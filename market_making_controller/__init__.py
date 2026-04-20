@@ -45,7 +45,6 @@ from .reward_tensor import (
     inventory_pnl_term_tensor,
     slippage_pnl_term_tensor,
     reward_delta_inventory_slippage_tensor,
-    REWARD_MODES,
     terminal_objective,
 )
 from .mpc_tensor_batched import MPCOptimizer, MonteCarloMPCTensorBatched
@@ -86,7 +85,6 @@ __all__ = [
     "inventory_pnl_term_tensor",
     "slippage_pnl_term_tensor",
     "reward_delta_inventory_slippage_tensor",
-    "REWARD_MODES",
     "terminal_objective",
     "MPCOptimizer",
     "MonteCarloMPCTensorBatched",

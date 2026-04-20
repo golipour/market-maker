@@ -2,12 +2,10 @@
 Differentiable (PyTorch) reward functions that take StateTensor and ActionTensor
 and return a scalar tensor so gradients flow for training or gradient-based optimization.
 
-Terminal reward modes (all use ΔW = W(s_{t+H}) - W(s_t), W(s) = c + q*p):
-  step_pnl / terminal_pnl: J = E[ΔW]
-  terminal_pnl_inventory:  J = E[ΔW] - γ E[q_{t+H}^2]
-  terminal_mean_variance:  J = E[ΔW] - λ Var(ΔW)
-  terminal_mean_std:       J = E[ΔW] - λ Std(ΔW)
-  terminal_cara:           J = -1/η log(E[e^{-η ΔW}])
+Terminal objective (single mode):
+  J = J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std + action_coef * J_action_entropy
+where:
+  J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW), J_action_entropy = E[normalized action entropy]
 """
 
 from __future__ import annotations
@@ -24,16 +22,6 @@ from .state_tensor import (
     depth_bid_derivative_tensor,
     depth_ask_derivative_tensor,
     slippage_penalty_tensor,
-)
-
-# Reward mode names for MPC terminal objectives.
-REWARD_MODES = (
-    "step_pnl",
-    "terminal_pnl",
-    "terminal_pnl_inventory",
-    "terminal_mean_variance",
-    "terminal_mean_std",
-    "terminal_cara",
 )
 
 
@@ -135,10 +123,10 @@ def objective_mean(delta_W: "Tensor") -> "Tensor":
 
 
 def objective_inv(inv_terminal: "Tensor") -> "Tensor":
-    """J_inv = E[q_{t+H}^2]. inv_terminal: (n_samples,) or (n_samples, 1)."""
+    """J_inv = E[q_{t+H}]. inv_terminal: (n_samples,) or (n_samples, 1)."""
     torch = _get_torch()
     q = inv_terminal.view(-1)
-    return (q * q).mean()
+    return q.mean()
 
 
 def objective_var(delta_W: "Tensor") -> "Tensor":
@@ -155,42 +143,29 @@ def objective_std(delta_W: "Tensor") -> "Tensor":
     return torch.sqrt(v.clamp(min=1e-20))
 
 
-def objective_entropic(delta_W: "Tensor", eta: float) -> "Tensor":
-    """J_entropic = -1/η log(E[e^{-η ΔW}]). Numerically stable via logsumexp."""
-    torch = _get_torch()
-    d = delta_W.view(-1)
-    if eta <= 0.0:
-        return objective_mean(delta_W)
-    n = d.shape[0]
-    # -η ΔW; then log(E[e^{-η ΔW}]) = logsumexp(-η*d) - log(n)
-    neg_eta_d = -eta * d
-    log_mean_exp = torch.logsumexp(neg_eta_d, dim=0) - torch.log(
-        torch.tensor(n, dtype=d.dtype, device=d.device)
-    )
-    return -(1.0 / eta) * log_mean_exp
-
-
 def terminal_objective(
     delta_W: "Tensor",
     inv_terminal: "Tensor",
-    mode: str,
-    gamma: float = 0.0,
-    lambda_var: float = 0.0,
-    eta: float = 0.0,
+    inv_coef: float = 0.0,
+    target_inv: float = 0.0,
+    risk_coef: float = 0.0,
+    action_entropy: "Tensor | None" = None,
+    action_coef: float = 0.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
-    Build scalar objective J from terminal ΔW and optional terminal inventory.
+    Build scalar objective J from terminal ΔW and optional action entropy regularizer.
 
     delta_W: (n_samples,) wealth change per trajectory, ΔW = W(s_{t+H}) - W(s_t).
     inv_terminal: (n_samples,) or (n_samples, 1) terminal inventory per trajectory.
-    mode: one of REWARD_MODES.
-    gamma: used for terminal_pnl_inventory, J = J_mean - γ J_inv.
-    lambda_var: used for terminal_mean_variance (J = J_mean - λ J_var) and terminal_mean_std (J = J_mean - λ J_std).
-    eta: used for terminal_cara, J = J_entropic.
+    inv_coef: weight for inventory target penalty.
+    target_inv: desired terminal inventory target.
+    risk_coef: weight for ΔW volatility penalty (J_std).
+    action_entropy: differentiable entropy regularizer term from action distribution.
+    action_coef: additive weight for action entropy regularization.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
-        components: dict with J_mean, J_inv, J_var, J_std, J_entropic (as scalars) for logging.
+        components: dict with J_mean, J_inv, J_std, J_action_entropy (as scalars) for logging.
     """
     torch = _get_torch()
     # Batched rollouts can produce inf/nan in ΔW when mid×inv overflows; poison the whole objective otherwise.
@@ -198,29 +173,28 @@ def terminal_objective(
     inv_terminal = torch.nan_to_num(inv_terminal, nan=0.0, posinf=1e30, neginf=-1e30)
     J_mean = objective_mean(delta_W)
     J_inv = objective_inv(inv_terminal)
-    J_var = objective_var(delta_W)
     J_std = objective_std(delta_W)
-    J_entropic = objective_entropic(delta_W, eta) if eta > 0 else J_mean
+    if action_entropy is None:
+        J_action_entropy = J_mean * 0.0
+    else:
+        J_action_entropy = torch.nan_to_num(
+            action_entropy.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6
+        )
+    target = torch.tensor(float(target_inv), dtype=J_inv.dtype, device=J_inv.device)
+    J_inv_penalty = (J_inv - target) * (J_inv - target)
 
     components = {
         "J_mean": J_mean,
         "J_inv": J_inv,
-        "J_var": J_var,
+        "J_inv_penalty": J_inv_penalty,
         "J_std": J_std,
-        "J_entropic": J_entropic,
+        "J_action_entropy": J_action_entropy,
     }
-
-    if mode in ("step_pnl", "terminal_pnl"):
-        J = J_mean
-    elif mode == "terminal_pnl_inventory":
-        J = J_mean - gamma * J_inv
-    elif mode == "terminal_mean_variance":
-        J = J_mean - lambda_var * J_var
-    elif mode == "terminal_mean_std":
-        J = J_mean - lambda_var * J_std
-    elif mode == "terminal_cara":
-        J = J_entropic
-    else:
-        J = J_mean
+    J = (
+        J_mean
+        - float(inv_coef) * J_inv_penalty
+        - float(risk_coef) * J_std
+        + float(action_coef) * J_action_entropy
+    )
 
     return J, components

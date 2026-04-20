@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -343,6 +343,165 @@ class NobitexAdapter:
             base, quote = s[:-3], s[-3:]
         quote = "RLS" if quote == "IRT" else quote
         return base.lower(), quote.lower()
+
+    @staticmethod
+    def _parse_time_ms(value: Any) -> int:
+        if value is None:
+            return int(time.time() * 1000)
+        if isinstance(value, (int, float)):
+            return int(value)
+        s = str(value).strip()
+        if not s:
+            return int(time.time() * 1000)
+        try:
+            return int(float(s))
+        except Exception:
+            pass
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1000)
+        except Exception:
+            return int(time.time() * 1000)
+
+    def normalize_private_trade_event(self, event: dict, *, source: str = "ws") -> dict | None:
+        """Normalize private trade payloads to a unified shape used by stepper/providers."""
+        if not isinstance(event, dict):
+            return None
+        ts_raw = event.get("timestamp") or event.get("time")
+        src_c = str(event.get("srcCurrency") or "").upper()
+        dst_c = str(event.get("dstCurrency") or "").upper()
+        market = str(event.get("market") or "").replace(" ", "").upper()
+        if "-" in market:
+            parts = market.split("-", 1)
+            if len(parts) == 2:
+                src_c = src_c or parts[0]
+                dst_c = dst_c or parts[1]
+        side = str(event.get("type", event.get("side", ""))).strip().lower()
+        price = str(event.get("price", "0"))
+        qty = str(event.get("amount", event.get("tradeAmount", event.get("qty", "0"))))
+        fee = str(event.get("fee", "0"))
+        try:
+            fee_val = abs(float(str(fee).replace(",", "")))
+        except Exception:
+            fee_val = 0.0
+        try:
+            price_val = float(str(price).replace(",", ""))
+        except Exception:
+            price_val = 0.0
+        # Nobitex semantics:
+        # - buy fee is typically in base -> convert to quote using price
+        # - sell fee is in quote
+        fee_quote = fee_val * price_val if side.startswith("buy") and price_val > 0.0 else fee_val
+        return {
+            "time": self._parse_time_ms(ts_raw),
+            "price": price,
+            "qty": qty,
+            "side": side,
+            "id": event.get("id"),
+            "orderId": event.get("orderId"),
+            "srcCurrency": src_c,
+            "dstCurrency": dst_c,
+            "total": str(event.get("total", "0")),
+            "fee": fee,
+            "feeQuote": str(fee_quote),
+            "source": str(source or "ws"),
+        }
+
+    def private_trade_fee_quote(self, event: dict) -> float:
+        """Return private trade fee in quote-native units from a normalized event."""
+        if not isinstance(event, dict):
+            return 0.0
+        try:
+            return abs(float(str(event.get("feeQuote", "")).replace(",", "")))
+        except Exception:
+            pass
+        try:
+            fee_val = abs(float(str(event.get("fee", "0")).replace(",", "")))
+        except Exception:
+            fee_val = 0.0
+        side = str(event.get("side", "")).strip().lower()
+        try:
+            px = float(str(event.get("price", "0")).replace(",", ""))
+        except Exception:
+            px = 0.0
+        if side.startswith("buy") and px > 0.0:
+            return fee_val * px
+        return fee_val
+
+    def normalize_private_order_event(self, event: dict) -> dict | None:
+        """Normalize private order payloads to a unified shape used by stepper/providers."""
+        if not isinstance(event, dict):
+            return None
+        qty = event.get("tradeAmount")
+        if qty is None:
+            qty = event.get("filledAmount")
+        if qty is None:
+            qty = event.get("amount")
+        px = event.get("tradePrice")
+        if px is None:
+            px = event.get("avgFilledPrice")
+        if px is None:
+            px = event.get("price")
+        return {
+            "time": self._parse_time_ms(event.get("eventTime", event.get("time"))),
+            "price": str(px if px is not None else "0"),
+            "qty": str(qty if qty is not None else "0"),
+            "side": str(event.get("side", "")).lower(),
+            "status": str(event.get("status", "")).lower(),
+            "orderId": event.get("orderId"),
+            "tradeId": event.get("tradeId"),
+            "srcCurrency": str(event.get("srcCurrency", "")).upper(),
+            "dstCurrency": str(event.get("dstCurrency", "")).upper(),
+            "amount": str(event.get("amount", "0")),
+            "filledAmount": str(event.get("filledAmount", "0")),
+        }
+
+    def supplement_private_trades(
+        self,
+        symbol: str,
+        api_token: str | None,
+        ws_trades: list[dict],
+        t_start_ms: int,
+        t_end_ms: int,
+        *,
+        limit: int = 200,
+    ) -> list[dict]:
+        """
+        Merge websocket private trades with authenticated REST user trades list.
+        Returns normalized events for the requested time window.
+        """
+        if not api_token:
+            return ws_trades
+        try:
+            rows = self.user_trades_list(symbol, api_token, limit=limit)
+        except Exception:
+            return ws_trades
+        by_id: dict[str, dict] = {}
+        for t in ws_trades:
+            if not isinstance(t, dict):
+                continue
+            tid = str(t.get("id", "") or "")
+            if tid:
+                by_id[tid] = t
+            else:
+                by_id[f"ws:{t.get('time')},{t.get('price')},{t.get('qty')}"] = t
+        for row in rows:
+            norm = self.normalize_private_trade_event(row, source="rest")
+            if not isinstance(norm, dict):
+                continue
+            tm = int(norm.get("time") or 0)
+            if not (t_start_ms <= tm <= t_end_ms):
+                continue
+            tid = str(norm.get("id", "") or "")
+            if tid and tid in by_id:
+                continue
+            if tid:
+                by_id[tid] = norm
+            else:
+                by_id[f"rest:{tm},{norm.get('price')},{norm.get('qty')}"] = norm
+        return sorted(by_id.values(), key=lambda x: int(x.get("time", 0)))
 
     def list_open_orders(self, symbol: str, api_token: str | None) -> list[dict]:
         if not api_token:

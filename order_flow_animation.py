@@ -292,7 +292,7 @@ def run_animation(
         limit_order_flow_model=runner.limit_order_flow_model,
         n_dates=len(runner.steps),
         runner=runner,
-        market_flow_model=runner.model,
+        market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
     )
     if not subplots_loss_init:
         subplots_loss_init = [{"title": "Log loss (NLL)", "ylabel": "EWMA −log p", "series": []}]
@@ -321,8 +321,8 @@ def run_animation(
     def update(_frame):
         runner.advance_scheduled(max_steps_per_call=max_steps_per_frame)
         # Always redraw so depth and all panels stay in sync with current runner state.
-        model = getattr(runner, "model", None)
-        param_plot_data = model.get_plot_data() if model is not None else {}
+        mof_model = getattr(runner, "mof_model", getattr(runner, "model", None))
+        param_plot_data = mof_model.get_plot_data() if mof_model is not None else {}
         dates = [datetime.fromtimestamp((s[0] - bucket_ms / 2) / 1000.0, tz=timezone.utc) for s in runner.steps]
         draw_dynamic(
             runner.steps,
@@ -361,7 +361,7 @@ def run_animation(
             limit_order_flow_model=runner.limit_order_flow_model,
             n_dates=len(dates),
             runner=runner,
-            market_flow_model=runner.model,
+            market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
         )
         if not subplots_loss:
             subplots_loss = [{"title": "Log loss", "ylabel": "", "series": []}]
@@ -676,14 +676,14 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
             y_be,
             color="royalblue",
             linewidth=1.2,
-            label="Buy MC pred error (EWMA pred − EWMA realized)",
+            label="Buy MC pred error (MC pred − realized)",
         )
         ax_pred_err.plot(
             td_e,
             y_se,
             color="tomato",
             linewidth=1.2,
-            label="Sell MC pred error (EWMA pred − EWMA realized)",
+            label="Sell MC pred error (MC pred − realized)",
         )
         ax_pred_err.plot(
             td_e,
@@ -1110,14 +1110,33 @@ def draw_dynamic(
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
+        wealth_from_dw_times = getattr(runner, "wealth_from_dw_times", None) or []
+        wealth_from_dw_hist = getattr(runner, "wealth_from_dw_hist", None) or []
+        plotted = False
         if wealth_times and wealth_hist and len(wealth_hist) == len(wealth_times):
             ax.plot(wealth_times, wealth_hist, color="orange", linewidth=1.5, label="Wealth")
+            plotted = True
+        if wealth_from_dw_times and wealth_from_dw_hist and len(wealth_from_dw_hist) == len(wealth_from_dw_times):
+            ax.plot(
+                wealth_from_dw_times,
+                wealth_from_dw_hist,
+                color="blue",
+                linewidth=1.2,
+                linestyle="--",
+                label="Wealth from cum(ΔW)",
+            )
+            plotted = True
+        if plotted:
             ax.legend(loc="upper right")
-            t_min, t_max = wealth_times[0], wealth_times[-1]
+            x_ref = wealth_times if wealth_times else wealth_from_dw_times
+            t_min, t_max = x_ref[0], x_ref[-1]
             if t_min != t_max:
                 ax.set_xlim(t_min, t_max)
-            if wealth_hist:
-                lo, hi = _finite_series_ylim(wealth_hist, pad_min=1.0)
+            y_for_ylim = list(wealth_hist)
+            if wealth_from_dw_hist:
+                y_for_ylim.extend(float(v) for v in wealth_from_dw_hist)
+            if y_for_ylim:
+                lo, hi = _finite_series_ylim(y_for_ylim, pad_min=1.0)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1255,6 +1274,44 @@ def draw_dynamic(
             if E_dW_hist:
                 lo, hi = _finite_series_ylim(E_dW_hist)
                 ax.set_ylim(lo, hi)
+        else:
+            ax.set_xlim(0, 1)
+            ax.set_ylim(-1, 1)
+        if fig:
+            fig.autofmt_xdate()
+
+    # --- Realized ΔW from state_after_step ---
+    start, end = ranges.get("J_components", (0, 0))
+    if end > start and runner is not None:
+        ax = axes[start]
+        ax.clear()
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Objective components")
+        ax.set_title("Optimizer J components")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
+        t_comp = getattr(runner, "J_comp_times", None) or []
+        j_mean = getattr(runner, "J_mean_hist", None) or []
+        j_inv = getattr(runner, "J_inv_hist", None) or []
+        j_std = getattr(runner, "J_std_hist", None) or []
+        j_ent = getattr(runner, "J_action_entropy_hist", None) or []
+        n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_ent))
+        if n_comp > 0:
+            t = t_comp[:n_comp]
+            y_mean = [float(v) for v in j_mean[:n_comp]]
+            y_inv = [float(v) for v in j_inv[:n_comp]]
+            y_std = [float(v) for v in j_std[:n_comp]]
+            y_ent = [float(v) for v in j_ent[:n_comp]]
+            ax.plot(t, y_mean, color="blue", linewidth=1.2, label="J_mean")
+            ax.plot(t, y_inv, color="red", linewidth=1.2, label="-inv_coef * J_inv_penalty")
+            ax.plot(t, y_std, color="purple", linewidth=1.2, label="-risk_coef * J_std")
+            ax.plot(t, y_ent, color="green", linewidth=1.2, label="+action_coef * J_action_entropy")
+            ax.legend(loc="upper right", fontsize=7)
+            if n_comp > 1:
+                ax.set_xlim(t[0], t[-1])
+            lo, hi = _finite_series_ylim(y_mean + y_inv + y_std + y_ent, pad_min=1.0)
+            ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
             ax.set_ylim(-1, 1)

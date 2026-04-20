@@ -392,43 +392,15 @@ class NobitexMarketWsSession:
                 "isBuyerMaker": side == "sell",
             })
         elif channel.startswith("private:trades#"):
-            ts_raw = data.get("timestamp") or data.get("time")
-            out.private_trades.append({
-                "time": _parse_iso_time_ms(ts_raw),
-                "price": str(data.get("price", "0")),
-                "qty": str(data.get("amount", data.get("tradeAmount", "0"))),
-                "side": str(data.get("type", "")).lower(),
-                "id": data.get("id"),
-                "orderId": data.get("orderId"),
-                "srcCurrency": str(data.get("srcCurrency", "")).upper(),
-                "dstCurrency": str(data.get("dstCurrency", "")).upper(),
-                "total": str(data.get("total", "0")),
-                "fee": str(data.get("fee", "0")),
-            })
+            if hasattr(self._adapter, "normalize_private_trade_event"):
+                ev = self._adapter.normalize_private_trade_event(data, source="ws")
+                if isinstance(ev, dict):
+                    out.private_trades.append(ev)
         elif channel.startswith("private:orders#"):
-            qty = data.get("tradeAmount")
-            if qty is None:
-                qty = data.get("filledAmount")
-            if qty is None:
-                qty = data.get("amount")
-            px = data.get("tradePrice")
-            if px is None:
-                px = data.get("avgFilledPrice")
-            if px is None:
-                px = data.get("price")
-            out.private_orders.append({
-                "time": _parse_iso_time_ms(data.get("eventTime")),
-                "price": str(px if px is not None else "0"),
-                "qty": str(qty if qty is not None else "0"),
-                "side": str(data.get("side", "")).lower(),
-                "status": str(data.get("status", "")).lower(),
-                "orderId": data.get("orderId"),
-                "tradeId": data.get("tradeId"),
-                "srcCurrency": str(data.get("srcCurrency", "")).upper(),
-                "dstCurrency": str(data.get("dstCurrency", "")).upper(),
-                "amount": str(data.get("amount", "0")),
-                "filledAmount": str(data.get("filledAmount", "0")),
-            })
+            if hasattr(self._adapter, "normalize_private_order_event"):
+                ev = self._adapter.normalize_private_order_event(data)
+                if isinstance(ev, dict):
+                    out.private_orders.append(ev)
         return out
 
 

@@ -17,7 +17,7 @@ from .state_tensor import (
     depth_bid_tensor,
     depth_ask_tensor,
 )
-from .reward_tensor import terminal_objective, REWARD_MODES
+from .reward_tensor import terminal_objective
 
 
 # -----------------------------------------------------------------------------
@@ -323,6 +323,37 @@ def _fill_and_cash_batched(
     return fill_bid, fill_ask, cash_delta, inv_delta
 
 
+def _action_entropy_from_flat_params(
+    params: torch.Tensor,
+    n_components: int,
+    *,
+    use_softplus: bool = True,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Entropy regularizer from bid/ask action size distributions.
+    Uses L parameters per side, normalizes to probabilities, and returns
+    normalized entropy in [0, 1] averaged over bid and ask.
+    """
+    if n_components <= 1:
+        return params.sum() * 0.0
+    n = int(n_components)
+    bid_L = params[0 : 3 * n : 3]
+    ask_L = params[3 * n : 6 * n : 3]
+    if use_softplus:
+        bid_w = torch.nn.functional.softplus(bid_L)
+        ask_w = torch.nn.functional.softplus(ask_L)
+    else:
+        bid_w = torch.clamp(bid_L, min=eps)
+        ask_w = torch.clamp(ask_L, min=eps)
+    bid_p = bid_w / torch.clamp(bid_w.sum(), min=eps)
+    ask_p = ask_w / torch.clamp(ask_w.sum(), min=eps)
+    bid_H = -(bid_p * torch.log(torch.clamp(bid_p, min=eps))).sum()
+    ask_H = -(ask_p * torch.log(torch.clamp(ask_p, min=eps))).sum()
+    norm = math.log(float(n))
+    return 0.5 * (bid_H + ask_H) / max(norm, eps)
+
+
 def _delta_wealth_mtm_batched(
     sell_ref: torch.Tensor,
     inv: torch.Tensor,
@@ -366,10 +397,10 @@ class MonteCarloMPCTensorBatched:
         total_q_max: float | int | None = None,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
-        reward_mode: str = "step_pnl",
-        reward_gamma: float = 0.0,
-        reward_lambda: float = 0.0,
-        reward_eta: float = 0.0,
+        inv_coef: float = 0.0,
+        target_inv: float = 0.0,
+        risk_coef: float = 0.0,
+        action_coef: float = 0.0,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -391,10 +422,10 @@ class MonteCarloMPCTensorBatched:
         self.total_q_max = float(total_q_max) if total_q_max is not None else None
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
-        self.reward_mode = reward_mode if reward_mode in REWARD_MODES else "step_pnl"
-        self.reward_gamma = max(0.0, float(reward_gamma))
-        self.reward_lambda = max(0.0, float(reward_lambda))
-        self.reward_eta = max(0.0, float(reward_eta))
+        self.inv_coef = max(0.0, float(inv_coef))
+        self.target_inv = float(target_inv)
+        self.risk_coef = max(0.0, float(risk_coef))
+        self.action_coef = max(0.0, float(action_coef))
         self._last_action: SigmoidMixtureAction | None = None
         self._last_J_components: dict | None = None
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
@@ -551,6 +582,7 @@ class MonteCarloMPCTensorBatched:
                 book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(self.n_samples, -1)
 
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
+                action_entropy_sum = torch_mod.zeros((), dtype=dtype, device=_device)
 
                 for h in range(self.horizon):
                     if h == 0:
@@ -560,6 +592,9 @@ class MonteCarloMPCTensorBatched:
                         book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks, self.n_grid)
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
+                    action_entropy_sum = action_entropy_sum + _action_entropy_from_flat_params(
+                        action_h, n, use_softplus=True
+                    )
                     sell_h = sell_vol[:, h : h + 1]
                     buy_h = buy_vol[:, h : h + 1]
                     eps_buy_h = eps_buy[:, h : h + 1]
@@ -634,13 +669,15 @@ class MonteCarloMPCTensorBatched:
                     cash_t = cash_next
 
                 # total_reward = ΔW per trajectory (same as W(s_{t+H}) - W(s_t)); inv_t = terminal inventory
+                action_entropy_mean = action_entropy_sum / float(self.horizon)
                 J, components = terminal_objective(
                     total_reward,
                     inv_t,
-                    self.reward_mode,
-                    gamma=self.reward_gamma,
-                    lambda_var=self.reward_lambda,
-                    eta=self.reward_eta,
+                    inv_coef=self.inv_coef,
+                    target_inv=self.target_inv,
+                    risk_coef=self.risk_coef,
+                    action_entropy=action_entropy_mean,
+                    action_coef=self.action_coef,
                 )
 
                 def _finite_item(t) -> float:
@@ -691,14 +728,9 @@ class MonteCarloMPCTensorBatched:
             self._last_E_dW = bl if math.isfinite(bl) else 0.0
         if self.warm_start:
             self._last_action = best_action
-        comp = self._last_J_components or {}
-        comp_str = " ".join(f"{k}={comp.get(k, 0):.4f}" for k in ("J_mean", "J_inv", "J_var", "J_std", "J_entropic"))
-        j_disp = -best_loss
-        if not math.isfinite(j_disp):
-            j_disp = float("nan")
         print(
             f"batch={batch_time_sec:.3f}s train={train_time_sec:.3f}s total={total_sec:.3f}s "
-            f"MC batched (n={self.n_samples}, H={self.horizon}) mode={self.reward_mode} J={j_disp:.4f} {comp_str}"
+            f"MC batched (n={self.n_samples}, H={self.horizon})"
         )
         return best_action
 

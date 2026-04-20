@@ -120,10 +120,10 @@ def build_pipeline(
         "total_q_max": mpc_kw["total_q_max"],
         "fixed_mc_samples": mpc_kw["fixed_mc_samples"],
         "verbose": mpc_kw["verbose"],
-        "reward_mode": mpc_kw.get("reward_mode", "step_pnl"),
-        "reward_gamma": mpc_kw.get("reward_gamma", 0.0),
-        "reward_lambda": mpc_kw.get("reward_lambda", 0.0),
-        "reward_eta": mpc_kw.get("reward_eta", 0.0),
+        "inv_coef": mpc_kw.get("inv_coef", 0.0),
+        "target_inv": mpc_kw.get("target_inv", 0.0),
+        "risk_coef": mpc_kw.get("risk_coef", mpc_kw.get("risk_inv", 0.0)),
+        "action_coef": mpc_kw.get("action_coef", 0.0),
         "soft_fill_temp": mpc_kw.get("soft_fill_temp", 1.0),
     }
     optimizer = MonteCarloMPCTensorBatched(
@@ -264,8 +264,8 @@ def main() -> None:
     args = {
         "exchange": "nobitex",
         "symbol": "USDT_IRT",
-        "T_ms": 3000,
-        "animation_interval_ms": 3000,
+        "T_ms": 10000,
+        "animation_interval_ms": 10000,
         "orderbook_ticks": 50,
         "limit": 1000,
         "depth_limit": 100,
@@ -288,7 +288,7 @@ def main() -> None:
 
     pipeline = {
         "market_order_flow_model_kwargs": {
-            "decay": 0.90,
+            "decay": 0.80,
             "param_eps": 1e-6,
             "device": None,
             "init_p0": 0.3,
@@ -298,7 +298,7 @@ def main() -> None:
         "price_model_kwargs": {
             "residual_mu": 0.0,
             "residual_sigma": 1.0,
-            "residual_decay": 0.95,
+            "residual_decay": 0.80,
             "learn_residual": True,
             "sigma_min": 1e-6,
             "representative_price_target_depth_lots": 1e12,
@@ -309,7 +309,7 @@ def main() -> None:
             "n_components": 1,
             "device": "cpu",
             "total_q_min": 0,
-            "total_q_max": 1e2,
+            "total_q_max": 100,
             "soft_fill_temp": 1e-6,
             "adam_lr": 1e1,
             "adam_epochs": 21,
@@ -320,14 +320,16 @@ def main() -> None:
             "fixed_mc_samples": True,
             "adam_normalize_inputs": True,
             "verbose": False,
-            "reward_mode": "terminal_mean_std",        # "step_pnl", "terminal_pnl_inventory", "terminal_mean_variance", "terminal_cara"
-            "reward_gamma": 0.0,                            # for terminal_pnl_inventory
-            "reward_lambda": 1.0,                          # for terminal_mean_variance (J = J_mean - λ*J_var);
-            "reward_eta": 0.0,                              # for terminal_cara
-            "zero_action_if_negative_J_mean": True,   # if True, return no quotes when best action has E[ΔW] < 0
+            # Unified objective:
+            # J = J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std + action_coef * J_action_entropy
+            "inv_coef": 1.0,
+            "target_inv": 100,
+            "risk_coef": 1.0,
+            "action_coef": 1e8,
+            "zero_action_if_negative_J_mean": False,   # if True, return no quotes when best action has E[ΔW] < 0
         },
         "execution_model_kwargs": {
-            "maker_fee": 0.0001,
+            "maker_fee": 0.0005,
             # Used only when execution_mode == "simulated"
             "simulated_initial_inventory": 0,
             "simulated_initial_cash": 0.0,

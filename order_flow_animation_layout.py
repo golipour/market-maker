@@ -47,7 +47,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
     section_specs: [(section_id, n_axes), ...] in display order.
     height_ratios: one per total axis, for plt.subplots(..., height_ratios=...).
     """
-    model = runner.model
+    model = getattr(runner, "mof_model", getattr(runner, "model", None))
     tester = runner.tester
     n_model = len(get_estimator_plot_specs(model))
     n_price_model = len(get_price_model_plot_specs(runner))
@@ -68,6 +68,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         ("cum_adverse_pnl", 1),
         ("cum_fee_pnl", 1),
         ("E_dW", 1),
+        ("J_components", 1),
         ("realized_dW", 1),
         ("depth", 1),
         ("action_depth", 2),  # DiscretizedOrderAction: marginal and cumulative
@@ -91,7 +92,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         # + [hr_score] * n_tester  # Moved to separate Predictive log loss window
         + [hr_state] * 3
         + [hr_state, hr_state, hr_state, hr_state]  # cum_spread_pnl, cum_inventory_pnl, cum_adverse_pnl, cum_fee_pnl
-        + [hr_state, hr_state]  # E_dW, realized_dW
+        + [hr_state, hr_state, hr_state]  # E_dW, J_components, realized_dW
         + [hr_depth]
         + [hr_action_depth, hr_action_depth]
         # + [hr_tox]  # Commented out

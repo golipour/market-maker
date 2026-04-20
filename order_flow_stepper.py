@@ -588,6 +588,7 @@ class OrderFlowStepper:
         self.exchange = exchange
         self.symbol = symbol
         self.private_api_token = private_api_token
+        self._exchange_adapter = EXCHANGES.get(str(exchange or "").lower().strip())
         self.T_ms = max(1, T_ms)
         self.trades_limit = trades_limit
         self.depth_limit = depth_limit
@@ -614,8 +615,6 @@ class OrderFlowStepper:
         self.balances: dict[str, dict[str, float]] = {}
         self._order_locked_by_id: dict[str, tuple[str, float]] = {}
         self._applied_private_trade_ids: set[str] = set()
-        # Nobitex: merge GET /market/trades/list into private events when WS misses (auth/subscription).
-        self._nobitex_rest_private_merge: bool = str(exchange or "").lower().strip() == "nobitex"
 
         if use_websocket_market_data and trade_provider is None and orderbook_provider is None:
             # One websocket provider: depth + trades from push only (no REST fallback on trades).
@@ -897,84 +896,55 @@ class OrderFlowStepper:
             cash_tick_lot = cash_native / (self._tick_size * self._lot_size)
         return int(round(inv_lots)), int(round(cash_tick_lot))
 
-    @staticmethod
-    def _nobitex_rest_trade_to_private_event(row: dict) -> dict:
-        """Map Nobitex GET /market/trades/list row to the same shape as websocket private:trades."""
-        from trade_stats_market_ws import _parse_iso_time_ms
-
-        ts_raw = row.get("timestamp") or row.get("time")
-        t_ms = _parse_iso_time_ms(ts_raw)
-        mkt = str(row.get("market") or "").replace(" ", "").upper()
-        src_c = str(row.get("srcCurrency") or "").upper()
-        dst_c = str(row.get("dstCurrency") or "").upper()
-        if "-" in mkt:
-            parts = mkt.split("-", 1)
-            if len(parts) == 2:
-                src_c, dst_c = parts[0], parts[1]
-        return {
-            "time": t_ms,
-            "price": str(row.get("price", "0")),
-            "qty": str(row.get("amount", "0")),
-            "side": str(row.get("type", "")).lower(),
-            "id": row.get("id"),
-            "orderId": row.get("orderId"),
-            "srcCurrency": src_c,
-            "dstCurrency": dst_c,
-            "total": str(row.get("total", "0")),
-            "fee": str(row.get("fee", "0")),
-        }
-
-    def _merge_nobitex_private_trades_with_rest(
+    def _merge_private_trades_with_adapter(
         self,
-        ws_trades: list[dict],
+        private_trades: list[dict],
         t_start_ms: int,
         t_end_ms: int,
     ) -> list[dict]:
         """
-        When websocket private:trades misses (auth, subscription, or client parse), fill gaps
-        using Nobitex GET /market/trades/list for the same pair (documented 3-day history).
+        Let adapter optionally supplement private websocket events with REST/private API
+        and normalize exchange-specific payloads.
         """
-        if not self._nobitex_rest_private_merge or not self.private_api_token:
-            return ws_trades
-        nob = EXCHANGES.get("nobitex")
-        if nob is None or not hasattr(nob, "user_trades_list"):
-            return ws_trades
+        ad = self._exchange_adapter
+        if ad is None or not hasattr(ad, "supplement_private_trades"):
+            return private_trades
         try:
-            rows = nob.user_trades_list(self.symbol, self.private_api_token, limit=200)
+            out = ad.supplement_private_trades(
+                self.symbol,
+                self.private_api_token,
+                private_trades,
+                t_start_ms,
+                t_end_ms,
+            )
+            return out if isinstance(out, list) else private_trades
         except Exception:
-            return ws_trades
-        by_id: dict[str, dict] = {}
-        for t in ws_trades:
-            tid = str(t.get("id", "") or "")
-            if tid:
-                by_id[tid] = t
-            else:
-                by_id[f"ws:{t.get('time')},{t.get('price')},{t.get('qty')}"] = t
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            ev = self._nobitex_rest_trade_to_private_event(row)
-            tm = int(ev.get("time") or 0)
-            if not (t_start_ms <= tm <= t_end_ms):
-                continue
-            tid = str(ev.get("id", "") or "")
-            if tid and tid in by_id:
-                continue
-            if tid:
-                by_id[tid] = ev
-            else:
-                by_id[f"rest:{tm},{ev.get('price')},{ev.get('qty')}"] = ev
-        return sorted(by_id.values(), key=lambda x: int(x.get("time", 0)))
+            return private_trades
 
     def _private_trades_fee_tick_lot(self) -> float:
         """
-        Sum `fee` from last_private_trades (exchange quote currency) and convert to tick*lot units
-        to match ``cash`` in Step (quote_native / (tick_size * lot_size)).
+        Sum private trade fees in quote-native units and convert to tick*lot units:
+        quote_native / (tick_size * lot_size).
+        If event includes ``feeQuote`` use it directly; otherwise fallback to adapter hook,
+        then to raw absolute ``fee``.
         """
         total_quote = 0.0
+        ad = self._exchange_adapter
         for t in self.last_private_trades or []:
             if not isinstance(t, dict):
                 continue
+            try:
+                fee_quote = float(str(t.get("feeQuote", "")).replace(",", ""))
+                total_quote += abs(fee_quote)
+                continue
+            except (TypeError, ValueError):
+                pass
+            if ad is not None and hasattr(ad, "private_trade_fee_quote"):
+                try:
+                    total_quote += abs(float(ad.private_trade_fee_quote(t)))
+                    continue
+                except Exception:
+                    pass
             try:
                 total_quote += abs(float(str(t.get("fee", "0") or "0").replace(",", "")))
             except (TypeError, ValueError):
@@ -1006,7 +976,7 @@ class OrderFlowStepper:
                 self.last_private_trades = []
         else:
             self.last_private_trades = []
-        self.last_private_trades = self._merge_nobitex_private_trades_with_rest(
+        self.last_private_trades = self._merge_private_trades_with_adapter(
             self.last_private_trades, t_start_ms, t_end_ms
         )
         if hasattr(self.trade_provider, "get_private_orders"):
