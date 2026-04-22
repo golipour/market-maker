@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from order_flow_stepper import OrderFlowStepper
-from trade_stats import get_min_order_amount_tick_lot
 from market_making_controller.models import (
     TorchHurdleWeibullModel,
     TorchResidualPriceModel,
@@ -123,7 +122,11 @@ def build_pipeline(
         "inv_coef": mpc_kw.get("inv_coef", 0.0),
         "target_inv": mpc_kw.get("target_inv", 0.0),
         "risk_coef": mpc_kw.get("risk_coef", mpc_kw.get("risk_inv", 0.0)),
-        "action_coef": mpc_kw.get("action_coef", 0.0),
+        "uniformity_coef": mpc_kw.get("uniformity_coef", mpc_kw.get("action_coef", 0.0)),
+        "reward_coef": mpc_kw.get("reward_coef", 1.0),
+        "size_coef": mpc_kw.get("size_coef", 0.0),
+        "total_q_target": mpc_kw.get("total_q_target"),
+        "project_total_q_target": mpc_kw.get("project_total_q_target", False),
         "soft_fill_temp": mpc_kw.get("soft_fill_temp", 1.0),
     }
     optimizer = MonteCarloMPCTensorBatched(
@@ -134,14 +137,6 @@ def build_pipeline(
     )
     # Bounds: bid/ask spread always [1, spread_max]; single source is spread_max.
 
-    min_order_notional_tick_lot = config.get("min_order_notional_tick_lot")
-    if min_order_notional_tick_lot is None and exchange and symbol:
-        try:
-            min_order_notional_tick_lot = float(get_min_order_amount_tick_lot(symbol, exchange))
-        except Exception:
-            min_order_notional_tick_lot = 0.0
-    min_order_notional_tick_lot = float(min_order_notional_tick_lot or 0.0)
-    min_notional_safety_mult = float(config.get("min_notional_safety_mult", 2.0))
     ctrl_disc = {
         "s_b_min": 1,
         "s_b_max": spread_max,
@@ -150,8 +145,6 @@ def build_pipeline(
         "lot_size": lot_size,
         "spread_max": spread_max,
         "zero_action_if_negative_J_mean": mpc_kw.get("zero_action_if_negative_J_mean", False),
-        "min_order_notional_tick_lot": min_order_notional_tick_lot,
-        "min_notional_safety_mult": min_notional_safety_mult,
     }
     controller = SigmoidController(optimizer, **ctrl_disc)
     execution_rule = DefaultExecutionRule(**config["execution_rule_kwargs"])
@@ -280,7 +273,7 @@ def main() -> None:
         "use_buffered_orderbook_provider": True,
         "use_websocket_market_data": True,
         "use_zero_action": False,  # False to run controller (MonteCarloMPCTensorBatched); True = no quotes
-        "action_start_after_steps": 10,  # warm-up: keep zero action for first N steps, then start controller
+        "action_start_after_steps": 100,  # warm-up: delay live order placement for first N steps (controller still runs)
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
@@ -309,23 +302,28 @@ def main() -> None:
             "n_components": 1,
             "device": "cpu",
             "total_q_min": 0,
-            "total_q_max": 100,
-            "soft_fill_temp": 1e-6,
-            "adam_lr": 1e1,
-            "adam_epochs": 21,
+            "total_q_max": 100000,
+            "soft_fill_temp": 0.25,
+            "adam_lr": 1e-2,
+            "adam_epochs": 0,
             "adam_grad_clip": 1e10,
             "horizon": 3,
-            "n_samples": 128,
+            "n_samples": 32,
             "warm_start": False,
             "fixed_mc_samples": True,
             "adam_normalize_inputs": True,
             "verbose": False,
             # Unified objective:
-            # J = J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std + action_coef * J_action_entropy
-            "inv_coef": 1.0,
+            # J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
+            #     - uniformity_coef * J_uniformity - size_coef * J_size
+            "reward_coef": 0.0,  # weight on E[ΔW] term
+            "inv_coef": 0.0,
+            "risk_coef": 0.0,
+            "uniformity_coef": 1.0,
+            "size_coef": 1.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
             "target_inv": 100,
-            "risk_coef": 1.0,
-            "action_coef": 1e8,
+            "total_q_target": 10000,           # finite-range target on [0, spread_max]
+            "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
             "zero_action_if_negative_J_mean": False,   # if True, return no quotes when best action has E[ΔW] < 0
         },
         "execution_model_kwargs": {
@@ -335,8 +333,6 @@ def main() -> None:
             "simulated_initial_cash": 0.0,
         },
         "execution_mode": "real",  # "simulated" (OB+flow fills) or "real" (inventory/cash from Step)
-        "min_order_notional_tick_lot": None,  # None => auto-load MIN_NOTIONAL from exchange info and convert to tick*lot
-        "min_notional_safety_mult": 2.0,      # keep only levels with notional >= mult * MIN_NOTIONAL
         "execution_rule_kwargs": {}
     }
 

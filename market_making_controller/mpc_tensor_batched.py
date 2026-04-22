@@ -79,39 +79,153 @@ def _scale_bounds_for_normalized(
     return result
 
 
+def _inv_softplus_np(y: float) -> float:
+    """Inverse softplus for positive target y (numpy scalar)."""
+    y_f = float(max(1e-12, y))
+    if y_f > 50.0:
+        return y_f
+    return float(np.log(np.expm1(y_f)))
+
+
+def _initial_action_uniform_marginal_qrange(
+    n_components: int,
+    spread_max: float,
+    total_q_target: float | None,
+) -> np.ndarray | None:
+    """
+    Build an initial flat action (raw optimizer params) targeting a uniform discrete
+    marginal ladder on integer spreads s=1..N where N=round(spread_max), using the
+    same convention as discretization:
+      m(1) = D(1), m(s) = D(s) - D(s-1) for s>=2.
+    Target:
+      m(s) ~= total_q_target / N for all s in [1..N],
+      sum_s m(s) ~= total_q_target.
+    """
+    if total_q_target is None or float(total_q_target) <= 0.0:
+        return None
+    n = max(1, int(n_components))
+    sm = max(1, int(round(float(spread_max))))
+    q_level = float(total_q_target) / float(sm)
+    # Endpoint-constrained initialization:
+    # enforce D(1) ~= q_level and D(N) ~= total_q_target with x0 around N/2.
+    x0_center = 0.5 * float(sm)
+    x0 = np.full(n, x0_center, dtype=np.float64)
+
+    def _sig(z: float) -> float:
+        if z >= 0.0:
+            ez = math.exp(-z)
+            return 1.0 / (1.0 + ez)
+        ez = math.exp(z)
+        return ez / (1.0 + ez)
+
+    target_ratio = float(sm)  # D(N) / D(1) target
+    lo, hi = 1e-6, 1.0
+    for _ in range(30):
+        a_hi = _sig(hi * (1.0 - x0_center))
+        b_hi = _sig(hi * (float(sm) - x0_center))
+        r_hi = b_hi / max(a_hi, 1e-18)
+        if r_hi >= target_ratio:
+            break
+        hi *= 2.0
+    for _ in range(80):
+        k_mid = 0.5 * (lo + hi)
+        a = _sig(k_mid * (1.0 - x0_center))
+        b = _sig(k_mid * (float(sm) - x0_center))
+        ratio = b / max(a, 1e-18)
+        if ratio < target_ratio:
+            lo = k_mid
+        else:
+            hi = k_mid
+    k_base = 0.5 * (lo + hi)
+    k_eff = np.full(n, max(1e-6, float(k_base)), dtype=np.float64)
+
+    bN = _sig(k_base * (float(sm) - x0_center))
+    L_total = float(total_q_target) / max(bN, 1e-12)
+    L_eff = np.full(n, max(1e-6, L_total / float(n)), dtype=np.float64)
+
+    # Final exact normalization on D(N) (discretizer convention total).
+    s_hi = 1.0 / (1.0 + np.exp(-(k_eff * (float(sm) - x0))))
+    d_n = float(np.sum(L_eff * s_hi))
+    if d_n > 1e-12:
+        L_eff *= float(total_q_target) / d_n
+
+    L_raw = np.array([_inv_softplus_np(v) for v in L_eff], dtype=np.float64)
+    k_raw = np.array([_inv_softplus_np(v) for v in k_eff], dtype=np.float64)
+
+    bid_part: list[float] = []
+    ask_part: list[float] = []
+    for i in range(n):
+        bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
+        ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
+    return np.array(bid_part + ask_part, dtype=np.float64)
+
+
 def _project_total_q_torch(
     x_torch: Any,
     single_len: int,
     n_components: int,
     total_q_min: float | None,
     total_q_max: float | None,
+    total_q_target: float | None,
+    project_total_q_target: bool,
+    spread_max: float,
     torch_mod: Any,
 ) -> None:
-    """In-place project L so sum(bid_L) and sum(ask_L) in [total_q_min, total_q_max]."""
-    if total_q_min is None or total_q_max is None:
+    """
+    In-place project L by quoted size over discretizer range s=1..N (N=spread_max),
+    under discretizer baseline convention where cumulative starts from zero.
+
+    - If project_total_q_target is True and total_q_target > 0, enforce Q_range ~= target.
+    - Otherwise, project Q_range into [total_q_min, total_q_max] when bounds are set.
+    """
+    has_range_bounds = (total_q_min is not None) or (total_q_max is not None)
+    use_target = bool(project_total_q_target and total_q_target is not None and float(total_q_target) > 0.0)
+    if (not has_range_bounds) and (not use_target):
         return
-    total_q_min_f = float(total_q_min)
-    total_q_max_f = float(total_q_max)
+    total_q_min_f = float(total_q_min) if total_q_min is not None else None
+    total_q_max_f = float(total_q_max) if total_q_max is not None else None
+    total_q_target_f = float(total_q_target) if total_q_target is not None else None
+    spread_hi = max(0.0, float(spread_max))
+    eps = 1e-12
+
+    def _effective_qrange(side_off: int, start: int) -> float:
+        q = 0.0
+        for i in range(n):
+            L_raw = x_torch[start + side_off + 3 * i]
+            k_raw = x_torch[start + side_off + 3 * i + 1]
+            x0 = x_torch[start + side_off + 3 * i + 2]
+            L_eff = torch_mod.nn.functional.softplus(L_raw) + 1e-8
+            k_eff = torch_mod.nn.functional.softplus(k_raw) + 1e-8
+            s_hi = torch_mod.sigmoid(k_eff * (spread_hi - x0))
+            q = q + L_eff * s_hi
+        try:
+            return float(q.detach().item())
+        except Exception:
+            return 0.0
+
+    def _desired(cur_q: float) -> float | None:
+        if use_target:
+            return total_q_target_f
+        lo = total_q_min_f if total_q_min_f is not None else -float("inf")
+        hi = total_q_max_f if total_q_max_f is not None else float("inf")
+        return float(min(max(cur_q, lo), hi))
+
     n = n_components
     num_slices = x_torch.numel() // single_len
     for start in range(0, num_slices * single_len, single_len):
-        bid_L_sum = x_torch[start + 0] * 0.0
-        for i in range(n):
-            bid_L_sum = bid_L_sum + x_torch[start + 3 * i]
-        eps = 1e-12
-        bid_L_sum = bid_L_sum + eps
-        target_bid = torch_mod.clamp(bid_L_sum, total_q_min_f, total_q_max_f)
-        factor_bid = target_bid / bid_L_sum
-        for i in range(n):
-            x_torch.data[start + 3 * i] = x_torch.data[start + 3 * i] * factor_bid
-        ask_L_sum = x_torch[start + 3 * n] * 0.0
-        for i in range(n):
-            ask_L_sum = ask_L_sum + x_torch[start + 3 * n + 3 * i]
-        ask_L_sum = ask_L_sum + eps
-        target_ask = torch_mod.clamp(ask_L_sum, total_q_min_f, total_q_max_f)
-        factor_ask = target_ask / ask_L_sum
-        for i in range(n):
-            x_torch.data[start + 3 * n + 3 * i] = x_torch.data[start + 3 * n + 3 * i] * factor_ask
+        cur_bid = _effective_qrange(0, start)
+        tgt_bid = _desired(cur_bid)
+        if tgt_bid is not None and cur_bid > eps:
+            factor_bid = float(tgt_bid) / max(cur_bid, eps)
+            for i in range(n):
+                x_torch.data[start + 3 * i] = x_torch.data[start + 3 * i] * factor_bid
+
+        cur_ask = _effective_qrange(3 * n, start)
+        tgt_ask = _desired(cur_ask)
+        if tgt_ask is not None and cur_ask > eps:
+            factor_ask = float(tgt_ask) / max(cur_ask, eps)
+            for i in range(n):
+                x_torch.data[start + 3 * n + 3 * i] = x_torch.data[start + 3 * n + 3 * i] * factor_ask
 
 
 def _project_total_q_flat(
@@ -119,20 +233,66 @@ def _project_total_q_flat(
     n_components: int,
     total_q_min: float | None,
     total_q_max: float | None,
+    total_q_target: float | None,
+    project_total_q_target: bool,
+    spread_max: float,
 ) -> np.ndarray:
-    """Project flat param vector so sum(bid_L) and sum(ask_L) in [total_q_min, total_q_max]."""
-    if total_q_min is None or total_q_max is None:
+    """
+    Project one flat param vector by quoted size over discretizer range s=1..N
+    (N=spread_max), under discretizer baseline convention.
+    """
+    has_range_bounds = (total_q_min is not None) or (total_q_max is not None)
+    use_target = bool(project_total_q_target and total_q_target is not None and float(total_q_target) > 0.0)
+    if (not has_range_bounds) and (not use_target):
         return flat
     out = np.array(flat, dtype=np.float64, copy=True)
     n = n_components
-    bid_L_sum = sum(out[3 * i] for i in range(n)) + 1e-12
-    target_bid = np.clip(bid_L_sum, total_q_min, total_q_max)
-    for i in range(n):
-        out[3 * i] *= target_bid / bid_L_sum
-    ask_L_sum = sum(out[3 * n + 3 * i] for i in range(n)) + 1e-12
-    target_ask = np.clip(ask_L_sum, total_q_min, total_q_max)
-    for i in range(n):
-        out[3 * n + 3 * i] *= target_ask / ask_L_sum
+    spread_hi = max(0.0, float(spread_max))
+    eps = 1e-12
+
+    def _softplus_np(x: float) -> float:
+        # Stable softplus matching torch behavior closely enough for projection.
+        return float(np.log1p(np.exp(-abs(float(x)))) + max(float(x), 0.0) + 1e-8)
+
+    def _sigmoid_np(x: float) -> float:
+        if x >= 0:
+            z = math.exp(-x)
+            return 1.0 / (1.0 + z)
+        z = math.exp(x)
+        return z / (1.0 + z)
+
+    def _effective_qrange(side_off: int) -> float:
+        q = 0.0
+        for i in range(n):
+            L_eff = _softplus_np(out[side_off + 3 * i])
+            k_eff = _softplus_np(out[side_off + 3 * i + 1])
+            x0 = float(out[side_off + 3 * i + 2])
+            s_hi = _sigmoid_np(k_eff * (spread_hi - x0))
+            q += L_eff * s_hi
+        return float(q)
+
+    def _desired(cur_q: float) -> float:
+        if use_target:
+            return float(total_q_target)
+        lo = float(total_q_min) if total_q_min is not None else -float("inf")
+        hi = float(total_q_max) if total_q_max is not None else float("inf")
+        return float(min(max(cur_q, lo), hi))
+
+    cur_bid = _effective_qrange(0)
+    if cur_bid > eps:
+        target_bid = _desired(cur_bid)
+        scale = target_bid / max(cur_bid, eps)
+        for i in range(n):
+            out[3 * i] *= scale
+
+    base = 3 * n
+    cur_ask = _effective_qrange(base)
+    if cur_ask > eps:
+        target_ask = _desired(cur_ask)
+        scale = target_ask / max(cur_ask, eps)
+        for i in range(n):
+            out[base + 3 * i] *= scale
+
     return out
 
 
@@ -307,8 +467,25 @@ def _fill_and_cash_batched(
     """
     depth_bid = depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
     depth_ask = depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    reach_bid = (sell_vol - book_cum_bid).clamp(min=0.0)
-    reach_ask = (buy_vol - book_cum_ask).clamp(min=0.0)
+    # Signed queue-reach without hard clamp to preserve gradient signal on both sides.
+    # Normalize per sample to adaptive range: positive -> [0, 1], negative -> [-1, 0].
+    eps = 1e-12
+    reach_bid_raw = sell_vol - book_cum_bid
+    reach_ask_raw = buy_vol - book_cum_ask
+    bid_pos_scale = torch.clamp(reach_bid_raw.max(dim=1, keepdim=True).values, min=eps)
+    bid_neg_scale = torch.clamp((-reach_bid_raw).max(dim=1, keepdim=True).values, min=eps)
+    ask_pos_scale = torch.clamp(reach_ask_raw.max(dim=1, keepdim=True).values, min=eps)
+    ask_neg_scale = torch.clamp((-reach_ask_raw).max(dim=1, keepdim=True).values, min=eps)
+    reach_bid = torch.where(
+        reach_bid_raw >= 0.0,
+        reach_bid_raw / bid_pos_scale,
+        reach_bid_raw / bid_neg_scale,
+    )
+    reach_ask = torch.where(
+        reach_ask_raw >= 0.0,
+        reach_ask_raw / ask_pos_scale,
+        reach_ask_raw / ask_neg_scale,
+    )
     fill_bid_level = depth_bid.unsqueeze(0) * torch.sigmoid(reach_bid / soft_temp)
     fill_ask_level = depth_ask.unsqueeze(0) * torch.sigmoid(reach_ask / soft_temp)
     fill_bid = fill_bid_level.sum(dim=1)
@@ -323,35 +500,78 @@ def _fill_and_cash_batched(
     return fill_bid, fill_ask, cash_delta, inv_delta
 
 
-def _action_entropy_from_flat_params(
+def _action_uniformity_l2_from_marginal_depth(
     params: torch.Tensor,
+    spread_ticks: torch.Tensor,
     n_components: int,
     *,
     use_softplus: bool = True,
     eps: float = 1e-12,
 ) -> torch.Tensor:
     """
-    Entropy regularizer from bid/ask action size distributions.
-    Uses L parameters per side, normalizes to probabilities, and returns
-    normalized entropy in [0, 1] averaged over bid and ask.
+    L2-to-uniform regularizer from discrete marginal depth implied by cumulative depth.
+
+    To match action discretization semantics, marginal levels are built from cumulative
+    depth on integer spreads with zero baseline at spread 0:
+      marg[1] = D(1) - 0
+      marg[s] = D(s) - D(s-1), s >= 2
+
+    Then each side is normalized to a probability-like distribution and penalized by
+    squared distance to uniform.
+    Returns average penalty across bid and ask.
     """
-    if n_components <= 1:
+    if n_components <= 0 or spread_ticks.numel() <= 1:
         return params.sum() * 0.0
-    n = int(n_components)
-    bid_L = params[0 : 3 * n : 3]
-    ask_L = params[3 * n : 6 * n : 3]
-    if use_softplus:
-        bid_w = torch.nn.functional.softplus(bid_L)
-        ask_w = torch.nn.functional.softplus(ask_L)
-    else:
-        bid_w = torch.clamp(bid_L, min=eps)
-        ask_w = torch.clamp(ask_L, min=eps)
-    bid_p = bid_w / torch.clamp(bid_w.sum(), min=eps)
-    ask_p = ask_w / torch.clamp(ask_w.sum(), min=eps)
-    bid_H = -(bid_p * torch.log(torch.clamp(bid_p, min=eps))).sum()
-    ask_H = -(ask_p * torch.log(torch.clamp(ask_p, min=eps))).sum()
-    norm = math.log(float(n))
-    return 0.5 * (bid_H + ask_H) / max(norm, eps)
+
+    torch_mod = _get_torch()
+    bid_cum = depth_bid_tensor(params, spread_ticks, n_components, use_softplus)
+    ask_cum = depth_ask_tensor(params, spread_ticks, n_components, use_softplus)
+    zero = torch_mod.zeros(1, dtype=bid_cum.dtype, device=bid_cum.device)
+    bid_marg = torch_mod.clamp(
+        bid_cum - torch_mod.cat([zero, bid_cum[:-1]], dim=0),
+        min=0.0,
+    )
+    ask_marg = torch_mod.clamp(
+        ask_cum - torch_mod.cat([zero, ask_cum[:-1]], dim=0),
+        min=0.0,
+    )
+    bid_p = bid_marg / torch.clamp(bid_marg.sum(), min=eps)
+    ask_p = ask_marg / torch.clamp(ask_marg.sum(), min=eps)
+    n_grid = float(spread_ticks.numel())
+    uni = torch.full_like(bid_p, 1.0 / max(n_grid, 1.0))
+    bid_l2 = torch.mean((bid_p - uni) ** 2)
+    ask_l2 = torch.mean((ask_p - uni) ** 2)
+    return 0.5 * (bid_l2 + ask_l2)
+
+
+def _action_size_penalty_qrange(
+    params: torch.Tensor,
+    n_components: int,
+    spread_max: float,
+    total_q_target: float | None,
+    *,
+    use_softplus: bool = True,
+) -> torch.Tensor:
+    """
+    Squared error penalty to target quoted size over discretizer range s=1..N
+    (N=spread_max), using discretizer baseline convention:
+      (Q_range_bid - Q_target)^2 + (Q_range_ask - Q_target)^2
+    where Q_range_side = D_side(spread_max).
+    """
+    if total_q_target is None or float(total_q_target) <= 0.0 or n_components <= 0:
+        return params.sum() * 0.0
+    torch_mod = _get_torch()
+    s = torch_mod.tensor(
+        [0.0, max(0.0, float(spread_max))],
+        dtype=params.dtype,
+        device=params.device,
+    )
+    bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
+    ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    q_bid = torch_mod.clamp(bid_depth[1], min=0.0)
+    q_ask = torch_mod.clamp(ask_depth[1], min=0.0)
+    tgt = torch_mod.tensor(float(total_q_target), dtype=params.dtype, device=params.device)
+    return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
 def _delta_wealth_mtm_batched(
@@ -400,7 +620,11 @@ class MonteCarloMPCTensorBatched:
         inv_coef: float = 0.0,
         target_inv: float = 0.0,
         risk_coef: float = 0.0,
-        action_coef: float = 0.0,
+        uniformity_coef: float = 0.0,
+        reward_coef: float = 1.0,
+        size_coef: float = 0.0,
+        total_q_target: float | int | None = None,
+        project_total_q_target: bool = False,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -425,9 +649,14 @@ class MonteCarloMPCTensorBatched:
         self.inv_coef = max(0.0, float(inv_coef))
         self.target_inv = float(target_inv)
         self.risk_coef = max(0.0, float(risk_coef))
-        self.action_coef = max(0.0, float(action_coef))
+        self.uniformity_coef = max(0.0, float(uniformity_coef))
+        self.reward_coef = float(reward_coef)
+        self.size_coef = max(0.0, float(size_coef))
+        self.total_q_target = float(total_q_target) if total_q_target is not None else None
+        self.project_total_q_target = bool(project_total_q_target)
         self._last_action: SigmoidMixtureAction | None = None
         self._last_J_components: dict | None = None
+        self._last_J_mean_raw: float = 0.0
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
         self._x_torch: Any = None
         self._optimizer: Any = None
@@ -436,6 +665,8 @@ class MonteCarloMPCTensorBatched:
             L_max = 1e5
             if self.total_q_max is not None:
                 L_max = max(L_max, float(self.total_q_max))
+            if self.total_q_target is not None:
+                L_max = max(L_max, float(self.total_q_target))
             self.bounds = sigmoid_mixture_action_bounds(
                 n_components=self.n_components,
                 L_max=L_max,
@@ -482,14 +713,20 @@ class MonteCarloMPCTensorBatched:
         if self.warm_start and self._last_action is not None:
             one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
         else:
-            sm = self.spread_max
-            bid_part = []
-            ask_part = []
-            for i in range(n):
-                x0_i = 1.0 + (sm - 1.0) * (i + 1) / (n + 1)
-                bid_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
-                ask_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
-            one_action = np.array(bid_part + ask_part, dtype=np.float64)
+            one_action = _initial_action_uniform_marginal_qrange(
+                n_components=n,
+                spread_max=self.spread_max,
+                total_q_target=self.total_q_target,
+            )
+            if one_action is None:
+                sm = self.spread_max
+                bid_part = []
+                ask_part = []
+                for i in range(n):
+                    x0_i = 1.0 + (sm - 1.0) * (i + 1) / (n + 1)
+                    bid_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
+                    ask_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
+                one_action = np.array(bid_part + ask_part, dtype=np.float64)
         if self.adam_normalize_inputs:
             one_action = _scale_flat_params_to_normalized(one_action, volume_scale)
         x0_arr = np.tile(one_action, self.horizon)
@@ -547,7 +784,15 @@ class MonteCarloMPCTensorBatched:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
                 if self.adam_normalize_inputs:
                     cur_flat = _unscale_flat_params_from_normalized(cur_flat, volume_scale)
-                cur_flat = _project_total_q_flat(cur_flat, n, self.total_q_min, self.total_q_max)
+                cur_flat = _project_total_q_flat(
+                    cur_flat,
+                    n,
+                    self.total_q_min,
+                    self.total_q_max,
+                    self.total_q_target,
+                    self.project_total_q_target,
+                    self.spread_max,
+                )
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
             def closure():
@@ -557,7 +802,9 @@ class MonteCarloMPCTensorBatched:
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
                     _project_total_q_torch(
                         x_torch, single_len, n,
-                        self.total_q_min, self.total_q_max, torch_mod,
+                        self.total_q_min, self.total_q_max,
+                        self.total_q_target, self.project_total_q_target,
+                        self.spread_max, torch_mod,
                     )
 
                 if self.fixed_mc_samples:
@@ -582,7 +829,8 @@ class MonteCarloMPCTensorBatched:
                 book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(self.n_samples, -1)
 
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                action_entropy_sum = torch_mod.zeros((), dtype=dtype, device=_device)
+                action_uniformity_sum = torch_mod.zeros((), dtype=dtype, device=_device)
+                action_size_sum = torch_mod.zeros((), dtype=dtype, device=_device)
 
                 for h in range(self.horizon):
                     if h == 0:
@@ -592,8 +840,15 @@ class MonteCarloMPCTensorBatched:
                         book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks, self.n_grid)
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
-                    action_entropy_sum = action_entropy_sum + _action_entropy_from_flat_params(
-                        action_h, n, use_softplus=True
+                    action_uniformity_sum = action_uniformity_sum + _action_uniformity_l2_from_marginal_depth(
+                        action_h, spread_grid, n, use_softplus=True
+                    )
+                    action_size_sum = action_size_sum + _action_size_penalty_qrange(
+                        action_h,
+                        n,
+                        self.spread_max,
+                        self.total_q_target,
+                        use_softplus=True,
                     )
                     sell_h = sell_vol[:, h : h + 1]
                     buy_h = buy_vol[:, h : h + 1]
@@ -669,16 +924,23 @@ class MonteCarloMPCTensorBatched:
                     cash_t = cash_next
 
                 # total_reward = ΔW per trajectory (same as W(s_{t+H}) - W(s_t)); inv_t = terminal inventory
-                action_entropy_mean = action_entropy_sum / float(self.horizon)
+                action_uniformity_mean = action_uniformity_sum / float(self.horizon)
+                action_size_mean = action_size_sum / float(self.horizon)
+                J_mean_raw = torch_mod.nan_to_num(
+                    total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                )
                 J, components = terminal_objective(
                     total_reward,
                     inv_t,
+                    reward_coef=self.reward_coef,
                     inv_coef=self.inv_coef,
                     target_inv=self.target_inv,
                     risk_coef=self.risk_coef,
-                    action_entropy=action_entropy_mean,
-                    action_coef=self.action_coef,
+                    uniformity=action_uniformity_mean,
+                    uniformity_coef=self.uniformity_coef,
                 )
+                J = J - float(self.size_coef) * action_size_mean
+                components["term_size"] = -float(self.size_coef) * action_size_mean
 
                 def _finite_item(t) -> float:
                     try:
@@ -688,6 +950,7 @@ class MonteCarloMPCTensorBatched:
                         return 0.0
 
                 self._last_J_components = {k: _finite_item(v) for k, v in components.items()}
+                self._last_J_mean_raw = _finite_item(J_mean_raw)
                 loss = -J
                 if torch_mod.isfinite(loss):
                     loss.backward()
@@ -699,10 +962,8 @@ class MonteCarloMPCTensorBatched:
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
                 best_x = x_torch.detach().clone()
-                comp = self._last_J_components
-                if comp is not None and "J_mean" in comp:
-                    jm = float(comp["J_mean"])
-                    best_J_mean = jm if math.isfinite(jm) else 0.0
+                jm = float(self._last_J_mean_raw)
+                best_J_mean = jm if math.isfinite(jm) else 0.0
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -716,7 +977,13 @@ class MonteCarloMPCTensorBatched:
         if self.adam_normalize_inputs:
             best_flat_slice = _unscale_flat_params_from_normalized(best_flat_slice, volume_scale)
         best_flat_slice = _project_total_q_flat(
-            best_flat_slice, n, self.total_q_min, self.total_q_max,
+            best_flat_slice,
+            n,
+            self.total_q_min,
+            self.total_q_max,
+            self.total_q_target,
+            self.project_total_q_target,
+            self.spread_max,
         )
         best_action = SigmoidMixtureAction.from_flat_positive(best_flat_slice, n_components=self.n_components)
         self._last_sigmoid_action = best_action

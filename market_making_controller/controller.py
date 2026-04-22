@@ -54,8 +54,6 @@ class SigmoidController:
         lot_size: int = 1,
         spread_max: float | None = None,
         zero_action_if_negative_J_mean: bool = False,
-        min_order_notional_tick_lot: float = 0.0,
-        min_notional_safety_mult: float = 1.0,
     ):
         self.optimizer = optimizer
         self.spread_max = spread_max
@@ -66,8 +64,6 @@ class SigmoidController:
             "s_a_min": s_a_min,
             "s_a_max": s_a_max,
             "lot_size": lot_size,
-            "min_order_notional_tick_lot": float(min_order_notional_tick_lot),
-            "min_notional_safety_mult": float(min_notional_safety_mult),
         }
 
     def act(
@@ -83,7 +79,6 @@ class SigmoidController:
                 return ZERO_DISCRETIZED_ACTION
         return sigmoid_action_to_discretized_action(
             sigmoid_action,
-            mid_ticks=float(state.mid),
             **self._discretization,
         )
 

@@ -12,7 +12,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from order_flow_stepper import OrderFlowStepper, Step
-from trade_stats import cancel_all_orders, get_lot_size, get_tick_size, place_limit_order_lots
+from trade_stats import (
+    cancel_all_orders,
+    get_lot_size,
+    get_min_order_amount_tick_lot,
+    get_min_order_qty_lots,
+    get_tick_size,
+    place_limit_order_lots,
+)
 from order_flow_testers import MarketOrderFlowTester
 
 if TYPE_CHECKING:
@@ -110,7 +117,7 @@ class OrderFlowRunner:
         self.J_mean_hist: list[float] = []
         self.J_inv_hist: list[float] = []
         self.J_std_hist: list[float] = []
-        self.J_action_entropy_hist: list[float] = []
+        self.J_uniformity_hist: list[float] = []
         # Realized ΔW: actual wealth change in one step when fills are applied. Often 0 or small if no fills.
         self.dW_times: list[datetime] = []  # when fills were applied
         self.dW_hist: list[float] = []
@@ -335,6 +342,8 @@ class OrderFlowRunner:
         base_asset, quote_asset = self._symbol_assets(sym)
         tick_size = float(get_tick_size(sym, ex))
         lot_size = float(get_lot_size(sym, ex))
+        min_qty_lots = max(0.0, float(get_min_order_qty_lots(sym, ex)))
+        min_notional_tick_lot = max(0.0, float(get_min_order_amount_tick_lot(sym, ex)))
         # Use current state totals (already synchronized by stepper in real mode) for
         # feasibility checks to avoid an extra balances REST request per step.
         avail_base = max(0.0, float(state.inventory) * lot_size)
@@ -342,7 +351,8 @@ class OrderFlowRunner:
         print(
             f"[live_execution] balances derived_from_state base_asset={base_asset} avail_base={avail_base:.12f} "
             f"quote_asset={quote_asset} avail_quote={avail_quote:.12f} "
-            f"lot_size={lot_size:.12f} tick_size={tick_size:.12f}"
+            f"lot_size={lot_size:.12f} tick_size={tick_size:.12f} "
+            f"min_qty_lots={min_qty_lots:.6f} min_notional_tick_lot={min_notional_tick_lot:.6f}"
         )
 
         mid_ticks = float(state.mid)
@@ -356,6 +366,19 @@ class OrderFlowRunner:
             amount_base = float(q) * lot_size
             price_quote = float(px) * tick_size
             notional_quote = amount_base * price_quote
+            if min_qty_lots > 0.0 and float(q) < min_qty_lots:
+                print(
+                    f"[live_execution] skip buy below min qty symbol={sym} "
+                    f"price_ticks={px} qty_lots={q} min_qty_lots={min_qty_lots:.6f}"
+                )
+                continue
+            if min_notional_tick_lot > 0.0 and float(q) * float(px) < min_notional_tick_lot:
+                print(
+                    f"[live_execution] skip buy below min notional symbol={sym} "
+                    f"price_ticks={px} qty_lots={q} notional_tick_lot={float(q) * float(px):.6f} "
+                    f"min_notional_tick_lot={min_notional_tick_lot:.6f}"
+                )
+                continue
             if notional_quote > avail_quote + 1e-12:
                 print(
                     f"[live_execution] skip buy insufficient quote symbol={sym} "
@@ -396,6 +419,19 @@ class OrderFlowRunner:
             amount_base = float(q) * lot_size
             price_quote = float(px) * tick_size
             notional_quote = amount_base * price_quote
+            if min_qty_lots > 0.0 and float(q) < min_qty_lots:
+                print(
+                    f"[live_execution] skip sell below min qty symbol={sym} "
+                    f"price_ticks={px} qty_lots={q} min_qty_lots={min_qty_lots:.6f}"
+                )
+                continue
+            if min_notional_tick_lot > 0.0 and float(q) * float(px) < min_notional_tick_lot:
+                print(
+                    f"[live_execution] skip sell below min notional symbol={sym} "
+                    f"price_ticks={px} qty_lots={q} notional_tick_lot={float(q) * float(px):.6f} "
+                    f"min_notional_tick_lot={min_notional_tick_lot:.6f}"
+                )
+                continue
             if amount_base > avail_base + 1e-12:
                 print(
                     f"[live_execution] skip sell insufficient base symbol={sym} "
@@ -569,8 +605,7 @@ class OrderFlowRunner:
                         reference_depth_lots=_ref_depth,
                     )
             opt = getattr(self.controller, "optimizer", None)
-            in_warmup = self._step_counter <= self.action_start_after_steps
-            if self.use_zero_action or in_warmup:
+            if self.use_zero_action:
                 action = ZERO_DISCRETIZED_ACTION
                 self.last_book_params = None
                 self.last_sigmoid_action = None
@@ -582,7 +617,10 @@ class OrderFlowRunner:
             if isinstance(action, DiscretizedOrderAction):
                 self.last_discretized_action = action
                 if self.live_order_execution:
-                    self._execute_live_orders(action, current_state)
+                    # Warm-up gate applies to live order placement only; controller
+                    # still runs and action/diagnostics are recorded from step 1.
+                    if self._step_counter > self.action_start_after_steps:
+                        self._execute_live_orders(action, current_state)
                 E_dW = None if self.use_zero_action else getattr(opt, "_last_E_dW", None)
                 t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)
                 if E_dW is not None:
@@ -590,22 +628,12 @@ class OrderFlowRunner:
                     self.E_dW_hist.append(float(E_dW))
                 comp = None if self.use_zero_action else getattr(opt, "_last_J_components", None)
                 if isinstance(comp, dict):
-                    inv_coef = float(getattr(opt, "inv_coef", 0.0) or 0.0)
-                    risk_coef = float(getattr(opt, "risk_coef", 0.0) or 0.0)
-                    action_coef = float(getattr(opt, "action_coef", 0.0) or 0.0)
                     self.J_comp_times.append(t_act)
-                    self.J_mean_hist.append(float(comp.get("J_mean", 0.0)))
-                    # Store weighted terms exactly as they appear in objective:
-                    # J = J_mean - inv_coef*J_inv_penalty - risk_coef*J_std + action_coef*J_action_entropy
-                    self.J_inv_hist.append(
-                        -inv_coef * float(comp.get("J_inv_penalty", 0.0))
-                    )
-                    self.J_std_hist.append(
-                        -risk_coef * float(comp.get("J_std", 0.0))
-                    )
-                    self.J_action_entropy_hist.append(
-                        action_coef * float(comp.get("J_action_entropy", 0.0))
-                    )
+                    # Weighted objective terms as returned by terminal_objective.
+                    self.J_mean_hist.append(float(comp.get("term_reward", 0.0)))
+                    self.J_inv_hist.append(float(comp.get("term_inv", 0.0)))
+                    self.J_std_hist.append(float(comp.get("term_risk", 0.0)))
+                    self.J_uniformity_hist.append(float(comp.get("term_uniformity", 0.0)))
             self._pending_action = action
             self._pending_state = current_state
             t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)

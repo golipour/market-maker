@@ -186,13 +186,44 @@ class NobitexAdapter:
         except Exception:
             step = Decimal("0.0001")
 
-        # minOrders is quote-currency keyed (e.g. {"rls": "3000000"}). Infer quote by suffix match.
+        # minOrders is quote-currency keyed (e.g. {"rls": "3000000"}). Infer quote by
+        # suffix match with IRT/RLS/TMN aliases so *_IRT symbols can still resolve
+        # Nobitex's RLS notional minimum.
         min_notional = None
         if isinstance(min_orders, dict) and min_orders:
             quote_key = None
-            for k in sorted((str(x) for x in min_orders.keys()), key=len, reverse=True):
-                if s_up.endswith(k.upper()):
-                    quote_key = k
+            norm_keys: dict[str, str] = {str(x).upper(): str(x) for x in min_orders.keys()}
+            candidates: list[str] = []
+            # Exact suffix candidates from known market symbols.
+            if s_up.endswith("RLS") or s_up.endswith("IRT") or s_up.endswith("TMN"):
+                candidates.extend(["RLS", "IRT", "TMN"])
+            # Generic fallback: try all keys by suffix match.
+            for k in sorted(norm_keys.keys(), key=len, reverse=True):
+                if s_up.endswith(k):
+                    candidates.append(k)
+            # Preserve order while deduplicating.
+            seen: set[str] = set()
+            for cand in candidates:
+                c = str(cand).upper()
+                if c in seen:
+                    continue
+                seen.add(c)
+                # Direct key first.
+                if c in norm_keys:
+                    quote_key = norm_keys[c]
+                    break
+                # Alias key fallback.
+                if c == "IRT" and "RLS" in norm_keys:
+                    quote_key = norm_keys["RLS"]
+                    break
+                if c == "RLS" and "IRT" in norm_keys:
+                    quote_key = norm_keys["IRT"]
+                    break
+                if c == "TMN" and "IRT" in norm_keys:
+                    quote_key = norm_keys["IRT"]
+                    break
+                if c == "IRT" and "TMN" in norm_keys:
+                    quote_key = norm_keys["TMN"]
                     break
             if quote_key is not None:
                 try:
@@ -937,6 +968,14 @@ def get_min_order_amount_tick_lot(symbol: str, exchange: str) -> float:
     return float(_min_order_amount_tick_lot(symbol, exchange))
 
 
+def get_min_order_qty_lots(symbol: str, exchange: str) -> float:
+    """
+    Minimum order quantity in model lot units, if exchange provides LOT_SIZE.minQty.
+    Returns 0.0 when not available.
+    """
+    return float(_min_order_qty_lots(symbol, exchange))
+
+
 def get_balances(exchange: str, api_token: str | None = None) -> dict[str, dict[str, float]]:
     """Current per-asset balances from exchange adapter private APIs (if supported)."""
     adapter = _adapter(exchange)
@@ -1142,6 +1181,10 @@ def _min_order_amount_tick_lot(symbol: str, exchange: str) -> float:
 
     If exchange exposes MIN_NOTIONAL in quote currency, convert as:
       min_tick_lot = min_notional / (tick_size * lot_size)
+
+    Fallback: if MIN_NOTIONAL is missing but LOT_SIZE.minQty exists, return
+    minQty expressed in model lots as a lower-bound proxy in tick*lot units.
+    (Equivalent to assuming price_ticks = 1.)
     """
     info = _exchange_info(symbol, exchange)
     if not info:
@@ -1157,10 +1200,37 @@ def _min_order_amount_tick_lot(symbol: str, exchange: str) -> float:
             except Exception:
                 pass
     if min_notional is None:
-        return 0.0
+        # Some exchanges (including some Nobitex symbols) expose only minQty.
+        # Return a non-zero lower-bound proxy so callers expecting a scalar
+        # minimum do not silently disable minimum-order constraints.
+        return float(_min_order_qty_lots(symbol, exchange))
     tick = max(1e-12, _tick_size(symbol, exchange))
     lot = max(1e-12, _lot_size(symbol, exchange))
     return float(min_notional / (tick * lot))
+
+
+def _min_order_qty_lots(symbol: str, exchange: str) -> float:
+    """
+    Minimum order quantity in model lot units (base minQty / lot_size).
+    Returns 0.0 when exchange does not expose a positive LOT_SIZE.minQty.
+    """
+    info = _exchange_info(symbol, exchange)
+    if not info:
+        return 0.0
+    min_qty = None
+    for f in info.get("filters") or []:
+        if f.get("filterType") == "LOT_SIZE":
+            try:
+                mq = float(f.get("minQty", 0) or 0)
+                if mq > 0:
+                    min_qty = mq
+                    break
+            except Exception:
+                pass
+    if min_qty is None:
+        return 0.0
+    lot = max(1e-12, _lot_size(symbol, exchange))
+    return float(min_qty / lot)
 
 
 def get_orderbook(symbol: str, limit: int = 100, exchange: str = "tabdeal") -> Orderbook:

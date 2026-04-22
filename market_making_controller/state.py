@@ -234,6 +234,47 @@ def sigmoid_action_to_action(sigmoid_action: SigmoidMixtureAction) -> Action:
     )
 
 
+def _evaluate_cumulative_depth_levels(spreads: list[float], depth_fn) -> list[float]:
+    """Step 1: evaluate monotone cumulative depth D(s) on spread grid."""
+    cumulative: list[float] = []
+    cum_prev = 0.0
+    for s in spreads:
+        cum = depth_fn(s)
+        if not math.isfinite(cum):
+            cum = cum_prev
+        cum = max(cum, cum_prev)
+        cumulative.append(cum)
+        cum_prev = cum
+    return cumulative
+
+
+def _marginal_from_cumulative_levels(cumulative: list[float]) -> list[float]:
+    """Step 2: convert cumulative levels to marginal levels with D(0)=0 baseline."""
+    marginal_raw: list[float] = []
+    prev_cum = 0.0
+    for cum in cumulative:
+        raw_qty = cum - prev_cum
+        if not math.isfinite(raw_qty) or raw_qty < 0:
+            raw_qty = 0.0
+        marginal_raw.append(raw_qty)
+        prev_cum = cum
+    return marginal_raw
+
+
+def _quantize_marginal_levels(
+    spreads: list[float],
+    marginal_raw: list[float],
+    lot_size: int,
+) -> list[tuple[float, int]]:
+    """Step 3: quantize raw marginals to lot_size and keep positive levels."""
+    out: list[tuple[float, int]] = []
+    for s, raw_qty in zip(spreads, marginal_raw):
+        qty = int(round(raw_qty / lot_size)) * lot_size
+        if qty > 0:
+            out.append((s, qty))
+    return out
+
+
 def sigmoid_action_to_discretized_action(
     sigmoid_action: SigmoidMixtureAction,
     s_b_min: float = 1.0,
@@ -241,9 +282,6 @@ def sigmoid_action_to_discretized_action(
     s_a_min: float = 1.0,
     s_a_max: float = 100.0,
     lot_size: int = 1,
-    mid_ticks: float | None = None,
-    min_order_notional_tick_lot: float = 0.0,
-    min_notional_safety_mult: float = 1.0,
 ) -> DiscretizedOrderAction:
     """
     Convert SigmoidMixtureAction to a discrete ladder of (spread_ticks, qty) per side
@@ -252,8 +290,8 @@ def sigmoid_action_to_discretized_action(
     Quantities discretized to lot_size. Each (spread_ticks, qty) is MARGINAL; cumulative
     at spread s is the sum of qty over levels with spread <= s (monotonic by construction).
 
-    Optional MIN_NOTIONAL guard (in tick*lot model units): keep only levels with
-    qty_lots * price_ticks >= min_order_notional_tick_lot * min_notional_safety_mult.
+    This function is model-space only: exchange-level minimum order constraints
+    (min notional, min qty) are enforced at execution time.
     """
     lot_size = max(1, lot_size)
     # Bid spread levels: step size 1 (tick)
@@ -263,35 +301,12 @@ def sigmoid_action_to_discretized_action(
     a_lo, a_hi = int(round(s_a_min)), int(round(s_a_max))
     ask_spreads = [float(i) for i in range(a_lo, a_hi + 1)] if a_hi >= a_lo else []
 
-    min_notional_tick_lot = max(0.0, float(min_order_notional_tick_lot)) * max(1.0, float(min_notional_safety_mult))
-    mid_ref = float(mid_ticks) if mid_ticks is not None and math.isfinite(float(mid_ticks)) else None
-
-    def levels_from_cumulative(spreads: list[float], depth_fn, side: str) -> list[tuple[float, int]]:
-        cum_prev = 0.0
-        out: list[tuple[float, int]] = []
-        for s in spreads:
-            cum = depth_fn(s)
-            if not math.isfinite(cum):
-                cum = cum_prev
-            cum = max(cum, cum_prev)  # enforce monotonic cumulative so marginal >= 0
-            raw_qty = cum - cum_prev
-            if not math.isfinite(raw_qty) or raw_qty < 0:
-                raw_qty = 0.0
-            qty = int(round(raw_qty / lot_size)) * lot_size
-            if qty > 0:
-                if min_notional_tick_lot > 0.0 and mid_ref is not None:
-                    px_ticks = (mid_ref - float(s)) if side == "bid" else (mid_ref + float(s))
-                    if (not math.isfinite(px_ticks)) or px_ticks <= 0.0:
-                        qty = 0
-                    elif float(qty) * px_ticks < min_notional_tick_lot:
-                        qty = 0
-                if qty > 0:
-                    out.append((s, qty))
-            cum_prev = cum
-        return out
-
-    bids = tuple(levels_from_cumulative(bid_spreads, sigmoid_action.depth_bid, side="bid"))
-    asks = tuple(levels_from_cumulative(ask_spreads, sigmoid_action.depth_ask, side="ask"))
+    bid_cumulative = _evaluate_cumulative_depth_levels(bid_spreads, sigmoid_action.depth_bid)
+    ask_cumulative = _evaluate_cumulative_depth_levels(ask_spreads, sigmoid_action.depth_ask)
+    bid_marginal = _marginal_from_cumulative_levels(bid_cumulative)
+    ask_marginal = _marginal_from_cumulative_levels(ask_cumulative)
+    bids = tuple(_quantize_marginal_levels(bid_spreads, bid_marginal, lot_size))
+    asks = tuple(_quantize_marginal_levels(ask_spreads, ask_marginal, lot_size))
     return DiscretizedOrderAction(bids=bids, asks=asks)
 
 

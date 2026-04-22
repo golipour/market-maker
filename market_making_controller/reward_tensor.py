@@ -3,9 +3,9 @@ Differentiable (PyTorch) reward functions that take StateTensor and ActionTensor
 and return a scalar tensor so gradients flow for training or gradient-based optimization.
 
 Terminal objective (single mode):
-  J = J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std + action_coef * J_action_entropy
+  J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std - uniformity_coef * J_uniformity
 where:
-  J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW), J_action_entropy = E[normalized action entropy]
+  J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW), J_uniformity = E[L2-to-uniform marginal penalty]
 """
 
 from __future__ import annotations
@@ -146,26 +146,32 @@ def objective_std(delta_W: "Tensor") -> "Tensor":
 def terminal_objective(
     delta_W: "Tensor",
     inv_terminal: "Tensor",
+    reward_coef: float = 1.0,
     inv_coef: float = 0.0,
     target_inv: float = 0.0,
     risk_coef: float = 0.0,
-    action_entropy: "Tensor | None" = None,
-    action_coef: float = 0.0,
+    uniformity: "Tensor | None" = None,
+    uniformity_coef: float = 0.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
-    Build scalar objective J from terminal ΔW and optional action entropy regularizer.
+    Build scalar objective J from terminal ΔW and optional action-uniformity regularizer.
 
     delta_W: (n_samples,) wealth change per trajectory, ΔW = W(s_{t+H}) - W(s_t).
     inv_terminal: (n_samples,) or (n_samples, 1) terminal inventory per trajectory.
+    reward_coef: multiplicative weight for mean reward term J_mean.
     inv_coef: weight for inventory target penalty.
     target_inv: desired terminal inventory target.
     risk_coef: weight for ΔW volatility penalty (J_std).
-    action_entropy: differentiable entropy regularizer term from action distribution.
-    action_coef: additive weight for action entropy regularization.
+    uniformity: differentiable L2-to-uniform regularizer term from marginal action distributions.
+    uniformity_coef: additive weight for uniformity penalty.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
-        components: dict with J_mean, J_inv, J_std, J_action_entropy (as scalars) for logging.
+        components: dict with weighted objective terms (ready for plotting/summing):
+            - term_reward = reward_coef * J_mean
+            - term_inv = -inv_coef * (J_inv - target_inv)^2
+            - term_risk = -risk_coef * J_std
+            - term_uniformity = -uniformity_coef * J_uniformity
     """
     torch = _get_torch()
     # Batched rollouts can produce inf/nan in ΔW when mid×inv overflows; poison the whole objective otherwise.
@@ -174,27 +180,25 @@ def terminal_objective(
     J_mean = objective_mean(delta_W)
     J_inv = objective_inv(inv_terminal)
     J_std = objective_std(delta_W)
-    if action_entropy is None:
-        J_action_entropy = J_mean * 0.0
+    if uniformity is None:
+        J_uniformity = J_mean * 0.0
     else:
-        J_action_entropy = torch.nan_to_num(
-            action_entropy.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6
+        J_uniformity = torch.nan_to_num(
+            uniformity.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6
         )
     target = torch.tensor(float(target_inv), dtype=J_inv.dtype, device=J_inv.device)
     J_inv_penalty = (J_inv - target) * (J_inv - target)
 
+    term_reward = float(reward_coef) * J_mean
+    term_inv = -float(inv_coef) * J_inv_penalty
+    term_risk = -float(risk_coef) * J_std
+    term_uniformity = -float(uniformity_coef) * J_uniformity
     components = {
-        "J_mean": J_mean,
-        "J_inv": J_inv,
-        "J_inv_penalty": J_inv_penalty,
-        "J_std": J_std,
-        "J_action_entropy": J_action_entropy,
+        "term_reward": term_reward,
+        "term_inv": term_inv,
+        "term_risk": term_risk,
+        "term_uniformity": term_uniformity,
     }
-    J = (
-        J_mean
-        - float(inv_coef) * J_inv_penalty
-        - float(risk_coef) * J_std
-        + float(action_coef) * J_action_entropy
-    )
+    J = term_reward + term_inv + term_risk + term_uniformity
 
     return J, components

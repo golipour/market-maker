@@ -1295,22 +1295,22 @@ def draw_dynamic(
         j_mean = getattr(runner, "J_mean_hist", None) or []
         j_inv = getattr(runner, "J_inv_hist", None) or []
         j_std = getattr(runner, "J_std_hist", None) or []
-        j_ent = getattr(runner, "J_action_entropy_hist", None) or []
-        n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_ent))
+        j_uni = getattr(runner, "J_uniformity_hist", None) or []
+        n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_uni))
         if n_comp > 0:
             t = t_comp[:n_comp]
             y_mean = [float(v) for v in j_mean[:n_comp]]
             y_inv = [float(v) for v in j_inv[:n_comp]]
             y_std = [float(v) for v in j_std[:n_comp]]
-            y_ent = [float(v) for v in j_ent[:n_comp]]
-            ax.plot(t, y_mean, color="blue", linewidth=1.2, label="J_mean")
+            y_uni = [float(v) for v in j_uni[:n_comp]]
+            ax.plot(t, y_mean, color="blue", linewidth=1.2, label="reward_coef * J_mean")
             ax.plot(t, y_inv, color="red", linewidth=1.2, label="-inv_coef * J_inv_penalty")
             ax.plot(t, y_std, color="purple", linewidth=1.2, label="-risk_coef * J_std")
-            ax.plot(t, y_ent, color="green", linewidth=1.2, label="+action_coef * J_action_entropy")
+            ax.plot(t, y_uni, color="green", linewidth=1.2, label="-uniformity_coef * J_uniformity")
             ax.legend(loc="upper right", fontsize=7)
             if n_comp > 1:
                 ax.set_xlim(t[0], t[-1])
-            lo, hi = _finite_series_ylim(y_mean + y_inv + y_std + y_ent, pad_min=1.0)
+            lo, hi = _finite_series_ylim(y_mean + y_inv + y_std + y_uni, pad_min=1.0)
             ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
