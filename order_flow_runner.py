@@ -109,6 +109,17 @@ class OrderFlowRunner:
         self.pred_buy_rep_prev_error_hist: list[float] = []
         self.pred_sell_rep_prev_error_hist: list[float] = []
         self.market_implied_mid_hist: list[float] = []  # mid from prev OB minus realized market flow only (for plot)
+        self.anchor_buy_reference_hist: list[float] = []
+        self.anchor_sell_reference_hist: list[float] = []
+        self.anchor_reference_times: list[datetime] = []
+        self.main_buy_reference_hist: list[float] = []
+        self.main_sell_reference_hist: list[float] = []
+        self.main_reference_times: list[datetime] = []
+        self.last_anchor_orderbook = None
+        self.last_main_buy_reference_ticks: float | None = None
+        self.last_main_sell_reference_ticks: float | None = None
+        self.last_anchor_buy_reference_ticks: float | None = None
+        self.last_anchor_sell_reference_ticks: float | None = None
         self.last_book_params: dict | None = None  # fitted depth params from last MPC step (for animation)
         # E[ΔW]: optimizer’s expected total ΔW over horizon (sum over H steps, mean over MC samples). Can be large (e.g. 1e9) if horizon or notional is large.
         self.E_dW_times: list[datetime] = []  # when action was taken
@@ -474,6 +485,35 @@ class OrderFlowRunner:
         t_end, ob, buy_vol, sell_vol, _step_inventory, _step_cash, *_ = step
         bucket_ms = self.stepper.T_ms
         mid_now_ticks = float(ob.mid)
+        self.last_main_buy_reference_ticks = getattr(
+            self.stepper, "last_main_buy_reference_ticks", None
+        )
+        self.last_main_sell_reference_ticks = getattr(
+            self.stepper, "last_main_sell_reference_ticks", None
+        )
+        self.last_anchor_orderbook = getattr(self.stepper, "last_anchor_orderbook", None)
+        self.last_anchor_buy_reference_ticks = getattr(
+            self.stepper, "last_anchor_buy_reference_ticks", None
+        )
+        self.last_anchor_sell_reference_ticks = getattr(
+            self.stepper, "last_anchor_sell_reference_ticks", None
+        )
+        if (
+            self.last_main_buy_reference_ticks is not None
+            and self.last_main_sell_reference_ticks is not None
+        ):
+            t_main = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+            self.main_reference_times.append(t_main)
+            self.main_buy_reference_hist.append(float(self.last_main_buy_reference_ticks))
+            self.main_sell_reference_hist.append(float(self.last_main_sell_reference_ticks))
+        if (
+            self.last_anchor_buy_reference_ticks is not None
+            and self.last_anchor_sell_reference_ticks is not None
+        ):
+            t_anchor = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+            self.anchor_reference_times.append(t_anchor)
+            self.anchor_buy_reference_hist.append(float(self.last_anchor_buy_reference_ticks))
+            self.anchor_sell_reference_hist.append(float(self.last_anchor_sell_reference_ticks))
 
         # Apply previous action with current step's volumes → current state (execution model returns state with current ob)
         current_state = None

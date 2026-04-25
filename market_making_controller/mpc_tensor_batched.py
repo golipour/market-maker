@@ -362,31 +362,6 @@ def _book_cumulative_from_arrays(
     return cum_b, cum_a
 
 
-def _consume_mof_only_torch(
-    ob_bids: torch.Tensor,
-    ob_asks: torch.Tensor,
-    buy_vol: torch.Tensor,
-    sell_vol: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply MOF consumption only (no LOF residual) to level volumes."""
-    cum_bid = torch.cumsum(ob_bids.float(), dim=1)
-    cum_ask = torch.cumsum(ob_asks.float(), dim=1)
-    sell_vol = sell_vol.clamp(min=0.0)
-    buy_vol = buy_vol.clamp(min=0.0)
-    consumed_b = torch.minimum(sell_vol, cum_bid)
-    consumed_a = torch.minimum(buy_vol, cum_ask)
-    new_cum_bid = (cum_bid - consumed_b).clamp(min=0.0)
-    new_cum_ask = (cum_ask - consumed_a).clamp(min=0.0)
-    ob_bids_after = torch.cat(
-        [new_cum_bid[:, :1], new_cum_bid[:, 1:] - new_cum_bid[:, :-1]],
-        dim=1,
-    ).clamp(min=0.0)
-    ob_asks_after = torch.cat(
-        [new_cum_ask[:, :1], new_cum_ask[:, 1:] - new_cum_ask[:, :-1]],
-        dim=1,
-    ).clamp(min=0.0)
-    return ob_bids_after, ob_asks_after
-
 
 def _representative_prices_batched(
     ob_bids: torch.Tensor,

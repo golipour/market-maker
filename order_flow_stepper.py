@@ -13,6 +13,7 @@ from typing import Protocol
 
 from trade_stats import (
     EXCHANGES,
+    Level,
     Orderbook,
     get_balances,
     get_lot_size,
@@ -23,6 +24,7 @@ from trade_stats import (
     normalize_trade_to_tick_lot_units,
 )
 from trade_stats_market_ws import create_market_ws_session, kucoin_ping_pong_json
+from market_making_controller.ob_reference_prices import reference_prices_ticks_from_orderbook
 
 from market_making_controller.models.flow_implied import Step
 
@@ -584,6 +586,15 @@ class OrderFlowStepper:
         private_api_token: str | None = None,
         step_window_mode: str = "lookback",
         balance_update_mode: str = "events",
+        anchor_exchange: str | None = None,
+        anchor_symbol: str | None = None,
+        use_anchor_websocket_market_data: bool = True,
+        anchor_depth_limit: int | None = None,
+        anchor_orderbook_poll_interval_ms: int | None = None,
+        anchor_orderbook_buffer_ms: int | None = None,
+        anchor_websocket_reconnect_ms: int | None = None,
+        main_representative_price_target_depth_lots: float | None = None,
+        anchor_representative_price_target_depth_lots: float = 1000.0,
     ):
         self.exchange = exchange
         self.symbol = symbol
@@ -600,7 +611,22 @@ class OrderFlowStepper:
             raise ValueError("balance_update_mode must be 'events' or 'rest'")
         self._lot_size = max(1e-12, float(get_lot_size(symbol, exchange)))
         self._tick_size = max(1e-12, float(get_tick_size(symbol, exchange)))
+        if main_representative_price_target_depth_lots is None:
+            main_representative_price_target_depth_lots = (
+                anchor_representative_price_target_depth_lots
+            )
+        self._main_representative_price_target_depth_lots = max(
+            1e-9, float(main_representative_price_target_depth_lots)
+        )
+        self._anchor_representative_price_target_depth_lots = max(
+            1e-9, float(anchor_representative_price_target_depth_lots)
+        )
         self.steps: list[Step] = []
+        self.last_main_buy_reference_ticks: float | None = None
+        self.last_main_sell_reference_ticks: float | None = None
+        self.last_anchor_orderbook: Orderbook | None = None
+        self.last_anchor_buy_reference_ticks: float | None = None
+        self.last_anchor_sell_reference_ticks: float | None = None
         # Buffered private exchange events (if websocket private channels are enabled).
         self.last_private_trades: list[dict] = []
         self.last_private_orders: list[dict] = []
@@ -615,6 +641,9 @@ class OrderFlowStepper:
         self.balances: dict[str, dict[str, float]] = {}
         self._order_locked_by_id: dict[str, tuple[str, float]] = {}
         self._applied_private_trade_ids: set[str] = set()
+        # Active own orders inferred from private websocket order events.
+        # order_id -> (side, price_ticks, remaining_qty_lots, last_event_time_ms)
+        self._active_orders_by_id: dict[str, tuple[str, int, int, int]] = {}
 
         if use_websocket_market_data and trade_provider is None and orderbook_provider is None:
             # One websocket provider: depth + trades from push only (no REST fallback on trades).
@@ -656,9 +685,117 @@ class OrderFlowStepper:
                     symbol=symbol,
                     depth_limit=depth_limit,
                 )
+        self.anchor_exchange = str(anchor_exchange).strip() if anchor_exchange else ""
+        self.anchor_symbol = (
+            str(anchor_symbol).strip() if anchor_symbol else str(symbol).strip()
+        )
+        self.anchor_orderbook_provider: OrderbookDataProvider | None = None
+        self._anchor_tick_size: float | None = None
+        self._anchor_lot_size: float | None = None
+        if self.anchor_exchange:
+            _anchor_depth_limit = (
+                int(anchor_depth_limit)
+                if anchor_depth_limit is not None
+                else int(depth_limit)
+            )
+            _anchor_orderbook_poll_interval_ms = (
+                int(anchor_orderbook_poll_interval_ms)
+                if anchor_orderbook_poll_interval_ms is not None
+                else int(orderbook_poll_interval_ms)
+            )
+            _anchor_orderbook_buffer_ms = (
+                int(anchor_orderbook_buffer_ms)
+                if anchor_orderbook_buffer_ms is not None
+                else int(orderbook_buffer_ms)
+            )
+            _anchor_websocket_reconnect_ms = (
+                int(anchor_websocket_reconnect_ms)
+                if anchor_websocket_reconnect_ms is not None
+                else int(websocket_reconnect_ms)
+            )
+            if use_anchor_websocket_market_data:
+                self.anchor_orderbook_provider = WebSocketBufferedMarketDataProvider(
+                    exchange=self.anchor_exchange,
+                    symbol=self.anchor_symbol,
+                    trades_limit=1,
+                    depth_limit=_anchor_depth_limit,
+                    max_buffer_ms=_anchor_orderbook_buffer_ms,
+                    reconnect_ms=_anchor_websocket_reconnect_ms,
+                    private_api_token=None,
+                )
+            else:
+                self.anchor_orderbook_provider = BufferedPollingOrderbookDataProvider(
+                    exchange=self.anchor_exchange,
+                    symbol=self.anchor_symbol,
+                    depth_limit=_anchor_depth_limit,
+                    poll_interval_ms=_anchor_orderbook_poll_interval_ms,
+                    max_buffer_ms=_anchor_orderbook_buffer_ms,
+                )
+            self._anchor_tick_size = max(
+                1e-12, float(get_tick_size(self.anchor_symbol, self.anchor_exchange))
+            )
+            self._anchor_lot_size = max(
+                1e-12, float(get_lot_size(self.anchor_symbol, self.anchor_exchange))
+            )
         self.trade_provider.start()
         self.orderbook_provider.start()
+        if self.anchor_orderbook_provider is not None:
+            self.anchor_orderbook_provider.start()
         self._initialize_balances()
+
+    def _convert_anchor_ob_to_main_units(
+        self, anchor_ob: Orderbook
+    ) -> Orderbook | None:
+        """Map anchor orderbook ticks/lots to main exchange tick/lot units."""
+        if self._anchor_tick_size is None or self._anchor_lot_size is None:
+            return None
+        price_scale = float(self._anchor_tick_size / self._tick_size)
+        qty_scale = float(self._anchor_lot_size / self._lot_size)
+
+        bids = []
+        asks = []
+        for lev in anchor_ob.bids:
+            p_main = max(1, int(round(float(lev.price) * price_scale)))
+            q_main = max(0, int(round(float(lev.qty) * qty_scale)))
+            if q_main <= 0:
+                continue
+            bids.append((p_main, q_main))
+        for lev in anchor_ob.asks:
+            p_main = max(1, int(round(float(lev.price) * price_scale)))
+            q_main = max(0, int(round(float(lev.qty) * qty_scale)))
+            if q_main <= 0:
+                continue
+            asks.append((p_main, q_main))
+        if not bids or not asks:
+            return None
+        bids.sort(key=lambda x: x[0], reverse=True)
+        asks.sort(key=lambda x: x[0])
+        best_bid = float(bids[0][0])
+        best_ask = float(asks[0][0])
+        mid_main = (best_bid + best_ask) / 2.0
+        bid_levels = [
+            Level(
+                price=p,
+                qty=q,
+                spread_ticks=int(round(mid_main - float(p))),
+            )
+            for (p, q) in bids
+        ]
+        ask_levels = [
+            Level(
+                price=p,
+                qty=q,
+                spread_ticks=int(round(float(p) - mid_main)),
+            )
+            for (p, q) in asks
+        ]
+        return Orderbook(
+            t_ms=int(anchor_ob.t_ms),
+            mid=float(mid_main),
+            tick_size=float(self._tick_size),
+            bids=bid_levels,
+            asks=ask_levels,
+        )
 
     @staticmethod
     def _to_float(v, default: float = 0.0) -> float:
@@ -790,6 +927,112 @@ class OrderFlowStepper:
                 if abs(delta_locked) > 0.0:
                     self._move_free_locked(lock_asset, delta_locked)
             self._order_locked_by_id[oid] = (lock_asset, lock_now)
+
+    def _private_order_remaining_lots(self, event: dict) -> int:
+        """Parse remaining order quantity from private order event in model lot units."""
+        amount = max(0.0, self._to_float(event.get("amount", 0.0)))
+        filled = max(0.0, self._to_float(event.get("filledAmount", 0.0)))
+        remaining = max(0.0, amount - filled)
+        if remaining <= 0.0:
+            return 0
+        return max(0, int(round(remaining / max(1e-12, self._lot_size))))
+
+    def _private_order_price_ticks(self, event: dict) -> int:
+        """Parse private order event price into model tick units."""
+        price_native = self._to_float(event.get("price", 0.0))
+        if price_native <= 0.0:
+            return 0
+        return max(1, int(round(price_native / max(1e-12, self._tick_size))))
+
+    def _update_active_orders_from_private_events(self, events: list[dict]) -> None:
+        """
+        Update active order map using private order websocket events.
+        This state is persistent across steps and is used to de-bias orderbook observations.
+        """
+        if not events:
+            return
+        for e in events:
+            oid = str(e.get("orderId", "") or "")
+            if not oid:
+                continue
+            t_ms = int(self._to_float(e.get("time", 0.0)))
+            side = str(e.get("side", "")).strip().lower()
+            status = str(e.get("status", "")).strip().lower()
+            if status in {"done", "canceled", "rejected"}:
+                self._active_orders_by_id.pop(oid, None)
+                continue
+            if not side.startswith("buy") and not side.startswith("sell"):
+                continue
+            price_ticks = self._private_order_price_ticks(e)
+            remaining_lots = self._private_order_remaining_lots(e)
+            if price_ticks <= 0 or remaining_lots <= 0:
+                self._active_orders_by_id.pop(oid, None)
+                continue
+            self._active_orders_by_id[oid] = (side, price_ticks, remaining_lots, t_ms)
+
+    def _subtract_active_orders_from_orderbook(self, ob: Orderbook) -> Orderbook:
+        """
+        Return orderbook with our currently active orders removed level-wise by price.
+        Keeps the original book unchanged and rebuilds spread ticks from corrected mid.
+        """
+        if not self._active_orders_by_id:
+            return ob
+
+        own_bid_by_price: dict[int, int] = defaultdict(int)
+        own_ask_by_price: dict[int, int] = defaultdict(int)
+        for side, price_ticks, remaining_lots, _t_ms in self._active_orders_by_id.values():
+            if price_ticks <= 0 or remaining_lots <= 0:
+                continue
+            if side.startswith("buy"):
+                own_bid_by_price[price_ticks] += int(remaining_lots)
+            elif side.startswith("sell"):
+                own_ask_by_price[price_ticks] += int(remaining_lots)
+
+        if not own_bid_by_price and not own_ask_by_price:
+            return ob
+
+        bids_pairs: list[tuple[int, int]] = []
+        for lev in ob.bids:
+            rem = int(lev.qty) - int(own_bid_by_price.get(int(lev.price), 0))
+            if rem > 0:
+                bids_pairs.append((int(lev.price), int(rem)))
+
+        asks_pairs: list[tuple[int, int]] = []
+        for lev in ob.asks:
+            rem = int(lev.qty) - int(own_ask_by_price.get(int(lev.price), 0))
+            if rem > 0:
+                asks_pairs.append((int(lev.price), int(rem)))
+
+        # If correction would invalidate one side, keep original snapshot.
+        if not bids_pairs or not asks_pairs:
+            return ob
+
+        bids_pairs.sort(key=lambda x: x[0], reverse=True)
+        asks_pairs.sort(key=lambda x: x[0])
+        mid_corr = (float(bids_pairs[0][0]) + float(asks_pairs[0][0])) / 2.0
+        bid_levels = [
+            Level(
+                price=p,
+                qty=q,
+                spread_ticks=int(round(mid_corr - float(p))),
+            )
+            for (p, q) in bids_pairs
+        ]
+        ask_levels = [
+            Level(
+                price=p,
+                qty=q,
+                spread_ticks=int(round(float(p) - mid_corr)),
+            )
+            for (p, q) in asks_pairs
+        ]
+        return Orderbook(
+            t_ms=int(ob.t_ms),
+            mid=float(mid_corr),
+            tick_size=float(ob.tick_size),
+            bids=bid_levels,
+            asks=ask_levels,
+        )
 
     def _private_events_to_side_fills(
         self,
@@ -955,6 +1198,8 @@ class OrderFlowStepper:
     def close(self) -> None:
         self.trade_provider.stop()
         self.orderbook_provider.stop()
+        if self.anchor_orderbook_provider is not None:
+            self.anchor_orderbook_provider.stop()
 
     def advance(self, t_end_ms: int | None = None) -> Step | None:
         """Fetch one step for [t_end_ms - T_ms, t_end_ms]. Return None on orderbook failure."""
@@ -968,6 +1213,40 @@ class OrderFlowStepper:
         ob = self.orderbook_provider.get_orderbook(t_end_ms)
         if ob is None:
             return None
+        m_buy, m_sell = reference_prices_ticks_from_orderbook(
+            ob,
+            target_depth_lots=self._main_representative_price_target_depth_lots,
+        )
+        self.last_main_buy_reference_ticks = float(m_buy)
+        self.last_main_sell_reference_ticks = float(m_sell)
+        if self.anchor_orderbook_provider is not None:
+            try:
+                anchor_ob_raw = self.anchor_orderbook_provider.get_orderbook(t_end_ms)
+            except Exception:
+                anchor_ob_raw = None
+            if anchor_ob_raw is not None:
+                anchor_ob_main = self._convert_anchor_ob_to_main_units(
+                    anchor_ob_raw
+                )
+                self.last_anchor_orderbook = anchor_ob_main
+                if anchor_ob_main is not None:
+                    a_buy, a_sell = reference_prices_ticks_from_orderbook(
+                        anchor_ob_main,
+                        target_depth_lots=self._anchor_representative_price_target_depth_lots,
+                    )
+                    self.last_anchor_buy_reference_ticks = float(a_buy)
+                    self.last_anchor_sell_reference_ticks = float(a_sell)
+                else:
+                    self.last_anchor_buy_reference_ticks = None
+                    self.last_anchor_sell_reference_ticks = None
+            else:
+                self.last_anchor_orderbook = None
+                self.last_anchor_buy_reference_ticks = None
+                self.last_anchor_sell_reference_ticks = None
+        else:
+            self.last_anchor_orderbook = None
+            self.last_anchor_buy_reference_ticks = None
+            self.last_anchor_sell_reference_ticks = None
         trades_list = self.trade_provider.get_trades(t_start_ms, t_end_ms)
         if hasattr(self.trade_provider, "get_private_trades"):
             try:
@@ -986,6 +1265,8 @@ class OrderFlowStepper:
                 self.last_private_orders = []
         else:
             self.last_private_orders = []
+        self._update_active_orders_from_private_events(self.last_private_orders)
+        ob = self._subtract_active_orders_from_orderbook(ob)
 
         self.last_private_trade_fills_bid, self.last_private_trade_fills_ask = (
             self._private_events_to_side_fills(self.last_private_trades, ob)

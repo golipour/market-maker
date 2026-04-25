@@ -199,6 +199,15 @@ def create_runner(
     expected_mid_debug_every: int = 1,
     live_order_execution: bool = False,
     action_start_after_steps: int = 0,
+    anchor_exchange: str | None = None,
+    anchor_symbol: str | None = None,
+    use_anchor_websocket_market_data: bool = True,
+    anchor_depth_limit: int | None = None,
+    anchor_orderbook_poll_interval_ms: int | None = None,
+    anchor_orderbook_buffer_ms: int | None = None,
+    anchor_websocket_reconnect_ms: int | None = None,
+    main_representative_price_target_depth_lots: float | None = None,
+    anchor_representative_price_target_depth_lots: float = 1000.0,
 ) -> OrderFlowRunner:
     """
     Build OrderFlowStepper and OrderFlowRunner from pipeline components.
@@ -226,6 +235,15 @@ def create_runner(
         private_api_token=private_api_token,
         step_window_mode=step_window_mode,
         balance_update_mode=balance_update_mode,
+        anchor_exchange=anchor_exchange,
+        anchor_symbol=anchor_symbol,
+        use_anchor_websocket_market_data=use_anchor_websocket_market_data,
+        anchor_depth_limit=anchor_depth_limit,
+        anchor_orderbook_poll_interval_ms=anchor_orderbook_poll_interval_ms,
+        anchor_orderbook_buffer_ms=anchor_orderbook_buffer_ms,
+        anchor_websocket_reconnect_ms=anchor_websocket_reconnect_ms,
+        main_representative_price_target_depth_lots=main_representative_price_target_depth_lots,
+        anchor_representative_price_target_depth_lots=anchor_representative_price_target_depth_lots,
     )
     return OrderFlowRunner(
         stepper=stepper,
@@ -273,10 +291,25 @@ def main() -> None:
         "use_buffered_orderbook_provider": True,
         "use_websocket_market_data": True,
         "use_zero_action": False,  # False to run controller (MonteCarloMPCTensorBatched); True = no quotes
-        "action_start_after_steps": 10,  # warm-up: delay live order placement for first N steps (controller still runs)
+        "action_start_after_steps": 1000,  # warm-up: delay live order placement for first N steps (controller still runs)
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
+        "anchor_exchange": None, #"kucoin",  # e.g. "kucoin"
+        "anchor_symbol": None,  # defaults to args["symbol"] when anchor_exchange is set
+        "use_anchor_websocket_market_data": True,
+        "anchor_depth_limit": None,  # defaults to depth_limit
+        "anchor_orderbook_poll_interval_ms": None,  # only used when anchor websocket is disabled
+        "anchor_orderbook_buffer_ms": None,  # defaults to orderbook_buffer_ms
+        "anchor_websocket_reconnect_ms": None,  # defaults to websocket_reconnect_ms
+        "main_representative_price_target_depth_lots": None,  # None => same as anchor target depth
+        "anchor_representative_price_target_depth_lots": 10000.0,
+        # Plot windows toggles (performance): Figure 1 (main) is always enabled.
+        "enable_loss_figure": False,    # Figure 2
+        "enable_action_figure": True,  # Figure 3
+        "enable_price_figure": False,   # Figure 4
+        "enable_qq_figure": False,      # Figure 5
+        "enable_anchor_figure": False,  # Figure 6
     }
 
     pipeline = {
@@ -393,6 +426,15 @@ def main() -> None:
         expected_mid_debug_every=args["expected_mid_debug_every"],
         live_order_execution=live_order_execution,
         action_start_after_steps=args["action_start_after_steps"],
+        anchor_exchange=args["anchor_exchange"],
+        anchor_symbol=args["anchor_symbol"],
+        use_anchor_websocket_market_data=args["use_anchor_websocket_market_data"],
+        anchor_depth_limit=args["anchor_depth_limit"],
+        anchor_orderbook_poll_interval_ms=args["anchor_orderbook_poll_interval_ms"],
+        anchor_orderbook_buffer_ms=args["anchor_orderbook_buffer_ms"],
+        anchor_websocket_reconnect_ms=args["anchor_websocket_reconnect_ms"],
+        main_representative_price_target_depth_lots=args["main_representative_price_target_depth_lots"],
+        anchor_representative_price_target_depth_lots=args["anchor_representative_price_target_depth_lots"],
     )
     run_animation(
         runner=runner,
@@ -404,6 +446,11 @@ def main() -> None:
         decay=args["decay"],
         spread_max=spread_max,
         animation_interval_ms=args["animation_interval_ms"],
+        enable_loss_figure=args["enable_loss_figure"],
+        enable_action_figure=args["enable_action_figure"],
+        enable_price_figure=args["enable_price_figure"],
+        enable_qq_figure=args["enable_qq_figure"],
+        enable_anchor_figure=args["enable_anchor_figure"],
     )
 
 

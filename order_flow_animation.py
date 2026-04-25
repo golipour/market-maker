@@ -236,6 +236,11 @@ def run_animation(
     spread_max: float | None = None,
     animation_interval_ms: int | None = None,
     max_steps_per_frame: int = 5,
+    enable_loss_figure: bool = True,
+    enable_action_figure: bool = True,
+    enable_price_figure: bool = True,
+    enable_qq_figure: bool = True,
+    enable_anchor_figure: bool = True,
 ) -> None:
     """
     Run the animation loop. Figure layout is built from runner: estimator and tester
@@ -260,10 +265,13 @@ def run_animation(
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.98), h_pad=1.2)
 
     # Figure 3: optimizer/components + depth/action diagnostics moved out of main window.
-    fig_action, axes_action = plt.subplots(4, 1, figsize=(10, 11.5), sharex=False)
-    axes_action = np.atleast_1d(axes_action).ravel()
-    fig_action.suptitle("Action & Depth diagnostics", fontsize=12)
-    fig_action.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
+    fig_action = None
+    axes_action = None
+    if enable_action_figure:
+        fig_action, axes_action = plt.subplots(4, 1, figsize=(10, 11.5), sharex=False)
+        axes_action = np.atleast_1d(axes_action).ravel()
+        fig_action.suptitle("Action & Depth diagnostics", fontsize=12)
+        fig_action.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
     ranges_action = {
         "J_components": (0, 1),
         "depth": (1, 2),
@@ -271,16 +279,30 @@ def run_animation(
     }
 
     # Figure 4: price-model diagnostics (flow, rep prices, σ, μ under σ, MC pred error).
-    fig_mid_price, axes_mid_price = plt.subplots(5, 1, figsize=(10, 13.8), sharex=False)
-    axes_mid_price = np.atleast_1d(axes_mid_price).ravel()
-    fig_mid_price.suptitle("Price model diagnostics", fontsize=12)
-    fig_mid_price.tight_layout()
+    fig_mid_price = None
+    axes_mid_price = None
+    if enable_price_figure:
+        fig_mid_price, axes_mid_price = plt.subplots(5, 1, figsize=(10, 13.8), sharex=False)
+        axes_mid_price = np.atleast_1d(axes_mid_price).ravel()
+        fig_mid_price.suptitle("Price model diagnostics", fontsize=12)
+        fig_mid_price.tight_layout()
 
     # Figure 5: QQ chart of observed trade volumes vs current learned flow model.
-    fig_qq, axes_qq = plt.subplots(2, 1, figsize=(8.8, 8.2), sharex=False)
-    axes_qq = np.atleast_1d(axes_qq).ravel()
-    fig_qq.suptitle("Trade volume QQ: observed vs learned model", fontsize=12)
-    fig_qq.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
+    fig_qq = None
+    axes_qq = None
+    if enable_qq_figure:
+        fig_qq, axes_qq = plt.subplots(2, 1, figsize=(8.8, 8.2), sharex=False)
+        axes_qq = np.atleast_1d(axes_qq).ravel()
+        fig_qq.suptitle("Trade volume QQ: observed vs learned model", fontsize=12)
+        fig_qq.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
+
+    # Figure 6: main/anchor representative buy/sell prices in a single subplot.
+    fig_anchor = None
+    ax_anchor = None
+    if enable_anchor_figure:
+        fig_anchor, ax_anchor = plt.subplots(1, 1, figsize=(10, 4.8), sharex=False)
+        fig_anchor.suptitle("Main vs Anchor Representative Prices", fontsize=12)
+        fig_anchor.tight_layout(rect=(0.02, 0.02, 0.98, 0.94))
 
     # Figure 2 — NLL / predictive log loss. Must be created before plt.show(); figures made only
     # inside FuncAnimation callbacks often never get a window on Qt/GTk backends.
@@ -297,32 +319,35 @@ def run_animation(
         loss_state["fig"].suptitle("Figure 2 — NLL & predictive log loss", fontsize=12)
         loss_state["fig"].tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
 
-    subplots_loss_init = _log_loss_subplots_data(
-        runner.tester,
-        getattr(runner, "price_tester", None),
-        limit_order_flow_model=runner.limit_order_flow_model,
-        n_dates=len(runner.steps),
-        runner=runner,
-        market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
-    )
-    if not subplots_loss_init:
-        subplots_loss_init = [{"title": "Log loss (NLL)", "ylabel": "EWMA −log p", "series": []}]
-    _ensure_loss_figure(len(subplots_loss_init))
-    dates_init = [
-        datetime.fromtimestamp((s[0] - bucket_ms / 2) / 1000.0, tz=timezone.utc) for s in runner.steps
-    ]
-    draw_log_loss_window(loss_state["axes"], dates_init, subplots_loss_init, loss_state["fig"])
+    if enable_loss_figure:
+        subplots_loss_init = _log_loss_subplots_data(
+            runner.tester,
+            getattr(runner, "price_tester", None),
+            limit_order_flow_model=runner.limit_order_flow_model,
+            n_dates=len(runner.steps),
+            runner=runner,
+            market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
+        )
+        if not subplots_loss_init:
+            subplots_loss_init = [{"title": "Log loss (NLL)", "ylabel": "EWMA −log p", "series": []}]
+        _ensure_loss_figure(len(subplots_loss_init))
+        dates_init = [
+            datetime.fromtimestamp((s[0] - bucket_ms / 2) / 1000.0, tz=timezone.utc) for s in runner.steps
+        ]
+        draw_log_loss_window(loss_state["axes"], dates_init, subplots_loss_init, loss_state["fig"])
 
     def init():
         for ax in axes:
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
-        for ax_ad in axes_action:
-            ax_ad.set_xlim(0, 1)
-            ax_ad.set_ylim(-1, 1)
-        for ax_mp in axes_mid_price:
-            ax_mp.set_xlim(0, 1)
-            ax_mp.set_ylim(-1, 1)
+        if axes_action is not None:
+            for ax_ad in axes_action:
+                ax_ad.set_xlim(0, 1)
+                ax_ad.set_ylim(-1, 1)
+        if axes_mid_price is not None:
+            for ax_mp in axes_mid_price:
+                ax_mp.set_xlim(0, 1)
+                ax_mp.set_ylim(-1, 1)
         for ax_l in loss_state["axes"] or []:
             ax_l.set_xlim(0, 1)
             ax_l.set_ylim(0, 1)
@@ -365,52 +390,59 @@ def run_animation(
             runner=runner,
             spread_max=spread_max,
         )
-        draw_dynamic(
-            runner.steps,
-            bucket_ms,
-            bar_width_days,
-            fixed_vol_max,
-            exchange,
-            symbol,
-            axes_action,
-            ranges_action,
-            param_plot_data,
-            {},
-            fig_action,
-            decay,
-            runner.action_times,
-            runner.delta_b_hist,
-            runner.delta_a_hist,
-            runner.q_b_hist,
-            runner.q_a_hist,
-            runner.inv_times,
-            runner.inv_hist,
-            runner.wealth_times,
-            runner.cash_hist,
-            runner.inv_value_hist,
-            runner.wealth_hist,
-            runner=runner,
-            spread_max=spread_max,
-        )
-        fig_action.canvas.draw_idle()
-        draw_mid_price_window(axes_mid_price, dates, runner, fig_mid_price)
-        fig_mid_price.canvas.draw_idle()
-        draw_volume_qq_window(axes_qq, runner, fig_qq)
-        fig_qq.canvas.draw_idle()
-        subplots_loss = _log_loss_subplots_data(
-            runner.tester,
-            getattr(runner, "price_tester", None),
-            limit_order_flow_model=runner.limit_order_flow_model,
-            n_dates=len(dates),
-            runner=runner,
-            market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
-        )
-        if not subplots_loss:
-            subplots_loss = [{"title": "Log loss", "ylabel": "", "series": []}]
-        _ensure_loss_figure(len(subplots_loss))
-        draw_log_loss_window(loss_state["axes"], dates, subplots_loss, loss_state["fig"])
-        if loss_state["fig"] is not None:
-            loss_state["fig"].canvas.draw_idle()
+        if axes_action is not None and fig_action is not None:
+            draw_dynamic(
+                runner.steps,
+                bucket_ms,
+                bar_width_days,
+                fixed_vol_max,
+                exchange,
+                symbol,
+                axes_action,
+                ranges_action,
+                param_plot_data,
+                {},
+                fig_action,
+                decay,
+                runner.action_times,
+                runner.delta_b_hist,
+                runner.delta_a_hist,
+                runner.q_b_hist,
+                runner.q_a_hist,
+                runner.inv_times,
+                runner.inv_hist,
+                runner.wealth_times,
+                runner.cash_hist,
+                runner.inv_value_hist,
+                runner.wealth_hist,
+                runner=runner,
+                spread_max=spread_max,
+            )
+            fig_action.canvas.draw_idle()
+        if axes_mid_price is not None and fig_mid_price is not None:
+            draw_mid_price_window(axes_mid_price, dates, runner, fig_mid_price)
+            fig_mid_price.canvas.draw_idle()
+        if axes_qq is not None and fig_qq is not None:
+            draw_volume_qq_window(axes_qq, runner, fig_qq)
+            fig_qq.canvas.draw_idle()
+        if ax_anchor is not None and fig_anchor is not None:
+            draw_anchor_reference_window(ax_anchor, runner, fig_anchor)
+            fig_anchor.canvas.draw_idle()
+        if enable_loss_figure:
+            subplots_loss = _log_loss_subplots_data(
+                runner.tester,
+                getattr(runner, "price_tester", None),
+                limit_order_flow_model=runner.limit_order_flow_model,
+                n_dates=len(dates),
+                runner=runner,
+                market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
+            )
+            if not subplots_loss:
+                subplots_loss = [{"title": "Log loss", "ylabel": "", "series": []}]
+            _ensure_loss_figure(len(subplots_loss))
+            draw_log_loss_window(loss_state["axes"], dates, subplots_loss, loss_state["fig"])
+            if loss_state["fig"] is not None:
+                loss_state["fig"].canvas.draw_idle()
         return ()
 
     ani = animation.FuncAnimation(
@@ -766,6 +798,86 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
     else:
         ax_pred_err.set_xlim(0, 1)
         ax_pred_err.set_ylim(-1, 1)
+    if fig:
+        fig.autofmt_xdate()
+
+
+def draw_anchor_reference_window(ax_anchor, runner: OrderFlowRunner, fig) -> None:
+    """Figure 6: main and anchor representative buy/sell prices in one subplot."""
+    ax_anchor.clear()
+    ax_anchor.set_xlabel("Time")
+    ax_anchor.set_ylabel("Representative price (ticks)")
+    ax_anchor.set_title("Main + Anchor representative buy/sell")
+    ax_anchor.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    ax_anchor.xaxis.set_major_locator(mdates.AutoDateLocator())
+
+    t_main = list(getattr(runner, "main_reference_times", []) or [])
+    y_main_buy = list(getattr(runner, "main_buy_reference_hist", []) or [])
+    y_main_sell = list(getattr(runner, "main_sell_reference_hist", []) or [])
+    t_anchor = list(getattr(runner, "anchor_reference_times", []) or [])
+    y_anchor_buy = list(getattr(runner, "anchor_buy_reference_hist", []) or [])
+    y_anchor_sell = list(getattr(runner, "anchor_sell_reference_hist", []) or [])
+
+    plotted_any = False
+    all_y: list[float] = []
+    if t_main and len(t_main) == len(y_main_buy) == len(y_main_sell):
+        ax_anchor.plot(
+            t_main,
+            y_main_buy,
+            color="navy",
+            linewidth=1.4,
+            label="Main buy rep",
+        )
+        ax_anchor.plot(
+            t_main,
+            y_main_sell,
+            color="green",
+            linewidth=1.4,
+            label="Main sell rep",
+        )
+        all_y.extend(float(v) for v in y_main_buy)
+        all_y.extend(float(v) for v in y_main_sell)
+        plotted_any = True
+    if t_anchor and len(t_anchor) == len(y_anchor_buy) == len(y_anchor_sell):
+        ax_anchor.plot(
+            t_anchor,
+            y_anchor_buy,
+            color="darkorange",
+            linewidth=1.2,
+            linestyle="--",
+            label="Anchor buy rep",
+        )
+        ax_anchor.plot(
+            t_anchor,
+            y_anchor_sell,
+            color="red",
+            linewidth=1.2,
+            linestyle="--",
+            label="Anchor sell rep",
+        )
+        all_y.extend(float(v) for v in y_anchor_buy)
+        all_y.extend(float(v) for v in y_anchor_sell)
+        plotted_any = True
+
+    if plotted_any:
+        ax_anchor.legend(loc="upper right")
+        t_all = t_main + t_anchor
+        t_all.sort()
+        if len(t_all) > 1:
+            ax_anchor.set_xlim(t_all[0], t_all[-1])
+        y_lo, y_hi = _finite_series_ylim(all_y, pad_min=1.0, default=(0.0, 1.0))
+        ax_anchor.set_ylim(y_lo, y_hi)
+    else:
+        ax_anchor.set_xlim(0, 1)
+        ax_anchor.set_ylim(0, 1)
+        ax_anchor.text(
+            0.5,
+            0.5,
+            "Waiting for representative prices...",
+            ha="center",
+            va="center",
+            transform=ax_anchor.transAxes,
+        )
     if fig:
         fig.autofmt_xdate()
 
@@ -1600,10 +1712,25 @@ def draw_dynamic(
         ax.axvline(0, color="gray", linewidth=0.8, linestyle="-", zorder=0)
         if has_data:
             x_b, q_b, x_a, q_a, _, _ = arrs
+            # Keep stable legend entries even when one side is empty in this frame.
+            ax.plot([], [], color="green", linewidth=1.5, label="Bid")
+            ax.plot([], [], color="red", linewidth=1.5, label="Ask")
             if x_b.size > 0:
-                ax.step(np.concatenate([[x_b[0] - 0.5], x_b]), np.concatenate([[0], q_b]), where="post", color="green", linewidth=1.5, label="Bid")
+                ax.step(
+                    np.concatenate([[x_b[0] - 0.5], x_b]),
+                    np.concatenate([[0], q_b]),
+                    where="post",
+                    color="green",
+                    linewidth=1.5,
+                )
             if x_a.size > 0:
-                ax.step(np.concatenate([[x_a[0] - 0.5], x_a]), np.concatenate([[0], q_a]), where="post", color="red", linewidth=1.5, label="Ask")
+                ax.step(
+                    np.concatenate([[x_a[0] - 0.5], x_a]),
+                    np.concatenate([[0], q_a]),
+                    where="post",
+                    color="red",
+                    linewidth=1.5,
+                )
             ax.legend(loc="upper right")
             y_max = max(float(np.max(q_b)) if q_b.size else 0.0, float(np.max(q_a)) if q_a.size else 0.0)
             ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1.0)
@@ -1620,10 +1747,25 @@ def draw_dynamic(
         ax.axvline(0, color="gray", linewidth=0.8, linestyle="-", zorder=0)
         if has_data:
             x_b, q_b, x_a, q_a, cum_b, cum_a = arrs
+            # Keep stable legend entries even when one side is empty in this frame.
+            ax.plot([], [], color="green", linewidth=1.5, label="Bid")
+            ax.plot([], [], color="red", linewidth=1.5, label="Ask")
             if x_b.size > 0 and cum_b.size > 0:
-                ax.step(np.concatenate([[x_b[0] - 0.5], x_b]), np.concatenate([[0], cum_b]), where="post", color="green", linewidth=1.5, label="Bid")
+                ax.step(
+                    np.concatenate([[x_b[0] - 0.5], x_b]),
+                    np.concatenate([[0], cum_b]),
+                    where="post",
+                    color="green",
+                    linewidth=1.5,
+                )
             if x_a.size > 0 and cum_a.size > 0:
-                ax.step(np.concatenate([[x_a[0] - 0.5], x_a]), np.concatenate([[0], cum_a]), where="post", color="red", linewidth=1.5, label="Ask")
+                ax.step(
+                    np.concatenate([[x_a[0] - 0.5], x_a]),
+                    np.concatenate([[0], cum_a]),
+                    where="post",
+                    color="red",
+                    linewidth=1.5,
+                )
             ax.legend(loc="upper right")
             y_max = max(float(np.max(cum_b)) if cum_b.size else 0.0, float(np.max(cum_a)) if cum_a.size else 0.0)
             ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1.0)

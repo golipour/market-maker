@@ -278,6 +278,26 @@ def _quantize_marginal_levels(
     return out
 
 
+def _ensure_nonempty_from_positive_raw(
+    spreads: list[float],
+    marginal_raw: list[float],
+    levels: list[tuple[float, int]],
+    lot_size: int,
+) -> list[tuple[float, int]]:
+    """
+    Guard against full side disappearing only due quantization.
+    If raw side has positive mass but all levels rounded to zero, keep one lot
+    at the level with maximum raw marginal.
+    """
+    if levels or not spreads or not marginal_raw:
+        return levels
+    max_raw = max(float(v) for v in marginal_raw)
+    if max_raw <= 0.0:
+        return levels
+    idx = max(range(len(marginal_raw)), key=lambda i: float(marginal_raw[i]))
+    return [(float(spreads[idx]), int(max(1, lot_size)))]
+
+
 def sigmoid_action_to_discretized_action(
     sigmoid_action: SigmoidMixtureAction,
     s_b_min: float = 1.0,
@@ -318,8 +338,16 @@ def sigmoid_action_to_discretized_action(
     # Marginal levels from raw cumulative differences with s=0 baseline.
     bid_marginal = _marginal_from_cumulative_levels(bid_cumulative_raw, baseline_cum=float(bid_base))
     ask_marginal = _marginal_from_cumulative_levels(ask_cumulative_raw, baseline_cum=float(ask_base))
-    bids = tuple(_quantize_marginal_levels(bid_spreads, bid_marginal, lot_size))
-    asks = tuple(_quantize_marginal_levels(ask_spreads, ask_marginal, lot_size))
+    bids_q = _quantize_marginal_levels(bid_spreads, bid_marginal, lot_size)
+    asks_q = _quantize_marginal_levels(ask_spreads, ask_marginal, lot_size)
+    bids_q = _ensure_nonempty_from_positive_raw(
+        bid_spreads, bid_marginal, bids_q, lot_size
+    )
+    asks_q = _ensure_nonempty_from_positive_raw(
+        ask_spreads, ask_marginal, asks_q, lot_size
+    )
+    bids = tuple(bids_q)
+    asks = tuple(asks_q)
     return DiscretizedOrderAction(bids=bids, asks=asks)
 
 
