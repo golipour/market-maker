@@ -248,10 +248,13 @@ def _evaluate_cumulative_depth_levels(spreads: list[float], depth_fn) -> list[fl
     return cumulative
 
 
-def _marginal_from_cumulative_levels(cumulative: list[float]) -> list[float]:
-    """Step 2: convert cumulative levels to marginal levels with D(0)=0 baseline."""
+def _marginal_from_cumulative_levels(
+    cumulative: list[float],
+    baseline_cum: float = 0.0,
+) -> list[float]:
+    """Step 2: convert cumulative levels to marginal levels with configurable baseline."""
     marginal_raw: list[float] = []
-    prev_cum = 0.0
+    prev_cum = float(baseline_cum)
     for cum in cumulative:
         raw_qty = cum - prev_cum
         if not math.isfinite(raw_qty) or raw_qty < 0:
@@ -301,10 +304,20 @@ def sigmoid_action_to_discretized_action(
     a_lo, a_hi = int(round(s_a_min)), int(round(s_a_max))
     ask_spreads = [float(i) for i in range(a_lo, a_hi + 1)] if a_hi >= a_lo else []
 
-    bid_cumulative = _evaluate_cumulative_depth_levels(bid_spreads, sigmoid_action.depth_bid)
-    ask_cumulative = _evaluate_cumulative_depth_levels(ask_spreads, sigmoid_action.depth_ask)
-    bid_marginal = _marginal_from_cumulative_levels(bid_cumulative)
-    ask_marginal = _marginal_from_cumulative_levels(ask_cumulative)
+    # Raw cumulative is defined on [0..N]; quoted cumulative on [1..N] is shifted by D(0).
+    bid_base = sigmoid_action.depth_bid(0.0)
+    ask_base = sigmoid_action.depth_ask(0.0)
+    if not math.isfinite(bid_base):
+        bid_base = 0.0
+    if not math.isfinite(ask_base):
+        ask_base = 0.0
+
+    bid_cumulative_raw = _evaluate_cumulative_depth_levels(bid_spreads, sigmoid_action.depth_bid)
+    ask_cumulative_raw = _evaluate_cumulative_depth_levels(ask_spreads, sigmoid_action.depth_ask)
+
+    # Marginal levels from raw cumulative differences with s=0 baseline.
+    bid_marginal = _marginal_from_cumulative_levels(bid_cumulative_raw, baseline_cum=float(bid_base))
+    ask_marginal = _marginal_from_cumulative_levels(ask_cumulative_raw, baseline_cum=float(ask_base))
     bids = tuple(_quantize_marginal_levels(bid_spreads, bid_marginal, lot_size))
     asks = tuple(_quantize_marginal_levels(ask_spreads, ask_marginal, lot_size))
     return DiscretizedOrderAction(bids=bids, asks=asks)

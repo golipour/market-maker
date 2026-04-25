@@ -67,11 +67,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         ("cum_inventory_pnl", 1),
         ("cum_adverse_pnl", 1),
         ("cum_fee_pnl", 1),
-        ("E_dW", 1),
-        ("J_components", 1),
         ("realized_dW", 1),
-        ("depth", 1),
-        ("action_depth", 2),  # DiscretizedOrderAction: marginal and cumulative
         # ("toxicity", 1),  # Commented out
     ]
     n_total = sum(n for _, n in sections)
@@ -92,9 +88,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         # + [hr_score] * n_tester  # Moved to separate Predictive log loss window
         + [hr_state] * 3
         + [hr_state, hr_state, hr_state, hr_state]  # cum_spread_pnl, cum_inventory_pnl, cum_adverse_pnl, cum_fee_pnl
-        + [hr_state, hr_state, hr_state]  # E_dW, J_components, realized_dW
-        + [hr_depth]
-        + [hr_action_depth, hr_action_depth]
+        + [hr_state]  # realized_dW
         # + [hr_tox]  # Commented out
     )
     return sections, height_ratios

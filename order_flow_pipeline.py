@@ -273,7 +273,7 @@ def main() -> None:
         "use_buffered_orderbook_provider": True,
         "use_websocket_market_data": True,
         "use_zero_action": False,  # False to run controller (MonteCarloMPCTensorBatched); True = no quotes
-        "action_start_after_steps": 100,  # warm-up: delay live order placement for first N steps (controller still runs)
+        "action_start_after_steps": 10,  # warm-up: delay live order placement for first N steps (controller still runs)
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
@@ -302,32 +302,32 @@ def main() -> None:
             "n_components": 1,
             "device": "cpu",
             "total_q_min": 0,
-            "total_q_max": 100000,
+            "total_q_max": 100,
             "soft_fill_temp": 0.25,
-            "adam_lr": 1e-2,
-            "adam_epochs": 0,
+            "adam_lr": 1e0,
+            "adam_epochs": 100,
             "adam_grad_clip": 1e10,
-            "horizon": 3,
+            "horizon": 1,
             "n_samples": 32,
             "warm_start": False,
             "fixed_mc_samples": True,
-            "adam_normalize_inputs": True,
+            "adam_normalize_inputs": False,
             "verbose": False,
             # Unified objective:
             # J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
             #     - uniformity_coef * J_uniformity - size_coef * J_size
-            "reward_coef": 0.0,  # weight on E[ΔW] term
-            "inv_coef": 0.0,
-            "risk_coef": 0.0,
-            "uniformity_coef": 1.0,
-            "size_coef": 1.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
-            "target_inv": 100,
-            "total_q_target": 10000,           # finite-range target on [0, spread_max]
+            "reward_coef": 1.0,  # weight on E[ΔW] term
+            "risk_coef": 1.0,
+            "inv_coef": 1.0,
+            "uniformity_coef": 0.0,
+            "size_coef": 0.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
+            "target_inv": 1000,
+            "total_q_target": 100,           # finite-range target on [0, spread_max]
             "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
             "zero_action_if_negative_J_mean": False,   # if True, return no quotes when best action has E[ΔW] < 0
         },
         "execution_model_kwargs": {
-            "maker_fee": 0.0005,
+            "maker_fee": 0.0001,
             # Used only when execution_mode == "simulated"
             "simulated_initial_inventory": 0,
             "simulated_initial_cash": 0.0,

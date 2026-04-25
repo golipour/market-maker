@@ -79,6 +79,23 @@ def _scale_bounds_for_normalized(
     return result
 
 
+def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """
+    Convert optimizer bounds from effective parameter space to raw tensor space.
+
+    L and k (index 0/1 of each 3-tuple) are represented in raw space and mapped via
+    softplus during model evaluation, so their bounds must be inverse-softplus mapped.
+    x0 (index 2) is used directly and left unchanged.
+    """
+    out: list[tuple[float, float]] = []
+    for i, (lo, hi) in enumerate(bounds):
+        if i % 3 in (0, 1):  # L, k
+            out.append((_inv_softplus_np(float(lo)), _inv_softplus_np(float(hi))))
+        else:  # x0
+            out.append((float(lo), float(hi)))
+    return out
+
+
 def _inv_softplus_np(y: float) -> float:
     """Inverse softplus for positive target y (numpy scalar)."""
     y_f = float(max(1e-12, y))
@@ -93,59 +110,40 @@ def _initial_action_uniform_marginal_qrange(
     total_q_target: float | None,
 ) -> np.ndarray | None:
     """
-    Build an initial flat action (raw optimizer params) targeting a uniform discrete
-    marginal ladder on integer spreads s=1..N where N=round(spread_max), using the
-    same convention as discretization:
-      m(1) = D(1), m(s) = D(s) - D(s-1) for s>=2.
-    Target:
-      m(s) ~= total_q_target / N for all s in [1..N],
-      sum_s m(s) ~= total_q_target.
+    Build an initial flat action (raw optimizer params) using a simple linear-range
+    sigmoid approximation over s in [0..N], N=round(spread_max).
+
+    We place x0 near N/2 and choose a small k so most of [0..N] lies in the near-linear
+    part of sigmoid. Then pick L so baseline-shift marginal is approximately uniform:
+      m(s) = D(s)-D(s-1) ~= total_q_target / N.
+
+    Finally we rescale L for exact baseline-shift total:
+      D(N) - D(0) = total_q_target.
     """
     if total_q_target is None or float(total_q_target) <= 0.0:
         return None
     n = max(1, int(n_components))
     sm = max(1, int(round(float(spread_max))))
     q_level = float(total_q_target) / float(sm)
-    # Endpoint-constrained initialization:
-    # enforce D(1) ~= q_level and D(N) ~= total_q_target with x0 around N/2.
     x0_center = 0.5 * float(sm)
-    x0 = np.full(n, x0_center, dtype=np.float64)
+    # Keep each component centered in the same linear region; tiny jitter avoids exact symmetry.
+    if n == 1:
+        x0 = np.array([x0_center], dtype=np.float64)
+    else:
+        x0 = np.linspace(x0_center - 0.01 * sm, x0_center + 0.01 * sm, n, dtype=np.float64)
 
-    def _sig(z: float) -> float:
-        if z >= 0.0:
-            ez = math.exp(-z)
-            return 1.0 / (1.0 + ez)
-        ez = math.exp(z)
-        return ez / (1.0 + ez)
+    # Linear-range choice: keep |k*(s-x0)| relatively small on [0..N].
+    k_base = max(1e-3, min(0.05, 2.0 / max(1.0, float(sm))))
+    k_eff = np.full(n, k_base, dtype=np.float64)
 
-    target_ratio = float(sm)  # D(N) / D(1) target
-    lo, hi = 1e-6, 1.0
-    for _ in range(30):
-        a_hi = _sig(hi * (1.0 - x0_center))
-        b_hi = _sig(hi * (float(sm) - x0_center))
-        r_hi = b_hi / max(a_hi, 1e-18)
-        if r_hi >= target_ratio:
-            break
-        hi *= 2.0
-    for _ in range(80):
-        k_mid = 0.5 * (lo + hi)
-        a = _sig(k_mid * (1.0 - x0_center))
-        b = _sig(k_mid * (float(sm) - x0_center))
-        ratio = b / max(a, 1e-18)
-        if ratio < target_ratio:
-            lo = k_mid
-        else:
-            hi = k_mid
-    k_base = 0.5 * (lo + hi)
-    k_eff = np.full(n, max(1e-6, float(k_base)), dtype=np.float64)
-
-    bN = _sig(k_base * (float(sm) - x0_center))
-    L_total = float(total_q_target) / max(bN, 1e-12)
+    # Linearized slope: sigmoid'(z) ~ 1/4 around z~0 => marginal ~ sum_i(L_i*k_i/4).
+    L_total = max(1e-6, 4.0 * q_level / max(k_base, 1e-12))
     L_eff = np.full(n, max(1e-6, L_total / float(n)), dtype=np.float64)
 
-    # Final exact normalization on D(N) (discretizer convention total).
+    # Final exact normalization on D(N)-D(0) (discretizer convention total).
     s_hi = 1.0 / (1.0 + np.exp(-(k_eff * (float(sm) - x0))))
-    d_n = float(np.sum(L_eff * s_hi))
+    s_lo = 1.0 / (1.0 + np.exp(-(k_eff * (0.0 - x0))))
+    d_n = float(np.sum(L_eff * (s_hi - s_lo)))
     if d_n > 1e-12:
         L_eff *= float(total_q_target) / d_n
 
@@ -173,7 +171,7 @@ def _project_total_q_torch(
 ) -> None:
     """
     In-place project L by quoted size over discretizer range s=1..N (N=spread_max),
-    under discretizer baseline convention where cumulative starts from zero.
+    under baseline-shift convention Q_range = D(N) - D(0).
 
     - If project_total_q_target is True and total_q_target > 0, enforce Q_range ~= target.
     - Otherwise, project Q_range into [total_q_min, total_q_max] when bounds are set.
@@ -186,6 +184,7 @@ def _project_total_q_torch(
     total_q_max_f = float(total_q_max) if total_q_max is not None else None
     total_q_target_f = float(total_q_target) if total_q_target is not None else None
     spread_hi = max(0.0, float(spread_max))
+    spread_lo = 0.0
     eps = 1e-12
 
     def _effective_qrange(side_off: int, start: int) -> float:
@@ -197,7 +196,8 @@ def _project_total_q_torch(
             L_eff = torch_mod.nn.functional.softplus(L_raw) + 1e-8
             k_eff = torch_mod.nn.functional.softplus(k_raw) + 1e-8
             s_hi = torch_mod.sigmoid(k_eff * (spread_hi - x0))
-            q = q + L_eff * s_hi
+            s_lo = torch_mod.sigmoid(k_eff * (spread_lo - x0))
+            q = q + L_eff * (s_hi - s_lo)
         try:
             return float(q.detach().item())
         except Exception:
@@ -239,7 +239,7 @@ def _project_total_q_flat(
 ) -> np.ndarray:
     """
     Project one flat param vector by quoted size over discretizer range s=1..N
-    (N=spread_max), under discretizer baseline convention.
+    (N=spread_max), under baseline-shift convention Q_range = D(N) - D(0).
     """
     has_range_bounds = (total_q_min is not None) or (total_q_max is not None)
     use_target = bool(project_total_q_target and total_q_target is not None and float(total_q_target) > 0.0)
@@ -248,6 +248,7 @@ def _project_total_q_flat(
     out = np.array(flat, dtype=np.float64, copy=True)
     n = n_components
     spread_hi = max(0.0, float(spread_max))
+    spread_lo = 0.0
     eps = 1e-12
 
     def _softplus_np(x: float) -> float:
@@ -268,7 +269,8 @@ def _project_total_q_flat(
             k_eff = _softplus_np(out[side_off + 3 * i + 1])
             x0 = float(out[side_off + 3 * i + 2])
             s_hi = _sigmoid_np(k_eff * (spread_hi - x0))
-            q += L_eff * s_hi
+            s_lo = _sigmoid_np(k_eff * (spread_lo - x0))
+            q += L_eff * (s_hi - s_lo)
         return float(q)
 
     def _desired(cur_q: float) -> float:
@@ -447,7 +449,7 @@ def _mid_from_book_best_levels_batched(
     return 0.5 * (best_bid + best_ask)
 
 
-def _fill_and_cash_batched(
+def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
     sell_ref: torch.Tensor,
@@ -462,16 +464,52 @@ def _fill_and_cash_batched(
     use_softplus: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Batched fill/cash: mid, book_cum_* (n_samples, n_grid), sell_vol, buy_vol (n_samples, 1).
-    Returns fill_bid, fill_ask, cash_delta, inv_delta (n_samples,) or (n_samples, 1).
+    Batched soft transition using combined (book + quoted) depth:
+    - soft-consume against combined cumulative book
+    - split consumed volume between market book and our quotes proportionally per level
+    - return next market-only orderbook levels plus cash/inventory deltas from our fills
+
+    Inputs:
+      book_cum_*: market-book cumulative depth on spread grid (n_samples, n_grid)
+      sell_vol/buy_vol: market order flow per sample (n_samples, 1)
+
+    Returns:
+      ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, n_grid)
+      cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
-    depth_bid = depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    depth_ask = depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    # Signed queue-reach without hard clamp to preserve gradient signal on both sides.
-    # Normalize per sample to adaptive range: positive -> [0, 1], negative -> [-1, 0].
+    # Use baseline-shifted cumulative depth to match discretization semantics:
+    # effective depth on quoted levels s=1..N is D(s)-D(0).
+    depth_bid_raw = depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
+    depth_ask_raw = depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
+    s0 = spread_grid.new_zeros((1,))
+    depth_bid_0 = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    depth_ask_0 = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    depth_bid = torch.clamp(depth_bid_raw - depth_bid_0, min=0.0)
+    depth_ask = torch.clamp(depth_ask_raw - depth_ask_0, min=0.0)
     eps = 1e-12
-    reach_bid_raw = sell_vol - book_cum_bid
-    reach_ask_raw = buy_vol - book_cum_ask
+    # Convert cumulative quoted depth to marginal level sizes.
+    depth_bid_prev = torch.cat([torch.zeros_like(depth_bid[:1]), depth_bid[:-1]], dim=0)
+    depth_ask_prev = torch.cat([torch.zeros_like(depth_ask[:1]), depth_ask[:-1]], dim=0)
+    marg_bid = torch.clamp(depth_bid - depth_bid_prev, min=0.0)
+    marg_ask = torch.clamp(depth_ask - depth_ask_prev, min=0.0)
+
+    # Recover market-book level volumes from cumulative market book.
+    book_bid_prev = torch.cat([torch.zeros_like(book_cum_bid[:, :1]), book_cum_bid[:, :-1]], dim=1)
+    book_ask_prev = torch.cat([torch.zeros_like(book_cum_ask[:, :1]), book_cum_ask[:, :-1]], dim=1)
+    book_bid_level = torch.clamp(book_cum_bid - book_bid_prev, min=0.0)
+    book_ask_level = torch.clamp(book_cum_ask - book_ask_prev, min=0.0)
+
+    # Combine market book and our quotes on each level.
+    our_bid_level = marg_bid.unsqueeze(0).expand_as(book_bid_level)
+    our_ask_level = marg_ask.unsqueeze(0).expand_as(book_ask_level)
+    comb_bid_level = book_bid_level + our_bid_level
+    comb_ask_level = book_ask_level + our_ask_level
+
+    # Soft consumption against combined cumulative depth.
+    comb_cum_bid = torch.cumsum(comb_bid_level, dim=1)
+    comb_cum_ask = torch.cumsum(comb_ask_level, dim=1)
+    reach_bid_raw = sell_vol - comb_cum_bid
+    reach_ask_raw = buy_vol - comb_cum_ask
     bid_pos_scale = torch.clamp(reach_bid_raw.max(dim=1, keepdim=True).values, min=eps)
     bid_neg_scale = torch.clamp((-reach_bid_raw).max(dim=1, keepdim=True).values, min=eps)
     ask_pos_scale = torch.clamp(reach_ask_raw.max(dim=1, keepdim=True).values, min=eps)
@@ -486,10 +524,26 @@ def _fill_and_cash_batched(
         reach_ask_raw / ask_pos_scale,
         reach_ask_raw / ask_neg_scale,
     )
-    fill_bid_level = depth_bid.unsqueeze(0) * torch.sigmoid(reach_bid / soft_temp)
-    fill_ask_level = depth_ask.unsqueeze(0) * torch.sigmoid(reach_ask / soft_temp)
+    consumed_bid_level = comb_bid_level * torch.sigmoid(reach_bid / soft_temp)
+    consumed_ask_level = comb_ask_level * torch.sigmoid(reach_ask / soft_temp)
+
+    # Split consumed level volumes proportionally between market book and our quotes.
+    bid_share_our = torch.where(
+        comb_bid_level > eps, our_bid_level / torch.clamp(comb_bid_level, min=eps), torch.zeros_like(comb_bid_level)
+    )
+    ask_share_our = torch.where(
+        comb_ask_level > eps, our_ask_level / torch.clamp(comb_ask_level, min=eps), torch.zeros_like(comb_ask_level)
+    )
+    fill_bid_level = consumed_bid_level * bid_share_our
+    fill_ask_level = consumed_ask_level * ask_share_our
     fill_bid = fill_bid_level.sum(dim=1)
     fill_ask = fill_ask_level.sum(dim=1)
+
+    # Market-book next state after market-flow consumption (our resting remainder is canceled).
+    consumed_bid_market = consumed_bid_level * (1.0 - bid_share_our)
+    consumed_ask_market = consumed_ask_level * (1.0 - ask_share_our)
+    ob_bids_next = torch.clamp(book_bid_level - consumed_bid_market, min=0.0)
+    ob_asks_next = torch.clamp(book_ask_level - consumed_ask_market, min=0.0)
     sell_exp = sell_ref.expand(-1, spread_grid.shape[0])
     buy_exp = buy_ref.expand(-1, spread_grid.shape[0])
     cash_bid = (fill_bid_level * (sell_exp - spread_grid.unsqueeze(0))).sum(dim=1)
@@ -497,27 +551,29 @@ def _fill_and_cash_batched(
     one_minus_f = 1.0 - maker_fee
     cash_delta = cash_ask * one_minus_f - cash_bid
     inv_delta = fill_bid * one_minus_f - fill_ask
-    return fill_bid, fill_ask, cash_delta, inv_delta
+    return ob_bids_next, ob_asks_next, cash_delta, inv_delta
 
 
 def _action_uniformity_l2_from_marginal_depth(
     params: torch.Tensor,
     spread_ticks: torch.Tensor,
     n_components: int,
+    total_q_target: float | None,
+    spread_max: float,
     *,
     use_softplus: bool = True,
-    eps: float = 1e-12,
 ) -> torch.Tensor:
     """
     L2-to-uniform regularizer from discrete marginal depth implied by cumulative depth.
 
     To match action discretization semantics, marginal levels are built from cumulative
-    depth on integer spreads with zero baseline at spread 0:
-      marg[1] = D(1) - 0
+    depth on integer spreads with spread-0 baseline:
+      marg[1] = D(1) - D(0)
       marg[s] = D(s) - D(s-1), s >= 2
 
-    Then each side is normalized to a probability-like distribution and penalized by
-    squared distance to uniform.
+    Then each side is penalized in raw units against the uniform target level:
+      q_uniform = total_q_target / spread_max
+    (no probability normalization).
     Returns average penalty across bid and ask.
     """
     if n_components <= 0 or spread_ticks.numel() <= 1:
@@ -526,22 +582,27 @@ def _action_uniformity_l2_from_marginal_depth(
     torch_mod = _get_torch()
     bid_cum = depth_bid_tensor(params, spread_ticks, n_components, use_softplus)
     ask_cum = depth_ask_tensor(params, spread_ticks, n_components, use_softplus)
-    zero = torch_mod.zeros(1, dtype=bid_cum.dtype, device=bid_cum.device)
+    s0 = torch_mod.zeros(1, dtype=spread_ticks.dtype, device=spread_ticks.device)
+    bid0 = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)
+    ask0 = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)
+    bid_prev = torch_mod.cat([bid0, bid_cum[:-1]], dim=0)
+    ask_prev = torch_mod.cat([ask0, ask_cum[:-1]], dim=0)
     bid_marg = torch_mod.clamp(
-        bid_cum - torch_mod.cat([zero, bid_cum[:-1]], dim=0),
+        bid_cum - bid_prev,
         min=0.0,
     )
     ask_marg = torch_mod.clamp(
-        ask_cum - torch_mod.cat([zero, ask_cum[:-1]], dim=0),
+        ask_cum - ask_prev,
         min=0.0,
     )
-    bid_p = bid_marg / torch.clamp(bid_marg.sum(), min=eps)
-    ask_p = ask_marg / torch.clamp(ask_marg.sum(), min=eps)
-    n_grid = float(spread_ticks.numel())
-    uni = torch.full_like(bid_p, 1.0 / max(n_grid, 1.0))
-    bid_l2 = torch.mean((bid_p - uni) ** 2)
-    ask_l2 = torch.mean((ask_p - uni) ** 2)
-    return 0.5 * (bid_l2 + ask_l2)
+    q_target = max(0.0, float(total_q_target or 0.0))
+    denom = max(1.0, float(spread_max))
+    q_uniform = q_target / denom
+    uni = torch_mod.full_like(bid_marg, q_uniform)
+    bid_l2 = torch.mean((bid_marg - uni) ** 2)
+    ask_l2 = torch.mean((ask_marg - uni) ** 2)
+    l2_mean = 0.5 * (bid_l2 + ask_l2)
+    return torch_mod.sqrt(torch_mod.clamp(l2_mean, min=1e-20))
 
 
 def _action_size_penalty_qrange(
@@ -554,9 +615,9 @@ def _action_size_penalty_qrange(
 ) -> torch.Tensor:
     """
     Squared error penalty to target quoted size over discretizer range s=1..N
-    (N=spread_max), using discretizer baseline convention:
+    (N=spread_max), using baseline-shift convention:
       (Q_range_bid - Q_target)^2 + (Q_range_ask - Q_target)^2
-    where Q_range_side = D_side(spread_max).
+    where Q_range_side = D_side(spread_max) - D_side(0).
     """
     if total_q_target is None or float(total_q_target) <= 0.0 or n_components <= 0:
         return params.sum() * 0.0
@@ -568,8 +629,8 @@ def _action_size_penalty_qrange(
     )
     bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
     ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
-    q_bid = torch_mod.clamp(bid_depth[1], min=0.0)
-    q_ask = torch_mod.clamp(ask_depth[1], min=0.0)
+    q_bid = torch_mod.clamp(bid_depth[1] - bid_depth[0], min=0.0)
+    q_ask = torch_mod.clamp(ask_depth[1] - ask_depth[0], min=0.0)
     tgt = torch_mod.tensor(float(total_q_target), dtype=params.dtype, device=params.device)
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
@@ -736,7 +797,10 @@ class MonteCarloMPCTensorBatched:
             if self.adam_normalize_inputs
             else self.bounds
         )
-        bounds_full = bounds_used * self.horizon
+        # Bounds are specified in effective model space. Convert L/k bounds to raw
+        # parameter space because optimization variable x_torch is raw.
+        bounds_raw = _bounds_effective_to_raw(bounds_used)
+        bounds_full = bounds_raw * self.horizon
         lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
         upper = torch_mod.tensor([b[1] for b in bounds_full], dtype=dtype, device=_device)
 
@@ -746,6 +810,10 @@ class MonteCarloMPCTensorBatched:
         else:
             with torch_mod.no_grad():
                 self._x_torch.data = torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
+            # If warm start is disabled, do not carry Adam moments across optimize()
+            # calls; otherwise one-step updates can be dominated by stale momentum.
+            if not self.warm_start:
+                self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
@@ -841,7 +909,12 @@ class MonteCarloMPCTensorBatched:
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
                     action_uniformity_sum = action_uniformity_sum + _action_uniformity_l2_from_marginal_depth(
-                        action_h, spread_grid, n, use_softplus=True
+                        action_h,
+                        spread_grid,
+                        n,
+                        self.total_q_target,
+                        self.spread_max,
+                        use_softplus=True,
                     )
                     action_size_sum = action_size_sum + _action_size_penalty_qrange(
                         action_h,
@@ -877,7 +950,7 @@ class MonteCarloMPCTensorBatched:
                     buy_ref_t = buy_cmp_t + eps_buy_h
                     sell_ref_t = sell_cmp_t + eps_sell_h
 
-                    fill_bid, fill_ask, cash_delta, inv_delta = _fill_and_cash_batched(
+                    ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
                         action_h,
                         n,
                         sell_ref_t,
@@ -893,9 +966,6 @@ class MonteCarloMPCTensorBatched:
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
-                    ob_bids_next, ob_asks_next = _consume_mof_only_torch(
-                        ob_bids, ob_asks, buy_h, sell_h
-                    )
                     mid_next = _mid_from_book_best_levels_batched(
                         ob_bids_next,
                         ob_asks_next,

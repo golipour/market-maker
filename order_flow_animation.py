@@ -259,6 +259,17 @@ def run_animation(
     # Layout fig 1 explicitly: more vertical space between subplots so titles/labels don't overlap.
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.98), h_pad=1.2)
 
+    # Figure 3: optimizer/components + depth/action diagnostics moved out of main window.
+    fig_action, axes_action = plt.subplots(4, 1, figsize=(10, 11.5), sharex=False)
+    axes_action = np.atleast_1d(axes_action).ravel()
+    fig_action.suptitle("Action & Depth diagnostics", fontsize=12)
+    fig_action.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
+    ranges_action = {
+        "J_components": (0, 1),
+        "depth": (1, 2),
+        "action_depth": (2, 4),
+    }
+
     # Figure 4: price-model diagnostics (flow, rep prices, σ, μ under σ, MC pred error).
     fig_mid_price, axes_mid_price = plt.subplots(5, 1, figsize=(10, 13.8), sharex=False)
     axes_mid_price = np.atleast_1d(axes_mid_price).ravel()
@@ -306,6 +317,9 @@ def run_animation(
         for ax in axes:
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
+        for ax_ad in axes_action:
+            ax_ad.set_xlim(0, 1)
+            ax_ad.set_ylim(-1, 1)
         for ax_mp in axes_mid_price:
             ax_mp.set_xlim(0, 1)
             ax_mp.set_ylim(-1, 1)
@@ -351,6 +365,34 @@ def run_animation(
             runner=runner,
             spread_max=spread_max,
         )
+        draw_dynamic(
+            runner.steps,
+            bucket_ms,
+            bar_width_days,
+            fixed_vol_max,
+            exchange,
+            symbol,
+            axes_action,
+            ranges_action,
+            param_plot_data,
+            {},
+            fig_action,
+            decay,
+            runner.action_times,
+            runner.delta_b_hist,
+            runner.delta_a_hist,
+            runner.q_b_hist,
+            runner.q_a_hist,
+            runner.inv_times,
+            runner.inv_hist,
+            runner.wealth_times,
+            runner.cash_hist,
+            runner.inv_value_hist,
+            runner.wealth_hist,
+            runner=runner,
+            spread_max=spread_max,
+        )
+        fig_action.canvas.draw_idle()
         draw_mid_price_window(axes_mid_price, dates, runner, fig_mid_price)
         fig_mid_price.canvas.draw_idle()
         draw_volume_qq_window(axes_qq, runner, fig_qq)
@@ -481,7 +523,7 @@ def draw_volume_qq_window(axes_qq, runner: OrderFlowRunner, fig) -> None:
 
 
 def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, fig) -> None:
-    """Figure 4: MOF flow, representative prices, residual σ, residual μ (below σ), MC prediction errors."""
+    """Figure 4: buy/sell NLL, representative prices, residual σ, residual μ, MC prediction errors."""
     ax_flow = axes_mid_price[0]
     ax_price = axes_mid_price[1]
     ax_sigma = axes_mid_price[2]
@@ -492,8 +534,8 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
     ax_sigma.clear()
     ax_mu.clear()
     ax_pred_err.clear()
-    ax_flow.set_ylabel("Volume")
-    ax_flow.set_title("Market order flow: realized vs MC mean of model.sample() (same N as mid/rep diagnostics)")
+    ax_flow.set_ylabel("EWMA −log p")
+    ax_flow.set_title("Market order flow NLL (buy / sell)")
     ax_flow.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
     ax_flow.xaxis.set_major_locator(mdates.AutoDateLocator())
     ax_price.set_xlabel("Time")
@@ -548,45 +590,40 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
         ax_pred_err.set_xlim(0, 1)
         ax_pred_err.set_ylim(-1, 1)
         return
+    # Draw buy/sell NLL in one subplot for cleaner Figure 4.
     td = dates[:n]
-    buy = [max(0.0, float(v)) for v in buy_raw[:n]]
-    sell = [max(0.0, float(v)) for v in sell_raw[:n]]
-    ax_flow.plot(td, buy, color="green", linewidth=1.1, label="Buy MOF")
-    ax_flow.plot(td, sell, color="red", linewidth=1.1, label="Sell MOF")
-    exp_buy = list(getattr(runner, "expected_buy_flow_hist", []) or [])
-    exp_sell = list(getattr(runner, "expected_sell_flow_hist", []) or [])
-    n_exp = min(n, len(exp_buy), len(exp_sell))
-    if n_exp > 0:
-        td_exp = td[:n_exp]
-        y_exp_buy = [max(0.0, float(v)) for v in exp_buy[:n_exp]]
-        y_exp_sell = [max(0.0, float(v)) for v in exp_sell[:n_exp]]
-        ax_flow.plot(
-            td_exp,
-            y_exp_buy,
-            color="darkgreen",
-            linewidth=1.0,
-            linestyle="--",
-            label="E[Buy MOF] (MC)",
-        )
-        ax_flow.plot(
-            td_exp,
-            y_exp_sell,
-            color="darkred",
-            linewidth=1.0,
-            linestyle="--",
-            label="E[Sell MOF] (MC)",
-        )
-        lo, hi = _finite_series_ylim(
-            buy + sell + y_exp_buy + y_exp_sell,
-            pad_min=0.5,
-            default=(-1.0, 1.0),
-        )
+    tester = getattr(runner, "tester", None)
+    nll_series = []
+    if tester is not None and hasattr(tester, "get_plot_data"):
+        try:
+            nll_series = list((tester.get_plot_data() or {}).get("series", []))
+        except Exception:
+            nll_series = []
+    y_buy_nll = []
+    y_sell_nll = []
+    for ser in nll_series:
+        label = str(ser.get("label", "")).lower()
+        y = list(ser.get("y", []))
+        if len(y) < n:
+            y = [0.0] * (n - len(y)) + y
+        y = y[:n]
+        if "buy" in label and "nll" in label:
+            y_buy_nll = [float(v) for v in y]
+        elif "sell" in label and "nll" in label:
+            y_sell_nll = [float(v) for v in y]
+    if y_buy_nll or y_sell_nll:
+        if y_buy_nll:
+            ax_flow.plot(td, y_buy_nll, color="green", linewidth=1.2, label="Buy NLL")
+        if y_sell_nll:
+            ax_flow.plot(td, y_sell_nll, color="red", linewidth=1.2, label="Sell NLL")
+        ax_flow.legend(loc="upper right")
+        lo, hi = _finite_series_ylim(y_buy_nll + y_sell_nll, pad_min=0.2, default=(0.0, 1.0))
+        ax_flow.set_ylim(lo, hi)
+        if n > 1:
+            ax_flow.set_xlim(td[0], td[-1])
     else:
-        lo, hi = _finite_series_ylim(buy + sell, pad_min=0.5, default=(-1.0, 1.0))
-    ax_flow.legend(loc="upper right")
-    ax_flow.set_ylim(lo, hi)
-    if n > 1:
-        ax_flow.set_xlim(td[0], td[-1])
+        ax_flow.set_xlim(0, 1)
+        ax_flow.set_ylim(-1, 1)
 
     buy_real_px = list(getattr(pm, "realized_buy_price_hist", []) or [])
     buy_cmp_px = list(getattr(pm, "computed_buy_price_hist", []) or [])
@@ -1246,33 +1283,6 @@ def draw_dynamic(
                 ax.set_xlim(pnl_times[0], pnl_times[-1])
             if cum_fee:
                 lo, hi = _finite_series_ylim(cum_fee)
-                ax.set_ylim(lo, hi)
-        else:
-            ax.set_xlim(0, 1)
-            ax.set_ylim(-1, 1)
-        if fig:
-            fig.autofmt_xdate()
-
-    # --- Expected E[ΔW] from optimizer ---
-    start, end = ranges.get("E_dW", (0, 0))
-    if end > start and runner is not None:
-        ax = axes[start]
-        ax.clear()
-        ax.set_xlabel("Time")
-        ax.set_ylabel("E[ΔW] (tick×lot)")
-        ax.set_title("Expected ΔW (optimizer)")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-        ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
-        E_dW_times = getattr(runner, "E_dW_times", None) or []
-        E_dW_hist = getattr(runner, "E_dW_hist", None) or []
-        if E_dW_times and E_dW_hist and len(E_dW_times) == len(E_dW_hist):
-            ax.step(E_dW_times, E_dW_hist, where="mid", color="blue", linewidth=1.5, label="E[ΔW]")
-            ax.legend(loc="upper right")
-            if len(E_dW_times) > 1:
-                ax.set_xlim(E_dW_times[0], E_dW_times[-1])
-            if E_dW_hist:
-                lo, hi = _finite_series_ylim(E_dW_hist)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)

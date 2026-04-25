@@ -16,6 +16,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def _softplus_positive(v: float) -> float:
+    """Map raw optimizer param to positive effective value."""
+    x = float(v)
+    if x >= 20.0:
+        return x + 1e-8
+    if x <= -20.0:
+        return 1e-8
+    return math.log(1.0 + math.exp(x)) + 1e-8
+
+
 def _sigmoid(z: np.ndarray) -> np.ndarray:
     # Stable enough for our parameter ranges.
     return 1.0 / (1.0 + np.exp(-z))
@@ -62,13 +72,19 @@ def main() -> None:
     spread_max = max(1.0, float(args.spread_max))
     num_points = max(201, int(args.num_points))
 
-    # Defaults from your debug example.
-    ask_L =(21639.534137396528,)
-    ask_k =(0.020000009999999967,)
-    ask_x0 =(50.0,)
-    bid_L =(21639.534137396528,)
-    bid_k =(0.020000009999999967,)
-    bid_x0 =(50.0,)
+    # Defaults from your debug example (raw optimizer-space params).
+    ask_L_raw = (23,)
+    ask_k_raw = (1e-6,)
+    ask_x0 = (50.0,)
+    bid_L_raw = (23,)
+    bid_k_raw = (1e-6,)
+    bid_x0 = (50.0,)
+
+    # Plot using effective model-space params (L,k > 0).
+    ask_L = tuple(_softplus_positive(v) for v in ask_L_raw)
+    ask_k = tuple(_softplus_positive(v) for v in ask_k_raw)
+    bid_L = tuple(_softplus_positive(v) for v in bid_L_raw)
+    bid_k = tuple(_softplus_positive(v) for v in bid_k_raw)
             
 
     x = np.linspace(-spread_max, spread_max, num_points, dtype=np.float64)

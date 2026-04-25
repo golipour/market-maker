@@ -195,9 +195,9 @@ def terminal_objective(
     term_uniformity = -float(uniformity_coef) * J_uniformity
     components = {
         "term_reward": term_reward,
-        "term_inv": term_inv,
-        "term_risk": term_risk,
-        "term_uniformity": term_uniformity,
+        "term_inv": -term_inv,
+        "term_risk": -term_risk,
+        "term_uniformity": -term_uniformity,
     }
     J = term_reward + term_inv + term_risk + term_uniformity
 
