@@ -125,6 +125,8 @@ def build_pipeline(
         "uniformity_coef": mpc_kw.get("uniformity_coef", mpc_kw.get("action_coef", 0.0)),
         "reward_coef": mpc_kw.get("reward_coef", 1.0),
         "size_coef": mpc_kw.get("size_coef", 0.0),
+        "anchor_hedge_coef": 1.0 if bool(mpc_kw.get("anchor_hedge_enabled", mpc_kw.get("anchor_hedge_coef", 0.0))) else 0.0,
+        "anchor_hedge_fee": mpc_kw.get("anchor_hedge_fee", 0.0),
         "total_q_target": mpc_kw.get("total_q_target"),
         "project_total_q_target": mpc_kw.get("project_total_q_target", False),
         "soft_fill_temp": mpc_kw.get("soft_fill_temp", 1.0),
@@ -208,6 +210,12 @@ def create_runner(
     anchor_websocket_reconnect_ms: int | None = None,
     main_representative_price_target_depth_lots: float | None = None,
     anchor_representative_price_target_depth_lots: float = 1000.0,
+    use_anchor_gaussian_price_model: bool = True,
+    anchor_price_model_decay: float = 0.97,
+    anchor_price_model_sigma_min_ticks: float = 1.0,
+    anchor_private_api_token: str | None = None,
+    use_anchor_portfolio_balances: bool = False,
+    anchor_hedge_enabled: bool = False,
 ) -> OrderFlowRunner:
     """
     Build OrderFlowStepper and OrderFlowRunner from pipeline components.
@@ -244,6 +252,11 @@ def create_runner(
         anchor_websocket_reconnect_ms=anchor_websocket_reconnect_ms,
         main_representative_price_target_depth_lots=main_representative_price_target_depth_lots,
         anchor_representative_price_target_depth_lots=anchor_representative_price_target_depth_lots,
+        use_anchor_gaussian_price_model=use_anchor_gaussian_price_model,
+        anchor_price_model_decay=anchor_price_model_decay,
+        anchor_price_model_sigma_min_ticks=anchor_price_model_sigma_min_ticks,
+        anchor_private_api_token=anchor_private_api_token,
+        use_anchor_portfolio_balances=use_anchor_portfolio_balances,
     )
     return OrderFlowRunner(
         stepper=stepper,
@@ -265,6 +278,7 @@ def create_runner(
         expected_mid_debug_every=expected_mid_debug_every,
         live_order_execution=live_order_execution,
         action_start_after_steps=action_start_after_steps,
+        anchor_hedge_enabled=anchor_hedge_enabled,
     )
 
 
@@ -275,6 +289,7 @@ def main() -> None:
     args = {
         "exchange": "nobitex",
         "symbol": "USDT_IRT",
+        "anchor_exchange": "wallex",
         "T_ms": 10000,
         "animation_interval_ms": 10000,
         "orderbook_ticks": 50,
@@ -284,7 +299,7 @@ def main() -> None:
         "trade_buffer_ms": 1 * 60 * 1000,
         "orderbook_buffer_ms": 1 * 60 * 1000,
         "websocket_reconnect_ms": 2000,
-        "private_api_token": "358e4fe544bff82683341eb9ff3e58fbea81cc19",  # API token to enable private ws channels
+        "private_api_token": "c1b236dd68df9686401ca23bce07d2a90e02b96b",  # API token to enable private ws channels
         "step_window_mode": "previous_end",  # "lookback" or "previous_end"
         "balance_update_mode": "rest",  # "events" (private trades/orders deltas) or "rest" (poll balances each step)
         "decay": 0.90,
@@ -295,7 +310,6 @@ def main() -> None:
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
-        "anchor_exchange": None, #"kucoin",  # e.g. "kucoin"
         "anchor_symbol": None,  # defaults to args["symbol"] when anchor_exchange is set
         "use_anchor_websocket_market_data": True,
         "anchor_depth_limit": None,  # defaults to depth_limit
@@ -303,13 +317,18 @@ def main() -> None:
         "anchor_orderbook_buffer_ms": None,  # defaults to orderbook_buffer_ms
         "anchor_websocket_reconnect_ms": None,  # defaults to websocket_reconnect_ms
         "main_representative_price_target_depth_lots": None,  # None => same as anchor target depth
-        "anchor_representative_price_target_depth_lots": 10000.0,
+        "anchor_representative_price_target_depth_lots": 1000.0,
+        "use_anchor_gaussian_price_model": True,
+        "anchor_price_model_decay": 0.9,
+        "anchor_price_model_sigma_min_ticks": 1.0,
+        "anchor_private_api_token": "18404|41TYyNTlan4QZhnaBykIkIwbCxZz3roczX7Pvuyr",  # defaults to private_api_token when None
+        "use_anchor_portfolio_balances": True,
         # Plot windows toggles (performance): Figure 1 (main) is always enabled.
         "enable_loss_figure": False,    # Figure 2
         "enable_action_figure": True,  # Figure 3
         "enable_price_figure": False,   # Figure 4
         "enable_qq_figure": False,      # Figure 5
-        "enable_anchor_figure": False,  # Figure 6
+        "enable_anchor_figure": True,  # Figure 6
     }
 
     pipeline = {
@@ -332,17 +351,17 @@ def main() -> None:
         "order_flow_model_kwargs": {},
         "mpc_kwargs": {
             "spread_max": 100,
-            "n_components": 1,
+            "n_components": 2,
             "device": "cpu",
             "total_q_min": 0,
-            "total_q_max": 100,
+            "total_q_max": 1e3,
             "soft_fill_temp": 0.25,
-            "adam_lr": 1e0,
-            "adam_epochs": 100,
+            "adam_lr": 1e-1,
+            "adam_epochs": 50,
             "adam_grad_clip": 1e10,
             "horizon": 1,
-            "n_samples": 32,
-            "warm_start": False,
+            "n_samples": 64,
+            "warm_start": True,
             "fixed_mc_samples": True,
             "adam_normalize_inputs": False,
             "verbose": False,
@@ -350,17 +369,20 @@ def main() -> None:
             # J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
             #     - uniformity_coef * J_uniformity - size_coef * J_size
             "reward_coef": 1.0,  # weight on E[ΔW] term
-            "risk_coef": 1.0,
-            "inv_coef": 1.0,
+            "risk_coef": 100.0,
+            "inv_coef": 0.0,
             "uniformity_coef": 0.0,
             "size_coef": 0.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
+            "anchor_hedge_enabled": False,    # when True, anchor hedge reward is added with fixed weight 1.0
+            "anchor_hedge_coef": 0.0,         # deprecated: kept for compatibility as ON/OFF fallback
+            "anchor_hedge_fee": 0.0000025,          # proportional fee factor on hedge contribution
             "target_inv": 1000,
-            "total_q_target": 100,           # finite-range target on [0, spread_max]
+            "total_q_target": 1e3,           # finite-range target on [0, spread_max]
             "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
             "zero_action_if_negative_J_mean": False,   # if True, return no quotes when best action has E[ΔW] < 0
         },
         "execution_model_kwargs": {
-            "maker_fee": 0.0001,
+            "maker_fee": 0.0000015,
             # Used only when execution_mode == "simulated"
             "simulated_initial_inventory": 0,
             "simulated_initial_cash": 0.0,
@@ -390,6 +412,8 @@ def main() -> None:
     spread_max = pipeline["mpc_kwargs"]["spread_max"]
     execution_mode = str(pipeline.get("execution_mode", "simulated")).lower()
     live_order_execution = execution_mode == "real"
+    _mpc_cfg = (pipeline.get("mpc_kwargs", {}) or {})
+    anchor_hedge_enabled = bool(_mpc_cfg.get("anchor_hedge_enabled", _mpc_cfg.get("anchor_hedge_coef", 0.0)))
     exec_kw = pipeline.get("execution_model_kwargs", {}) or {}
     sim_initial_inventory = int(exec_kw.get("simulated_initial_inventory", 0))
     sim_initial_cash = float(exec_kw.get("simulated_initial_cash", 0.0))
@@ -435,6 +459,12 @@ def main() -> None:
         anchor_websocket_reconnect_ms=args["anchor_websocket_reconnect_ms"],
         main_representative_price_target_depth_lots=args["main_representative_price_target_depth_lots"],
         anchor_representative_price_target_depth_lots=args["anchor_representative_price_target_depth_lots"],
+        use_anchor_gaussian_price_model=args["use_anchor_gaussian_price_model"],
+        anchor_price_model_decay=args["anchor_price_model_decay"],
+        anchor_price_model_sigma_min_ticks=args["anchor_price_model_sigma_min_ticks"],
+        anchor_private_api_token=args["anchor_private_api_token"],
+        use_anchor_portfolio_balances=args["use_anchor_portfolio_balances"],
+        anchor_hedge_enabled=anchor_hedge_enabled,
     )
     run_animation(
         runner=runner,

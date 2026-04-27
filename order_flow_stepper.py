@@ -6,6 +6,7 @@ advance(t_end_ms) can be called on an exact schedule independent from animation 
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections import defaultdict, deque
@@ -556,6 +557,73 @@ class WebSocketBufferedMarketDataProvider:
         return out
 
 
+class AnchorGaussianRepPriceModel:
+    """
+    Gaussian model for anchor representative-price deltas (buy/sell), updated via
+    EWMA sufficient statistics (exponentially weighted MLE).
+    """
+
+    def __init__(self, decay: float = 0.97, sigma_min_ticks: float = 1.0):
+        self.decay = min(0.999999, max(0.0, float(decay)))
+        self.sigma_min_ticks = max(1e-9, float(sigma_min_ticks))
+        self._m1_buy: float | None = None  # E[delta_buy]
+        self._m2_buy: float | None = None  # E[delta_buy^2]
+        self._m1_sell: float | None = None  # E[delta_sell]
+        self._m2_sell: float | None = None  # E[delta_sell^2]
+        self._last_buy_obs: float | None = None
+        self._last_sell_obs: float | None = None
+
+    def _update_one(self, x: float, m1: float | None, m2: float | None) -> tuple[float, float]:
+        if m1 is None or m2 is None:
+            return float(x), float(x) * float(x)
+        a = self.decay
+        b = 1.0 - a
+        m1_new = a * float(m1) + b * float(x)
+        m2_new = a * float(m2) + b * float(x) * float(x)
+        return float(m1_new), float(m2_new)
+
+    @staticmethod
+    def _var_from_moments(m1: float | None, m2: float | None) -> float:
+        if m1 is None or m2 is None:
+            return 0.0
+        return max(0.0, float(m2) - float(m1) * float(m1))
+
+    def update(self, buy_obs: float, sell_obs: float) -> None:
+        b = float(buy_obs)
+        s = float(sell_obs)
+        if self._last_buy_obs is not None and self._last_sell_obs is not None:
+            d_buy = b - float(self._last_buy_obs)
+            d_sell = s - float(self._last_sell_obs)
+            self._m1_buy, self._m2_buy = self._update_one(d_buy, self._m1_buy, self._m2_buy)
+            self._m1_sell, self._m2_sell = self._update_one(d_sell, self._m1_sell, self._m2_sell)
+        self._last_buy_obs = b
+        self._last_sell_obs = s
+
+    def forecast_next_prices(self) -> tuple[float | None, float | None]:
+        """
+        One-step forecast from delta model:
+          p_{t+1|t} = p_t + E[delta].
+        """
+        if self._last_buy_obs is None or self._last_sell_obs is None:
+            return None, None
+        mu_db = float(self._m1_buy) if self._m1_buy is not None else 0.0
+        mu_ds = float(self._m1_sell) if self._m1_sell is not None else 0.0
+        return float(self._last_buy_obs + mu_db), float(self._last_sell_obs + mu_ds)
+
+    def get_params(self) -> dict[str, float]:
+        var_buy = self._var_from_moments(self._m1_buy, self._m2_buy)
+        var_sell = self._var_from_moments(self._m1_sell, self._m2_sell)
+        sigma_buy = max(self.sigma_min_ticks, math.sqrt(var_buy))
+        sigma_sell = max(self.sigma_min_ticks, math.sqrt(var_sell))
+        return {
+            "mu_delta_buy": float(self._m1_buy) if self._m1_buy is not None else 0.0,
+            "sigma_delta_buy": float(sigma_buy),
+            "mu_delta_sell": float(self._m1_sell) if self._m1_sell is not None else 0.0,
+            "sigma_delta_sell": float(sigma_sell),
+            "decay": float(self.decay),
+        }
+
+
 class OrderFlowStepper:
     """
     advance(t_end_ms) returns one step over [t_end_ms - T_ms, t_end_ms].
@@ -595,10 +663,16 @@ class OrderFlowStepper:
         anchor_websocket_reconnect_ms: int | None = None,
         main_representative_price_target_depth_lots: float | None = None,
         anchor_representative_price_target_depth_lots: float = 1000.0,
+        use_anchor_gaussian_price_model: bool = True,
+        anchor_price_model_decay: float = 0.97,
+        anchor_price_model_sigma_min_ticks: float = 1.0,
+        anchor_private_api_token: str | None = None,
+        use_anchor_portfolio_balances: bool = False,
     ):
         self.exchange = exchange
         self.symbol = symbol
         self.private_api_token = private_api_token
+        self.anchor_private_api_token = anchor_private_api_token or private_api_token
         self._exchange_adapter = EXCHANGES.get(str(exchange or "").lower().strip())
         self.T_ms = max(1, T_ms)
         self.trades_limit = trades_limit
@@ -611,6 +685,10 @@ class OrderFlowStepper:
             raise ValueError("balance_update_mode must be 'events' or 'rest'")
         self._lot_size = max(1e-12, float(get_lot_size(symbol, exchange)))
         self._tick_size = max(1e-12, float(get_tick_size(symbol, exchange)))
+        self._main_symbol_asset_base, _main_q_raw = self._symbol_assets_for(self.symbol)
+        self._main_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
+            _main_q_raw, self.exchange
+        )
         if main_representative_price_target_depth_lots is None:
             main_representative_price_target_depth_lots = (
                 anchor_representative_price_target_depth_lots
@@ -627,6 +705,10 @@ class OrderFlowStepper:
         self.last_anchor_orderbook: Orderbook | None = None
         self.last_anchor_buy_reference_ticks: float | None = None
         self.last_anchor_sell_reference_ticks: float | None = None
+        self.last_anchor_price_model_params: dict[str, float] | None = None
+        self.last_anchor_inventory: int = 0
+        self.last_anchor_cash: int = 0
+        self.use_anchor_portfolio_balances = bool(use_anchor_portfolio_balances)
         # Buffered private exchange events (if websocket private channels are enabled).
         self.last_private_trades: list[dict] = []
         self.last_private_orders: list[dict] = []
@@ -692,6 +774,10 @@ class OrderFlowStepper:
         self.anchor_orderbook_provider: OrderbookDataProvider | None = None
         self._anchor_tick_size: float | None = None
         self._anchor_lot_size: float | None = None
+        self._anchor_symbol_asset_base: str = ""
+        self._anchor_symbol_asset_quote: str = ""
+        self.anchor_balances: dict[str, dict[str, float]] = {}
+        self._anchor_price_model: AnchorGaussianRepPriceModel | None = None
         if self.anchor_exchange:
             _anchor_depth_limit = (
                 int(anchor_depth_limit)
@@ -737,11 +823,23 @@ class OrderFlowStepper:
             self._anchor_lot_size = max(
                 1e-12, float(get_lot_size(self.anchor_symbol, self.anchor_exchange))
             )
+            self._anchor_symbol_asset_base, _anchor_q_raw = self._symbol_assets_for(
+                self.anchor_symbol
+            )
+            self._anchor_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
+                _anchor_q_raw, self.anchor_exchange
+            )
+            if use_anchor_gaussian_price_model:
+                self._anchor_price_model = AnchorGaussianRepPriceModel(
+                    decay=anchor_price_model_decay,
+                    sigma_min_ticks=anchor_price_model_sigma_min_ticks,
+                )
         self.trade_provider.start()
         self.orderbook_provider.start()
         if self.anchor_orderbook_provider is not None:
             self.anchor_orderbook_provider.start()
         self._initialize_balances()
+        self._initialize_anchor_balances()
 
     def _convert_anchor_ob_to_main_units(
         self, anchor_ob: Orderbook
@@ -750,18 +848,19 @@ class OrderFlowStepper:
         if self._anchor_tick_size is None or self._anchor_lot_size is None:
             return None
         price_scale = float(self._anchor_tick_size / self._tick_size)
+        quote_scale = float(self._anchor_quote_to_main_quote_scale())
         qty_scale = float(self._anchor_lot_size / self._lot_size)
 
         bids = []
         asks = []
         for lev in anchor_ob.bids:
-            p_main = max(1, int(round(float(lev.price) * price_scale)))
+            p_main = max(1, int(round(float(lev.price) * price_scale * quote_scale)))
             q_main = max(0, int(round(float(lev.qty) * qty_scale)))
             if q_main <= 0:
                 continue
             bids.append((p_main, q_main))
         for lev in anchor_ob.asks:
-            p_main = max(1, int(round(float(lev.price) * price_scale)))
+            p_main = max(1, int(round(float(lev.price) * price_scale * quote_scale)))
             q_main = max(0, int(round(float(lev.qty) * qty_scale)))
             if q_main <= 0:
                 continue
@@ -796,6 +895,36 @@ class OrderFlowStepper:
             bids=bid_levels,
             asks=ask_levels,
         )
+
+    def _anchor_quote_to_main_quote_scale(self) -> float:
+        """
+        Convert anchor quote-currency price units into main quote-currency units.
+        Most markets are already aligned (scale=1). Handle common Iran quote aliases:
+          1 TMN = 10 IRT (Rial).
+        """
+        main_q = str(self._main_symbol_asset_quote or "").upper().strip()
+        anchor_q = str(self._anchor_symbol_asset_quote or "").upper().strip()
+        if not main_q or not anchor_q or main_q == anchor_q:
+            return 1.0
+        # Toman -> Rial
+        if anchor_q == "TMN" and main_q in {"IRT", "RLS"}:
+            return 10.0
+        # Rial -> Toman
+        if anchor_q in {"IRT", "RLS"} and main_q == "TMN":
+            return 0.1
+        return 1.0
+
+    @staticmethod
+    def _normalize_quote_asset_for_exchange(asset: str, exchange: str) -> str:
+        """
+        Normalize quote aliases based on exchange conventions.
+        Wallex uses TMN for toman-priced markets; users may still pass IRT symbols.
+        """
+        a = str(asset or "").upper().strip()
+        ex = str(exchange or "").lower().strip()
+        if ex == "wallex" and a in {"IRT", "RLS"}:
+            return "TMN"
+        return a
 
     @staticmethod
     def _to_float(v, default: float = 0.0) -> float:
@@ -1105,6 +1234,17 @@ class OrderFlowStepper:
                 return s[: -len(q)], q
         return "", ""
 
+    @staticmethod
+    def _symbol_assets_for(symbol: str) -> tuple[str, str]:
+        s = str(symbol or "").upper().strip()
+        if "_" in s:
+            b, q = s.split("_", 1)
+            return b, q
+        for q in ("USDT", "IRT", "TMN", "RLS", "USD", "BTC", "ETH"):
+            if s.endswith(q) and len(s) > len(q):
+                return s[: -len(q)], q
+        return "", ""
+
     def _balance_asset_aliases(self, asset: str) -> list[str]:
         a = str(asset or "").upper().strip()
         if not a:
@@ -1137,6 +1277,49 @@ class OrderFlowStepper:
         if quote:
             cash_native = self._balance_total(quote)
             cash_tick_lot = cash_native / (self._tick_size * self._lot_size)
+        return int(round(inv_lots)), int(round(cash_tick_lot))
+
+    def _anchor_balance_total(self, asset: str) -> float:
+        for a in self._balance_asset_aliases(asset):
+            if a in self.anchor_balances:
+                return self._to_float((self.anchor_balances.get(a) or {}).get("total", 0.0))
+        return 0.0
+
+    def _initialize_anchor_balances(self) -> None:
+        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
+            self.anchor_balances = {}
+            return
+        raw = get_balances(self.anchor_exchange, api_token=self.anchor_private_api_token) or {}
+        self.anchor_balances = self._normalize_balances(raw)
+
+    def _refresh_anchor_balances_from_rest(self) -> None:
+        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
+            self.anchor_balances = {}
+            return
+        fresh = get_balances(self.anchor_exchange, api_token=self.anchor_private_api_token) or {}
+        if fresh:
+            self.anchor_balances = self._normalize_balances(fresh)
+
+    def _anchor_inventory_cash_in_main_units(self) -> tuple[int, int]:
+        """
+        Convert anchor-account balances to main model units:
+        - inventory in main lots
+        - cash in main tick*lot units
+        """
+        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
+            return 0, 0
+        base = self._anchor_symbol_asset_base
+        quote = self._anchor_symbol_asset_quote
+        if not base and not quote:
+            return 0, 0
+        inv_lots = 0.0
+        cash_tick_lot = 0.0
+        if base:
+            inv_native = self._anchor_balance_total(base)
+            inv_lots = inv_native / max(1e-12, self._lot_size)
+        if quote:
+            cash_native = self._anchor_balance_total(quote)
+            cash_tick_lot = cash_native / max(1e-12, self._tick_size * self._lot_size)
         return int(round(inv_lots)), int(round(cash_tick_lot))
 
     def _merge_private_trades_with_adapter(
@@ -1234,19 +1417,30 @@ class OrderFlowStepper:
                         anchor_ob_main,
                         target_depth_lots=self._anchor_representative_price_target_depth_lots,
                     )
-                    self.last_anchor_buy_reference_ticks = float(a_buy)
-                    self.last_anchor_sell_reference_ticks = float(a_sell)
+                    if self._anchor_price_model is not None:
+                        self._anchor_price_model.update(float(a_buy), float(a_sell))
+                        f_buy, f_sell = self._anchor_price_model.forecast_next_prices()
+                        self.last_anchor_buy_reference_ticks = float(f_buy) if f_buy is not None else float(a_buy)
+                        self.last_anchor_sell_reference_ticks = float(f_sell) if f_sell is not None else float(a_sell)
+                        self.last_anchor_price_model_params = self._anchor_price_model.get_params()
+                    else:
+                        self.last_anchor_buy_reference_ticks = float(a_buy)
+                        self.last_anchor_sell_reference_ticks = float(a_sell)
+                        self.last_anchor_price_model_params = None
                 else:
                     self.last_anchor_buy_reference_ticks = None
                     self.last_anchor_sell_reference_ticks = None
+                    self.last_anchor_price_model_params = None
             else:
                 self.last_anchor_orderbook = None
                 self.last_anchor_buy_reference_ticks = None
                 self.last_anchor_sell_reference_ticks = None
+                self.last_anchor_price_model_params = None
         else:
             self.last_anchor_orderbook = None
             self.last_anchor_buy_reference_ticks = None
             self.last_anchor_sell_reference_ticks = None
+            self.last_anchor_price_model_params = None
         trades_list = self.trade_provider.get_trades(t_start_ms, t_end_ms)
         if hasattr(self.trade_provider, "get_private_trades"):
             try:
@@ -1280,12 +1474,17 @@ class OrderFlowStepper:
         else:
             # REST-mode balance source of truth: replace balances each step.
             self._refresh_balances_from_rest()
+        self._refresh_anchor_balances_from_rest()
 
         buy_lots, sell_lots = self._buy_sell_lots_from_trades(trades_list)
         inventory, cash = self._inventory_cash_from_balances()
+        anchor_inventory, anchor_cash = self._anchor_inventory_cash_in_main_units()
+        self.last_anchor_inventory = int(anchor_inventory)
+        self.last_anchor_cash = int(anchor_cash)
         private_fills_bid = tuple(self.last_private_trade_fills_bid)
         private_fills_ask = tuple(self.last_private_trade_fills_ask)
         private_trade_fee_tick_lot = self._private_trades_fee_tick_lot()
+        ap = self.last_anchor_price_model_params or {}
 
         step: Step = (
             t_end_ms,
@@ -1297,6 +1496,14 @@ class OrderFlowStepper:
             private_trade_fee_tick_lot,
             private_fills_bid,
             private_fills_ask,
+            self.last_anchor_buy_reference_ticks,
+            self.last_anchor_sell_reference_ticks,
+            float(ap.get("mu_delta_buy")) if ap.get("mu_delta_buy") is not None else None,
+            float(ap.get("sigma_delta_buy")) if ap.get("sigma_delta_buy") is not None else None,
+            float(ap.get("mu_delta_sell")) if ap.get("mu_delta_sell") is not None else None,
+            float(ap.get("sigma_delta_sell")) if ap.get("sigma_delta_sell") is not None else None,
+            int(anchor_inventory),
+            int(anchor_cash),
         )
         self.steps.append(step)
         return step

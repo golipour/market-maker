@@ -613,6 +613,20 @@ class WallexAdapter:
         r.raise_for_status()
         return r.json()
 
+    def _get_auth(self, path: str, api_token: str, params: dict[str, Any] | None = None) -> Any:
+        headers = {
+            "X-API-Key": api_token,
+            "Accept": "application/json",
+        }
+        r = requests.get(
+            f"{self.BASE_URL}{path}",
+            params=params or {},
+            headers=headers,
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+
     def _symbol(self, symbol: str) -> str:
         # Wallex uses TMN (Toman), not IRT. Map e.g. USDT_IRT → USDTTMN, BTC_IRT → BTCTMN.
         s = _symbol_for_exchange(symbol, use_underscore=False)
@@ -672,7 +686,100 @@ class WallexAdapter:
         return {"filters": [{"filterType": "PRICE_FILTER", "tickSize": str(tick)}]}
 
     def balances(self, api_token: str | None = None) -> dict[str, dict[str, float]]:
+        if not api_token:
+            return {}
+        # Wallex docs: GET /v1/account/balances with X-API-Key.
+        # Shape:
+        # {
+        #   "success": true,
+        #   "result": {
+        #     "balances": {
+        #       "TMN": {"asset":"TMN","value":"...","locked":"..."},
+        #       ...
+        #     }
+        #   }
+        # }
+        # Normalize to {ASSET: {free, locked, total}}.
+        candidates = [
+            "/v1/account/balances",
+            "/v1/account/wallets",
+            "/v1/account/profile",
+            "/v1/account",
+        ]
+        for path in candidates:
+            try:
+                out = self._get_auth(path, api_token)
+            except Exception:
+                continue
+            result: dict[str, dict[str, float]] = {}
+            if isinstance(out, dict) and out.get("success") is False:
+                continue
+            payload = out.get("result", out) if isinstance(out, dict) else {}
+            rows = None
+            asset_keyed = False
+            if isinstance(payload, dict):
+                rows = (
+                    payload.get("balances")
+                    or payload.get("wallets")
+                    or payload.get("assets")
+                    or payload.get("accounts")
+                )
+            if rows is None and isinstance(payload, list):
+                rows = payload
+            if isinstance(rows, dict):
+                # Most likely Wallex shape: dict keyed by asset symbol.
+                asset_keyed = True
+                rows = list(rows.items())
+            if not isinstance(rows, list):
+                continue
+            for w in rows:
+                row = None
+                row_asset = ""
+                if asset_keyed and isinstance(w, tuple) and len(w) == 2:
+                    k, v = w
+                    row_asset = str(k or "").upper()
+                    row = v if isinstance(v, dict) else {}
+                elif isinstance(w, dict):
+                    row = w
+                if not isinstance(row, dict):
+                    continue
+                asset = str(
+                    row.get("asset")
+                    or row.get("currency")
+                    or row.get("coin")
+                    or row.get("symbol")
+                    or row_asset
+                    or ""
+                ).upper()
+                if not asset:
+                    continue
+                free = self._safe_float(
+                    row.get(
+                        "free",
+                        row.get(
+                            "available",
+                            row.get(
+                                "value",
+                                row.get("balance", 0.0),
+                            ),
+                        ),
+                    )
+                )
+                locked = self._safe_float(
+                    row.get("locked", row.get("inOrder", row.get("hold", 0.0)))
+                )
+                total = self._safe_float(row.get("total", free + locked))
+                result[asset] = {"free": free, "locked": locked, "total": total}
+            if result:
+                return result
         return {}
+
+    @staticmethod
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
 
 
 class BitPinAdapter:

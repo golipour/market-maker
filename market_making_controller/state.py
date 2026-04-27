@@ -278,24 +278,37 @@ def _quantize_marginal_levels(
     return out
 
 
-def _ensure_nonempty_from_positive_raw(
-    spreads: list[float],
-    marginal_raw: list[float],
+def _top_up_levels_to_total_q_min_at_spread_max(
     levels: list[tuple[float, int]],
+    *,
+    spread_max: float,
+    total_q_min: float | None,
     lot_size: int,
 ) -> list[tuple[float, int]]:
     """
-    Guard against full side disappearing only due quantization.
-    If raw side has positive mass but all levels rounded to zero, keep one lot
-    at the level with maximum raw marginal.
+    After quantization, ensure cumulative quoted size reaches feasible total_q_min
+    by placing residual size at spread_max level.
     """
-    if levels or not spreads or not marginal_raw:
+    if total_q_min is None:
         return levels
-    max_raw = max(float(v) for v in marginal_raw)
-    if max_raw <= 0.0:
+    lot_size = max(1, int(lot_size))
+    # Keep target feasible in discrete lot units.
+    target_q = int(math.ceil(float(total_q_min) / float(lot_size))) * lot_size
+    if target_q <= 0:
         return levels
-    idx = max(range(len(marginal_raw)), key=lambda i: float(marginal_raw[i]))
-    return [(float(spreads[idx]), int(max(1, lot_size)))]
+    curr_q = int(sum(int(q) for _, q in levels))
+    if curr_q >= target_q:
+        return levels
+    residual_q = target_q - curr_q
+    s_max = float(spread_max)
+    out: list[tuple[float, int]] = list(levels)
+    for i, (s, q) in enumerate(out):
+        if float(s) == s_max:
+            out[i] = (float(s), int(q) + int(residual_q))
+            return out
+    out.append((s_max, int(residual_q)))
+    out.sort(key=lambda x: float(x[0]))
+    return out
 
 
 def sigmoid_action_to_discretized_action(
@@ -305,6 +318,7 @@ def sigmoid_action_to_discretized_action(
     s_a_min: float = 1.0,
     s_a_max: float = 100.0,
     lot_size: int = 1,
+    total_q_min: float | None = None,
 ) -> DiscretizedOrderAction:
     """
     Convert SigmoidMixtureAction to a discrete ladder of (spread_ticks, qty) per side
@@ -340,14 +354,22 @@ def sigmoid_action_to_discretized_action(
     ask_marginal = _marginal_from_cumulative_levels(ask_cumulative_raw, baseline_cum=float(ask_base))
     bids_q = _quantize_marginal_levels(bid_spreads, bid_marginal, lot_size)
     asks_q = _quantize_marginal_levels(ask_spreads, ask_marginal, lot_size)
-    bids_q = _ensure_nonempty_from_positive_raw(
-        bid_spreads, bid_marginal, bids_q, lot_size
+    bids = tuple(
+        _top_up_levels_to_total_q_min_at_spread_max(
+            bids_q,
+            spread_max=float(s_b_max),
+            total_q_min=total_q_min,
+            lot_size=lot_size,
+        )
     )
-    asks_q = _ensure_nonempty_from_positive_raw(
-        ask_spreads, ask_marginal, asks_q, lot_size
+    asks = tuple(
+        _top_up_levels_to_total_q_min_at_spread_max(
+            asks_q,
+            spread_max=float(s_a_max),
+            total_q_min=total_q_min,
+            lot_size=lot_size,
+        )
     )
-    bids = tuple(bids_q)
-    asks = tuple(asks_q)
     return DiscretizedOrderAction(bids=bids, asks=asks)
 
 
@@ -388,6 +410,14 @@ class State:
     cash: float = 0.0
     buy_ref: float = 0.0
     sell_ref: float = 0.0
+    anchor_buy_ref: float | None = None
+    anchor_sell_ref: float | None = None
+    anchor_mu_delta_buy: float | None = None
+    anchor_sigma_delta_buy: float | None = None
+    anchor_mu_delta_sell: float | None = None
+    anchor_sigma_delta_sell: float | None = None
+    anchor_inventory: int = 0
+    anchor_cash: float = 0.0
 
     @property
     def x(self) -> MarketState:
@@ -402,6 +432,14 @@ def state_from_ob_and_flow(
     sell_vol: float,
     inventory: int,
     cash: float = 0.0,
+    anchor_buy_ref: float | None = None,
+    anchor_sell_ref: float | None = None,
+    anchor_mu_delta_buy: float | None = None,
+    anchor_sigma_delta_buy: float | None = None,
+    anchor_mu_delta_sell: float | None = None,
+    anchor_sigma_delta_sell: float | None = None,
+    anchor_inventory: int = 0,
+    anchor_cash: float = 0.0,
 ) -> State:
     """Build State from mid, orderbook levels (spread_ticks, qty), flow, and position."""
     ob_rel = OrderbookRelative(
@@ -417,6 +455,14 @@ def state_from_ob_and_flow(
         cash=cash,
         buy_ref=mid,
         sell_ref=mid,
+        anchor_buy_ref=anchor_buy_ref,
+        anchor_sell_ref=anchor_sell_ref,
+        anchor_mu_delta_buy=anchor_mu_delta_buy,
+        anchor_sigma_delta_buy=anchor_sigma_delta_buy,
+        anchor_mu_delta_sell=anchor_mu_delta_sell,
+        anchor_sigma_delta_sell=anchor_sigma_delta_sell,
+        anchor_inventory=int(anchor_inventory),
+        anchor_cash=float(anchor_cash),
     )
 
 
@@ -442,6 +488,14 @@ def state_from_orderbook(
     cash: float = 0.0,
     spread_max: float | None = None,
     reference_depth_lots: float = 1000.0,
+    anchor_buy_ref: float | None = None,
+    anchor_sell_ref: float | None = None,
+    anchor_mu_delta_buy: float | None = None,
+    anchor_sigma_delta_buy: float | None = None,
+    anchor_mu_delta_sell: float | None = None,
+    anchor_sigma_delta_sell: float | None = None,
+    anchor_inventory: int = 0,
+    anchor_cash: float = 0.0,
 ) -> State:
     """
     Build State from trade_stats Orderbook and flow/position.
@@ -459,6 +513,14 @@ def state_from_orderbook(
         cash=cash,
         buy_ref=buy_ref,
         sell_ref=sell_ref,
+        anchor_buy_ref=anchor_buy_ref,
+        anchor_sell_ref=anchor_sell_ref,
+        anchor_mu_delta_buy=anchor_mu_delta_buy,
+        anchor_sigma_delta_buy=anchor_sigma_delta_buy,
+        anchor_mu_delta_sell=anchor_mu_delta_sell,
+        anchor_sigma_delta_sell=anchor_sigma_delta_sell,
+        anchor_inventory=int(anchor_inventory),
+        anchor_cash=float(anchor_cash),
     )
 
 
@@ -467,12 +529,36 @@ def state_from_step(
     *,
     spread_max: float | None = None,
     reference_depth_lots: float = 1000.0,
+    anchor_buy_ref: float | None = None,
+    anchor_sell_ref: float | None = None,
+    anchor_mu_delta_buy: float | None = None,
+    anchor_sigma_delta_buy: float | None = None,
+    anchor_mu_delta_sell: float | None = None,
+    anchor_sigma_delta_sell: float | None = None,
+    anchor_inventory: int | None = None,
+    anchor_cash: float | None = None,
 ) -> State:
     """
     Build State directly from a Step tuple:
     (t_end_ms, ob, buy_vol, sell_vol, inventory, cash, ...).
     """
-    _t_end, ob, buy_vol, sell_vol, inventory, cash, *_ = step
+    _t_end, ob, buy_vol, sell_vol, inventory, cash, *_rest = step
+    if anchor_buy_ref is None and len(_rest) >= 5:
+        anchor_buy_ref = _rest[3]
+    if anchor_sell_ref is None and len(_rest) >= 5:
+        anchor_sell_ref = _rest[4]
+    if anchor_mu_delta_buy is None and len(_rest) >= 9:
+        anchor_mu_delta_buy = _rest[5]
+    if anchor_sigma_delta_buy is None and len(_rest) >= 9:
+        anchor_sigma_delta_buy = _rest[6]
+    if anchor_mu_delta_sell is None and len(_rest) >= 9:
+        anchor_mu_delta_sell = _rest[7]
+    if anchor_sigma_delta_sell is None and len(_rest) >= 9:
+        anchor_sigma_delta_sell = _rest[8]
+    if anchor_inventory is None and len(_rest) >= 11:
+        anchor_inventory = _rest[9]
+    if anchor_cash is None and len(_rest) >= 11:
+        anchor_cash = _rest[10]
     return state_from_orderbook(
         ob=ob,
         buy_vol=float(buy_vol),
@@ -481,4 +567,24 @@ def state_from_step(
         cash=float(cash),
         spread_max=spread_max,
         reference_depth_lots=reference_depth_lots,
+        anchor_buy_ref=(
+            float(anchor_buy_ref) if anchor_buy_ref is not None else None
+        ),
+        anchor_sell_ref=(
+            float(anchor_sell_ref) if anchor_sell_ref is not None else None
+        ),
+        anchor_mu_delta_buy=(
+            float(anchor_mu_delta_buy) if anchor_mu_delta_buy is not None else None
+        ),
+        anchor_sigma_delta_buy=(
+            float(anchor_sigma_delta_buy) if anchor_sigma_delta_buy is not None else None
+        ),
+        anchor_mu_delta_sell=(
+            float(anchor_mu_delta_sell) if anchor_mu_delta_sell is not None else None
+        ),
+        anchor_sigma_delta_sell=(
+            float(anchor_sigma_delta_sell) if anchor_sigma_delta_sell is not None else None
+        ),
+        anchor_inventory=int(anchor_inventory) if anchor_inventory is not None else 0,
+        anchor_cash=float(anchor_cash) if anchor_cash is not None else 0.0,
     )

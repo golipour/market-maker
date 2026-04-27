@@ -79,6 +79,7 @@ class SigmoidController:
                 return ZERO_DISCRETIZED_ACTION
         return sigmoid_action_to_discretized_action(
             sigmoid_action,
+            total_q_min=getattr(self.optimizer, "total_q_min", None),
             **self._discretization,
         )
 

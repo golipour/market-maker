@@ -223,7 +223,21 @@ class DiscretizedExecutionModel:
         spread_max: float | None = None,
     ) -> tuple[State, DeltaPnL]:
         """Apply prev_action with curr_step volumes and return next state + one-step pnl."""
-        _t_end, ob_curr, buy_vol, sell_vol, _inventory, _cash, *_ = curr_step
+        _t_end, ob_curr, buy_vol, sell_vol, _inventory, _cash, *_rest = curr_step
+        anchor_buy_ref = None
+        anchor_sell_ref = None
+        anchor_mu_delta_buy = None
+        anchor_sigma_delta_buy = None
+        anchor_mu_delta_sell = None
+        anchor_sigma_delta_sell = None
+        if len(_rest) >= 5:
+            anchor_buy_ref = _rest[3]
+            anchor_sell_ref = _rest[4]
+        if len(_rest) >= 9:
+            anchor_mu_delta_buy = _rest[5]
+            anchor_sigma_delta_buy = _rest[6]
+            anchor_mu_delta_sell = _rest[7]
+            anchor_sigma_delta_sell = _rest[8]
         if not isinstance(prev_action, DiscretizedOrderAction):
             raise TypeError(
                 "DiscretizedExecutionModel.state_after_step expects DiscretizedOrderAction"
@@ -235,6 +249,8 @@ class DiscretizedExecutionModel:
         S_t = mid_cur
         S_t1 = mid_curr
         q_t = prev_state.inventory
+        q_anchor_t = int(getattr(prev_state, "anchor_inventory", 0))
+        c_anchor_t = float(getattr(prev_state, "anchor_cash", 0.0))
         one_minus_f = 1.0 - self.maker_fee
 
         f_b, f_a, fills_bid, fills_ask = fills_from_ob_rel_discretized(
@@ -255,8 +271,22 @@ class DiscretizedExecutionModel:
         total_fee_paid = self.maker_fee * (ask_notional + bid_notional)
         fee_pnl = -float(total_fee_paid)
 
-        wealth_before = prev_state.cash + prev_state.inventory * prev_state.mid
-        wealth_after = cash_new + inv_new * mid_curr
+        anchor_ref_prev = (
+            0.5
+            * float(
+                (prev_state.anchor_buy_ref if prev_state.anchor_buy_ref is not None else prev_state.buy_ref)
+                + (prev_state.anchor_sell_ref if prev_state.anchor_sell_ref is not None else prev_state.sell_ref)
+            )
+        )
+        anchor_ref_next = (
+            0.5
+            * float(
+                (anchor_buy_ref if anchor_buy_ref is not None else prev_state.buy_ref)
+                + (anchor_sell_ref if anchor_sell_ref is not None else prev_state.sell_ref)
+            )
+        )
+        wealth_before = prev_state.cash + prev_state.inventory * prev_state.mid + c_anchor_t + q_anchor_t * anchor_ref_prev
+        wealth_after = cash_new + inv_new * mid_curr + c_anchor_t + q_anchor_t * anchor_ref_next
         wealth_pnl = wealth_after - wealth_before
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         next_state = State(
@@ -266,6 +296,14 @@ class DiscretizedExecutionModel:
             sell_vol=float(sell_vol),
             inventory=inv_new,
             cash=cash_new,
+            anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
+            anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
+            anchor_mu_delta_buy=float(anchor_mu_delta_buy) if anchor_mu_delta_buy is not None else None,
+            anchor_sigma_delta_buy=float(anchor_sigma_delta_buy) if anchor_sigma_delta_buy is not None else None,
+            anchor_mu_delta_sell=float(anchor_mu_delta_sell) if anchor_mu_delta_sell is not None else None,
+            anchor_sigma_delta_sell=float(anchor_sigma_delta_sell) if anchor_sigma_delta_sell is not None else None,
+            anchor_inventory=q_anchor_t,
+            anchor_cash=c_anchor_t,
         )
         return next_state, DeltaPnL(
             spread_pnl=float(spread_pnl),
@@ -290,20 +328,63 @@ class ObservedStepExecutionModel:
         curr_step: Step,
         spread_max: float | None = None,
     ) -> tuple[State, DeltaPnL]:
-        _t_end, ob_curr, buy_vol, sell_vol, inv_new, cash_new, private_trade_fee_tick_lot, *_ = curr_step
+        _t_end, ob_curr, buy_vol, sell_vol, inv_new, cash_new, private_trade_fee_tick_lot, *_rest = curr_step
+        anchor_buy_ref = None
+        anchor_sell_ref = None
+        anchor_mu_delta_buy = None
+        anchor_sigma_delta_buy = None
+        anchor_mu_delta_sell = None
+        anchor_sigma_delta_sell = None
+        anchor_inventory = None
+        anchor_cash = None
+        if len(_rest) >= 4:
+            anchor_buy_ref = _rest[2]
+            anchor_sell_ref = _rest[3]
+        if len(_rest) >= 8:
+            anchor_mu_delta_buy = _rest[4]
+            anchor_sigma_delta_buy = _rest[5]
+            anchor_mu_delta_sell = _rest[6]
+            anchor_sigma_delta_sell = _rest[7]
+        if len(_rest) >= 10:
+            anchor_inventory = _rest[8]
+            anchor_cash = _rest[9]
         mid_curr = float(ob_curr.mid)
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         cash_f = float(cash_new)
         inv_i = int(inv_new)
-        wealth_before = prev_state.cash + prev_state.inventory * prev_state.mid
-        wealth_after = cash_f + inv_i * mid_curr
+        anchor_inv_i = int(anchor_inventory) if anchor_inventory is not None else int(getattr(prev_state, "anchor_inventory", 0))
+        anchor_cash_f = float(anchor_cash) if anchor_cash is not None else float(getattr(prev_state, "anchor_cash", 0.0))
+        anchor_ref_prev = (
+            0.5
+            * float(
+                (prev_state.anchor_buy_ref if prev_state.anchor_buy_ref is not None else prev_state.buy_ref)
+                + (prev_state.anchor_sell_ref if prev_state.anchor_sell_ref is not None else prev_state.sell_ref)
+            )
+        )
+        anchor_ref_next = (
+            0.5
+            * float(
+                (anchor_buy_ref if anchor_buy_ref is not None else prev_state.buy_ref)
+                + (anchor_sell_ref if anchor_sell_ref is not None else prev_state.sell_ref)
+            )
+        )
+        main_wealth_before = prev_state.cash + prev_state.inventory * prev_state.mid
+        main_wealth_after = cash_f + inv_i * mid_curr
+        main_wealth_pnl = main_wealth_after - main_wealth_before
+        wealth_before = (
+            main_wealth_before
+            + float(getattr(prev_state, "anchor_cash", 0.0))
+            + int(getattr(prev_state, "anchor_inventory", 0)) * anchor_ref_prev
+        )
+        wealth_after = main_wealth_after + anchor_cash_f + anchor_inv_i * anchor_ref_next
         wealth_pnl = wealth_after - wealth_before
         inventory_pnl = prev_state.inventory * (mid_curr - prev_state.mid)
         delta_inv = inv_i - prev_state.inventory
         cross_pnl = delta_inv * (mid_curr - prev_state.mid)
         # Exchange-reported trade fees from stepper are in tick*lot units (same as cash).
         fee_pnl = -float(private_trade_fee_tick_lot)
-        spread_pnl = wealth_pnl - inventory_pnl - cross_pnl - fee_pnl
+        # Spread decomposition is for main market only (not total portfolio wealth).
+        spread_pnl = main_wealth_pnl - inventory_pnl - cross_pnl - fee_pnl
         next_state = State(
             mid=mid_curr,
             ob_rel=ob_rel,
@@ -311,6 +392,14 @@ class ObservedStepExecutionModel:
             sell_vol=float(sell_vol),
             inventory=inv_i,
             cash=cash_f,
+            anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
+            anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
+            anchor_mu_delta_buy=float(anchor_mu_delta_buy) if anchor_mu_delta_buy is not None else None,
+            anchor_sigma_delta_buy=float(anchor_sigma_delta_buy) if anchor_sigma_delta_buy is not None else None,
+            anchor_mu_delta_sell=float(anchor_mu_delta_sell) if anchor_mu_delta_sell is not None else None,
+            anchor_sigma_delta_sell=float(anchor_sigma_delta_sell) if anchor_sigma_delta_sell is not None else None,
+            anchor_inventory=anchor_inv_i,
+            anchor_cash=anchor_cash_f,
         )
         return next_state, DeltaPnL(
             spread_pnl=float(spread_pnl),

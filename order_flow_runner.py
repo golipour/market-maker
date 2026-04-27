@@ -63,6 +63,7 @@ class OrderFlowRunner:
         expected_mid_debug_every: int = 1,
         live_order_execution: bool = False,
         action_start_after_steps: int = 0,
+        anchor_hedge_enabled: bool = False,
     ):
         self.stepper = stepper
         # Preferred name for market-order-flow estimator.
@@ -83,6 +84,7 @@ class OrderFlowRunner:
         self.expected_mid_debug_every = max(1, int(expected_mid_debug_every))
         self.live_order_execution = bool(live_order_execution)
         self.action_start_after_steps = max(0, int(action_start_after_steps))
+        self.anchor_hedge_enabled = bool(anchor_hedge_enabled)
         self._live_exec_warned_no_token = False
         self._step_counter = 0
         if execution_model is None and controller is not None and execution_rule is None:
@@ -112,6 +114,14 @@ class OrderFlowRunner:
         self.anchor_buy_reference_hist: list[float] = []
         self.anchor_sell_reference_hist: list[float] = []
         self.anchor_reference_times: list[datetime] = []
+        self.anchor_price_param_times: list[datetime] = []
+        self.anchor_mu_buy_hist: list[float] = []
+        self.anchor_mu_sell_hist: list[float] = []
+        self.anchor_sigma_buy_hist: list[float] = []
+        self.anchor_sigma_sell_hist: list[float] = []
+        self.anchor_portfolio_times: list[datetime] = []
+        self.anchor_inventory_hist: list[int] = []
+        self.anchor_cash_hist: list[float] = []
         self.main_buy_reference_hist: list[float] = []
         self.main_sell_reference_hist: list[float] = []
         self.main_reference_times: list[datetime] = []
@@ -120,8 +130,9 @@ class OrderFlowRunner:
         self.last_main_sell_reference_ticks: float | None = None
         self.last_anchor_buy_reference_ticks: float | None = None
         self.last_anchor_sell_reference_ticks: float | None = None
+        self.last_anchor_price_model_params: dict | None = None
         self.last_book_params: dict | None = None  # fitted depth params from last MPC step (for animation)
-        # E[ΔW]: optimizer’s expected total ΔW over horizon (sum over H steps, mean over MC samples). Can be large (e.g. 1e9) if horizon or notional is large.
+        # E[ΔW_next]: optimizer expected one-step wealth change (t -> t+1), mean over MC samples.
         self.E_dW_times: list[datetime] = []  # when action was taken
         self.E_dW_hist: list[float] = []
         self.J_comp_times: list[datetime] = []  # when optimizer components were recorded
@@ -129,6 +140,14 @@ class OrderFlowRunner:
         self.J_inv_hist: list[float] = []
         self.J_std_hist: list[float] = []
         self.J_uniformity_hist: list[float] = []
+        self.J_mean_init_hist: list[float] = []
+        self.J_inv_init_hist: list[float] = []
+        self.J_std_init_hist: list[float] = []
+        self.J_uniformity_init_hist: list[float] = []
+        self.main_reward_opt_hist: list[float] = []
+        self.anchor_reward_opt_hist: list[float] = []
+        self.main_reward_init_hist: list[float] = []
+        self.anchor_reward_init_hist: list[float] = []
         # Realized ΔW: actual wealth change in one step when fills are applied. Often 0 or small if no fills.
         self.dW_times: list[datetime] = []  # when fills were applied
         self.dW_hist: list[float] = []
@@ -481,6 +500,8 @@ class OrderFlowRunner:
         step = self.stepper.advance(t_end_ms=t_end_ms)
         if step is None:
             return False
+        if not self.anchor_hedge_enabled and len(step) >= 15:
+            step = tuple(list(step[:-2]) + [0, 0])
         self._step_counter += 1
         t_end, ob, buy_vol, sell_vol, _step_inventory, _step_cash, *_ = step
         bucket_ms = self.stepper.T_ms
@@ -498,6 +519,18 @@ class OrderFlowRunner:
         self.last_anchor_sell_reference_ticks = getattr(
             self.stepper, "last_anchor_sell_reference_ticks", None
         )
+        self.last_anchor_price_model_params = getattr(
+            self.stepper, "last_anchor_price_model_params", None
+        )
+        anchor_inventory = int(getattr(self.stepper, "last_anchor_inventory", 0) or 0)
+        anchor_cash = float(getattr(self.stepper, "last_anchor_cash", 0.0) or 0.0)
+        if not self.anchor_hedge_enabled:
+            anchor_inventory = 0
+            anchor_cash = 0.0
+        t_anchor_port = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+        self.anchor_portfolio_times.append(t_anchor_port)
+        self.anchor_inventory_hist.append(int(anchor_inventory))
+        self.anchor_cash_hist.append(float(anchor_cash))
         if (
             self.last_main_buy_reference_ticks is not None
             and self.last_main_sell_reference_ticks is not None
@@ -514,6 +547,12 @@ class OrderFlowRunner:
             self.anchor_reference_times.append(t_anchor)
             self.anchor_buy_reference_hist.append(float(self.last_anchor_buy_reference_ticks))
             self.anchor_sell_reference_hist.append(float(self.last_anchor_sell_reference_ticks))
+            p = self.last_anchor_price_model_params or {}
+            self.anchor_price_param_times.append(t_anchor)
+            self.anchor_mu_buy_hist.append(float(p.get("mu_delta_buy", float("nan"))))
+            self.anchor_mu_sell_hist.append(float(p.get("mu_delta_sell", float("nan"))))
+            self.anchor_sigma_buy_hist.append(float(p.get("sigma_delta_buy", float("nan"))))
+            self.anchor_sigma_sell_hist.append(float(p.get("sigma_delta_sell", float("nan"))))
 
         # Apply previous action with current step's volumes → current state (execution model returns state with current ob)
         current_state = None
@@ -543,7 +582,15 @@ class OrderFlowRunner:
             self.cum_fee_pnl_hist.append(self._cum_fee_pnl)
 
             inv_value = self.inventory * mid_now_ticks
-            wealth = self.cash + inv_value
+            anchor_inv = int(getattr(current_state, "anchor_inventory", 0))
+            anchor_cash = float(getattr(current_state, "anchor_cash", 0.0))
+            anchor_buy_ref = getattr(current_state, "anchor_buy_ref", None)
+            anchor_sell_ref = getattr(current_state, "anchor_sell_ref", None)
+            if anchor_buy_ref is not None and anchor_sell_ref is not None:
+                anchor_mid = 0.5 * (float(anchor_buy_ref) + float(anchor_sell_ref))
+            else:
+                anchor_mid = mid_now_ticks
+            wealth = self.cash + inv_value + anchor_cash + anchor_inv * anchor_mid
             t_fill = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
             self.inv_times.append(t_fill)
             self.inv_hist.append(self.inventory)
@@ -631,6 +678,38 @@ class OrderFlowRunner:
                         step,
                         spread_max=self.spread_max,
                         reference_depth_lots=_ref_depth,
+                        anchor_buy_ref=(
+                            float(self.last_anchor_buy_reference_ticks)
+                            if self.last_anchor_buy_reference_ticks is not None
+                            else None
+                        ),
+                        anchor_sell_ref=(
+                            float(self.last_anchor_sell_reference_ticks)
+                            if self.last_anchor_sell_reference_ticks is not None
+                            else None
+                        ),
+                        anchor_mu_delta_buy=(
+                            float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
+                            if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
+                            else None
+                        ),
+                        anchor_sigma_delta_buy=(
+                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
+                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
+                            else None
+                        ),
+                        anchor_mu_delta_sell=(
+                            float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
+                            if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
+                            else None
+                        ),
+                        anchor_sigma_delta_sell=(
+                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
+                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
+                            else None
+                        ),
+                        anchor_inventory=anchor_inventory,
+                        anchor_cash=anchor_cash,
                     )
                     self.inventory = current_state.inventory
                     self.cash = current_state.cash
@@ -643,6 +722,38 @@ class OrderFlowRunner:
                         cash=self.cash,
                         spread_max=self.spread_max,
                         reference_depth_lots=_ref_depth,
+                        anchor_buy_ref=(
+                            float(self.last_anchor_buy_reference_ticks)
+                            if self.last_anchor_buy_reference_ticks is not None
+                            else None
+                        ),
+                        anchor_sell_ref=(
+                            float(self.last_anchor_sell_reference_ticks)
+                            if self.last_anchor_sell_reference_ticks is not None
+                            else None
+                        ),
+                        anchor_mu_delta_buy=(
+                            float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
+                            if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
+                            else None
+                        ),
+                        anchor_sigma_delta_buy=(
+                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
+                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
+                            else None
+                        ),
+                        anchor_mu_delta_sell=(
+                            float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
+                            if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
+                            else None
+                        ),
+                        anchor_sigma_delta_sell=(
+                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
+                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
+                            else None
+                        ),
+                        anchor_inventory=anchor_inventory,
+                        anchor_cash=anchor_cash,
                     )
             opt = getattr(self.controller, "optimizer", None)
             if self.use_zero_action:
@@ -661,7 +772,9 @@ class OrderFlowRunner:
                     # still runs and action/diagnostics are recorded from step 1.
                     if self._step_counter > self.action_start_after_steps:
                         self._execute_live_orders(action, current_state)
-                E_dW = None if self.use_zero_action else getattr(opt, "_last_E_dW", None)
+                E_dW = None if self.use_zero_action else getattr(opt, "_last_E_dW_next", None)
+                if E_dW is None and not self.use_zero_action:
+                    E_dW = getattr(opt, "_last_E_dW", None)
                 t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)
                 if E_dW is not None:
                     self.E_dW_times.append(t_act)
@@ -674,6 +787,23 @@ class OrderFlowRunner:
                     self.J_inv_hist.append(float(comp.get("term_inv", 0.0)))
                     self.J_std_hist.append(float(comp.get("term_risk", 0.0)))
                     self.J_uniformity_hist.append(float(comp.get("term_uniformity", 0.0)))
+                    self.main_reward_opt_hist.append(float(getattr(opt, "_last_main_reward_mean", float("nan"))))
+                    self.anchor_reward_opt_hist.append(float(getattr(opt, "_last_anchor_reward_mean", float("nan"))))
+                    comp_init = getattr(opt, "_last_J_components_initial", None)
+                    if isinstance(comp_init, dict):
+                        self.J_mean_init_hist.append(float(comp_init.get("term_reward", 0.0)))
+                        self.J_inv_init_hist.append(float(comp_init.get("term_inv", 0.0)))
+                        self.J_std_init_hist.append(float(comp_init.get("term_risk", 0.0)))
+                        self.J_uniformity_init_hist.append(float(comp_init.get("term_uniformity", 0.0)))
+                        self.main_reward_init_hist.append(float(getattr(opt, "_last_main_reward_mean_initial", float("nan"))))
+                        self.anchor_reward_init_hist.append(float(getattr(opt, "_last_anchor_reward_mean_initial", float("nan"))))
+                    else:
+                        self.J_mean_init_hist.append(float("nan"))
+                        self.J_inv_init_hist.append(float("nan"))
+                        self.J_std_init_hist.append(float("nan"))
+                        self.J_uniformity_init_hist.append(float("nan"))
+                        self.main_reward_init_hist.append(float("nan"))
+                        self.anchor_reward_init_hist.append(float("nan"))
             self._pending_action = action
             self._pending_state = current_state
             t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)

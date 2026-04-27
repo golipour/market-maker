@@ -13,12 +13,18 @@ from trade_stats import Orderbook
 
 # Unified step type:
 # (t_end_ms, orderbook, buy_vol, sell_vol, inventory, cash,
-#  private_trade_fee_tick_lot, private_fills_bid, private_fills_ask)
+#  private_trade_fee_tick_lot, private_fills_bid, private_fills_ask,
+#  anchor_buy_ref_ticks, anchor_sell_ref_ticks,
+#  anchor_mu_delta_buy, anchor_sigma_delta_buy, anchor_mu_delta_sell, anchor_sigma_delta_sell,
+#  anchor_inventory, anchor_cash)
 # private_trade_fee_tick_lot: sum of exchange-reported trade fees in last_private_trades,
 #   converted to the same tick*lot units as cash (quote native / (tick_size * lot_size)).
 Step = tuple[
     int, Orderbook, int, int, int, int, float,
     tuple[tuple[int, int], ...], tuple[tuple[int, int], ...],
+    float | None, float | None,
+    float | None, float | None, float | None, float | None,
+    int, int,
 ]
 
 

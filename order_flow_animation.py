@@ -268,14 +268,15 @@ def run_animation(
     fig_action = None
     axes_action = None
     if enable_action_figure:
-        fig_action, axes_action = plt.subplots(4, 1, figsize=(10, 11.5), sharex=False)
+        fig_action, axes_action = plt.subplots(5, 1, figsize=(10, 13.2), sharex=False)
         axes_action = np.atleast_1d(axes_action).ravel()
         fig_action.suptitle("Action & Depth diagnostics", fontsize=12)
         fig_action.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
     ranges_action = {
         "J_components": (0, 1),
-        "depth": (1, 2),
-        "action_depth": (2, 4),
+        "main_anchor_rewards": (1, 2),
+        "depth": (2, 3),
+        "action_depth": (3, 5),
     }
 
     # Figure 4: price-model diagnostics (flow, rep prices, σ, μ under σ, MC pred error).
@@ -298,9 +299,10 @@ def run_animation(
 
     # Figure 6: main/anchor representative buy/sell prices in a single subplot.
     fig_anchor = None
-    ax_anchor = None
+    axes_anchor = None
     if enable_anchor_figure:
-        fig_anchor, ax_anchor = plt.subplots(1, 1, figsize=(10, 4.8), sharex=False)
+        fig_anchor, axes_anchor = plt.subplots(3, 1, figsize=(10, 11.0), sharex=False)
+        axes_anchor = np.atleast_1d(axes_anchor).ravel()
         fig_anchor.suptitle("Main vs Anchor Representative Prices", fontsize=12)
         fig_anchor.tight_layout(rect=(0.02, 0.02, 0.98, 0.94))
 
@@ -425,8 +427,8 @@ def run_animation(
         if axes_qq is not None and fig_qq is not None:
             draw_volume_qq_window(axes_qq, runner, fig_qq)
             fig_qq.canvas.draw_idle()
-        if ax_anchor is not None and fig_anchor is not None:
-            draw_anchor_reference_window(ax_anchor, runner, fig_anchor)
+        if axes_anchor is not None and fig_anchor is not None:
+            draw_anchor_reference_window(axes_anchor, runner, fig_anchor)
             fig_anchor.canvas.draw_idle()
         if enable_loss_figure:
             subplots_loss = _log_loss_subplots_data(
@@ -802,8 +804,12 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
         fig.autofmt_xdate()
 
 
-def draw_anchor_reference_window(ax_anchor, runner: OrderFlowRunner, fig) -> None:
-    """Figure 6: main and anchor representative buy/sell prices in one subplot."""
+def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> None:
+    """Figure 6: representative prices, anchor delta params, anchor inv/cash."""
+    axes = np.atleast_1d(axes_anchor).ravel()
+    ax_anchor = axes[0]
+    ax_params = axes[1] if len(axes) > 1 else None
+    ax_portfolio = axes[2] if len(axes) > 2 else None
     ax_anchor.clear()
     ax_anchor.set_xlabel("Time")
     ax_anchor.set_ylabel("Representative price (ticks)")
@@ -878,6 +884,80 @@ def draw_anchor_reference_window(ax_anchor, runner: OrderFlowRunner, fig) -> Non
             va="center",
             transform=ax_anchor.transAxes,
         )
+
+    if ax_params is not None:
+        ax_params.clear()
+        ax_params.set_xlabel("Time")
+        ax_params.set_ylabel("Delta ticks")
+        ax_params.set_title("Anchor Gaussian learned delta params (EWMA MLE)")
+        ax_params.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        ax_params.xaxis.set_major_locator(mdates.AutoDateLocator())
+        t_p = list(getattr(runner, "anchor_price_param_times", []) or [])
+        mu_b = list(getattr(runner, "anchor_mu_buy_hist", []) or [])
+        mu_s = list(getattr(runner, "anchor_mu_sell_hist", []) or [])
+        sg_b = list(getattr(runner, "anchor_sigma_buy_hist", []) or [])
+        sg_s = list(getattr(runner, "anchor_sigma_sell_hist", []) or [])
+        n_p = min(len(t_p), len(mu_b), len(mu_s), len(sg_b), len(sg_s))
+        if n_p > 0:
+            t = t_p[:n_p]
+            y_mu_b = [float(v) for v in mu_b[:n_p]]
+            y_mu_s = [float(v) for v in mu_s[:n_p]]
+            y_sg_b = [float(v) for v in sg_b[:n_p]]
+            y_sg_s = [float(v) for v in sg_s[:n_p]]
+            ax_params.plot(t, y_mu_b, color="darkorange", linewidth=1.2, label="mu_delta_buy")
+            ax_params.plot(t, y_mu_s, color="red", linewidth=1.2, label="mu_delta_sell")
+            ax_params.plot(t, y_sg_b, color="teal", linewidth=1.1, linestyle="--", label="sigma_delta_buy")
+            ax_params.plot(t, y_sg_s, color="purple", linewidth=1.1, linestyle="--", label="sigma_delta_sell")
+            ax_params.legend(loc="upper right", fontsize=8)
+            if n_p > 1:
+                ax_params.set_xlim(t[0], t[-1])
+            lo, hi = _finite_series_ylim(y_mu_b + y_mu_s + y_sg_b + y_sg_s, pad_min=1.0, default=(0.0, 1.0))
+            ax_params.set_ylim(lo, hi)
+        else:
+            ax_params.set_xlim(0, 1)
+            ax_params.set_ylim(0, 1)
+            ax_params.text(
+                0.5,
+                0.5,
+                "Waiting for learned anchor params...",
+                ha="center",
+                va="center",
+                transform=ax_params.transAxes,
+            )
+
+    if ax_portfolio is not None:
+        ax_portfolio.clear()
+        ax_portfolio.set_xlabel("Time")
+        ax_portfolio.set_ylabel("Main units")
+        ax_portfolio.set_title("Anchor inventory/cash (converted to main exchange units)")
+        ax_portfolio.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        ax_portfolio.xaxis.set_major_locator(mdates.AutoDateLocator())
+        t_a = list(getattr(runner, "anchor_portfolio_times", []) or [])
+        inv_a = list(getattr(runner, "anchor_inventory_hist", []) or [])
+        cash_a = list(getattr(runner, "anchor_cash_hist", []) or [])
+        n_a = min(len(t_a), len(inv_a), len(cash_a))
+        if n_a > 0:
+            t = t_a[:n_a]
+            y_inv = [float(v) for v in inv_a[:n_a]]
+            y_cash = [float(v) for v in cash_a[:n_a]]
+            ax_portfolio.plot(t, y_inv, color="navy", linewidth=1.2, label="Anchor inventory (lots)")
+            ax_portfolio.plot(t, y_cash, color="darkgreen", linewidth=1.2, label="Anchor cash (tick*lot)")
+            ax_portfolio.legend(loc="upper right", fontsize=8)
+            if n_a > 1:
+                ax_portfolio.set_xlim(t[0], t[-1])
+            lo, hi = _finite_series_ylim(y_inv + y_cash, pad_min=1.0, default=(0.0, 1.0))
+            ax_portfolio.set_ylim(lo, hi)
+        else:
+            ax_portfolio.set_xlim(0, 1)
+            ax_portfolio.set_ylim(0, 1)
+            ax_portfolio.text(
+                0.5,
+                0.5,
+                "Waiting for anchor inventory/cash...",
+                ha="center",
+                va="center",
+                transform=ax_portfolio.transAxes,
+            )
     if fig:
         fig.autofmt_xdate()
 
@@ -1418,6 +1498,10 @@ def draw_dynamic(
         j_inv = getattr(runner, "J_inv_hist", None) or []
         j_std = getattr(runner, "J_std_hist", None) or []
         j_uni = getattr(runner, "J_uniformity_hist", None) or []
+        j_mean_init = getattr(runner, "J_mean_init_hist", None) or []
+        j_inv_init = getattr(runner, "J_inv_init_hist", None) or []
+        j_std_init = getattr(runner, "J_std_init_hist", None) or []
+        j_uni_init = getattr(runner, "J_uniformity_init_hist", None) or []
         n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_uni))
         if n_comp > 0:
             t = t_comp[:n_comp]
@@ -1425,14 +1509,72 @@ def draw_dynamic(
             y_inv = [float(v) for v in j_inv[:n_comp]]
             y_std = [float(v) for v in j_std[:n_comp]]
             y_uni = [float(v) for v in j_uni[:n_comp]]
-            ax.plot(t, y_mean, color="blue", linewidth=1.2, label="reward_coef * J_mean")
-            ax.plot(t, y_inv, color="red", linewidth=1.2, label="-inv_coef * J_inv_penalty")
-            ax.plot(t, y_std, color="purple", linewidth=1.2, label="-risk_coef * J_std")
-            ax.plot(t, y_uni, color="green", linewidth=1.2, label="-uniformity_coef * J_uniformity")
+            ax.plot(t, y_mean, color="blue", linewidth=1.2, label="reward_coef * J_mean (opt)")
+            ax.plot(t, y_inv, color="red", linewidth=1.2, label="-inv_coef * J_inv_penalty (opt)")
+            ax.plot(t, y_std, color="purple", linewidth=1.2, label="-risk_coef * J_std (opt)")
+            ax.plot(t, y_uni, color="green", linewidth=1.2, label="-uniformity_coef * J_uniformity (opt)")
+            n_init = min(len(t_comp), len(j_mean_init), len(j_inv_init), len(j_std_init), len(j_uni_init))
+            if n_init > 0:
+                t_i = t_comp[:n_init]
+                y_mean_i = [float(v) for v in j_mean_init[:n_init]]
+                y_inv_i = [float(v) for v in j_inv_init[:n_init]]
+                y_std_i = [float(v) for v in j_std_init[:n_init]]
+                y_uni_i = [float(v) for v in j_uni_init[:n_init]]
+                ax.plot(t_i, y_mean_i, color="blue", linewidth=1.1, linestyle=":", label="reward_coef * J_mean (init)")
+                ax.plot(t_i, y_inv_i, color="red", linewidth=1.1, linestyle=":", label="-inv_coef * J_inv_penalty (init)")
+                ax.plot(t_i, y_std_i, color="purple", linewidth=1.1, linestyle=":", label="-risk_coef * J_std (init)")
+                ax.plot(t_i, y_uni_i, color="green", linewidth=1.1, linestyle=":", label="-uniformity_coef * J_uniformity (init)")
             ax.legend(loc="upper right", fontsize=7)
             if n_comp > 1:
                 ax.set_xlim(t[0], t[-1])
-            lo, hi = _finite_series_ylim(y_mean + y_inv + y_std + y_uni, pad_min=1.0)
+            all_y = y_mean + y_inv + y_std + y_uni
+            if n_init > 0:
+                all_y += y_mean_i + y_inv_i + y_std_i + y_uni_i
+            lo, hi = _finite_series_ylim(all_y, pad_min=1.0)
+            ax.set_ylim(lo, hi)
+        else:
+            ax.set_xlim(0, 1)
+            ax.set_ylim(-1, 1)
+        if fig:
+            fig.autofmt_xdate()
+
+    # --- Main/anchor reward (init vs opt) ---
+    start, end = ranges.get("main_anchor_rewards", (0, 0))
+    if end > start and runner is not None:
+        ax = axes[start]
+        ax.clear()
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Reward (tick×lot)")
+        ax.set_title("Main and anchor rewards (initial vs optimal)")
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
+        t_comp = getattr(runner, "J_comp_times", None) or []
+        main_opt = getattr(runner, "main_reward_opt_hist", None) or []
+        anchor_opt = getattr(runner, "anchor_reward_opt_hist", None) or []
+        main_init = getattr(runner, "main_reward_init_hist", None) or []
+        anchor_init = getattr(runner, "anchor_reward_init_hist", None) or []
+        n_opt = min(len(t_comp), len(main_opt), len(anchor_opt))
+        if n_opt > 0:
+            t = t_comp[:n_opt]
+            y_main_opt = [float(v) for v in main_opt[:n_opt]]
+            y_anchor_opt = [float(v) for v in anchor_opt[:n_opt]]
+            ax.plot(t, y_main_opt, color="blue", linewidth=1.2, label="Main reward (opt)")
+            ax.plot(t, y_anchor_opt, color="orange", linewidth=1.2, label="Anchor reward (opt)")
+            n_init = min(len(t_comp), len(main_init), len(anchor_init))
+            if n_init > 0:
+                t_i = t_comp[:n_init]
+                y_main_init = [float(v) for v in main_init[:n_init]]
+                y_anchor_init = [float(v) for v in anchor_init[:n_init]]
+                ax.plot(t_i, y_main_init, color="blue", linewidth=1.1, linestyle=":", label="Main reward (init)")
+                ax.plot(t_i, y_anchor_init, color="orange", linewidth=1.1, linestyle=":", label="Anchor reward (init)")
+            ax.legend(loc="upper right", fontsize=7)
+            if n_opt > 1:
+                ax.set_xlim(t[0], t[-1])
+            all_y = y_main_opt + y_anchor_opt
+            if n_init > 0:
+                all_y += y_main_init + y_anchor_init
+            lo, hi = _finite_series_ylim(all_y, pad_min=1.0)
             ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1453,13 +1595,36 @@ def draw_dynamic(
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         dW_times = getattr(runner, "dW_times", None) or []
         dW_hist = getattr(runner, "dW_hist", None) or []
-        if dW_times and dW_hist and len(dW_times) == len(dW_hist):
-            ax.step(dW_times, dW_hist, where="mid", color="green", linewidth=1.5, label="ΔW")
+        e_dw_times = getattr(runner, "E_dW_times", None) or []
+        e_dw_hist = getattr(runner, "E_dW_hist", None) or []
+        has_realized = bool(dW_times and dW_hist and len(dW_times) == len(dW_hist))
+        has_expected = bool(e_dw_times and e_dw_hist and len(e_dw_times) == len(e_dw_hist))
+        if has_realized or has_expected:
+            all_y: list[float] = []
+            t_min = None
+            t_max = None
+            if has_realized:
+                all_y.extend(float(v) for v in dW_hist)
+                t_min = dW_times[0] if t_min is None else min(t_min, dW_times[0])
+                t_max = dW_times[-1] if t_max is None else max(t_max, dW_times[-1])
+                ax.step(dW_times, dW_hist, where="mid", color="green", linewidth=1.5, label="Realized ΔW")
+            if has_expected:
+                all_y.extend(float(v) for v in e_dw_hist)
+                t_min = e_dw_times[0] if t_min is None else min(t_min, e_dw_times[0])
+                t_max = e_dw_times[-1] if t_max is None else max(t_max, e_dw_times[-1])
+                ax.plot(
+                    e_dw_times,
+                    e_dw_hist,
+                    color="darkorange",
+                    linewidth=1.3,
+                    linestyle="--",
+                    label="Expected next-step ΔW (J_mean, h=0)",
+                )
             ax.legend(loc="upper right")
-            if len(dW_times) > 1:
-                ax.set_xlim(dW_times[0], dW_times[-1])
-            if dW_hist:
-                lo, hi = _finite_series_ylim(dW_hist)
+            if t_min is not None and t_max is not None and t_min != t_max:
+                ax.set_xlim(t_min, t_max)
+            if all_y:
+                lo, hi = _finite_series_ylim(all_y)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1712,25 +1877,10 @@ def draw_dynamic(
         ax.axvline(0, color="gray", linewidth=0.8, linestyle="-", zorder=0)
         if has_data:
             x_b, q_b, x_a, q_a, _, _ = arrs
-            # Keep stable legend entries even when one side is empty in this frame.
-            ax.plot([], [], color="green", linewidth=1.5, label="Bid")
-            ax.plot([], [], color="red", linewidth=1.5, label="Ask")
             if x_b.size > 0:
-                ax.step(
-                    np.concatenate([[x_b[0] - 0.5], x_b]),
-                    np.concatenate([[0], q_b]),
-                    where="post",
-                    color="green",
-                    linewidth=1.5,
-                )
+                ax.step(np.concatenate([[x_b[0] - 0.5], x_b]), np.concatenate([[0], q_b]), where="post", color="green", linewidth=1.5, label="Bid")
             if x_a.size > 0:
-                ax.step(
-                    np.concatenate([[x_a[0] - 0.5], x_a]),
-                    np.concatenate([[0], q_a]),
-                    where="post",
-                    color="red",
-                    linewidth=1.5,
-                )
+                ax.step(np.concatenate([[x_a[0] - 0.5], x_a]), np.concatenate([[0], q_a]), where="post", color="red", linewidth=1.5, label="Ask")
             ax.legend(loc="upper right")
             y_max = max(float(np.max(q_b)) if q_b.size else 0.0, float(np.max(q_a)) if q_a.size else 0.0)
             ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1.0)
@@ -1747,25 +1897,10 @@ def draw_dynamic(
         ax.axvline(0, color="gray", linewidth=0.8, linestyle="-", zorder=0)
         if has_data:
             x_b, q_b, x_a, q_a, cum_b, cum_a = arrs
-            # Keep stable legend entries even when one side is empty in this frame.
-            ax.plot([], [], color="green", linewidth=1.5, label="Bid")
-            ax.plot([], [], color="red", linewidth=1.5, label="Ask")
             if x_b.size > 0 and cum_b.size > 0:
-                ax.step(
-                    np.concatenate([[x_b[0] - 0.5], x_b]),
-                    np.concatenate([[0], cum_b]),
-                    where="post",
-                    color="green",
-                    linewidth=1.5,
-                )
+                ax.step(np.concatenate([[x_b[0] - 0.5], x_b]), np.concatenate([[0], cum_b]), where="post", color="green", linewidth=1.5, label="Bid")
             if x_a.size > 0 and cum_a.size > 0:
-                ax.step(
-                    np.concatenate([[x_a[0] - 0.5], x_a]),
-                    np.concatenate([[0], cum_a]),
-                    where="post",
-                    color="red",
-                    linewidth=1.5,
-                )
+                ax.step(np.concatenate([[x_a[0] - 0.5], x_a]), np.concatenate([[0], cum_a]), where="post", color="red", linewidth=1.5, label="Ask")
             ax.legend(loc="upper right")
             y_max = max(float(np.max(cum_b)) if cum_b.size else 0.0, float(np.max(cum_a)) if cum_a.size else 0.0)
             ax.set_ylim(0, y_max * 1.1 if y_max > 0 else 1.0)
