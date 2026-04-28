@@ -34,49 +34,12 @@ class MPCOptimizer(Protocol):
 
 
 # -----------------------------------------------------------------------------
-# Helpers: normalization, scaling, bounds, total_q projection, book cumulative
+# Helpers: bounds, total_q projection, book cumulative
 # -----------------------------------------------------------------------------
 
 
 def _get_torch():
     return torch
-
-
-def _normalization_volume_scale(state: State) -> float:
-    """Volume scale from order book for numerical stability."""
-    total_book_vol = sum(q for (_, q) in state.ob_rel.bids) + sum(q for (_, q) in state.ob_rel.asks)
-    return max(1.0, total_book_vol / 1000.0)
-
-
-def _scale_flat_params_to_normalized(flat: np.ndarray, volume_scale: float) -> np.ndarray:
-    """Scale L components (param index 0 in each 3-tuple) to normalized space."""
-    out = np.array(flat, dtype=np.float64, copy=True)
-    for i in range(len(out)):
-        if i % 3 == 0:
-            out[i] /= volume_scale
-    return out
-
-
-def _unscale_flat_params_from_normalized(flat: np.ndarray, volume_scale: float) -> np.ndarray:
-    """Unscale L components from normalized space back to original scale."""
-    out = np.array(flat, dtype=np.float64, copy=True)
-    for i in range(len(out)):
-        if i % 3 == 0:
-            out[i] *= volume_scale
-    return out
-
-
-def _scale_bounds_for_normalized(
-    bounds: list[tuple[float, float]], volume_scale: float
-) -> list[tuple[float, float]]:
-    """Scale L bounds (first of each 3-tuple) for optimization in normalized space."""
-    result = []
-    for i, (lo, hi) in enumerate(bounds):
-        if i % 3 == 0:
-            result.append((lo / volume_scale, hi / volume_scale))
-        else:
-            result.append((lo, hi))
-    return result
 
 
 def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -675,6 +638,7 @@ class MonteCarloMPCTensorBatched:
         price_model: Any,
         market_flow_model: Any,
         execution_model: Any,
+        anchor_price_model: Any = None,
         n_components: int = 2,
         n_samples: int = 32,
         horizon: int = 4,
@@ -688,7 +652,6 @@ class MonteCarloMPCTensorBatched:
         device: str | None = None,
         bounds: list[tuple[float, float]] | None = None,
         warm_start: bool = False,
-        adam_normalize_inputs: bool = False,
         total_q_min: float | int | None = None,
         total_q_max: float | int | None = None,
         fixed_mc_samples: bool = False,
@@ -709,6 +672,7 @@ class MonteCarloMPCTensorBatched:
         self.price_model = price_model
         self.market_flow_model = market_flow_model
         self.execution_model = execution_model
+        self.anchor_price_model = anchor_price_model
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
@@ -721,7 +685,6 @@ class MonteCarloMPCTensorBatched:
         self.adam_grad_clip = adam_grad_clip
         self.device = device
         self.warm_start = warm_start
-        self.adam_normalize_inputs = adam_normalize_inputs
         self.total_q_min = float(total_q_min) if total_q_min is not None else None
         self.total_q_max = float(total_q_max) if total_q_max is not None else None
         self.fixed_mc_samples = fixed_mc_samples
@@ -798,10 +761,6 @@ class MonteCarloMPCTensorBatched:
         single_len = 6 * n
         param_len = self.horizon * single_len
 
-        volume_scale = 1.0
-        if self.adam_normalize_inputs:
-            volume_scale = _normalization_volume_scale(state)
-
         if self.warm_start and self._last_action is not None:
             one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
         else:
@@ -819,18 +778,11 @@ class MonteCarloMPCTensorBatched:
                     bid_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
                     ask_part.extend([10.0 + 10.0 * i, 0.5 - 0.1 * i, x0_i])
                 one_action = np.array(bid_part + ask_part, dtype=np.float64)
-        if self.adam_normalize_inputs:
-            one_action = _scale_flat_params_to_normalized(one_action, volume_scale)
         x0_arr = np.tile(one_action, self.horizon)
 
-        bounds_used = (
-            _scale_bounds_for_normalized(self.bounds, volume_scale)
-            if self.adam_normalize_inputs
-            else self.bounds
-        )
         # Bounds are specified in effective model space. Convert L/k bounds to raw
         # parameter space because optimization variable x_torch is raw.
-        bounds_raw = _bounds_effective_to_raw(bounds_used)
+        bounds_raw = _bounds_effective_to_raw(self.bounds)
         bounds_full = bounds_raw * self.horizon
         lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
         upper = torch_mod.tensor([b[1] for b in bounds_full], dtype=dtype, device=_device)
@@ -858,8 +810,16 @@ class MonteCarloMPCTensorBatched:
             sell_vol = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             eps_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             eps_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            z_anchor_buy = torch_mod.randn(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            z_anchor_sell = torch_mod.randn(self.n_samples, self.horizon, dtype=dtype, device=_device)
+            if self.anchor_price_model is not None and hasattr(self.anchor_price_model, "sample_deltas"):
+                d_anchor_buy, d_anchor_sell = self.anchor_price_model.sample_deltas(
+                    (self.n_samples, self.horizon),
+                    device=_device,
+                    dtype=dtype,
+                    torch_mod=torch_mod,
+                )
+            else:
+                d_anchor_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
+                d_anchor_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             for s in range(self.n_samples):
                 for h in range(self.horizon):
                     bv, sv = self.market_flow_model.sample((1,), device=_device, dtype=dtype)
@@ -868,7 +828,7 @@ class MonteCarloMPCTensorBatched:
                     eb, es = self.price_model.sample_residual((), device=_device, dtype=dtype)
                     eps_buy[s, h] = eb.squeeze()
                     eps_sell[s, h] = es.squeeze()
-            return buy_vol, sell_vol, eps_buy, eps_sell, z_anchor_buy, z_anchor_sell
+            return buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell
 
         batch_time_sec = 0.0
         if self.fixed_mc_samples:
@@ -878,8 +838,8 @@ class MonteCarloMPCTensorBatched:
                 fixed_sell_vol,
                 fixed_eps_buy,
                 fixed_eps_sell,
-                fixed_z_anchor_buy,
-                fixed_z_anchor_sell,
+                fixed_d_anchor_buy,
+                fixed_d_anchor_sell,
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
 
@@ -896,8 +856,6 @@ class MonteCarloMPCTensorBatched:
         for epoch in range(self.adam_epochs):
             if self.verbose:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
-                if self.adam_normalize_inputs:
-                    cur_flat = _unscale_flat_params_from_normalized(cur_flat, volume_scale)
                 cur_flat = _project_total_q_flat(
                     cur_flat,
                     n,
@@ -922,24 +880,24 @@ class MonteCarloMPCTensorBatched:
                     )
 
                 if self.fixed_mc_samples:
-                    buy_vol, sell_vol, eps_buy, eps_sell, z_anchor_buy, z_anchor_sell = (
+                    buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell = (
                         fixed_buy_vol,
                         fixed_sell_vol,
                         fixed_eps_buy,
                         fixed_eps_sell,
-                        fixed_z_anchor_buy,
-                        fixed_z_anchor_sell,
+                        fixed_d_anchor_buy,
+                        fixed_d_anchor_sell,
                     )
                 else:
                     t_batch = time.perf_counter()
-                    buy_vol, sell_vol, eps_buy, eps_sell, z_anchor_buy, z_anchor_sell = draw_samples()
+                    buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell = draw_samples()
                     batch_time_sec += time.perf_counter() - t_batch
 
                 inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
                 cash_t = torch_mod.full((self.n_samples, 1), cash_0, dtype=dtype, device=_device)
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
-                mid_anchor_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
+                mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
                 anchor_buy_ref_t = torch_mod.full(
                     (self.n_samples, 1),
                     float(state.anchor_buy_ref if state.anchor_buy_ref is not None else state.buy_ref),
@@ -963,28 +921,6 @@ class MonteCarloMPCTensorBatched:
                     float(getattr(state, "anchor_cash", 0.0)),
                     dtype=dtype,
                     device=_device,
-                )
-                anchor_mu_db = float(
-                    state.anchor_mu_delta_buy if state.anchor_mu_delta_buy is not None else 0.0
-                )
-                anchor_mu_ds = float(
-                    state.anchor_mu_delta_sell if state.anchor_mu_delta_sell is not None else 0.0
-                )
-                anchor_sg_db = max(
-                    1e-12,
-                    float(
-                        state.anchor_sigma_delta_buy
-                        if state.anchor_sigma_delta_buy is not None
-                        else 1e-6
-                    ),
-                )
-                anchor_sg_ds = max(
-                    1e-12,
-                    float(
-                        state.anchor_sigma_delta_sell
-                        if state.anchor_sigma_delta_sell is not None
-                        else 1e-6
-                    ),
                 )
 
                 book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(self.n_samples, -1)
@@ -1041,16 +977,32 @@ class MonteCarloMPCTensorBatched:
                     mid_t = _mid_from_book_best_levels_batched(
                         ob_bids,
                         ob_asks,
-                        mid_anchor_t,
+                        mid_fallback_t,
                         spread_grid_rep,
                     )
-                    buy_cmp_t, sell_cmp_t = _representative_prices_batched(
-                        ob_bids,
-                        ob_asks,
-                        mid_t,
-                        spread_grid_rep,
-                        target_depth=target_depth,
-                    )
+                    if h == 0:
+                        # Use the representative prices computed upstream (unique target depth),
+                        # instead of recomputing from the book arrays.
+                        buy_cmp_t = torch_mod.full(
+                            (self.n_samples, 1),
+                            float(state.buy_ref),
+                            dtype=dtype,
+                            device=_device,
+                        )
+                        sell_cmp_t = torch_mod.full(
+                            (self.n_samples, 1),
+                            float(state.sell_ref),
+                            dtype=dtype,
+                            device=_device,
+                        )
+                    else:
+                        buy_cmp_t, sell_cmp_t = _representative_prices_batched(
+                            ob_bids,
+                            ob_asks,
+                            mid_t,
+                            spread_grid_rep,
+                            target_depth=target_depth,
+                        )
                     buy_ref_t = buy_cmp_t + eps_buy_h
                     sell_ref_t = sell_cmp_t + eps_sell_h
 
@@ -1071,10 +1023,10 @@ class MonteCarloMPCTensorBatched:
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
                     if self.anchor_hedge_enabled:
-                        z_buy = z_anchor_buy[:, h : h + 1]
-                        z_sell = z_anchor_sell[:, h : h + 1]
-                        anchor_buy_ref_next = anchor_buy_ref_t + (anchor_mu_db + anchor_sg_db * z_buy)
-                        anchor_sell_ref_next = anchor_sell_ref_t + (anchor_mu_ds + anchor_sg_ds * z_sell)
+                        d_buy = d_anchor_buy[:, h : h + 1]
+                        d_sell = d_anchor_sell[:, h : h + 1]
+                        anchor_buy_ref_next = anchor_buy_ref_t + d_buy
+                        anchor_sell_ref_next = anchor_sell_ref_t + d_sell
                         d_inv = inv_delta.unsqueeze(1)  # fee-adjusted executed inventory change
                         # Hedge trade at t+1 on anchor:
                         # - d_inv>0 (longer main) -> sell anchor inventory at anchor bid
@@ -1126,7 +1078,7 @@ class MonteCarloMPCTensorBatched:
                     total_main_reward = total_main_reward + step_reward_main
                     total_anchor_reward = total_anchor_reward + anchor_reward
 
-                    mid_anchor_t = mid_next
+                    mid_fallback_t = mid_next
                     inv_t = inv_next
                     cash_t = cash_next
                     anchor_buy_ref_t = anchor_buy_ref_next
@@ -1211,8 +1163,6 @@ class MonteCarloMPCTensorBatched:
             total_sec = loop_elapsed
         best_flat = best_x.cpu().numpy()
         best_flat_slice = best_flat[:single_len]
-        if self.adam_normalize_inputs:
-            best_flat_slice = _unscale_flat_params_from_normalized(best_flat_slice, volume_scale)
         best_flat_slice = _project_total_q_flat(
             best_flat_slice,
             n,

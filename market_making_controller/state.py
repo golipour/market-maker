@@ -412,10 +412,6 @@ class State:
     sell_ref: float = 0.0
     anchor_buy_ref: float | None = None
     anchor_sell_ref: float | None = None
-    anchor_mu_delta_buy: float | None = None
-    anchor_sigma_delta_buy: float | None = None
-    anchor_mu_delta_sell: float | None = None
-    anchor_sigma_delta_sell: float | None = None
     anchor_inventory: int = 0
     anchor_cash: float = 0.0
 
@@ -434,10 +430,6 @@ def state_from_ob_and_flow(
     cash: float = 0.0,
     anchor_buy_ref: float | None = None,
     anchor_sell_ref: float | None = None,
-    anchor_mu_delta_buy: float | None = None,
-    anchor_sigma_delta_buy: float | None = None,
-    anchor_mu_delta_sell: float | None = None,
-    anchor_sigma_delta_sell: float | None = None,
     anchor_inventory: int = 0,
     anchor_cash: float = 0.0,
 ) -> State:
@@ -457,10 +449,6 @@ def state_from_ob_and_flow(
         sell_ref=mid,
         anchor_buy_ref=anchor_buy_ref,
         anchor_sell_ref=anchor_sell_ref,
-        anchor_mu_delta_buy=anchor_mu_delta_buy,
-        anchor_sigma_delta_buy=anchor_sigma_delta_buy,
-        anchor_mu_delta_sell=anchor_mu_delta_sell,
-        anchor_sigma_delta_sell=anchor_sigma_delta_sell,
         anchor_inventory=int(anchor_inventory),
         anchor_cash=float(anchor_cash),
     )
@@ -490,10 +478,6 @@ def state_from_orderbook(
     reference_depth_lots: float = 1000.0,
     anchor_buy_ref: float | None = None,
     anchor_sell_ref: float | None = None,
-    anchor_mu_delta_buy: float | None = None,
-    anchor_sigma_delta_buy: float | None = None,
-    anchor_mu_delta_sell: float | None = None,
-    anchor_sigma_delta_sell: float | None = None,
     anchor_inventory: int = 0,
     anchor_cash: float = 0.0,
 ) -> State:
@@ -515,10 +499,6 @@ def state_from_orderbook(
         sell_ref=sell_ref,
         anchor_buy_ref=anchor_buy_ref,
         anchor_sell_ref=anchor_sell_ref,
-        anchor_mu_delta_buy=anchor_mu_delta_buy,
-        anchor_sigma_delta_buy=anchor_sigma_delta_buy,
-        anchor_mu_delta_sell=anchor_mu_delta_sell,
-        anchor_sigma_delta_sell=anchor_sigma_delta_sell,
         anchor_inventory=int(anchor_inventory),
         anchor_cash=float(anchor_cash),
     )
@@ -528,63 +508,41 @@ def state_from_step(
     step: tuple,
     *,
     spread_max: float | None = None,
-    reference_depth_lots: float = 1000.0,
-    anchor_buy_ref: float | None = None,
-    anchor_sell_ref: float | None = None,
-    anchor_mu_delta_buy: float | None = None,
-    anchor_sigma_delta_buy: float | None = None,
-    anchor_mu_delta_sell: float | None = None,
-    anchor_sigma_delta_sell: float | None = None,
-    anchor_inventory: int | None = None,
-    anchor_cash: float | None = None,
 ) -> State:
     """
     Build State directly from a Step tuple:
     (t_end_ms, ob, buy_vol, sell_vol, inventory, cash, ...).
     """
-    _t_end, ob, buy_vol, sell_vol, inventory, cash, *_rest = step
-    if anchor_buy_ref is None and len(_rest) >= 5:
-        anchor_buy_ref = _rest[3]
-    if anchor_sell_ref is None and len(_rest) >= 5:
-        anchor_sell_ref = _rest[4]
-    if anchor_mu_delta_buy is None and len(_rest) >= 9:
-        anchor_mu_delta_buy = _rest[5]
-    if anchor_sigma_delta_buy is None and len(_rest) >= 9:
-        anchor_sigma_delta_buy = _rest[6]
-    if anchor_mu_delta_sell is None and len(_rest) >= 9:
-        anchor_mu_delta_sell = _rest[7]
-    if anchor_sigma_delta_sell is None and len(_rest) >= 9:
-        anchor_sigma_delta_sell = _rest[8]
-    if anchor_inventory is None and len(_rest) >= 11:
-        anchor_inventory = _rest[9]
-    if anchor_cash is None and len(_rest) >= 11:
-        anchor_cash = _rest[10]
-    return state_from_orderbook(
-        ob=ob,
+    (
+        _t_end,
+        ob,
+        buy_vol,
+        sell_vol,
+        inventory,
+        cash,
+        _private_trade_fee_tick_lot,
+        _private_fills_bid,
+        _private_fills_ask,
+        main_buy_ref,
+        main_sell_ref,
+        anchor_buy_ref,
+        anchor_sell_ref,
+        anchor_inventory,
+        anchor_cash,
+    ) = step
+    mid = float(ob.mid)
+    ob_rel = ob_to_ob_rel(ob, spread_max=spread_max)
+    return State(
+        mid=mid,
+        ob_rel=ob_rel,
         buy_vol=float(buy_vol),
         sell_vol=float(sell_vol),
         inventory=int(inventory),
         cash=float(cash),
-        spread_max=spread_max,
-        reference_depth_lots=reference_depth_lots,
-        anchor_buy_ref=(
-            float(anchor_buy_ref) if anchor_buy_ref is not None else None
-        ),
-        anchor_sell_ref=(
-            float(anchor_sell_ref) if anchor_sell_ref is not None else None
-        ),
-        anchor_mu_delta_buy=(
-            float(anchor_mu_delta_buy) if anchor_mu_delta_buy is not None else None
-        ),
-        anchor_sigma_delta_buy=(
-            float(anchor_sigma_delta_buy) if anchor_sigma_delta_buy is not None else None
-        ),
-        anchor_mu_delta_sell=(
-            float(anchor_mu_delta_sell) if anchor_mu_delta_sell is not None else None
-        ),
-        anchor_sigma_delta_sell=(
-            float(anchor_sigma_delta_sell) if anchor_sigma_delta_sell is not None else None
-        ),
-        anchor_inventory=int(anchor_inventory) if anchor_inventory is not None else 0,
-        anchor_cash=float(anchor_cash) if anchor_cash is not None else 0.0,
+        buy_ref=float(main_buy_ref),
+        sell_ref=float(main_sell_ref),
+        anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
+        anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
+        anchor_inventory=int(anchor_inventory),
+        anchor_cash=float(anchor_cash),
     )

@@ -62,6 +62,7 @@ def build_pipeline(
         DefaultExecutionRule,
         ObservedStepExecutionModel,
     )
+    from order_flow_stepper import AnchorGaussianRepPriceModel
 
     mpc_kw = config["mpc_kwargs"]
     spread_max = mpc_kw["spread_max"]
@@ -71,7 +72,6 @@ def build_pipeline(
     market_order_flow_model = TorchHurdleWeibullModel(**{k: v for k, v in mof_kw.items() if k in _get_init_params(TorchHurdleWeibullModel)})
     tester = GeneralOrderFlowLogLossTester(market_order_flow_model, decay=decay)
 
-    limit_order_flow_model = None
 
     p_kw = config["price_model_kwargs"]
     price_model = TorchResidualPriceModel(
@@ -85,6 +85,10 @@ def build_pipeline(
     # maker_fee is retained for MPC compatibility (it reads execution_model.maker_fee).
     execution_model = ObservedStepExecutionModel(maker_fee=float(exec_kw.get("maker_fee", 0.0)))
     runner_execution_model = execution_model
+    anchor_price_model = AnchorGaussianRepPriceModel(
+        decay=float(config.get("anchor_price_model_decay", 0.97) or 0.97),
+        sigma_min_ticks=float(config.get("anchor_price_model_sigma_min_ticks", 1.0) or 1.0),
+    )
     mc_mpc_kw = {
         "n_components": mpc_kw["n_components"],
         "n_samples": mpc_kw["n_samples"],
@@ -97,7 +101,6 @@ def build_pipeline(
         "adam_grad_clip": mpc_kw["adam_grad_clip"],
         "device": mpc_kw["device"],
         "warm_start": mpc_kw["warm_start"],
-        "adam_normalize_inputs": mpc_kw["adam_normalize_inputs"],
         "total_q_min": mpc_kw["total_q_min"],
         "total_q_max": mpc_kw["total_q_max"],
         "fixed_mc_samples": mpc_kw["fixed_mc_samples"],
@@ -120,6 +123,7 @@ def build_pipeline(
         price_model,
         market_order_flow_model,
         execution_model,
+        anchor_price_model=anchor_price_model,
         **{k: v for k, v in mc_mpc_kw.items() if k in _get_init_params(MonteCarloMPCTensorBatched)},
     )
     # Bounds: bid/ask spread always [1, spread_max]; single source is spread_max.
@@ -145,8 +149,7 @@ def build_pipeline(
         execution_rule,
         execution_model,
         runner_execution_model,
-        limit_order_flow_model,
-        None,
+        anchor_price_model,
     )
 
 
@@ -180,7 +183,6 @@ def create_runner(
     step_window_mode: str = "lookback",
     balance_update_mode: str = "events",
     use_zero_action: bool = False,
-    limit_order_flow_model: object = None,
     expected_mid_n_samples: int = 10,
     expected_mid_debug: bool = False,
     expected_mid_debug_every: int = 1,
@@ -201,6 +203,7 @@ def create_runner(
     anchor_private_api_token: str | None = None,
     use_anchor_portfolio_balances: bool = False,
     anchor_hedge_enabled: bool = False,
+    anchor_price_model: object | None = None,
 ) -> OrderFlowRunner:
     """
     Build OrderFlowStepper and OrderFlowRunner from pipeline components.
@@ -257,13 +260,13 @@ def create_runner(
         runner_execution_model=runner_execution_model,
         spread_max=spread_max,
         use_zero_action=use_zero_action,
-        limit_order_flow_model=limit_order_flow_model,
         expected_mid_n_samples=expected_mid_n_samples,
         expected_mid_debug=expected_mid_debug,
         expected_mid_debug_every=expected_mid_debug_every,
         live_order_execution=live_order_execution,
         action_start_after_steps=action_start_after_steps,
         anchor_hedge_enabled=anchor_hedge_enabled,
+        anchor_price_model=anchor_price_model,
     )
 
 
@@ -348,7 +351,6 @@ def main() -> None:
             "n_samples": 128,
             "warm_start": False,
             "fixed_mc_samples": True,
-            "adam_normalize_inputs": False,
             "verbose": False,
             # Unified objective:
             # J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
@@ -387,8 +389,7 @@ def main() -> None:
         execution_rule,
         execution_model,
         runner_execution_model,
-        limit_order_flow_model,
-        _,
+        anchor_price_model,
     ) = build_pipeline(
         pipeline,
         decay=args["decay"],
@@ -431,7 +432,6 @@ def main() -> None:
         step_window_mode=args["step_window_mode"],
         balance_update_mode=args["balance_update_mode"],
         use_zero_action=args["use_zero_action"],
-        limit_order_flow_model=limit_order_flow_model,
         expected_mid_n_samples=args["expected_mid_n_samples"],
         expected_mid_debug=args["expected_mid_debug"],
         expected_mid_debug_every=args["expected_mid_debug_every"],
@@ -452,6 +452,7 @@ def main() -> None:
         anchor_private_api_token=args["anchor_private_api_token"],
         use_anchor_portfolio_balances=args["use_anchor_portfolio_balances"],
         anchor_hedge_enabled=anchor_hedge_enabled,
+        anchor_price_model=anchor_price_model,
     )
     run_animation(
         runner=runner,

@@ -12,6 +12,8 @@ import time
 from collections import defaultdict, deque
 from typing import Protocol
 
+import numpy as np
+
 from trade_stats import (
     EXCHANGES,
     Level,
@@ -623,6 +625,35 @@ class AnchorGaussianRepPriceModel:
             "decay": float(self.decay),
         }
 
+    def sample_deltas(
+        self,
+        shape: tuple[int, int],
+        *,
+        device=None,
+        dtype=None,
+        torch_mod=None,
+    ):
+        """
+        Sample Gaussian delta shocks for (buy, sell) representative prices.
+
+        Returns (d_buy, d_sell) with the given shape, in ticks.
+        If ``torch_mod`` is provided, returns torch tensors on (device, dtype).
+        Otherwise returns numpy arrays (float64).
+        """
+        n_samples, horizon = int(shape[0]), int(shape[1])
+        p = self.get_params()
+        mu_db = float(p.get("mu_delta_buy", 0.0) or 0.0)
+        mu_ds = float(p.get("mu_delta_sell", 0.0) or 0.0)
+        sg_db = max(1e-12, float(p.get("sigma_delta_buy", 1e-6) or 1e-6))
+        sg_ds = max(1e-12, float(p.get("sigma_delta_sell", 1e-6) or 1e-6))
+        if torch_mod is not None:
+            d_buy = torch_mod.randn(n_samples, horizon, device=device, dtype=dtype) * sg_db + mu_db
+            d_sell = torch_mod.randn(n_samples, horizon, device=device, dtype=dtype) * sg_ds + mu_ds
+            return d_buy, d_sell
+        z_buy = np.random.randn(n_samples, horizon)
+        z_sell = np.random.randn(n_samples, horizon)
+        return z_buy * sg_db + mu_db, z_sell * sg_ds + mu_ds
+
 
 class OrderFlowStepper:
     """
@@ -693,21 +724,12 @@ class OrderFlowStepper:
             main_representative_price_target_depth_lots = (
                 anchor_representative_price_target_depth_lots
             )
-        self._main_representative_price_target_depth_lots = max(
+        # Use a single depth target for BOTH main and anchor representative prices.
+        # This keeps Step semantics consistent across venues.
+        self._representative_price_target_depth_lots = max(
             1e-9, float(main_representative_price_target_depth_lots)
         )
-        self._anchor_representative_price_target_depth_lots = max(
-            1e-9, float(anchor_representative_price_target_depth_lots)
-        )
         self.steps: list[Step] = []
-        self.last_main_buy_reference_ticks: float | None = None
-        self.last_main_sell_reference_ticks: float | None = None
-        self.last_anchor_orderbook: Orderbook | None = None
-        self.last_anchor_buy_reference_ticks: float | None = None
-        self.last_anchor_sell_reference_ticks: float | None = None
-        self.last_anchor_price_model_params: dict[str, float] | None = None
-        self.last_anchor_inventory: int = 0
-        self.last_anchor_cash: int = 0
         self.use_anchor_portfolio_balances = bool(use_anchor_portfolio_balances)
         # Buffered private exchange events (if websocket private channels are enabled).
         self.last_private_trades: list[dict] = []
@@ -777,7 +799,6 @@ class OrderFlowStepper:
         self._anchor_symbol_asset_base: str = ""
         self._anchor_symbol_asset_quote: str = ""
         self.anchor_balances: dict[str, dict[str, float]] = {}
-        self._anchor_price_model: AnchorGaussianRepPriceModel | None = None
         if self.anchor_exchange:
             _anchor_depth_limit = (
                 int(anchor_depth_limit)
@@ -829,11 +850,7 @@ class OrderFlowStepper:
             self._anchor_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
                 _anchor_q_raw, self.anchor_exchange
             )
-            if use_anchor_gaussian_price_model:
-                self._anchor_price_model = AnchorGaussianRepPriceModel(
-                    decay=anchor_price_model_decay,
-                    sigma_min_ticks=anchor_price_model_sigma_min_ticks,
-                )
+            # Anchor price model is updated in the runner alongside other models.
         self.trade_provider.start()
         self.orderbook_provider.start()
         if self.anchor_orderbook_provider is not None:
@@ -1398,49 +1415,28 @@ class OrderFlowStepper:
             return None
         m_buy, m_sell = reference_prices_ticks_from_orderbook(
             ob,
-            target_depth_lots=self._main_representative_price_target_depth_lots,
+            target_depth_lots=self._representative_price_target_depth_lots,
         )
-        self.last_main_buy_reference_ticks = float(m_buy)
-        self.last_main_sell_reference_ticks = float(m_sell)
+        main_buy_ref = float(m_buy)
+        main_sell_ref = float(m_sell)
+
+        # Anchor representative prices (ticks), converted into main tick units.
+        anchor_buy_ref: float | None = None
+        anchor_sell_ref: float | None = None
         if self.anchor_orderbook_provider is not None:
             try:
                 anchor_ob_raw = self.anchor_orderbook_provider.get_orderbook(t_end_ms)
             except Exception:
                 anchor_ob_raw = None
             if anchor_ob_raw is not None:
-                anchor_ob_main = self._convert_anchor_ob_to_main_units(
-                    anchor_ob_raw
-                )
-                self.last_anchor_orderbook = anchor_ob_main
+                anchor_ob_main = self._convert_anchor_ob_to_main_units(anchor_ob_raw)
                 if anchor_ob_main is not None:
                     a_buy, a_sell = reference_prices_ticks_from_orderbook(
                         anchor_ob_main,
-                        target_depth_lots=self._anchor_representative_price_target_depth_lots,
+                        target_depth_lots=self._representative_price_target_depth_lots,
                     )
-                    if self._anchor_price_model is not None:
-                        self._anchor_price_model.update(float(a_buy), float(a_sell))
-                        f_buy, f_sell = self._anchor_price_model.forecast_next_prices()
-                        self.last_anchor_buy_reference_ticks = float(f_buy) if f_buy is not None else float(a_buy)
-                        self.last_anchor_sell_reference_ticks = float(f_sell) if f_sell is not None else float(a_sell)
-                        self.last_anchor_price_model_params = self._anchor_price_model.get_params()
-                    else:
-                        self.last_anchor_buy_reference_ticks = float(a_buy)
-                        self.last_anchor_sell_reference_ticks = float(a_sell)
-                        self.last_anchor_price_model_params = None
-                else:
-                    self.last_anchor_buy_reference_ticks = None
-                    self.last_anchor_sell_reference_ticks = None
-                    self.last_anchor_price_model_params = None
-            else:
-                self.last_anchor_orderbook = None
-                self.last_anchor_buy_reference_ticks = None
-                self.last_anchor_sell_reference_ticks = None
-                self.last_anchor_price_model_params = None
-        else:
-            self.last_anchor_orderbook = None
-            self.last_anchor_buy_reference_ticks = None
-            self.last_anchor_sell_reference_ticks = None
-            self.last_anchor_price_model_params = None
+                    anchor_buy_ref = float(a_buy)
+                    anchor_sell_ref = float(a_sell)
         trades_list = self.trade_provider.get_trades(t_start_ms, t_end_ms)
         if hasattr(self.trade_provider, "get_private_trades"):
             try:
@@ -1479,12 +1475,9 @@ class OrderFlowStepper:
         buy_lots, sell_lots = self._buy_sell_lots_from_trades(trades_list)
         inventory, cash = self._inventory_cash_from_balances()
         anchor_inventory, anchor_cash = self._anchor_inventory_cash_in_main_units()
-        self.last_anchor_inventory = int(anchor_inventory)
-        self.last_anchor_cash = int(anchor_cash)
         private_fills_bid = tuple(self.last_private_trade_fills_bid)
         private_fills_ask = tuple(self.last_private_trade_fills_ask)
         private_trade_fee_tick_lot = self._private_trades_fee_tick_lot()
-        ap = self.last_anchor_price_model_params or {}
 
         step: Step = (
             t_end_ms,
@@ -1496,12 +1489,10 @@ class OrderFlowStepper:
             private_trade_fee_tick_lot,
             private_fills_bid,
             private_fills_ask,
-            self.last_anchor_buy_reference_ticks,
-            self.last_anchor_sell_reference_ticks,
-            float(ap.get("mu_delta_buy")) if ap.get("mu_delta_buy") is not None else None,
-            float(ap.get("sigma_delta_buy")) if ap.get("sigma_delta_buy") is not None else None,
-            float(ap.get("mu_delta_sell")) if ap.get("mu_delta_sell") is not None else None,
-            float(ap.get("sigma_delta_sell")) if ap.get("sigma_delta_sell") is not None else None,
+            main_buy_ref,
+            main_sell_ref,
+            anchor_buy_ref,
+            anchor_sell_ref,
             int(anchor_inventory),
             int(anchor_cash),
         )

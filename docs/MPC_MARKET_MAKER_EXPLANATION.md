@@ -136,7 +136,6 @@ So we can penalize **terminal inventory squared** (γ), **variance** or **std of
 - **total_q_min**, **total_q_max**: optional box on **sum of L** per side (projected each epoch).  
 - **fixed_mc_samples**: if True, draw **one** set of (buy_vol, sell_vol) for all steps and epochs; if False, redraw every epoch.  
 - **warm_start**: if True, initialize from previous solution (last action replicated over H).  
-- **adam_normalize_inputs**: scale L by a volume scale (from OB) for numerics.  
 - **reward_mode**: one of `REWARD_MODES` (step_pnl, terminal_pnl, terminal_pnl_inventory, terminal_mean_variance, terminal_mean_std, terminal_cara).  
 - **reward_gamma**, **reward_lambda**, **reward_eta**: parameters for inventory penalty (γ), variance/std penalty (λ), and CARA (η).
 

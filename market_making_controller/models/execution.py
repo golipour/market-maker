@@ -185,48 +185,46 @@ class ObservedStepExecutionModel:
         curr_step: Step,
         spread_max: float | None = None,
     ) -> tuple[State, DeltaPnL]:
-        _t_end, ob_curr, buy_vol, sell_vol, inv_new, cash_new, private_trade_fee_tick_lot, *_rest = curr_step
-        anchor_buy_ref = None
-        anchor_sell_ref = None
-        anchor_mu_delta_buy = None
-        anchor_sigma_delta_buy = None
-        anchor_mu_delta_sell = None
-        anchor_sigma_delta_sell = None
-        anchor_inventory = None
-        anchor_cash = None
-        if len(_rest) >= 4:
-            anchor_buy_ref = _rest[2]
-            anchor_sell_ref = _rest[3]
-        if len(_rest) >= 8:
-            anchor_mu_delta_buy = _rest[4]
-            anchor_sigma_delta_buy = _rest[5]
-            anchor_mu_delta_sell = _rest[6]
-            anchor_sigma_delta_sell = _rest[7]
-        if len(_rest) >= 10:
-            anchor_inventory = _rest[8]
-            anchor_cash = _rest[9]
+        (
+            _t_end,
+            ob_curr,
+            buy_vol,
+            sell_vol,
+            inv_new,
+            cash_new,
+            private_trade_fee_tick_lot,
+            _private_fills_bid,
+            _private_fills_ask,
+            main_buy_ref,
+            main_sell_ref,
+            anchor_buy_ref,
+            anchor_sell_ref,
+            anchor_inventory,
+            anchor_cash,
+        ) = curr_step
         mid_curr = float(ob_curr.mid)
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         cash_f = float(cash_new)
         inv_i = int(inv_new)
-        anchor_inv_i = int(anchor_inventory) if anchor_inventory is not None else int(getattr(prev_state, "anchor_inventory", 0))
-        anchor_cash_f = float(anchor_cash) if anchor_cash is not None else float(getattr(prev_state, "anchor_cash", 0.0))
-        anchor_ref_prev = (
-            0.5
-            * float(
-                (prev_state.anchor_buy_ref if prev_state.anchor_buy_ref is not None else prev_state.buy_ref)
-                + (prev_state.anchor_sell_ref if prev_state.anchor_sell_ref is not None else prev_state.sell_ref)
-            )
+        anchor_inv_i = int(anchor_inventory)
+        anchor_cash_f = float(anchor_cash)
+
+        # Option B: liquidation-style mark-to-bid (sell-side representative price).
+        main_ref_prev = float(prev_state.sell_ref)
+        main_ref_next = float(main_sell_ref)
+        anchor_ref_prev = float(
+            prev_state.anchor_sell_ref
+            if prev_state.anchor_sell_ref is not None
+            else prev_state.sell_ref
         )
-        anchor_ref_next = (
-            0.5
-            * float(
-                (anchor_buy_ref if anchor_buy_ref is not None else prev_state.buy_ref)
-                + (anchor_sell_ref if anchor_sell_ref is not None else prev_state.sell_ref)
-            )
+        anchor_ref_next = float(
+            anchor_sell_ref
+            if anchor_sell_ref is not None
+            else main_ref_next
         )
-        main_wealth_before = prev_state.cash + prev_state.inventory * prev_state.mid
-        main_wealth_after = cash_f + inv_i * mid_curr
+
+        main_wealth_before = prev_state.cash + prev_state.inventory * main_ref_prev
+        main_wealth_after = cash_f + inv_i * main_ref_next
         main_wealth_pnl = main_wealth_after - main_wealth_before
         wealth_before = (
             main_wealth_before
@@ -235,9 +233,9 @@ class ObservedStepExecutionModel:
         )
         wealth_after = main_wealth_after + anchor_cash_f + anchor_inv_i * anchor_ref_next
         wealth_pnl = wealth_after - wealth_before
-        inventory_pnl = prev_state.inventory * (mid_curr - prev_state.mid)
+        inventory_pnl = prev_state.inventory * (main_ref_next - main_ref_prev)
         delta_inv = inv_i - prev_state.inventory
-        cross_pnl = delta_inv * (mid_curr - prev_state.mid)
+        cross_pnl = delta_inv * (main_ref_next - main_ref_prev)
         # Exchange-reported trade fees from stepper are in tick*lot units (same as cash).
         fee_pnl = -float(private_trade_fee_tick_lot)
         # Spread decomposition is for main market only (not total portfolio wealth).
@@ -249,12 +247,10 @@ class ObservedStepExecutionModel:
             sell_vol=float(sell_vol),
             inventory=inv_i,
             cash=cash_f,
+            buy_ref=float(main_buy_ref),
+            sell_ref=float(main_sell_ref),
             anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
             anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
-            anchor_mu_delta_buy=float(anchor_mu_delta_buy) if anchor_mu_delta_buy is not None else None,
-            anchor_sigma_delta_buy=float(anchor_sigma_delta_buy) if anchor_sigma_delta_buy is not None else None,
-            anchor_mu_delta_sell=float(anchor_mu_delta_sell) if anchor_mu_delta_sell is not None else None,
-            anchor_sigma_delta_sell=float(anchor_sigma_delta_sell) if anchor_sigma_delta_sell is not None else None,
             anchor_inventory=anchor_inv_i,
             anchor_cash=anchor_cash_f,
         )

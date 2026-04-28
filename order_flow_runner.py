@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from market_making_controller import Controller
     from market_making_controller.models import ExecutionRule, ExecutionModel
 
-from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_orderbook, state_from_step
+from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
 from market_making_controller.ob_reference_prices import mid_ticks_after_market_order_flow
 
 class OrderFlowRunner:
@@ -57,13 +57,13 @@ class OrderFlowRunner:
         price_tester: object = None,
         spread_max: float | None = None,
         use_zero_action: bool = False,
-        limit_order_flow_model: object = None,
         expected_mid_n_samples: int = 10,
         expected_mid_debug: bool = False,
         expected_mid_debug_every: int = 1,
         live_order_execution: bool = False,
         action_start_after_steps: int = 0,
         anchor_hedge_enabled: bool = False,
+        anchor_price_model: object | None = None,
     ):
         self.stepper = stepper
         # Preferred name for market-order-flow estimator.
@@ -75,7 +75,6 @@ class OrderFlowRunner:
         self.use_zero_action = use_zero_action
         self.price_model = price_model
         self.price_tester = price_tester
-        self.limit_order_flow_model = limit_order_flow_model
         self.execution_model = execution_model
         self.runner_execution_model = runner_execution_model
         self.spread_max = spread_max
@@ -85,6 +84,9 @@ class OrderFlowRunner:
         self.live_order_execution = bool(live_order_execution)
         self.action_start_after_steps = max(0, int(action_start_after_steps))
         self.anchor_hedge_enabled = bool(anchor_hedge_enabled)
+        # Anchor rep-price delta model (updated in the runner alongside other models).
+        # MPC reads its (mu, sigma) params from the model object (not from State).
+        self.anchor_price_model = anchor_price_model
         self._live_exec_warned_no_token = False
         self._step_counter = 0
         if execution_model is None and controller is not None and execution_rule is None:
@@ -102,8 +104,6 @@ class OrderFlowRunner:
         self.delta_a_hist: list[float] = []
         self.q_b_hist: list[float] = []
         self.q_a_hist: list[float] = []
-        self.expected_buy_flow_hist: list[float] = []
-        self.expected_sell_flow_hist: list[float] = []
         self.expected_mid_hist: list[float] = []  # MC mean mid incl. residual
         # Representative-price prediction diagnostics for price window subplot.
         self.pred_buy_rep_error_hist: list[float] = []
@@ -126,10 +126,6 @@ class OrderFlowRunner:
         self.main_sell_reference_hist: list[float] = []
         self.main_reference_times: list[datetime] = []
         self.last_anchor_orderbook = None
-        self.last_main_buy_reference_ticks: float | None = None
-        self.last_main_sell_reference_ticks: float | None = None
-        self.last_anchor_buy_reference_ticks: float | None = None
-        self.last_anchor_sell_reference_ticks: float | None = None
         self.last_anchor_price_model_params: dict | None = None
         self.last_book_params: dict | None = None  # fitted depth params from last MPC step (for animation)
         # E[ΔW_next]: optimizer expected one-step wealth change (t -> t+1), mean over MC samples.
@@ -296,27 +292,6 @@ class OrderFlowRunner:
         if not buy_preds or not sell_preds:
             return None
         return float(np.mean(buy_preds)), float(np.mean(sell_preds))
-
-    def _expected_mof_volume_mc(self, n_samples: int) -> tuple[float, float]:
-        """
-        Monte Carlo mean of market buy/sell volume by repeatedly calling mof_model.sample().
-        Matches the generative graph (e.g. hurdle then LogNormal); converges to the same
-        expectation as the closed-form (1-p0)*E[LogNormal] for the continuous sampler.
-        """
-        if self.mof_model is None or not hasattr(self.mof_model, "sample"):
-            return (0.0, 0.0)
-        buy_acc: list[float] = []
-        sell_acc: list[float] = []
-        for _ in range(max(1, int(n_samples))):
-            bv, sv = self.mof_model.sample(())
-            b = self._to_scalar(bv)
-            s = self._to_scalar(sv)
-            if np.isfinite(b) and np.isfinite(s):
-                buy_acc.append(float(max(0.0, b)))
-                sell_acc.append(float(max(0.0, s)))
-        if not buy_acc:
-            return (0.0, 0.0)
-        return (float(np.mean(buy_acc)), float(np.mean(sell_acc)))
 
     def _estimate_expected_mid_mc(
         self, prev_step: Step, n_samples: int, curr_step: Step | None = None
@@ -505,50 +480,51 @@ class OrderFlowRunner:
         if not self.anchor_hedge_enabled and len(step) >= 15:
             step = tuple(list(step[:-2]) + [0, 0])
         self._step_counter += 1
-        t_end, ob, buy_vol, sell_vol, _step_inventory, _step_cash, *_ = step
+        (
+            t_end,
+            ob,
+            buy_vol,
+            sell_vol,
+            _step_inventory,
+            _step_cash,
+            _private_trade_fee_tick_lot,
+            _private_fills_bid,
+            _private_fills_ask,
+            main_buy_ref,
+            main_sell_ref,
+            anchor_buy_ref,
+            anchor_sell_ref,
+            anchor_inventory,
+            anchor_cash,
+        ) = step
         bucket_ms = self.stepper.T_ms
         mid_now_ticks = float(ob.mid)
-        self.last_main_buy_reference_ticks = getattr(
-            self.stepper, "last_main_buy_reference_ticks", None
-        )
-        self.last_main_sell_reference_ticks = getattr(
-            self.stepper, "last_main_sell_reference_ticks", None
-        )
-        self.last_anchor_orderbook = getattr(self.stepper, "last_anchor_orderbook", None)
-        self.last_anchor_buy_reference_ticks = getattr(
-            self.stepper, "last_anchor_buy_reference_ticks", None
-        )
-        self.last_anchor_sell_reference_ticks = getattr(
-            self.stepper, "last_anchor_sell_reference_ticks", None
-        )
-        self.last_anchor_price_model_params = getattr(
-            self.stepper, "last_anchor_price_model_params", None
-        )
-        anchor_inventory = int(getattr(self.stepper, "last_anchor_inventory", 0) or 0)
-        anchor_cash = float(getattr(self.stepper, "last_anchor_cash", 0.0) or 0.0)
+        anchor_inventory = int(anchor_inventory)
+        anchor_cash = float(anchor_cash)
         if not self.anchor_hedge_enabled:
             anchor_inventory = 0
             anchor_cash = 0.0
+            anchor_buy_ref = None
+            anchor_sell_ref = None
         t_anchor_port = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
         self.anchor_portfolio_times.append(t_anchor_port)
         self.anchor_inventory_hist.append(int(anchor_inventory))
         self.anchor_cash_hist.append(float(anchor_cash))
-        if (
-            self.last_main_buy_reference_ticks is not None
-            and self.last_main_sell_reference_ticks is not None
-        ):
-            t_main = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
-            self.main_reference_times.append(t_main)
-            self.main_buy_reference_hist.append(float(self.last_main_buy_reference_ticks))
-            self.main_sell_reference_hist.append(float(self.last_main_sell_reference_ticks))
-        if (
-            self.last_anchor_buy_reference_ticks is not None
-            and self.last_anchor_sell_reference_ticks is not None
-        ):
+        t_main = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+        self.main_reference_times.append(t_main)
+        self.main_buy_reference_hist.append(float(main_buy_ref))
+        self.main_sell_reference_hist.append(float(main_sell_ref))
+        if anchor_buy_ref is not None and anchor_sell_ref is not None:
+            if self.anchor_price_model is not None:
+                self.anchor_price_model.update(
+                    float(anchor_buy_ref),
+                    float(anchor_sell_ref),
+                )
+                self.last_anchor_price_model_params = self.anchor_price_model.get_params()
             t_anchor = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
             self.anchor_reference_times.append(t_anchor)
-            self.anchor_buy_reference_hist.append(float(self.last_anchor_buy_reference_ticks))
-            self.anchor_sell_reference_hist.append(float(self.last_anchor_sell_reference_ticks))
+            self.anchor_buy_reference_hist.append(float(anchor_buy_ref))
+            self.anchor_sell_reference_hist.append(float(anchor_sell_ref))
             p = self.last_anchor_price_model_params or {}
             self.anchor_price_param_times.append(t_anchor)
             self.anchor_mu_buy_hist.append(float(p.get("mu_delta_buy", float("nan"))))
@@ -583,16 +559,16 @@ class OrderFlowRunner:
             self.cum_cross_pnl_hist.append(self._cum_cross_pnl)
             self.cum_fee_pnl_hist.append(self._cum_fee_pnl)
 
-            inv_value = self.inventory * mid_now_ticks
+            # Option B consistency: mark-to-bid (sell-side representative price).
+            main_sell_ref = float(getattr(current_state, "sell_ref", mid_now_ticks))
+            inv_value = self.inventory * main_sell_ref
             anchor_inv = int(getattr(current_state, "anchor_inventory", 0))
             anchor_cash = float(getattr(current_state, "anchor_cash", 0.0))
-            anchor_buy_ref = getattr(current_state, "anchor_buy_ref", None)
             anchor_sell_ref = getattr(current_state, "anchor_sell_ref", None)
-            if anchor_buy_ref is not None and anchor_sell_ref is not None:
-                anchor_mid = 0.5 * (float(anchor_buy_ref) + float(anchor_sell_ref))
-            else:
-                anchor_mid = mid_now_ticks
-            wealth = self.cash + inv_value + anchor_cash + anchor_inv * anchor_mid
+            anchor_sell_ref_used = (
+                float(anchor_sell_ref) if anchor_sell_ref is not None else main_sell_ref
+            )
+            wealth = self.cash + inv_value + anchor_cash + anchor_inv * anchor_sell_ref_used
             t_fill = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
             self.inv_times.append(t_fill)
             self.inv_hist.append(self.inventory)
@@ -631,10 +607,7 @@ class OrderFlowRunner:
         self.tester.update(prev_step, curr_step, params)
         self.mof_model.update(prev_step, curr_step)
 
-        # E[MOF] from the same PGM as MPC sampling: MC mean of model.sample() (not closed-form params).
-        e_buy_post, e_sell_post = self._expected_mof_volume_mc(self.expected_mid_n_samples)
-        self.expected_buy_flow_hist.append(float(e_buy_post))
-        self.expected_sell_flow_hist.append(float(e_sell_post))
+        # (debug removed) expected MOF volume series
 
         if self.price_model is not None:
             if self.price_tester is not None:
@@ -661,8 +634,6 @@ class OrderFlowRunner:
                     self.pred_buy_rep_prev_error_hist.append(float("nan"))
                     self.pred_sell_rep_prev_error_hist.append(float("nan"))
 
-        if self.limit_order_flow_model is not None:
-            self.limit_order_flow_model.update(prev_step, curr_step)
 
         # Decide new action (cancels previous, places new)
         if self.controller is not None:
@@ -670,93 +641,15 @@ class OrderFlowRunner:
                 # Initial state source depends on execution path:
                 # - observed/real: use Step inventory/cash from balances/private events
                 # - simulated: use runner inventory/cash (simulated initial + transitions)
-                _ref_depth = (
-                    float(getattr(self.price_model, "_target_depth_lots", 1000.0))
-                    if self.price_model is not None
-                    else 1000.0
-                )
-                if self.runner_execution_model is not None and self.runner_execution_model.__class__.__name__ == "ObservedStepExecutionModel":
+                # Observed execution model: initialize directly from Step (includes main+anchor rep prices).
+                if self.runner_execution_model is not None:
                     current_state = state_from_step(
                         step,
                         spread_max=self.spread_max,
-                        reference_depth_lots=_ref_depth,
-                        anchor_buy_ref=(
-                            float(self.last_anchor_buy_reference_ticks)
-                            if self.last_anchor_buy_reference_ticks is not None
-                            else None
-                        ),
-                        anchor_sell_ref=(
-                            float(self.last_anchor_sell_reference_ticks)
-                            if self.last_anchor_sell_reference_ticks is not None
-                            else None
-                        ),
-                        anchor_mu_delta_buy=(
-                            float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
-                            if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
-                            else None
-                        ),
-                        anchor_sigma_delta_buy=(
-                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
-                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
-                            else None
-                        ),
-                        anchor_mu_delta_sell=(
-                            float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
-                            if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
-                            else None
-                        ),
-                        anchor_sigma_delta_sell=(
-                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
-                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
-                            else None
-                        ),
-                        anchor_inventory=anchor_inventory,
-                        anchor_cash=anchor_cash,
                     )
                     self.inventory = current_state.inventory
                     self.cash = current_state.cash
-                # else:
-                #     current_state = state_from_orderbook(
-                #         ob,
-                #         buy_vol=float(buy_vol),
-                #         sell_vol=float(sell_vol),
-                #         inventory=self.inventory,
-                #         cash=self.cash,
-                #         spread_max=self.spread_max,
-                #         reference_depth_lots=_ref_depth,
-                #         anchor_buy_ref=(
-                #             float(self.last_anchor_buy_reference_ticks)
-                #             if self.last_anchor_buy_reference_ticks is not None
-                #             else None
-                #         ),
-                #         anchor_sell_ref=(
-                #             float(self.last_anchor_sell_reference_ticks)
-                #             if self.last_anchor_sell_reference_ticks is not None
-                #             else None
-                #         ),
-                #         anchor_mu_delta_buy=(
-                #             float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
-                #             if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
-                #             else None
-                #         ),
-                #         anchor_sigma_delta_buy=(
-                #             float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
-                #             if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
-                #             else None
-                #         ),
-                #         anchor_mu_delta_sell=(
-                #             float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
-                #             if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
-                #             else None
-                #         ),
-                #         anchor_sigma_delta_sell=(
-                #             float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
-                #             if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
-                #             else None
-                #         ),
-                #         anchor_inventory=anchor_inventory,
-                #         anchor_cash=anchor_cash,
-                #     )
+               
             opt = getattr(self.controller, "optimizer", None)
             if self.use_zero_action:
                 action = ZERO_DISCRETIZED_ACTION
