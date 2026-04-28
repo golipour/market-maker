@@ -12,8 +12,6 @@ from order_flow_stepper import OrderFlowStepper
 from market_making_controller.models import (
     TorchHurdleWeibullModel,
     TorchResidualPriceModel,
-    GaussianPriceModel,
-    HurdleOrderFlow,
 )
 from order_flow_testers import (
     MarketOrderFlowTester,
@@ -62,7 +60,6 @@ def build_pipeline(
         SigmoidController,
         MonteCarloMPCTensorBatched,
         DefaultExecutionRule,
-        DiscretizedExecutionModel,
         ObservedStepExecutionModel,
     )
 
@@ -83,25 +80,11 @@ def build_pipeline(
     )
     price_tester = PriceLogLossTester(price_model, decay=decay)
 
-    order_flow = HurdleOrderFlow(**config["order_flow_model_kwargs"])
-    price_model_for_exec = GaussianPriceModel()
     exec_kw = config["execution_model_kwargs"]
-    execution_model = DiscretizedExecutionModel(
-        order_flow_model=order_flow,
-        price_model=price_model_for_exec,
-        maker_fee=exec_kw["maker_fee"],
-    )
-    _exec_mode = config.get("execution_mode", "simulated")
-    if _exec_mode not in ("simulated", "real"):
-        raise ValueError(
-            "execution_mode must be 'simulated' or 'real', "
-            f"got {_exec_mode!r}"
-        )
-    runner_execution_model = (
-        ObservedStepExecutionModel()
-        if _exec_mode == "real"
-        else execution_model
-    )
+    # Simplified: keep only observed execution model (live/replay balances from stepper).
+    # maker_fee is retained for MPC compatibility (it reads execution_model.maker_fee).
+    execution_model = ObservedStepExecutionModel(maker_fee=float(exec_kw.get("maker_fee", 0.0)))
+    runner_execution_model = execution_model
     mc_mpc_kw = {
         "n_components": mpc_kw["n_components"],
         "n_samples": mpc_kw["n_samples"],

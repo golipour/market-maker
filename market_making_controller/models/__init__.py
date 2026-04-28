@@ -29,9 +29,7 @@ from .execution import (
     depth_bid_rel,
     depth_ask_rel,
     fills_from_ob_rel,
-    fills_from_ob_rel_discretized,
     ExecutionModel,
-    DiscretizedExecutionModel,
     ObservedStepExecutionModel,
 )
 
@@ -58,8 +56,6 @@ __all__ = [
     "depth_bid_rel",
     "depth_ask_rel",
     "fills_from_ob_rel",
-    "fills_from_ob_rel_discretized",
     "ExecutionModel",
-    "DiscretizedExecutionModel",
     "ObservedStepExecutionModel",
 ]

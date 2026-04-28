@@ -23,7 +23,6 @@ from .models import (
     ExecutionRule,
     DefaultExecutionRule,
     ExecutionModel,
-    DiscretizedExecutionModel,
     ObservedStepExecutionModel,
 )
 from .state_tensor import (
@@ -67,7 +66,6 @@ __all__ = [
     "ExecutionRule",
     "DefaultExecutionRule",
     "ExecutionModel",
-    "DiscretizedExecutionModel",
     "ObservedStepExecutionModel",
     "StateTensor",
     "ActionTensor",
