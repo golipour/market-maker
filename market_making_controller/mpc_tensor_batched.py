@@ -610,6 +610,46 @@ def _action_size_penalty_qrange(
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
+def _action_spread_at_target_depth(
+    params: torch.Tensor,
+    n_components: int,
+    spread_max: float,
+    target_lots: float,
+    *,
+    use_softplus: bool = True,
+    grid_points: int = 128,
+    softmin_temp: float = 40.0,
+) -> torch.Tensor:
+    """
+    Differentiable proxy for spread at which cumulative bid/ask depth reaches target_lots.
+
+    For each side, evaluate D(δ) on a dense spread grid in [0, spread_max], then use a
+    soft-argmin of |D(δ) - target_lots| to get an effective spread. Returns:
+      spread_bid(target_lots) + spread_ask(target_lots)
+    """
+    if n_components <= 0 or float(target_lots) <= 0.0:
+        return params.sum() * 0.0
+    torch_mod = _get_torch()
+    s = torch_mod.linspace(
+        0.0,
+        max(0.0, float(spread_max)),
+        steps=max(8, int(grid_points)),
+        dtype=params.dtype,
+        device=params.device,
+    )
+    bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
+    ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    tgt = torch_mod.tensor(float(target_lots), dtype=params.dtype, device=params.device)
+    bid_err = torch_mod.abs(bid_depth - tgt)
+    ask_err = torch_mod.abs(ask_depth - tgt)
+    temp = max(1e-6, float(softmin_temp))
+    bid_w = torch_mod.softmax(-temp * bid_err, dim=0)
+    ask_w = torch_mod.softmax(-temp * ask_err, dim=0)
+    bid_spread = torch_mod.sum(bid_w * s)
+    ask_spread = torch_mod.sum(ask_w * s)
+    return bid_spread + ask_spread
+
+
 def _delta_wealth_mtm_batched(
     sell_ref: torch.Tensor,
     inv: torch.Tensor,
@@ -659,6 +699,8 @@ class MonteCarloMPCTensorBatched:
         uniformity_coef: float = 0.0,
         reward_coef: float = 1.0,
         size_coef: float = 0.0,
+        spread_coef: float = 0.0,
+        spread_target_lots: float = 1.0,
         anchor_hedge_coef: float = 0.0,
         anchor_hedge_fee: float = 0.0,
         total_q_target: float | int | None = None,
@@ -690,6 +732,8 @@ class MonteCarloMPCTensorBatched:
         self.uniformity_coef = max(0.0, float(uniformity_coef))
         self.reward_coef = float(reward_coef)
         self.size_coef = max(0.0, float(size_coef))
+        self.spread_coef = max(0.0, float(spread_coef))
+        self.spread_target_lots = max(0.0, float(spread_target_lots))
         # Legacy knob kept for backward compatibility as hedge ON/OFF flag only.
         # Anchor hedge contribution is always weighted by 1.0 when enabled.
         self.anchor_hedge_enabled = bool(float(anchor_hedge_coef) != 0.0)
@@ -951,6 +995,7 @@ class MonteCarloMPCTensorBatched:
                 total_anchor_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 action_uniformity_sum = torch_mod.zeros((), dtype=dtype, device=_device)
                 action_size_sum = torch_mod.zeros((), dtype=dtype, device=_device)
+                action_spread_sum = torch_mod.zeros((), dtype=dtype, device=_device)
 
                 for h in range(self.horizon):
                     if h == 0:
@@ -973,6 +1018,13 @@ class MonteCarloMPCTensorBatched:
                         n,
                         self.spread_max,
                         self.total_q_target,
+                        use_softplus=True,
+                    )
+                    action_spread_sum = action_spread_sum + _action_spread_at_target_depth(
+                        action_h,
+                        n,
+                        self.spread_max,
+                        self.spread_target_lots,
                         use_softplus=True,
                     )
                     sell_h = sell_vol[:, h : h + 1]
@@ -1085,6 +1137,7 @@ class MonteCarloMPCTensorBatched:
                 # total_reward = ΔW per trajectory (same as W(s_{t+H}) - W(s_t)); inv_t = terminal inventory
                 action_uniformity_mean = action_uniformity_sum / float(self.horizon)
                 action_size_mean = action_size_sum / float(self.horizon)
+                action_spread_mean = action_spread_sum / float(self.horizon)
                 J_mean_raw = torch_mod.nan_to_num(
                     total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
@@ -1106,9 +1159,11 @@ class MonteCarloMPCTensorBatched:
                     risk_coef=self.risk_coef,
                     uniformity=action_uniformity_mean,
                     uniformity_coef=self.uniformity_coef,
+                    size=action_size_mean,
+                    size_coef=self.size_coef,
+                    spread=action_spread_mean,
+                    spread_coef=self.spread_coef,
                 )
-                J = J - float(self.size_coef) * action_size_mean
-                components["term_size"] = -float(self.size_coef) * action_size_mean
 
                 def _finite_item(t) -> float:
                     try:

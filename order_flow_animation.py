@@ -1498,38 +1498,44 @@ def draw_dynamic(
         j_inv = getattr(runner, "J_inv_hist", None) or []
         j_std = getattr(runner, "J_std_hist", None) or []
         j_uni = getattr(runner, "J_uniformity_hist", None) or []
+        j_spread = getattr(runner, "J_spread_hist", None) or []
         j_mean_init = getattr(runner, "J_mean_init_hist", None) or []
         j_inv_init = getattr(runner, "J_inv_init_hist", None) or []
         j_std_init = getattr(runner, "J_std_init_hist", None) or []
         j_uni_init = getattr(runner, "J_uniformity_init_hist", None) or []
-        n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_uni))
+        j_spread_init = getattr(runner, "J_spread_init_hist", None) or []
+        n_comp = min(len(t_comp), len(j_mean), len(j_inv), len(j_std), len(j_uni), len(j_spread))
         if n_comp > 0:
             t = t_comp[:n_comp]
             y_mean = [float(v) for v in j_mean[:n_comp]]
             y_inv = [float(v) for v in j_inv[:n_comp]]
             y_std = [float(v) for v in j_std[:n_comp]]
             y_uni = [float(v) for v in j_uni[:n_comp]]
+            y_spread = [float(v) for v in j_spread[:n_comp]]
             ax.plot(t, y_mean, color="blue", linewidth=1.2, label="reward_coef * J_mean (opt)")
             ax.plot(t, y_inv, color="red", linewidth=1.2, label="-inv_coef * J_inv_penalty (opt)")
             ax.plot(t, y_std, color="purple", linewidth=1.2, label="-risk_coef * J_std (opt)")
             ax.plot(t, y_uni, color="green", linewidth=1.2, label="-uniformity_coef * J_uniformity (opt)")
-            n_init = min(len(t_comp), len(j_mean_init), len(j_inv_init), len(j_std_init), len(j_uni_init))
+            ax.plot(t, y_spread, color="black", linewidth=1.2, label="-spread_coef * J_spread (opt)")
+            n_init = min(len(t_comp), len(j_mean_init), len(j_inv_init), len(j_std_init), len(j_uni_init), len(j_spread_init))
             if n_init > 0:
                 t_i = t_comp[:n_init]
                 y_mean_i = [float(v) for v in j_mean_init[:n_init]]
                 y_inv_i = [float(v) for v in j_inv_init[:n_init]]
                 y_std_i = [float(v) for v in j_std_init[:n_init]]
                 y_uni_i = [float(v) for v in j_uni_init[:n_init]]
+                y_spread_i = [float(v) for v in j_spread_init[:n_init]]
                 ax.plot(t_i, y_mean_i, color="blue", linewidth=1.1, linestyle=":", label="reward_coef * J_mean (init)")
                 ax.plot(t_i, y_inv_i, color="red", linewidth=1.1, linestyle=":", label="-inv_coef * J_inv_penalty (init)")
                 ax.plot(t_i, y_std_i, color="purple", linewidth=1.1, linestyle=":", label="-risk_coef * J_std (init)")
                 ax.plot(t_i, y_uni_i, color="green", linewidth=1.1, linestyle=":", label="-uniformity_coef * J_uniformity (init)")
+                ax.plot(t_i, y_spread_i, color="black", linewidth=1.1, linestyle=":", label="-spread_coef * J_spread (init)")
             ax.legend(loc="upper right", fontsize=7)
             if n_comp > 1:
                 ax.set_xlim(t[0], t[-1])
-            all_y = y_mean + y_inv + y_std + y_uni
+            all_y = y_mean + y_inv + y_std + y_uni + y_spread
             if n_init > 0:
-                all_y += y_mean_i + y_inv_i + y_std_i + y_uni_i
+                all_y += y_mean_i + y_inv_i + y_std_i + y_uni_i + y_spread_i
             lo, hi = _finite_series_ylim(all_y, pad_min=1.0)
             ax.set_ylim(lo, hi)
         else:

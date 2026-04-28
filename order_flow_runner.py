@@ -140,10 +140,12 @@ class OrderFlowRunner:
         self.J_inv_hist: list[float] = []
         self.J_std_hist: list[float] = []
         self.J_uniformity_hist: list[float] = []
+        self.J_spread_hist: list[float] = []
         self.J_mean_init_hist: list[float] = []
         self.J_inv_init_hist: list[float] = []
         self.J_std_init_hist: list[float] = []
         self.J_uniformity_init_hist: list[float] = []
+        self.J_spread_init_hist: list[float] = []
         self.main_reward_opt_hist: list[float] = []
         self.anchor_reward_opt_hist: list[float] = []
         self.main_reward_init_hist: list[float] = []
@@ -713,48 +715,48 @@ class OrderFlowRunner:
                     )
                     self.inventory = current_state.inventory
                     self.cash = current_state.cash
-                else:
-                    current_state = state_from_orderbook(
-                        ob,
-                        buy_vol=float(buy_vol),
-                        sell_vol=float(sell_vol),
-                        inventory=self.inventory,
-                        cash=self.cash,
-                        spread_max=self.spread_max,
-                        reference_depth_lots=_ref_depth,
-                        anchor_buy_ref=(
-                            float(self.last_anchor_buy_reference_ticks)
-                            if self.last_anchor_buy_reference_ticks is not None
-                            else None
-                        ),
-                        anchor_sell_ref=(
-                            float(self.last_anchor_sell_reference_ticks)
-                            if self.last_anchor_sell_reference_ticks is not None
-                            else None
-                        ),
-                        anchor_mu_delta_buy=(
-                            float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
-                            if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
-                            else None
-                        ),
-                        anchor_sigma_delta_buy=(
-                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
-                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
-                            else None
-                        ),
-                        anchor_mu_delta_sell=(
-                            float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
-                            if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
-                            else None
-                        ),
-                        anchor_sigma_delta_sell=(
-                            float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
-                            if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
-                            else None
-                        ),
-                        anchor_inventory=anchor_inventory,
-                        anchor_cash=anchor_cash,
-                    )
+                # else:
+                #     current_state = state_from_orderbook(
+                #         ob,
+                #         buy_vol=float(buy_vol),
+                #         sell_vol=float(sell_vol),
+                #         inventory=self.inventory,
+                #         cash=self.cash,
+                #         spread_max=self.spread_max,
+                #         reference_depth_lots=_ref_depth,
+                #         anchor_buy_ref=(
+                #             float(self.last_anchor_buy_reference_ticks)
+                #             if self.last_anchor_buy_reference_ticks is not None
+                #             else None
+                #         ),
+                #         anchor_sell_ref=(
+                #             float(self.last_anchor_sell_reference_ticks)
+                #             if self.last_anchor_sell_reference_ticks is not None
+                #             else None
+                #         ),
+                #         anchor_mu_delta_buy=(
+                #             float((self.last_anchor_price_model_params or {}).get("mu_delta_buy"))
+                #             if (self.last_anchor_price_model_params or {}).get("mu_delta_buy") is not None
+                #             else None
+                #         ),
+                #         anchor_sigma_delta_buy=(
+                #             float((self.last_anchor_price_model_params or {}).get("sigma_delta_buy"))
+                #             if (self.last_anchor_price_model_params or {}).get("sigma_delta_buy") is not None
+                #             else None
+                #         ),
+                #         anchor_mu_delta_sell=(
+                #             float((self.last_anchor_price_model_params or {}).get("mu_delta_sell"))
+                #             if (self.last_anchor_price_model_params or {}).get("mu_delta_sell") is not None
+                #             else None
+                #         ),
+                #         anchor_sigma_delta_sell=(
+                #             float((self.last_anchor_price_model_params or {}).get("sigma_delta_sell"))
+                #             if (self.last_anchor_price_model_params or {}).get("sigma_delta_sell") is not None
+                #             else None
+                #         ),
+                #         anchor_inventory=anchor_inventory,
+                #         anchor_cash=anchor_cash,
+                #     )
             opt = getattr(self.controller, "optimizer", None)
             if self.use_zero_action:
                 action = ZERO_DISCRETIZED_ACTION
@@ -787,6 +789,7 @@ class OrderFlowRunner:
                     self.J_inv_hist.append(float(comp.get("term_inv", 0.0)))
                     self.J_std_hist.append(float(comp.get("term_risk", 0.0)))
                     self.J_uniformity_hist.append(float(comp.get("term_uniformity", 0.0)))
+                    self.J_spread_hist.append(float(comp.get("term_spread", 0.0)))
                     self.main_reward_opt_hist.append(float(getattr(opt, "_last_main_reward_mean", float("nan"))))
                     self.anchor_reward_opt_hist.append(float(getattr(opt, "_last_anchor_reward_mean", float("nan"))))
                     comp_init = getattr(opt, "_last_J_components_initial", None)
@@ -795,6 +798,7 @@ class OrderFlowRunner:
                         self.J_inv_init_hist.append(float(comp_init.get("term_inv", 0.0)))
                         self.J_std_init_hist.append(float(comp_init.get("term_risk", 0.0)))
                         self.J_uniformity_init_hist.append(float(comp_init.get("term_uniformity", 0.0)))
+                        self.J_spread_init_hist.append(float(comp_init.get("term_spread", 0.0)))
                         self.main_reward_init_hist.append(float(getattr(opt, "_last_main_reward_mean_initial", float("nan"))))
                         self.anchor_reward_init_hist.append(float(getattr(opt, "_last_anchor_reward_mean_initial", float("nan"))))
                     else:
@@ -802,6 +806,7 @@ class OrderFlowRunner:
                         self.J_inv_init_hist.append(float("nan"))
                         self.J_std_init_hist.append(float("nan"))
                         self.J_uniformity_init_hist.append(float("nan"))
+                        self.J_spread_init_hist.append(float("nan"))
                         self.main_reward_init_hist.append(float("nan"))
                         self.anchor_reward_init_hist.append(float("nan"))
             self._pending_action = action

@@ -125,6 +125,8 @@ def build_pipeline(
         "uniformity_coef": mpc_kw.get("uniformity_coef", mpc_kw.get("action_coef", 0.0)),
         "reward_coef": mpc_kw.get("reward_coef", 1.0),
         "size_coef": mpc_kw.get("size_coef", 0.0),
+        "spread_coef": mpc_kw.get("spread_coef", 0.0),
+        "spread_target_lots": mpc_kw.get("spread_target_lots", 1.0),
         "anchor_hedge_coef": 1.0 if bool(mpc_kw.get("anchor_hedge_enabled", mpc_kw.get("anchor_hedge_coef", 0.0))) else 0.0,
         "anchor_hedge_fee": mpc_kw.get("anchor_hedge_fee", 0.0),
         "total_q_target": mpc_kw.get("total_q_target"),
@@ -306,7 +308,7 @@ def main() -> None:
         "use_buffered_orderbook_provider": True,
         "use_websocket_market_data": True,
         "use_zero_action": False,  # False to run controller (MonteCarloMPCTensorBatched); True = no quotes
-        "action_start_after_steps": 1000,  # warm-up: delay live order placement for first N steps (controller still runs)
+        "action_start_after_steps": 10,  # warm-up: delay live order placement for first N steps (controller still runs)
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
@@ -317,7 +319,7 @@ def main() -> None:
         "anchor_orderbook_buffer_ms": None,  # defaults to orderbook_buffer_ms
         "anchor_websocket_reconnect_ms": None,  # defaults to websocket_reconnect_ms
         "main_representative_price_target_depth_lots": None,  # None => same as anchor target depth
-        "anchor_representative_price_target_depth_lots": 1000.0,
+        "anchor_representative_price_target_depth_lots": 1e3,
         "use_anchor_gaussian_price_model": True,
         "anchor_price_model_decay": 0.9,
         "anchor_price_model_sigma_min_ticks": 1.0,
@@ -346,43 +348,45 @@ def main() -> None:
             "residual_decay": 0.80,
             "learn_residual": True,
             "sigma_min": 1e-6,
-            "representative_price_target_depth_lots": 1e12,
+            "representative_price_target_depth_lots": 1e5,
         },
         "order_flow_model_kwargs": {},
         "mpc_kwargs": {
             "spread_max": 100,
-            "n_components": 2,
+            "n_components": 3,
             "device": "cpu",
             "total_q_min": 0,
             "total_q_max": 1e3,
             "soft_fill_temp": 0.25,
-            "adam_lr": 1e-1,
+            "adam_lr": 1e0,
             "adam_epochs": 50,
             "adam_grad_clip": 1e10,
             "horizon": 1,
-            "n_samples": 64,
-            "warm_start": True,
+            "n_samples": 128,
+            "warm_start": False,
             "fixed_mc_samples": True,
             "adam_normalize_inputs": False,
             "verbose": False,
             # Unified objective:
             # J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
-            #     - uniformity_coef * J_uniformity - size_coef * J_size
+            #     - uniformity_coef * J_uniformity - size_coef * J_size - spread_coef * J_spread
             "reward_coef": 1.0,  # weight on E[ΔW] term
-            "risk_coef": 100.0,
+            "risk_coef": 1.0,
             "inv_coef": 0.0,
             "uniformity_coef": 0.0,
             "size_coef": 0.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
-            "anchor_hedge_enabled": False,    # when True, anchor hedge reward is added with fixed weight 1.0
+            "spread_coef": 100.0,               # penalize bid+ask spread at spread_target_lots cumulative depth
+            "spread_target_lots": 50.0,        # depth level used to measure bid/ask spread term
+            "anchor_hedge_enabled": True,    # when True, anchor hedge reward is added with fixed weight 1.0
             "anchor_hedge_coef": 0.0,         # deprecated: kept for compatibility as ON/OFF fallback
             "anchor_hedge_fee": 0.0000025,          # proportional fee factor on hedge contribution
-            "target_inv": 1000,
+            "target_inv": 1e3,
             "total_q_target": 1e3,           # finite-range target on [0, spread_max]
             "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
             "zero_action_if_negative_J_mean": False,   # if True, return no quotes when best action has E[ΔW] < 0
         },
         "execution_model_kwargs": {
-            "maker_fee": 0.0000015,
+            "maker_fee": 0.00015,
             # Used only when execution_mode == "simulated"
             "simulated_initial_inventory": 0,
             "simulated_initial_cash": 0.0,
