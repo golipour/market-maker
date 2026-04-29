@@ -6,6 +6,9 @@ from typing import Any
 from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION, state_from_step
 
 from mm_core.legacy.step_v1 import parse_step
+from mm_core.app.assemblers import step_snapshot_from_step_v1
+from mm_core.domain.types import InstrumentId
+from mm_core.units.converter import instrument_spec_from_trade_stats
 
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
@@ -23,6 +26,19 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         step = tuple(list(step[:-2]) + [0, 0])
     runner._step_counter += 1
     s = parse_step(step)
+
+    # Migration aid: compute a typed snapshot in canonical float units.
+    # This does not affect trading behavior; it is for observability/debugging and future refactors.
+    try:
+        ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
+        sym = str(getattr(runner.stepper, "symbol", "") or "").strip()
+        if ex and sym:
+            spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+            inst = InstrumentId(exchange=ex, symbol=sym)
+            runner._last_step_snapshot = step_snapshot_from_step_v1(s, instrument=inst, spec=spec)
+    except Exception:
+        # Keep runner robust: snapshot creation must never break execution.
+        runner._last_step_snapshot = None
     bucket_ms = runner.stepper.T_ms
     mid_now_ticks = float(s.ob.mid)
     anchor_inventory = int(s.anchor_inventory)
