@@ -1,0 +1,252 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(mm_step_counter{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"})",
+          "legendFormat": "steps",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Step counter",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(mm_wealth_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"})",
+          "legendFormat": "wealth",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Wealth (quote)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(mm_cash_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"})",
+          "legendFormat": "cash",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cash (quote)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(mm_inventory_base{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"})",
+          "legendFormat": "inv",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Inventory (base)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "mm_mid_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}",
+          "legendFormat": "mid",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "mm_sell_ref_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}",
+          "legendFormat": "sell_ref",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Prices (quote)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "mm_wealth_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}",
+          "legendFormat": "wealth",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "mm_cash_quote{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}",
+          "legendFormat": "cash",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Wealth / Cash (quote)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "mm_inventory_base{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}",
+          "legendFormat": "inventory",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Inventory (base)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (side) (rate(mm_orders_placed_total{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}[1m]))",
+          "legendFormat": "placed {{side}}/s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(mm_live_execution_skipped_total{service=~\"$service\",env=~\"$env\",exchange=~\"$exchange\",symbol=~\"$symbol\"}[1m]))",
+          "legendFormat": "skipped {{reason}}/s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Live execution (rates)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["market_maker"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 2,
+        "label": "Datasource",
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "name": "service",
+        "label": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(mm_mid_quote, service)" },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      },
+      {
+        "name": "env",
+        "label": "env",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(mm_mid_quote, env)" },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      },
+      {
+        "name": "exchange",
+        "label": "exchange",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(mm_mid_quote, exchange)" },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      },
+      {
+        "name": "symbol",
+        "label": "symbol",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": { "query": "label_values(mm_mid_quote{exchange=~\"$exchange\"}, symbol)" },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": ".*" }
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Market Maker Overview",
+  "uid": "mm-overview",
+  "version": 1
+}
+

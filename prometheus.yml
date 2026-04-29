@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: market_maker
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          # Your app runs on the host; enable metrics with MM_METRICS_PORT=8000.
+          - host.docker.internal:8000
+
