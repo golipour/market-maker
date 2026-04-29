@@ -14,10 +14,6 @@ import numpy as np
 from order_flow_stepper import OrderFlowStepper, Step
 from trade_stats import (
     cancel_all_orders,
-    get_lot_size,
-    get_min_order_amount_tick_lot,
-    get_min_order_qty_lots,
-    get_tick_size,
     place_limit_order_lots,
 )
 from order_flow_testers import MarketOrderFlowTester
@@ -30,6 +26,10 @@ from market_making_controller.state import DiscretizedOrderAction, State, ZERO_D
 from mm_core.pricing import mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow
 
 from mm_core.app.engine import advance_order_flow_runner
+from mm_core.units.converter import (
+    instrument_spec_from_trade_stats,
+    ladder_level_to_venue_order,
+)
 
 class OrderFlowRunner:
     """
@@ -349,10 +349,11 @@ class OrderFlowRunner:
             return
 
         base_asset, quote_asset = self._symbol_assets(sym)
-        tick_size = float(get_tick_size(sym, ex))
-        lot_size = float(get_lot_size(sym, ex))
-        min_qty_lots = max(0.0, float(get_min_order_qty_lots(sym, ex)))
-        min_notional_tick_lot = max(0.0, float(get_min_order_amount_tick_lot(sym, ex)))
+        spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+        tick_size = float(spec.tick_size)
+        lot_size = float(spec.lot_size)
+        min_qty_lots = float(spec.min_qty_lots)
+        min_notional_tick_lot = float(spec.min_notional_tick_lot)
         # Use current state totals (already synchronized by stepper in real mode) for
         # feasibility checks to avoid an extra balances REST request per step.
         avail_base = max(0.0, float(state.inventory) * lot_size)
@@ -366,12 +367,16 @@ class OrderFlowRunner:
 
         mid_ticks = float(state.mid)
         for spread, qty in action.bids:
-            q = int(qty)
-            if q <= 0:
+            o = ladder_level_to_venue_order(
+                side="buy",
+                mid_ticks=mid_ticks,
+                spread_ticks=float(spread),
+                qty_lots=int(qty),
+            )
+            if o is None:
                 continue
-            px = int(round(mid_ticks - float(spread)))
-            if px <= 0:
-                continue
+            q = int(o.qty_lots)
+            px = int(o.price_ticks)
             amount_base = float(q) * lot_size
             price_quote = float(px) * tick_size
             notional_quote = amount_base * price_quote
@@ -419,12 +424,16 @@ class OrderFlowRunner:
                 avail_quote = max(0.0, avail_quote - notional_quote)
 
         for spread, qty in action.asks:
-            q = int(qty)
-            if q <= 0:
+            o = ladder_level_to_venue_order(
+                side="sell",
+                mid_ticks=mid_ticks,
+                spread_ticks=float(spread),
+                qty_lots=int(qty),
+            )
+            if o is None:
                 continue
-            px = int(round(mid_ticks + float(spread)))
-            if px <= 0:
-                continue
+            q = int(o.qty_lots)
+            px = int(o.price_ticks)
             amount_base = float(q) * lot_size
             price_quote = float(px) * tick_size
             notional_quote = amount_base * price_quote
