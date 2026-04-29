@@ -27,7 +27,7 @@ from trade_stats import (
     normalize_trade_to_tick_lot_units,
 )
 from trade_stats_market_ws import create_market_ws_session, kucoin_ping_pong_json
-from market_making_controller.ob_reference_prices import reference_prices_ticks_from_orderbook
+from mm_core.pricing import reference_prices_from_orderbook_ticks as reference_prices_ticks_from_orderbook
 
 from market_making_controller.models.flow_implied import Step
 

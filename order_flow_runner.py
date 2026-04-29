@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from market_making_controller.models import ExecutionRule, ExecutionModel
 
 from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
-from market_making_controller.ob_reference_prices import mid_ticks_after_market_order_flow
+from mm_core.pricing import mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow
 
 from mm_core.app.engine import advance_order_flow_runner
 
