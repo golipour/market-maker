@@ -1,0 +1,53 @@
+services:
+  redis:
+    image: redis:latest
+    container_name: redis
+    restart: "no"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  db:
+    image: postgres
+    container_name: postgres
+    restart: "no"
+    shm_size: 128mb
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: meysam
+      POSTGRES_PASSWORD: Welcome123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mimir:
+    image: grafana/mimir:latest
+    container_name: mimir
+    restart: "no"
+    command:
+      - -config.file=/etc/mimir/mimir.yaml
+    ports:
+      - "9009:9009"
+    volumes:
+      - ./mimir.yaml:/etc/mimir/mimir.yaml
+      - mimir_data:/data
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: "no"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - mimir
+
+volumes:
+  redis-data:
+  postgres_data:
+  prometheus_data:
+  mimir_data:
+  grafana_data:
