@@ -116,6 +116,23 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.inv_value_hist.append(inv_value)
         runner.wealth_times.append(t_fill)
         runner.wealth_hist.append(wealth)
+        # Parallel wealth series in canonical quote units from StepSnapshot (if available).
+        snap = getattr(runner, "_last_step_snapshot", None)
+        if snap is not None and isinstance(getattr(snap, "data", None), dict):
+            try:
+                main = (snap.data.get("main") or {})
+                anchor = (snap.data.get("anchor") or {})
+                cash_quote = float(main.get("cash", 0.0))
+                inv_base = float(main.get("inventory", 0.0))
+                sell_ref_quote = float(main.get("sell_ref", 0.0))
+                a_cash_quote = float(anchor.get("cash_quote", 0.0) or 0.0)
+                a_inv_base = float(anchor.get("inventory_base", 0.0) or 0.0)
+                a_sell_ref_quote = float(anchor.get("sell_ref_quote", sell_ref_quote) or sell_ref_quote)
+                wealth_quote = cash_quote + inv_base * sell_ref_quote + a_cash_quote + a_inv_base * a_sell_ref_quote
+                runner.wealth_quote_times.append(t_fill)
+                runner.wealth_quote_hist.append(float(wealth_quote))
+            except Exception:
+                pass
         if dW_step is not None:
             if runner._wealth_from_dw_running is None:
                 runner._wealth_from_dw_baseline = float(wealth - dW_step)

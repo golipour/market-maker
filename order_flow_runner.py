@@ -168,6 +168,10 @@ class OrderFlowRunner:
         self.inv_value_hist: list[float] = []
         self.wealth_times: list[datetime] = []
         self.wealth_hist: list[float] = []
+        # Canonical-unit wealth series (quote units) computed from mm_core StepSnapshot.
+        # This is a migration aid; it does not affect execution or controller behavior.
+        self.wealth_quote_times: list[datetime] = []
+        self.wealth_quote_hist: list[float] = []
         # Wealth reconstructed as W0 + cumulative sum of realized dW.
         self.wealth_from_dw_times: list[datetime] = []
         self.wealth_from_dw_hist: list[float] = []
