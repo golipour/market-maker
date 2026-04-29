@@ -12,6 +12,8 @@ from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
+from mm_core.diagnostics.frame_v1 import build_diagnostics_frame_v1
+from mm_adapters.diagnostics.emitter import emit as emit_diagnostics
 
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
@@ -323,6 +325,26 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.delta_a_hist.append(delta_a)
         runner.q_b_hist.append(q_b)
         runner.q_a_hist.append(q_a)
+
+    # Emit a single diagnostics frame for external UIs (Streamlit) to render.
+    try:
+        ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
+    except Exception:
+        ex = ""
+    try:
+        sym = str(getattr(runner.stepper, "symbol", "") or "").strip()
+    except Exception:
+        sym = ""
+    try:
+        frame = build_diagnostics_frame_v1(
+            runner=runner,
+            exchange=ex,
+            symbol=sym,
+            spread_max=float(getattr(runner, "spread_max", 0.0) or 0.0) or None,
+        )
+        emit_diagnostics(frame)
+    except Exception:
+        pass
 
     return True
 

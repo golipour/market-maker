@@ -61,6 +61,23 @@ services:
     depends_on:
       - prometheus
       - mimir
+      - redis
+
+  mm_viz:
+    image: market_maker-mm_viz
+    container_name: mm_viz
+    restart: "no"
+    working_dir: /app
+    environment:
+      MM_DIAGNOSTICS_REDIS_URL: redis://redis:6379/0
+      MM_DIAGNOSTICS_CHANNEL: mm.diagnostics.v1
+      MM_VIZ_MAX_FRAMES: "2000"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
 
 volumes:
   redis-data:

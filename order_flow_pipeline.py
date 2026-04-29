@@ -271,8 +271,12 @@ def create_runner(
 
 
 def main() -> None:
-    """Build pipeline and runner from config, then run animation."""
-    from order_flow_animation import run_animation
+    """
+    Build pipeline and runner from config, then run headless.
+
+    Plotting is intentionally removed from the runtime path. Use `mm_viz` (Streamlit)
+    fed by Redis diagnostics frames instead.
+    """
 
     args = {
         "exchange": "nobitex",
@@ -454,22 +458,12 @@ def main() -> None:
         anchor_hedge_enabled=anchor_hedge_enabled,
         anchor_price_model=anchor_price_model,
     )
-    run_animation(
-        runner=runner,
-        exchange=args["exchange"],
-        symbol=args["symbol"],
-        T_ms=args["T_ms"],
-        fixed_vol_max=None,
-        orderbook_ticks=args["orderbook_ticks"],
-        decay=args["decay"],
-        spread_max=spread_max,
-        animation_interval_ms=args["animation_interval_ms"],
-        enable_loss_figure=args["enable_loss_figure"],
-        enable_action_figure=args["enable_action_figure"],
-        enable_price_figure=args["enable_price_figure"],
-        enable_qq_figure=args["enable_qq_figure"],
-        enable_anchor_figure=args["enable_anchor_figure"],
-    )
+    # Headless run loop. The runner emits DiagnosticsFrameV1 each step when MM_DIAGNOSTICS=1.
+    import time
+
+    while True:
+        runner.advance_scheduled(max_steps_per_call=5)
+        time.sleep(0.05)
 
 
 if __name__ == "__main__":
