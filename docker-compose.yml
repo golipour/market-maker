@@ -40,6 +40,8 @@ services:
     restart: "no"
     ports:
       - "3000:3000"
+    environment:
+      GF_LOG_LEVEL: warn
     volumes:
       - grafana_data:/var/lib/grafana
     depends_on:
