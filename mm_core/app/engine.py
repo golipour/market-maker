@@ -11,6 +11,7 @@ from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
+from mm_adapters.observability.context import get_context
 
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
@@ -53,9 +54,12 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         try:
             main = snap.data.get("main") or {}
             anchor = snap.data.get("anchor") or {}
+            ctx = get_context()
             log_emit(
                 "mm.step",
                 {
+                    "service": ctx.service,
+                    "env": ctx.env,
                     "exchange": getattr(getattr(snap, "instrument", None), "exchange", None),
                     "symbol": getattr(getattr(snap, "instrument", None), "symbol", None),
                     "t_end_ms": int(s.t_end_ms),
@@ -76,7 +80,10 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
 
         # Optional metrics (enable by setting MM_METRICS_PORT).
         try:
+            ctx = get_context()
             labels = {
+                "service": ctx.service,
+                "env": ctx.env,
                 "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
                 "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
             }

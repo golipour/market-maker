@@ -33,6 +33,8 @@ from mm_core.units.converter import (
     price_from_ticks,
     qty_from_lots,
 )
+from mm_adapters.observability.metrics import REGISTRY as METRICS
+from mm_adapters.observability.context import get_context
 
 class OrderFlowRunner:
     """
@@ -362,6 +364,15 @@ class OrderFlowRunner:
             if not self._live_exec_warned_no_token:
                 print("[live_execution] skipped: missing private_api_token")
                 self._live_exec_warned_no_token = True
+            try:
+                ctx = get_context()
+                METRICS.counter_inc(
+                    "mm_live_execution_skipped_total",
+                    labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "reason": "missing_private_api_token"},
+                    help="Live execution skips by reason",
+                )
+            except Exception:
+                pass
             return
         print(
             f"[live_execution] cancel_all request exchange={ex} symbol={sym} execution=limit"
@@ -375,6 +386,15 @@ class OrderFlowRunner:
         )
         if str(cancel_resp.get("status", "")).lower() != "ok":
             print("[live_execution] skipped placements: cancel_all not ok")
+            try:
+                ctx = get_context()
+                METRICS.counter_inc(
+                    "mm_live_execution_skipped_total",
+                    labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "reason": "cancel_all_not_ok"},
+                    help="Live execution skips by reason",
+                )
+            except Exception:
+                pass
             return
 
         base_asset, quote_asset = self._symbol_assets(sym)
@@ -463,6 +483,15 @@ class OrderFlowRunner:
             )
             if str(resp.get("status", "")).lower() == "ok":
                 avail_quote = max(0.0, avail_quote - notional_quote)
+                try:
+                    ctx = get_context()
+                    METRICS.counter_inc(
+                        "mm_orders_placed_total",
+                        labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "side": "buy"},
+                        help="Orders placed",
+                    )
+                except Exception:
+                    pass
 
         for spread, qty in action.asks:
             o = ladder_level_to_venue_order(
@@ -523,6 +552,15 @@ class OrderFlowRunner:
             )
             if str(resp.get("status", "")).lower() == "ok":
                 avail_base = max(0.0, avail_base - amount_base)
+                try:
+                    ctx = get_context()
+                    METRICS.counter_inc(
+                        "mm_orders_placed_total",
+                        labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "side": "sell"},
+                        help="Orders placed",
+                    )
+                except Exception:
+                    pass
 
     def advance(self, t_end_ms: int | None = None) -> bool:
         """
