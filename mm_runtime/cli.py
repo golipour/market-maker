@@ -16,9 +16,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     start_server()
 
-    import order_flow_pipeline
+    from mm_runtime.run import run_order_flow_pipeline
 
-    # Keep legacy behavior: run the pipeline main().
-    order_flow_pipeline.main()
+    run_order_flow_pipeline()
     return 0
 
