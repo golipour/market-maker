@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from order_flow_stepper import OrderFlowStepper
+from mm_runtime.wiring import create_stepper
 from market_making_controller.models import (
     TorchHurdleWeibullModel,
     TorchResidualPriceModel,
@@ -215,7 +215,7 @@ def create_runner(
     """
     # Poll intervals are only relevant for REST/polling providers. In websocket mode,
     # OrderFlowStepper wires WebSocketBufferedMarketDataProvider and ignores them.
-    stepper = OrderFlowStepper(
+    stepper = create_stepper(
         exchange=exchange,
         symbol=symbol,
         T_ms=T_ms,
