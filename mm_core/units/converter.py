@@ -16,6 +16,21 @@ class VenueOrder:
     qty_lots: int
 
 
+def price_from_ticks(price_ticks: int, *, tick_size: float) -> float:
+    """Convert price ticks to real quote/base price."""
+    return float(price_ticks) * float(tick_size)
+
+
+def qty_from_lots(qty_lots: int, *, lot_size: float) -> float:
+    """Convert quantity lots to real base quantity."""
+    return float(qty_lots) * float(lot_size)
+
+
+def notional_from_tick_lot(notional_tick_lot: float, *, tick_size: float, lot_size: float) -> float:
+    """Convert tick*lot notional units to real quote notional."""
+    return float(notional_tick_lot) * float(tick_size) * float(lot_size)
+
+
 def instrument_spec_from_trade_stats(exchange: str, symbol: str) -> InstrumentSpec:
     """
     Build InstrumentSpec using current trade_stats helpers.

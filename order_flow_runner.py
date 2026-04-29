@@ -29,6 +29,9 @@ from mm_core.app.engine import advance_order_flow_runner
 from mm_core.units.converter import (
     instrument_spec_from_trade_stats,
     ladder_level_to_venue_order,
+    notional_from_tick_lot,
+    price_from_ticks,
+    qty_from_lots,
 )
 
 class OrderFlowRunner:
@@ -364,8 +367,14 @@ class OrderFlowRunner:
             f"lot_size={lot_size:.12f} tick_size={tick_size:.12f} "
             f"min_qty_lots={min_qty_lots:.6f} min_notional_tick_lot={min_notional_tick_lot:.6f}"
         )
+        print(
+            f"[live_execution] units base_qty={base_asset} quote={quote_asset} "
+            f"min_qty_base={qty_from_lots(int(round(min_qty_lots)), lot_size=lot_size):.12f} "
+            f"min_notional_quote={notional_from_tick_lot(min_notional_tick_lot, tick_size=tick_size, lot_size=lot_size):.12f}"
+        )
 
         mid_ticks = float(state.mid)
+        mid_quote = price_from_ticks(int(round(mid_ticks)), tick_size=tick_size)
         for spread, qty in action.bids:
             o = ladder_level_to_venue_order(
                 side="buy",
@@ -405,6 +414,10 @@ class OrderFlowRunner:
                 f"mid_ticks={mid_ticks:.6f} spread_ticks={float(spread):.6f} "
                 f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} "
                 f"price_quote={price_quote:.12f} notional_quote={notional_quote:.12f}"
+            )
+            print(
+                f"[live_execution] place (human) side=buy symbol={sym} "
+                f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
             )
             t0_place = time.perf_counter()
             resp = place_limit_order_lots(
@@ -461,6 +474,10 @@ class OrderFlowRunner:
                 f"mid_ticks={mid_ticks:.6f} spread_ticks={float(spread):.6f} "
                 f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} "
                 f"price_quote={price_quote:.12f} notional_quote={notional_quote:.12f}"
+            )
+            print(
+                f"[live_execution] place (human) side=sell symbol={sym} "
+                f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
             )
             t0_place = time.perf_counter()
             resp = place_limit_order_lots(
