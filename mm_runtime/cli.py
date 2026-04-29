@@ -11,6 +11,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     while we migrate code into mm_core/mm_adapters/mm_runtime incrementally.
     """
     # Import lazily so module import stays lightweight.
+    # Start optional local /metrics endpoint (enable with MM_METRICS_PORT=8000).
+    from mm_adapters.observability.metrics import start_server
+
+    start_server()
+
     import order_flow_pipeline
 
     # Keep legacy behavior: run the pipeline main().

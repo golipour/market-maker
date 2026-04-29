@@ -9,6 +9,8 @@ from mm_core.legacy.step_v1 import parse_step
 from mm_core.app.assemblers import step_snapshot_from_step_v1
 from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
+from mm_adapters.observability.jsonlog import emit as log_emit
+from mm_adapters.observability.metrics import REGISTRY as METRICS
 
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
@@ -44,6 +46,49 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
             runner._last_step_snapshot = step_snapshot_from_step_v1(s, instrument=inst, spec=spec)
     except Exception:
         runner._last_step_snapshot = None
+
+    # Optional structured log (off by default; enable with MM_JSON_LOG=1).
+    snap = getattr(runner, "_last_step_snapshot", None)
+    if snap is not None and isinstance(getattr(snap, "data", None), dict):
+        try:
+            main = snap.data.get("main") or {}
+            anchor = snap.data.get("anchor") or {}
+            log_emit(
+                "mm.step",
+                {
+                    "exchange": getattr(getattr(snap, "instrument", None), "exchange", None),
+                    "symbol": getattr(getattr(snap, "instrument", None), "symbol", None),
+                    "t_end_ms": int(s.t_end_ms),
+                    "step_counter": int(getattr(runner, "_step_counter", 0)),
+                    # Canonical floats (quote/base):
+                    "mid_quote": float(main.get("mid", 0.0)),
+                    "buy_ref_quote": float(main.get("buy_ref", 0.0)),
+                    "sell_ref_quote": float(main.get("sell_ref", 0.0)),
+                    "inventory_base": float(main.get("inventory", 0.0)),
+                    "cash_quote": float(main.get("cash", 0.0)),
+                    "anchor_sell_ref_quote": anchor.get("sell_ref_quote"),
+                    "anchor_inventory_base": anchor.get("inventory_base"),
+                    "anchor_cash_quote": anchor.get("cash_quote"),
+                },
+            )
+        except Exception:
+            pass
+
+        # Optional metrics (enable by setting MM_METRICS_PORT).
+        try:
+            labels = {
+                "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
+                "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
+            }
+            METRICS.gauge("mm_step_counter", float(getattr(runner, "_step_counter", 0)), labels=labels, help="Step counter")
+            METRICS.gauge("mm_mid_quote", float(main.get("mid", 0.0)), labels=labels, help="Mid price in quote/base")
+            METRICS.gauge("mm_sell_ref_quote", float(main.get("sell_ref", 0.0)), labels=labels, help="Sell-side representative price in quote/base")
+            METRICS.gauge("mm_inventory_base", float(main.get("inventory", 0.0)), labels=labels, help="Inventory in base units")
+            METRICS.gauge("mm_cash_quote", float(main.get("cash", 0.0)), labels=labels, help="Cash in quote units")
+            if runner.wealth_quote_hist:
+                METRICS.gauge("mm_wealth_quote", float(runner.wealth_quote_hist[-1]), labels=labels, help="Total wealth in quote units")
+        except Exception:
+            pass
     bucket_ms = runner.stepper.T_ms
     mid_now_ticks = float(s.ob.mid)
     anchor_inventory = int(s.anchor_inventory)
