@@ -5,6 +5,8 @@ from typing import Any
 
 from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION, state_from_step
 
+from mm_core.legacy.step_v1 import parse_step
+
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     """
@@ -20,50 +22,34 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     if not runner.anchor_hedge_enabled and len(step) >= 15:
         step = tuple(list(step[:-2]) + [0, 0])
     runner._step_counter += 1
-    (
-        t_end,
-        ob,
-        buy_vol,
-        sell_vol,
-        _step_inventory,
-        _step_cash,
-        _private_trade_fee_tick_lot,
-        _private_fills_bid,
-        _private_fills_ask,
-        main_buy_ref,
-        main_sell_ref,
-        anchor_buy_ref,
-        anchor_sell_ref,
-        anchor_inventory,
-        anchor_cash,
-    ) = step
+    s = parse_step(step)
     bucket_ms = runner.stepper.T_ms
-    mid_now_ticks = float(ob.mid)
-    anchor_inventory = int(anchor_inventory)
-    anchor_cash = float(anchor_cash)
+    mid_now_ticks = float(s.ob.mid)
+    anchor_inventory = int(s.anchor_inventory)
+    anchor_cash = float(s.anchor_cash)
     if not runner.anchor_hedge_enabled:
         anchor_inventory = 0
         anchor_cash = 0.0
         anchor_buy_ref = None
         anchor_sell_ref = None
+    else:
+        anchor_buy_ref = s.anchor_buy_ref
+        anchor_sell_ref = s.anchor_sell_ref
 
-    t_anchor_port = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+    t_anchor_port = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
     runner.anchor_portfolio_times.append(t_anchor_port)
     runner.anchor_inventory_hist.append(int(anchor_inventory))
     runner.anchor_cash_hist.append(float(anchor_cash))
-    t_main = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+    t_main = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
     runner.main_reference_times.append(t_main)
-    runner.main_buy_reference_hist.append(float(main_buy_ref))
-    runner.main_sell_reference_hist.append(float(main_sell_ref))
+    runner.main_buy_reference_hist.append(float(s.main_buy_ref))
+    runner.main_sell_reference_hist.append(float(s.main_sell_ref))
 
     if anchor_buy_ref is not None and anchor_sell_ref is not None:
         if runner.anchor_price_model is not None:
-            runner.anchor_price_model.update(
-                float(anchor_buy_ref),
-                float(anchor_sell_ref),
-            )
+            runner.anchor_price_model.update(float(anchor_buy_ref), float(anchor_sell_ref))
             runner.last_anchor_price_model_params = runner.anchor_price_model.get_params()
-        t_anchor = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+        t_anchor = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
         runner.anchor_reference_times.append(t_anchor)
         runner.anchor_buy_reference_hist.append(float(anchor_buy_ref))
         runner.anchor_sell_reference_hist.append(float(anchor_sell_ref))
@@ -87,7 +73,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         )
         runner.inventory = current_state.inventory
         runner.cash = current_state.cash
-        t_fill = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+        t_fill = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
         dW_step = float(delta_pnl.wealth_pnl)
         runner.dW_times.append(t_fill)
         runner.dW_hist.append(dW_step)
@@ -111,7 +97,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
             float(anchor_sell_ref_now) if anchor_sell_ref_now is not None else main_sell_ref_now
         )
         wealth = runner.cash + inv_value + anchor_cash_now + anchor_inv * anchor_sell_ref_used
-        t_fill = datetime.fromtimestamp(t_end / 1000.0, tz=timezone.utc)
+        t_fill = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
         runner.inv_times.append(t_fill)
         runner.inv_hist.append(runner.inventory)
         runner.cash_hist.append(runner.cash)
@@ -201,7 +187,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
             E_dW = None if runner.use_zero_action else getattr(opt, "_last_E_dW_next", None)
             if E_dW is None and not runner.use_zero_action:
                 E_dW = getattr(opt, "_last_E_dW", None)
-            t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)
+            t_act = datetime.fromtimestamp((s.t_end_ms - bucket_ms / 2) / 1000.0, tz=timezone.utc)
             if E_dW is not None:
                 runner.E_dW_times.append(t_act)
                 runner.E_dW_hist.append(float(E_dW))
@@ -235,7 +221,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
 
         runner._pending_action = action
         runner._pending_state = current_state
-        t_act = datetime.fromtimestamp((t_end - bucket_ms / 2) / 1000.0, tz=timezone.utc)
+        t_act = datetime.fromtimestamp((s.t_end_ms - bucket_ms / 2) / 1000.0, tz=timezone.utc)
         runner.action_times.append(t_act)
         if isinstance(action, DiscretizedOrderAction):
             delta_b = float(action.bids[0][0]) if action.bids else 0.0
