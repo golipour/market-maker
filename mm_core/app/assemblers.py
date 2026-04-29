@@ -23,9 +23,10 @@ def instrument_snapshot_from_step_v1(
     """
     Convert legacy tick/lot step fields into canonical float units.
     """
-    mid_quote = price_from_ticks(int(round(float(step.ob.mid))), tick_size=spec.tick_size)
-    buy_ref_quote = price_from_ticks(int(round(step.main_buy_ref)), tick_size=spec.tick_size)
-    sell_ref_quote = price_from_ticks(int(round(step.main_sell_ref)), tick_size=spec.tick_size)
+    # Keep tick precision: `step.ob.mid` and ref ticks may be float.
+    mid_quote = price_from_ticks(float(step.ob.mid), tick_size=spec.tick_size)
+    buy_ref_quote = price_from_ticks(float(step.main_buy_ref), tick_size=spec.tick_size)
+    sell_ref_quote = price_from_ticks(float(step.main_sell_ref), tick_size=spec.tick_size)
     inv_base = qty_from_lots(int(step.inventory), lot_size=spec.lot_size)
     cash_quote = notional_from_tick_lot(float(step.cash), tick_size=spec.tick_size, lot_size=spec.lot_size)
     return InstrumentSnapshot(
@@ -53,12 +54,12 @@ def step_snapshot_from_step_v1(
     main = instrument_snapshot_from_step_v1(step, instrument=instrument, spec=spec)
     anchor = {
         "buy_ref_quote": (
-            price_from_ticks(int(round(step.anchor_buy_ref)), tick_size=spec.tick_size)
+            price_from_ticks(float(step.anchor_buy_ref), tick_size=spec.tick_size)
             if step.anchor_buy_ref is not None
             else None
         ),
         "sell_ref_quote": (
-            price_from_ticks(int(round(step.anchor_sell_ref)), tick_size=spec.tick_size)
+            price_from_ticks(float(step.anchor_sell_ref), tick_size=spec.tick_size)
             if step.anchor_sell_ref is not None
             else None
         ),

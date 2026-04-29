@@ -16,8 +16,8 @@ class VenueOrder:
     qty_lots: int
 
 
-def price_from_ticks(price_ticks: int, *, tick_size: float) -> float:
-    """Convert price ticks to real quote/base price."""
+def price_from_ticks(price_ticks: int | float, *, tick_size: float) -> float:
+    """Convert price ticks (int or float) to real quote/base price."""
     return float(price_ticks) * float(tick_size)
 
 
