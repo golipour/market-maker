@@ -92,6 +92,9 @@ class OrderFlowRunner:
         # Anchor rep-price delta model (updated in the runner alongside other models).
         # MPC reads its (mu, sigma) params from the model object (not from State).
         self.anchor_price_model = anchor_price_model
+        # Cached instrument identity/spec (lazy-filled).
+        self._instrument_id = None
+        self._instrument_spec = None
         self._live_exec_warned_no_token = False
         self._step_counter = 0
         if execution_model is None and controller is not None and execution_rule is None:
@@ -177,6 +180,29 @@ class OrderFlowRunner:
         self.wealth_from_dw_hist: list[float] = []
         self._wealth_from_dw_baseline: float | None = None
         self._wealth_from_dw_running: float | None = None
+
+    def _get_instrument_id_and_spec(self) -> tuple[object | None, object | None]:
+        """
+        Lazily build (InstrumentId, InstrumentSpec) for this runner.
+
+        Kept as `object` types to avoid importing the new mm_core domain types into
+        the legacy runner surface; engine/assemblers can interpret them.
+        """
+        if self._instrument_id is not None and self._instrument_spec is not None:
+            return self._instrument_id, self._instrument_spec
+        ex = str(getattr(self.stepper, "exchange", "") or "").strip()
+        sym = str(getattr(self.stepper, "symbol", "") or "").strip()
+        if not (ex and sym):
+            return None, None
+        try:
+            from mm_core.domain.types import InstrumentId
+            from mm_core.units.converter import instrument_spec_from_trade_stats
+
+            self._instrument_id = InstrumentId(exchange=ex, symbol=sym)
+            self._instrument_spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+            return self._instrument_id, self._instrument_spec
+        except Exception:
+            return None, None
 
     @property
     def steps(self) -> list[Step]:
@@ -352,7 +378,9 @@ class OrderFlowRunner:
             return
 
         base_asset, quote_asset = self._symbol_assets(sym)
-        spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+        _inst, spec = self._get_instrument_id_and_spec()
+        if spec is None:
+            spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
         tick_size = float(spec.tick_size)
         lot_size = float(spec.lot_size)
         min_qty_lots = float(spec.min_qty_lots)

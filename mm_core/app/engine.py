@@ -30,14 +30,19 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     # Migration aid: compute a typed snapshot in canonical float units.
     # This does not affect trading behavior; it is for observability/debugging and future refactors.
     try:
-        ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
-        sym = str(getattr(runner.stepper, "symbol", "") or "").strip()
-        if ex and sym:
-            spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
-            inst = InstrumentId(exchange=ex, symbol=sym)
+        inst = None
+        spec = None
+        if hasattr(runner, "_get_instrument_id_and_spec"):
+            inst, spec = runner._get_instrument_id_and_spec()
+        if inst is None or spec is None:
+            ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
+            sym = str(getattr(runner.stepper, "symbol", "") or "").strip()
+            if ex and sym:
+                spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+                inst = InstrumentId(exchange=ex, symbol=sym)
+        if inst is not None and spec is not None:
             runner._last_step_snapshot = step_snapshot_from_step_v1(s, instrument=inst, spec=spec)
     except Exception:
-        # Keep runner robust: snapshot creation must never break execution.
         runner._last_step_snapshot = None
     bucket_ms = runner.stepper.T_ms
     mid_now_ticks = float(s.ob.mid)
