@@ -63,10 +63,10 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         ("inv", 1),
         ("cash", 1),
         ("wealth", 1),
-        ("cum_spread_pnl", 1),
-        ("cum_inventory_pnl", 1),
-        ("cum_adverse_pnl", 1),
-        ("cum_fee_pnl", 1),
+        ("delta_spread_pnl", 1),
+        ("delta_inventory_pnl", 1),
+        ("delta_adverse_pnl", 1),
+        ("delta_fee_pnl", 1),
         ("realized_dW", 1),
         # ("toxicity", 1),  # Commented out
     ]
@@ -87,7 +87,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
         + [hr_est] * n_price_model
         # + [hr_score] * n_tester  # Moved to separate Predictive log loss window
         + [hr_state] * 3
-        + [hr_state, hr_state, hr_state, hr_state]  # cum_spread_pnl, cum_inventory_pnl, cum_adverse_pnl, cum_fee_pnl
+        + [hr_state, hr_state, hr_state, hr_state]  # delta_spread_pnl, delta_inventory_pnl, delta_adverse_pnl, delta_fee_pnl
         + [hr_state]  # realized_dW
         # + [hr_tox]  # Commented out
     )

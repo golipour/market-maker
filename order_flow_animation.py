@@ -1373,26 +1373,26 @@ def draw_dynamic(
         if fig:
             fig.autofmt_xdate()
 
-    # --- Cumulative spread PnL (exact decomposition) ---
-    start, end = ranges.get("cum_spread_pnl", (0, 0))
+    # --- Δ spread PnL (exact decomposition) ---
+    start, end = ranges.get("delta_spread_pnl", (0, 0))
     if end > start and runner is not None:
         ax = axes[start]
         ax.clear()
         ax.set_xlabel("Time")
-        ax.set_ylabel("Cum. spread PnL")
-        ax.set_title("Cumulative spread PnL")
+        ax.set_ylabel("Δ spread PnL")
+        ax.set_title("Delta spread PnL")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         pnl_times = getattr(runner, "pnl_times", None) or []
-        cum_spread = getattr(runner, "cum_spread_pnl_hist", None) or []
-        if pnl_times and cum_spread and len(pnl_times) == len(cum_spread):
-            ax.step(pnl_times, cum_spread, where="mid", color="green", linewidth=1.5, label="Cum. spread PnL")
+        d_spread = getattr(runner, "delta_spread_pnl_hist", None) or []
+        if pnl_times and d_spread and len(pnl_times) == len(d_spread):
+            ax.step(pnl_times, d_spread, where="mid", color="green", linewidth=1.5, label="Δ spread PnL")
             ax.legend(loc="upper right")
             if len(pnl_times) > 1:
                 ax.set_xlim(pnl_times[0], pnl_times[-1])
-            if cum_spread:
-                lo, hi = _finite_series_ylim(cum_spread)
+            if d_spread:
+                lo, hi = _finite_series_ylim(d_spread)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1400,26 +1400,26 @@ def draw_dynamic(
         if fig:
             fig.autofmt_xdate()
 
-    # --- Cumulative inventory PnL ---
-    start, end = ranges.get("cum_inventory_pnl", (0, 0))
+    # --- Δ inventory PnL ---
+    start, end = ranges.get("delta_inventory_pnl", (0, 0))
     if end > start and runner is not None:
         ax = axes[start]
         ax.clear()
         ax.set_xlabel("Time")
-        ax.set_ylabel("Cum. inventory PnL")
-        ax.set_title("Cumulative inventory PnL")
+        ax.set_ylabel("Δ inventory PnL")
+        ax.set_title("Delta inventory PnL")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         pnl_times = getattr(runner, "pnl_times", None) or []
-        cum_inv = getattr(runner, "cum_inventory_pnl_hist", None) or []
-        if pnl_times and cum_inv and len(pnl_times) == len(cum_inv):
-            ax.step(pnl_times, cum_inv, where="mid", color="blue", linewidth=1.5, label="Cum. inventory PnL")
+        d_inv = getattr(runner, "delta_inventory_pnl_hist", None) or []
+        if pnl_times and d_inv and len(pnl_times) == len(d_inv):
+            ax.step(pnl_times, d_inv, where="mid", color="blue", linewidth=1.5, label="Δ inventory PnL")
             ax.legend(loc="upper right")
             if len(pnl_times) > 1:
                 ax.set_xlim(pnl_times[0], pnl_times[-1])
-            if cum_inv:
-                lo, hi = _finite_series_ylim(cum_inv)
+            if d_inv:
+                lo, hi = _finite_series_ylim(d_inv)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1427,26 +1427,26 @@ def draw_dynamic(
         if fig:
             fig.autofmt_xdate()
 
-    # --- Cumulative adverse PnL (cross term) ---
-    start, end = ranges.get("cum_adverse_pnl", (0, 0))
+    # --- Δ adverse PnL (cross term) ---
+    start, end = ranges.get("delta_adverse_pnl", (0, 0))
     if end > start and runner is not None:
         ax = axes[start]
         ax.clear()
         ax.set_xlabel("Time")
-        ax.set_ylabel("Cum. adverse PnL")
-        ax.set_title("Cumulative adverse PnL (cross term)")
+        ax.set_ylabel("Δ adverse PnL")
+        ax.set_title("Delta adverse PnL (cross term)")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         pnl_times = getattr(runner, "pnl_times", None) or []
-        cum_cross = getattr(runner, "cum_cross_pnl_hist", None) or []
-        if pnl_times and cum_cross and len(pnl_times) == len(cum_cross):
-            ax.step(pnl_times, cum_cross, where="mid", color="red", linewidth=1.5, label="Cum. adverse PnL")
+        d_cross = getattr(runner, "delta_cross_pnl_hist", None) or []
+        if pnl_times and d_cross and len(pnl_times) == len(d_cross):
+            ax.step(pnl_times, d_cross, where="mid", color="red", linewidth=1.5, label="Δ adverse PnL")
             ax.legend(loc="upper right")
             if len(pnl_times) > 1:
                 ax.set_xlim(pnl_times[0], pnl_times[-1])
-            if cum_cross:
-                lo, hi = _finite_series_ylim(cum_cross)
+            if d_cross:
+                lo, hi = _finite_series_ylim(d_cross)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)
@@ -1455,26 +1455,26 @@ def draw_dynamic(
             fig.autofmt_xdate()
 
 
-    # --- Cumulative fee PnL ---
-    start, end = ranges.get("cum_fee_pnl", (0, 0))
+    # --- Δ fee PnL ---
+    start, end = ranges.get("delta_fee_pnl", (0, 0))
     if end > start and runner is not None:
         ax = axes[start]
         ax.clear()
         ax.set_xlabel("Time")
-        ax.set_ylabel("Cum. fee PnL")
-        ax.set_title("Cumulative fee PnL")
+        ax.set_ylabel("Δ fee PnL")
+        ax.set_title("Delta fee PnL")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         pnl_times = getattr(runner, "pnl_times", None) or []
-        cum_fee = getattr(runner, "cum_fee_pnl_hist", None) or []
-        if pnl_times and cum_fee and len(pnl_times) == len(cum_fee):
-            ax.step(pnl_times, cum_fee, where="mid", color="purple", linewidth=1.5, label="Cum. fee PnL")
+        d_fee = getattr(runner, "delta_fee_pnl_hist", None) or []
+        if pnl_times and d_fee and len(pnl_times) == len(d_fee):
+            ax.step(pnl_times, d_fee, where="mid", color="purple", linewidth=1.5, label="Δ fee PnL")
             ax.legend(loc="upper right")
             if len(pnl_times) > 1:
                 ax.set_xlim(pnl_times[0], pnl_times[-1])
-            if cum_fee:
-                lo, hi = _finite_series_ylim(cum_fee)
+            if d_fee:
+                lo, hi = _finite_series_ylim(d_fee)
                 ax.set_ylim(lo, hi)
         else:
             ax.set_xlim(0, 1)

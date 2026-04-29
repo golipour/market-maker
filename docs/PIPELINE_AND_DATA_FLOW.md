@@ -142,7 +142,7 @@ Directly from execution-model output (`state_after_step` + runner bookkeeping):
 - **Wealth** (`wealth_hist`) — computed from updated inventory/cash and current mid
 - **Realized ΔW** (`dW_hist`) — from execution model `_last_dW`
 - **Cumulative spread/inventory/cross PnL**
-  - `cum_spread_pnl_hist`, `cum_inventory_pnl_hist`, `cum_cross_pnl_hist`
+  - `delta_spread_pnl_hist`, `delta_inventory_pnl_hist`, `delta_cross_pnl_hist`
   - from execution model `_last_pnl_decomp`
 
 Not from realized execution output:

@@ -78,14 +78,10 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.dW_times.append(t_fill)
         runner.dW_hist.append(dW_step)
         runner.pnl_times.append(t_fill)
-        runner._cum_spread_pnl += float(delta_pnl.spread_pnl)
-        runner._cum_inventory_pnl += float(delta_pnl.inventory_pnl)
-        runner._cum_cross_pnl += float(delta_pnl.cross_pnl)
-        runner._cum_fee_pnl += float(delta_pnl.fee_pnl)
-        runner.cum_spread_pnl_hist.append(runner._cum_spread_pnl)
-        runner.cum_inventory_pnl_hist.append(runner._cum_inventory_pnl)
-        runner.cum_cross_pnl_hist.append(runner._cum_cross_pnl)
-        runner.cum_fee_pnl_hist.append(runner._cum_fee_pnl)
+        runner.delta_spread_pnl_hist.append(float(delta_pnl.spread_pnl))
+        runner.delta_inventory_pnl_hist.append(float(delta_pnl.inventory_pnl))
+        runner.delta_cross_pnl_hist.append(float(delta_pnl.cross_pnl))
+        runner.delta_fee_pnl_hist.append(float(delta_pnl.fee_pnl))
 
         # Option B consistency: mark-to-bid (sell-side representative price).
         main_sell_ref_now = float(getattr(current_state, "sell_ref", mid_now_ticks))

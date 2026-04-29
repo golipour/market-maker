@@ -158,14 +158,10 @@ class OrderFlowRunner:
         self.last_discretized_action = None  # last DiscretizedOrderAction from controller.act() (for marginal/cumulative plots)
         # PnL decomposition (spread, inventory, cross, fee) for plotting; same time index as dW
         self.pnl_times: list[datetime] = []
-        self.cum_spread_pnl_hist: list[float] = []
-        self.cum_inventory_pnl_hist: list[float] = []
-        self.cum_cross_pnl_hist: list[float] = []
-        self.cum_fee_pnl_hist: list[float] = []
-        self._cum_spread_pnl = 0.0
-        self._cum_inventory_pnl = 0.0
-        self._cum_cross_pnl = 0.0
-        self._cum_fee_pnl = 0.0
+        self.delta_spread_pnl_hist: list[float] = []
+        self.delta_inventory_pnl_hist: list[float] = []
+        self.delta_cross_pnl_hist: list[float] = []
+        self.delta_fee_pnl_hist: list[float] = []
         self.inv_times: list[datetime] = []
         self.inv_hist: list[int] = []
         self.cash_hist: list[float] = []
