@@ -124,13 +124,13 @@ Controlled by environment:
 | **`MM_DIAGNOSTICS_CHANNEL`** | Pub/Sub channel (default `mm.diagnostics.v1`). |
 | **`MM_DIAGNOSTICS_REDIS_LATEST_KEY`** | String key for **`SET`** of last payload (default `mm_diagnostics:latest`) so consumers need not rely on Pub/Sub timing. |
 
-On each emit: **`SET`** latest key, then **`PUBLISH`** channel. Failures are swallowed (best-effort).
+Wire format is **`mm.diag.v2`**: **`SET`** stores a **`kind: full`** envelope (merged frame in **`frame`**). **`PUBLISH`** sends **`kind: full`** or **`kind: delta`** (patch vs previous frame). On each emit: **`SET`** latest key, then **`PUBLISH`** channel. Failures are swallowed (best-effort).
 
 ### 5.3 Realtime UI (`mm_viz`)
 
 - **`mm_viz/server.py`**: **FastAPI** app with:
   - **Lifespan**: background **async Redis** loop — periodic **`GET`** of latest key + **`SUBSCRIBE`** to Pub/Sub; deduplicates by **`point.step_counter`**; maintains an in-memory deque of frames (**`MM_VIZ_MAX_FRAMES`**).
-  - **`WebSocket /ws`**: pushes **`{type:"frame", frame: {...}}`** to browsers when a new step arrives; initial snapshot if already buffered.
+  - **`WebSocket /ws`**: pushes **`{type:"frame", frame: {...}}`** or compact **`{type:"frame_delta", patch: ...}`** when the Pub/Sub message is a delta; initial snapshot if already buffered.
   - **REST**: `/api/latest`, `/api/config`, `/api/history_steps`; optional **`/api/figures/*.png`** (matplotlib) for API/debug — **main UI uses client-side Plotly/Chart.js**, not PNG refresh.
 - **Static SPA** (`mm_viz/static/`): **Chart.js** for overview/price/QQ/anchor line charts; **Plotly.js** for Action & Depth and LOF panels (built from the same frame JSON in `plotly_action_lof.js`, aligned with `mpl_figures.py`).
 

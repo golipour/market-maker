@@ -93,21 +93,27 @@ def _sanitize_for_json(obj: Any) -> Any:
 
 
 def _merge_redis_message(obj: dict[str, Any], hub: "Hub") -> dict[str, Any] | None:
-    """Turn Redis Pub/Sub JSON (legacy full or mm.diag.v2 envelope) into a merged full frame."""
-    if not is_v2_envelope(obj):
+    """Normalize Redis JSON (mm.diag.v2 or older bare frame on GET) to a full diagnostics frame."""
+    if not isinstance(obj, dict):
+        return None
+    if is_v2_envelope(obj):
+        kind = obj.get("kind")
+        if kind == KIND_FULL:
+            f = obj.get("frame")
+            return f if isinstance(f, dict) else None
+        if kind == KIND_DELTA:
+            base = hub.latest_frame
+            if base is None:
+                logger.warning(
+                    "Skipping diagnostics delta (no base frame yet). Wait for Redis GET / full publish."
+                )
+                return None
+            patch = obj.get("patch")
+            return apply_patch(base, patch)
+        return None
+    # Older deployments: latest key held a raw frame dict without an envelope.
+    if "point" in obj:
         return obj
-    kind = obj.get("kind")
-    if kind == KIND_FULL:
-        return obj.get("frame")
-    if kind == KIND_DELTA:
-        base = hub.latest_frame
-        if base is None:
-            logger.warning(
-                "Skipping diagnostics delta (no base frame yet). Wait for Redis GET / full publish."
-            )
-            return None
-        patch = obj.get("patch")
-        return apply_patch(base, patch)
     return None
 
 

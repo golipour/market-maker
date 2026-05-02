@@ -73,7 +73,7 @@ services:
       - redis
 
   # After changing mm_viz, rebuild: `docker compose build mm_viz --no-cache` then `docker compose up -d mm_viz`
-  # (Plain `up` reuses the old image — you will keep seeing the previous UI, e.g. Streamlit.)
+  # (Plain `up` reuses the cached image.)
   mm_viz:
     build:
       context: .

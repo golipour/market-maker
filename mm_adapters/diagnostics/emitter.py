@@ -33,11 +33,6 @@ def _json_enabled() -> bool:
     return bool(str(os.environ.get("MM_DIAGNOSTICS_JSON", "1")).strip())
 
 
-def _delta_enabled() -> bool:
-    """Smaller Pub/Sub (and stdout) payloads: v2 envelope with patch vs previous frame."""
-    return bool(str(os.environ.get("MM_DIAGNOSTICS_DELTA", "")).strip())
-
-
 def _default(o: Any):
     # Numpy scalars/arrays → python types.
     try:
@@ -61,9 +56,9 @@ _last_full_frame: dict[str, Any] | None = None
 def emit(frame: dict[str, Any]) -> None:
     """
     Emit one diagnostics frame (already JSON-serializable) to:
-    - stdout JSON (optional; MM_DIAGNOSTICS_JSON=1) — same payload as Redis Pub/Sub
-    - Redis ``SET`` on a latest-frame key — **always** the merged **full** frame (legacy shape)
-    - Redis PubSub — **full** or **delta** envelope (``MM_DIAGNOSTICS_DELTA=1``) for smaller fan-out
+    - stdout JSON (optional; MM_DIAGNOSTICS_JSON=1) — same payload as Redis Pub/Sub (mm.diag.v2)
+    - Redis ``SET`` on the latest key — **mm.diag.v2** ``kind: full`` (merged frame in ``frame``)
+    - Redis Pub/Sub — **full** or **delta** envelope (patch vs previous frame when possible)
     """
     if not _enabled():
         return
@@ -72,20 +67,21 @@ def emit(frame: dict[str, Any]) -> None:
     step = (merged.get("point") or {}).get("step_counter")
 
     global _last_full_frame
+    store_obj = envelope_full(step, merged)
     pub_obj: dict[str, Any]
-    if _delta_enabled() and _last_full_frame is not None:
+    if _last_full_frame is not None:
         patch = compute_patch(_last_full_frame, merged)
         if patch is None:
-            pub_obj = envelope_full(step, merged)
+            pub_obj = store_obj
         else:
             pub_obj = envelope_delta(step, patch)
     else:
-        pub_obj = envelope_full(step, merged)
+        pub_obj = store_obj
 
     _last_full_frame = merged
 
     payload_pub = json.dumps(pub_obj, ensure_ascii=False, separators=(",", ":"), default=_default)
-    payload_full = json.dumps(merged, ensure_ascii=False, separators=(",", ":"), default=_default)
+    payload_store = json.dumps(store_obj, ensure_ascii=False, separators=(",", ":"), default=_default)
 
     if _json_enabled():
         print(payload_pub)
@@ -100,8 +96,7 @@ def emit(frame: dict[str, Any]) -> None:
             import redis  # type: ignore
 
             _redis_client = redis.Redis.from_url(url)
-        # Late subscribers / GET always see a complete merged frame (no schema envelope).
-        _redis_client.set(_redis_latest_key(), payload_full)
+        _redis_client.set(_redis_latest_key(), payload_store)
         _redis_client.publish(_redis_channel(), payload_pub)
     except Exception:
         return

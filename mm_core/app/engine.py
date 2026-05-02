@@ -326,7 +326,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.q_b_hist.append(q_b)
         runner.q_a_hist.append(q_a)
 
-    # Emit a single diagnostics frame for external UIs (Streamlit) to render.
+    # Emit a single diagnostics frame for mm_viz / Redis consumers.
     try:
         ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
     except Exception:

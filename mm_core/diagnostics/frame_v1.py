@@ -248,7 +248,7 @@ def build_diagnostics_frame_v1(
     - Figure 5 (volume QQ)
     - Figure 6 (anchor vs main reps + anchor params/portfolio)
 
-    The Streamlit UI consumes this frame stream and renders the equivalent subplots.
+    The realtime UI (mm_viz) consumes this frame stream and renders the equivalent subplots.
     """
     steps_data: list[Step] = list(getattr(runner, "steps", []) or [])
     last_step = steps_data[-1] if steps_data else None
