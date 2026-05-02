@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from .state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
+from .torch_device import resolve_torch_device
 from .state_tensor import (
     depth_bid_tensor,
     depth_ask_tensor,
@@ -703,10 +704,12 @@ class MonteCarloMPCTensorBatched:
 
     def optimize(self, state: State) -> SigmoidMixtureAction:
         torch_mod = _get_torch()
-        if self.device is None or (isinstance(self.device, str) and self.device.lower() == "cuda"):
-            _device = torch_mod.device("cuda" if torch_mod.cuda.is_available() else "cpu")
+        if isinstance(self.device, str) and self.device.lower() == "cpu":
+            _device = torch_mod.device("cpu")
+        elif self.device is None:
+            _device = resolve_torch_device(None)
         else:
-            _device = torch_mod.device("cpu" if (isinstance(self.device, str) and self.device.lower() == "cpu") else self.device)
+            _device = resolve_torch_device(str(self.device).strip() or None)
         dtype = torch_mod.float64
 
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(

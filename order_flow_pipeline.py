@@ -274,9 +274,12 @@ def main() -> None:
     """
     Build pipeline and runner from config, then run headless.
 
-    Plotting is intentionally removed from the runtime path. Use `mm_viz` (Streamlit)
+    Plotting is intentionally removed from the runtime path. Use `mm_viz` (FastAPI + WebSocket)
     fed by Redis diagnostics frames instead.
     """
+    from mm_runtime.local_env import load_local_env
+
+    load_local_env()
 
     args = {
         "exchange": "nobitex",

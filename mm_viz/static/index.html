@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mm_viz — Market Maker Diagnostics</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="/static/plotly_action_lof.js"></script>
+    <script src="/static/delta_merge.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <h1>
+        Market maker realtime diagnostics
+        <span
+          class="tech-tag"
+          title="If you still see Streamlit, rebuild: docker compose build mm_viz --no-cache"
+        >FastAPI · WebSocket</span>
+      </h1>
+      <div class="meta">
+        <span id="connState" class="badge">disconnected</span>
+        <span id="frameTitle">—</span>
+      </div>
+      <p class="hint" id="configHint"></p>
+    </header>
+
+    <div class="page-body">
+      <div class="main-column">
+    <nav class="tabs">
+      <button type="button" class="tab-btn active" data-tab="t0">Overview</button>
+      <button type="button" class="tab-btn" data-tab="t1">Action &amp; Depth</button>
+      <button type="button" class="tab-btn" data-tab="t2">LOF</button>
+      <button type="button" class="tab-btn" data-tab="t3">Price diagnostics</button>
+      <button type="button" class="tab-btn" data-tab="t4">QQ volumes</button>
+      <button type="button" class="tab-btn" data-tab="t5">Anchor</button>
+      <button type="button" class="tab-btn" data-tab="t6">Loss / NLL</button>
+      <button type="button" class="tab-btn" data-tab="t7">Raw frame</button>
+    </nav>
+
+    <main>
+      <section id="t0" class="tab-panel active">
+        <h2>Latest point</h2>
+        <pre id="pointJson" class="json-block"></pre>
+        <h2>Key series (tail 500)</h2>
+        <div class="chart-grid">
+          <div class="chart-box"><canvas id="cWealth"></canvas></div>
+          <div class="chart-box"><canvas id="cInv"></canvas></div>
+        </div>
+      </section>
+
+      <section id="t1" class="tab-panel">
+        <p class="caption">
+          Plotly.js — five stacked panels (J components, rewards, depth, action marginal / cumulative), matched to
+          <code>mpl_figures.figure_action_depth_window</code>. Updates on each frame over WebSocket.
+        </p>
+        <div id="plotActionDepth" class="plotly-panel"></div>
+      </section>
+
+      <section id="t2" class="tab-panel">
+        <p class="caption">
+          Plotly.js — LOF observed + sample paths (<code>figure_lof_observed_and_sample</code>), live-updated.
+        </p>
+        <div id="plotLof" class="plotly-panel"></div>
+        <h3>LOF params</h3>
+        <pre id="lofParams" class="json-block"></pre>
+      </section>
+
+      <section id="t3" class="tab-panel">
+        <h2>Representative prices + residual params</h2>
+        <pre id="priceMeta" class="json-block small-json"></pre>
+        <div class="chart-grid">
+          <div class="chart-box"><canvas id="cRep"></canvas></div>
+          <div class="chart-box"><canvas id="cSig"></canvas></div>
+          <div class="chart-box"><canvas id="cMu"></canvas></div>
+          <div class="chart-box"><canvas id="cPe"></canvas></div>
+        </div>
+      </section>
+
+      <section id="t4" class="tab-panel">
+        <h2>QQ volumes</h2>
+        <pre id="qqMeta" class="json-block small-json"></pre>
+        <div class="chart-grid">
+          <div class="chart-box"><canvas id="cQqBuy"></canvas></div>
+          <div class="chart-box"><canvas id="cQqSell"></canvas></div>
+        </div>
+      </section>
+
+      <section id="t5" class="tab-panel">
+        <h2>Anchor vs main</h2>
+        <div class="chart-grid">
+          <div class="chart-box"><canvas id="cAnchorRef"></canvas></div>
+          <div class="chart-box"><canvas id="cAnchorParams"></canvas></div>
+          <div class="chart-box"><canvas id="cAnchorPort"></canvas></div>
+        </div>
+      </section>
+
+      <section id="t6" class="tab-panel">
+        <h2>Loss / NLL subplots (raw spec)</h2>
+        <pre id="lossJson" class="json-block"></pre>
+      </section>
+
+      <section id="t7" class="tab-panel">
+        <h2>Raw DiagnosticsFrameV1</h2>
+        <pre id="rawFrame" class="json-block"></pre>
+      </section>
+    </main>
+      </div>
+
+      <aside class="sidebar">
+        <h3>Stream</h3>
+        <label>
+          <input type="checkbox" id="followLatest" checked />
+          Follow latest step
+        </label>
+        <label>
+          View step
+          <select id="stepSelect"></select>
+        </label>
+        <p class="small">
+          Redis pushes JSON over WebSocket (deduped by step). Chart.js for overview series; Plotly.js for Action &amp;
+          Depth and LOF (same geometry as <code>mpl_figures.py</code>, updated live — no PNG refresh).
+        </p>
+      </aside>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

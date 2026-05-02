@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+
+# Local secrets / env (copy from .env.example)
+.env

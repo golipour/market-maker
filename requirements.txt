@@ -1,4 +1,4 @@
 numpy
 redis
-streamlit
+python-dotenv>=1.0
 

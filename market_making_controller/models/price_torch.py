@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import numpy as np
 
 from ..state import MarketState
+from ..torch_device import resolve_torch_device
 from ..ob_reference_prices import reference_prices_from_transition
 from .flow_implied import Step
 
@@ -326,7 +327,7 @@ class TorchResidualPriceModel:
         mu_sell = float(p.get("mu_sell", 0.0))
         sigma_buy = max(1e-12, float(p.get("sigma_buy", p.get("sigma_mid", 1.0))))
         sigma_sell = max(1e-12, float(p.get("sigma_sell", p.get("sigma_mid", 1.0))))
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         db = dist.Normal(torch.tensor(mu_buy, dtype=_dtype, device=_device), torch.tensor(sigma_buy, dtype=_dtype, device=_device))
         ds = dist.Normal(torch.tensor(mu_sell, dtype=_dtype, device=_device), torch.tensor(sigma_sell, dtype=_dtype, device=_device))
@@ -344,7 +345,7 @@ class TorchResidualPriceModel:
         p = self.get_params()
         mu = float(p["mu_mid"])
         sigma = max(1e-12, float(p["sigma_mid"]))
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         d = dist.Normal(
             torch.tensor(mu, dtype=_dtype, device=_device),

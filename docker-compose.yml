@@ -1,3 +1,8 @@
+# Full stack: `docker compose up` (or add `-d`).
+# Redis + diagnostics UI only (no Postgres / Prometheus / Grafana / Mimir):
+#   docker compose up -d redis mm_viz
+#   open http://localhost:8501
+#
 services:
   redis:
     image: redis:latest
@@ -54,6 +59,10 @@ services:
       - "3000:3000"
     environment:
       GF_LOG_LEVEL: warn
+      # Quiet offline / restricted-network installs (no grafana.com calls for updates/plugins news).
+      GF_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -63,21 +72,36 @@ services:
       - mimir
       - redis
 
+  # After changing mm_viz, rebuild: `docker compose build mm_viz --no-cache` then `docker compose up -d mm_viz`
+  # (Plain `up` reuses the old image — you will keep seeing the previous UI, e.g. Streamlit.)
   mm_viz:
+    build:
+      context: .
+      dockerfile: mm_viz/Dockerfile
     image: market_maker-mm_viz
     container_name: mm_viz
     restart: "no"
-    working_dir: /app
     environment:
       MM_DIAGNOSTICS_REDIS_URL: redis://redis:6379/0
       MM_DIAGNOSTICS_CHANNEL: mm.diagnostics.v1
+      MM_DIAGNOSTICS_REDIS_LATEST_KEY: mm_diagnostics:latest
       MM_VIZ_MAX_FRAMES: "2000"
     ports:
       - "8501:8501"
-    volumes:
-      - ./:/app
     depends_on:
       - redis
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/api/config', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
 
 volumes:
   redis-data:

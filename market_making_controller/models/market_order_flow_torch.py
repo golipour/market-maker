@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import numpy as np
 
 from ..state import MarketState
+from ..torch_device import resolve_torch_device
 from .flow_implied import Step
 
 if TYPE_CHECKING:
@@ -489,7 +490,7 @@ class TorchDiscreteGammaModel:
         import torch
         import torch.distributions as dist
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         shape_buy = max(1.0, p["shape_buy"])
         scale_buy = max(1e-9, p["scale_buy"])
@@ -627,7 +628,7 @@ class TorchWeibullModel:
         import torch.distributions as dist
 
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         k_buy = max(1e-3, float(p["wb_k_buy"]))
         lam_buy = max(1e-9, float(p["wb_lambda_buy"]))
@@ -777,7 +778,7 @@ class TorchHurdleGammaModel:
         import torch.distributions as dist
 
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         p0_buy = max(0.0, min(1.0, p["p0_buy"]))
         p0_sell = max(0.0, min(1.0, p["p0_sell"]))
@@ -937,7 +938,7 @@ class TorchHurdleWeibullModel:
         import torch.distributions as dist
 
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         p0_buy = max(0.0, min(1.0, p["p0_buy"]))
         p0_sell = max(0.0, min(1.0, p["p0_sell"]))
@@ -1088,7 +1089,7 @@ class TorchHurdleLogNormalModel:
         import torch
         import torch.distributions as dist
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         p0_buy = max(0.0, min(1.0, p["p0_buy"]))
         p0_sell = max(0.0, min(1.0, p["p0_sell"]))
@@ -1241,7 +1242,7 @@ class TorchHurdleLogStudentTModel:
         import torch.distributions as dist
 
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         p0_buy = max(0.0, min(1.0, p["p0_buy"]))
         p0_sell = max(0.0, min(1.0, p["p0_sell"]))
@@ -1422,7 +1423,7 @@ class TorchHurdleGeneralizedParetoModel:
         import torch
 
         p = self.get_params()
-        _device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        _device = resolve_torch_device(device)
         _dtype = dtype if dtype is not None else torch.float64
         p0_buy = max(0.0, min(1.0, p["p0_buy"]))
         p0_sell = max(0.0, min(1.0, p["p0_sell"]))

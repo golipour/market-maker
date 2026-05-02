@@ -1,0 +1,6 @@
+# Same pins as the RUN pip install line in mm_viz/Dockerfile (local venv / IDE).
+redis>=4
+matplotlib>=3.8
+numpy>=1.24
+fastapi>=0.109
+uvicorn[standard]>=0.27
