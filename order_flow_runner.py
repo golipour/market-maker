@@ -73,10 +73,7 @@ class OrderFlowRunner:
         anchor_price_model: object | None = None,
     ):
         self.stepper = stepper
-        # Preferred name for market-order-flow estimator.
         self.mof_model = model
-        # Backward-compatible alias (legacy code still reads runner.model).
-        self.model = self.mof_model
         self.tester = tester
         self.controller = controller
         self.use_zero_action = use_zero_action
@@ -187,8 +184,8 @@ class OrderFlowRunner:
         """
         Lazily build (InstrumentId, InstrumentSpec) for this runner.
 
-        Kept as `object` types to avoid importing the new mm_core domain types into
-        the legacy runner surface; engine/assemblers can interpret them.
+        Kept as `object` types to avoid importing mm_core domain types here;
+        engine/assemblers supply concrete types when present.
         """
         if self._instrument_id is not None and self._instrument_spec is not None:
             return self._instrument_id, self._instrument_spec

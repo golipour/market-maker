@@ -47,7 +47,7 @@ def build_layout(runner: "OrderFlowRunner") -> tuple[list[tuple[str, int]], list
     section_specs: [(section_id, n_axes), ...] in display order.
     height_ratios: one per total axis, for plt.subplots(..., height_ratios=...).
     """
-    model = getattr(runner, "mof_model", getattr(runner, "model", None))
+    model = getattr(runner, "mof_model", None)
     tester = runner.tester
     n_model = len(get_estimator_plot_specs(model))
     n_price_model = len(get_price_model_plot_specs(runner))

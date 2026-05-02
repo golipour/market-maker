@@ -5,7 +5,7 @@ from typing import Any
 
 from mm_core.domain.snapshots import InstrumentSnapshot, StepSnapshot
 from mm_core.domain.types import InstrumentId
-from mm_core.legacy.step_v1 import StepV1
+from mm_core.app.parsed_step import ParsedStep
 from mm_core.units.converter import (
     notional_from_tick_lot,
     price_from_ticks,
@@ -14,14 +14,14 @@ from mm_core.units.converter import (
 from mm_core.units.spec import InstrumentSpec
 
 
-def instrument_snapshot_from_step_v1(
-    step: StepV1,
+def instrument_snapshot_from_step(
+    step: ParsedStep,
     *,
     instrument: InstrumentId,
     spec: InstrumentSpec,
 ) -> InstrumentSnapshot:
     """
-    Convert legacy tick/lot step fields into canonical float units.
+    Convert tick/lot step fields into canonical float units.
     """
     # Keep tick precision: `step.ob.mid` and ref ticks may be float.
     mid_quote = price_from_ticks(float(step.ob.mid), tick_size=spec.tick_size)
@@ -40,18 +40,16 @@ def instrument_snapshot_from_step_v1(
     )
 
 
-def step_snapshot_from_step_v1(
-    step: StepV1,
+def step_snapshot_from_step(
+    step: ParsedStep,
     *,
     instrument: InstrumentId,
     spec: InstrumentSpec,
 ) -> StepSnapshot:
     """
-    StepSnapshot for debugging/observability during migration.
-
-    For now, we store a structured dict with both raw and converted values.
+    StepSnapshot for debugging/observability: raw tick/lot fields plus canonical floats.
     """
-    main = instrument_snapshot_from_step_v1(step, instrument=instrument, spec=spec)
+    main = instrument_snapshot_from_step(step, instrument=instrument, spec=spec)
     anchor = {
         "buy_ref_quote": (
             price_from_ticks(float(step.anchor_buy_ref), tick_size=spec.tick_size)
@@ -67,7 +65,7 @@ def step_snapshot_from_step_v1(
         "cash_quote": notional_from_tick_lot(float(step.anchor_cash), tick_size=spec.tick_size, lot_size=spec.lot_size),
     }
     data: dict[str, Any] = {
-        "legacy": {
+        "raw": {
             "t_end_ms": int(step.t_end_ms),
             "buy_lots": int(step.buy_lots),
             "sell_lots": int(step.sell_lots),

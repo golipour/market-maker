@@ -5,14 +5,14 @@ from typing import Any
 
 from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION, state_from_step
 
-from mm_core.legacy.step_v1 import parse_step
-from mm_core.app.assemblers import step_snapshot_from_step_v1
+from mm_core.app.parsed_step import parse_step
+from mm_core.app.assemblers import step_snapshot_from_step
 from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
-from mm_core.diagnostics.frame_v1 import build_diagnostics_frame_v1
+from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm_adapters.diagnostics.emitter import emit as emit_diagnostics
 
 
@@ -46,7 +46,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
                 inst = InstrumentId(exchange=ex, symbol=sym)
         if inst is not None and spec is not None:
-            runner._last_step_snapshot = step_snapshot_from_step_v1(s, instrument=inst, spec=spec)
+            runner._last_step_snapshot = step_snapshot_from_step(s, instrument=inst, spec=spec)
     except Exception:
         runner._last_step_snapshot = None
 
@@ -336,7 +336,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     except Exception:
         sym = ""
     try:
-        frame = build_diagnostics_frame_v1(
+        frame = build_diagnostics_frame(
             runner=runner,
             exchange=ex,
             symbol=sym,

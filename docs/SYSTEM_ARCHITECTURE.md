@@ -31,7 +31,7 @@ flowchart TB
   end
 
   subgraph diag["Diagnostics"]
-    FV1["build_diagnostics_frame_v1"]
+    FV1["build_diagnostics_frame"]
     EM["emit → Redis SET + PUBLISH"]
   end
 
@@ -68,13 +68,13 @@ flowchart TB
 | Layer / area | Role | Notable paths |
 |----------------|------|----------------|
 | **Runtime shell** | CLI and future composition root | `mm_runtime/` — `cli.py`, `run.py` (delegates to `order_flow_pipeline.main`), `wiring.py` (`create_stepper` → `OrderFlowStepper`) |
-| **Core (refactor target)** | Orchestration extract, domain types, diagnostics schema | `mm_core/app/engine.py` — one step of `OrderFlowRunner`; `mm_core/diagnostics/frame_v1.py` — `build_diagnostics_frame_v1`; `mm_core/domain/`, `mm_core/ports/`, `mm_core/units/`, `mm_core/legacy/step_v1.py` |
+| **Core** | Orchestration extract, domain types, diagnostics schema | `mm_core/app/engine.py` — one step of `OrderFlowRunner`; `mm_core/diagnostics/diagnostics_frame.py` — `build_diagnostics_frame`; `mm_core/app/parsed_step.py` — tuple → `ParsedStep`; `mm_core/domain/`, `mm_core/ports/`, `mm_core/units/` |
 | **Adapters** | I/O and side effects | `mm_adapters/diagnostics/emitter.py` — stdout + Redis; `mm_adapters/observability/` — metrics, JSON log, request context |
 | **Controller / models** | PyTorch models, MPC, state, rewards | `market_making_controller/` — `controller.py`, `mpc_tensor_batched.py`, `models/`, `state.py`, `reward_tensor.py` |
-| **Legacy loop (still canonical)** | Stepper, runner, pipeline, animation | `order_flow_stepper.py`, `order_flow_runner.py`, `order_flow_pipeline.py`, `order_flow_animation.py`, `trade_stats.py` |
+| **Trading loop** | Stepper, runner, pipeline, animation | `order_flow_stepper.py`, `order_flow_runner.py`, `order_flow_pipeline.py`, `order_flow_animation.py`, `trade_stats.py` |
 | **Viz** | Realtime debug UI | `mm_viz/server.py` (FastAPI, WebSocket, serves static files), `mm_viz/static/` (HTML/JS/Plotly/Chart.js), `mm_viz/mpl_figures.py` (reference / optional PNG) |
 
-The **active trading path** still runs through **legacy modules**; `mm_core.app.engine` is the **first cut** of moving orchestration into `mm_core` while preserving behavior.
+The trading loop remains in the top-level `order_flow_*` modules; **`mm_core.app.engine`** centralizes per-step orchestration (parse step, execution, MPC, diagnostics emit).
 
 ---
 
@@ -96,10 +96,10 @@ The structural sequence is:
 
 1. **`OrderFlowStepper.advance(t_end_ms)`** fetches order book and trades for a time bucket, outputs a **Step** (or `None` on failure).
 2. **`OrderFlowRunner`** (driven from `order_flow_pipeline` / animation) calls into **`mm_core.app.engine.advance_order_flow_runner`** for the refactored path, which:
-   - Parses the step to internal structures (`parse_step`, optional **step snapshot** for typed units).
+   - Parses the step tuple (`mm_core.app.parsed_step.parse_step` → `ParsedStep`), optional **step snapshot** for typed units.
    - Runs **execution** of the *previous* action against the *current* step (inventory, PnL, histories).
    - Runs **testers / diagnostics MC** (e.g. expected mid), **MPC** to choose the **next** action, updates histories (`delta_*`, rewards, J components, etc.).
-3. At the end of a successful step, **`build_diagnostics_frame_v1(runner, exchange, symbol, spread_max)`** assembles a large JSON-serializable **DiagnosticsFrameV1** (runner series, depth, action_depth, price diagnostics, LOF, anchor, loss specs, etc.).
+3. At the end of a successful step, **`build_diagnostics_frame(runner, exchange, symbol, spread_max)`** assembles a large JSON-serializable **DiagnosticsFrame** (runner series, depth, action_depth, price diagnostics, LOF, anchor, loss specs, etc.).
 4. **`emit_diagnostics(frame)`** (adapters) may print JSON and/or write to **Redis** (see §6).
 
 For **full narrative** of delayed execution, MPC vs diagnostic sampling, and model roles, see [PIPELINE_AND_DATA_FLOW.md](./PIPELINE_AND_DATA_FLOW.md).
@@ -110,7 +110,7 @@ For **full narrative** of delayed execution, MPC vs diagnostic sampling, and mod
 
 ### 5.1 Frame builder
 
-- **`mm_core.diagnostics.frame_v1.build_diagnostics_frame_v1`** reads **duck-typed `runner`** state: histories on the runner, model plot hooks (`get_plot_data`, etc.), and embeds everything needed to reproduce desktop-style figures (Figure 1–6 style data).
+- **`mm_core.diagnostics.diagnostics_frame.build_diagnostics_frame`** reads **duck-typed `runner`** state: histories on the runner, model plot hooks (`get_plot_data`, etc.), and embeds everything needed to reproduce desktop-style figures (Figure 1–6 style data).
 
 ### 5.2 Emitter (`mm_adapters.diagnostics.emitter`)
 
@@ -209,4 +209,4 @@ To run **only Redis + `mm_viz`** (no DB/metrics containers):
 | `MM_VIZ_MAX_FRAMES` | `2000` | Server-side ring buffer of frames (viz). |
 | `MM_METRICS_PORT` | `8000` | Enables Prometheus exporter on that port. |
 
-This architecture is **intentionally incremental**: legacy modules carry the full trading behavior; **`mm_core`** and **`mm_adapters`** carve out stable boundaries for orchestration, domain typing, and side effects.
+**`mm_core`** and **`mm_adapters`** provide orchestration, domain typing, and side-effect boundaries; the long-lived trading modules (`order_flow_*`, `trade_stats`, …) remain the integration surface for venues and models.

@@ -214,7 +214,7 @@ def _qq_data(runner: Any) -> dict[str, Any]:
     if n_obs < 8:
         return {"present": False, "reason": "waiting_for_data", "n_obs": n_obs}
     n_sim = min(1500, max(300, n_obs))
-    sim_buy, sim_sell = _sample_model_volumes(getattr(runner, "model", None), n_sim)
+    sim_buy, sim_sell = _sample_model_volumes(getattr(runner, "mof_model", None), n_sim)
     if len(sim_buy) < 8 or len(sim_sell) < 8:
         return {"present": False, "reason": "model_samples_unavailable", "n_obs": n_obs, "n_sim": len(sim_buy)}
     q = np.linspace(0.02, 0.98, 49)
@@ -232,7 +232,7 @@ def _qq_data(runner: Any) -> dict[str, Any]:
     }
 
 
-def build_diagnostics_frame_v1(
+def build_diagnostics_frame(
     *,
     runner: Any,
     exchange: str,
@@ -263,7 +263,7 @@ def build_diagnostics_frame_v1(
     }
 
     # Main plot data from models/testers (already JSON-ish).
-    mof_model = getattr(runner, "mof_model", getattr(runner, "model", None))
+    mof_model = getattr(runner, "mof_model", None)
     param_plot_data = {}
     if mof_model is not None and hasattr(mof_model, "get_plot_data"):
         try:
@@ -422,7 +422,7 @@ def build_diagnostics_frame_v1(
     }
 
     return {
-        "schema": "DiagnosticsFrameV1",
+        "schema": "DiagnosticsFrame",
         "exchange": str(exchange),
         "symbol": str(symbol),
         "latest": latest,

@@ -328,7 +328,7 @@ def run_animation(
             limit_order_flow_model=runner.limit_order_flow_model,
             n_dates=len(runner.steps),
             runner=runner,
-            market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
+            market_flow_model=getattr(runner, "mof_model", None),
         )
         if not subplots_loss_init:
             subplots_loss_init = [{"title": "Log loss (NLL)", "ylabel": "EWMA −log p", "series": []}]
@@ -362,7 +362,7 @@ def run_animation(
     def update(_frame):
         runner.advance_scheduled(max_steps_per_call=max_steps_per_frame)
         # Always redraw so depth and all panels stay in sync with current runner state.
-        mof_model = getattr(runner, "mof_model", getattr(runner, "model", None))
+        mof_model = getattr(runner, "mof_model", None)
         param_plot_data = mof_model.get_plot_data() if mof_model is not None else {}
         dates = [datetime.fromtimestamp((s[0] - bucket_ms / 2) / 1000.0, tz=timezone.utc) for s in runner.steps]
         draw_dynamic(
@@ -437,7 +437,7 @@ def run_animation(
                 limit_order_flow_model=runner.limit_order_flow_model,
                 n_dates=len(dates),
                 runner=runner,
-                market_flow_model=getattr(runner, "mof_model", getattr(runner, "model", None)),
+                market_flow_model=getattr(runner, "mof_model", None),
             )
             if not subplots_loss:
                 subplots_loss = [{"title": "Log loss", "ylabel": "", "series": []}]
@@ -522,7 +522,7 @@ def draw_volume_qq_window(axes_qq, runner: OrderFlowRunner, fig) -> None:
         return
 
     n_sim = min(1500, max(300, n_obs))
-    sim_buy, sim_sell = _sample_model_volumes(getattr(runner, "model", None), n_sim)
+    sim_buy, sim_sell = _sample_model_volumes(getattr(runner, "mof_model", None), n_sim)
     if len(sim_buy) < 8 or len(sim_sell) < 8:
         for ax in (ax_buy, ax_sell):
             ax.set_xlim(0, 1)

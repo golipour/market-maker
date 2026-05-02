@@ -461,7 +461,7 @@ def main() -> None:
         anchor_hedge_enabled=anchor_hedge_enabled,
         anchor_price_model=anchor_price_model,
     )
-    # Headless run loop. The runner emits DiagnosticsFrameV1 each step when MM_DIAGNOSTICS=1.
+    # Headless run loop. The runner emits a diagnostics frame each step when MM_DIAGNOSTICS=1.
     import time
 
     while True:
