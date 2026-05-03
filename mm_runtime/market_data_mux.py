@@ -10,6 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mm_core.ports.market_data import OrderbookDataProvider, TradeDataProvider
+from mm_runtime.market_data_providers import (
+    BufferedPollingOrderbookDataProvider,
+    BufferedPollingTradeDataProvider,
+    RestOrderbookDataProvider,
+    WebSocketBufferedMarketDataProvider,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,14 +55,6 @@ class MarketDataMux:
         anchor_orderbook_buffer_ms: int | None,
         anchor_websocket_reconnect_ms: int | None,
     ) -> MarketDataBundle:
-        # Import here to avoid circular imports with ``order_flow_stepper``.
-        from mm_runtime.order_flow_stepper import (
-            BufferedPollingOrderbookDataProvider,
-            BufferedPollingTradeDataProvider,
-            RestOrderbookDataProvider,
-            WebSocketBufferedMarketDataProvider,
-        )
-
         if use_websocket_market_data and trade_provider is None and orderbook_provider is None:
             ws = WebSocketBufferedMarketDataProvider(
                 exchange=exchange,
