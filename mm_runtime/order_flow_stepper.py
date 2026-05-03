@@ -3,7 +3,7 @@ Order-flow stepper with pluggable market-data providers.
 advance(t_end_ms) can be called on an exact schedule independent from animation timing.
 
 Canonical implementation (root ``order_flow_stepper.py`` re-exports via PEP 562 ``__getattr__``).
-Future: split REST/WS glue into ``mm_adapters.exchanges`` + normalized events (see docs/ARCHITECTURE_RFC.md).
+WS/REST/polling selection for market data is composed via ``mm_runtime.market_data_mux``; venue glue remains in ``trade_stats`` / ``trade_stats_market_ws`` for now.
 """
 
 from __future__ import annotations
@@ -13,9 +13,10 @@ import math
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Protocol
-
 import numpy as np
+
+from mm_core.ports.market_data import OrderbookDataProvider, TradeDataProvider
+from mm_runtime.market_data_mux import MarketDataMux
 
 from trade_stats import (
     EXCHANGES,
@@ -38,32 +39,6 @@ from market_making_controller.models.flow_implied import Step
 # - buy_lots/sell_lots/inventory/private_* fill quantities are in integer lots.
 # - prices/spreads are in ticks (relative to current mid where relevant).
 # - cash and private_trade_fee_tick_lot are in tick*lot units.
-
-
-class TradeDataProvider(Protocol):
-    """Provider for time-windowed trades in tick/lot units."""
-
-    def get_trades(self, t_start_ms: int, t_end_ms: int) -> list[dict]:
-        ...
-
-    def start(self) -> None:
-        ...
-
-    def stop(self) -> None:
-        ...
-
-
-class OrderbookDataProvider(Protocol):
-    """Provider for point-in-time orderbook snapshots."""
-
-    def get_orderbook(self, t_end_ms: int) -> Orderbook | None:
-        ...
-
-    def start(self) -> None:
-        ...
-
-    def stop(self) -> None:
-        ...
 
 
 class RestTradeDataProvider:
@@ -752,95 +727,43 @@ class OrderFlowStepper:
         # order_id -> (side, price_ticks, remaining_qty_lots, last_event_time_ms)
         self._active_orders_by_id: dict[str, tuple[str, int, int, int]] = {}
 
-        if use_websocket_market_data and trade_provider is None and orderbook_provider is None:
-            # One websocket provider: depth + trades from push only (no REST fallback on trades).
-            ws = WebSocketBufferedMarketDataProvider(
-                exchange=exchange,
-                symbol=symbol,
-                trades_limit=trades_limit,
-                depth_limit=depth_limit,
-                max_buffer_ms=max(trade_buffer_ms, orderbook_buffer_ms),
-                reconnect_ms=websocket_reconnect_ms,
-                private_api_token=private_api_token,
-            )
-            self.orderbook_provider = ws
-            self.trade_provider = ws
-        else:
-            if trade_provider is not None:
-                self.trade_provider = trade_provider
-            else:
-                self.trade_provider = BufferedPollingTradeDataProvider(
-                    exchange=exchange,
-                    symbol=symbol,
-                    trades_limit=trades_limit,
-                    poll_interval_ms=trades_poll_interval_ms,
-                    max_buffer_ms=trade_buffer_ms,
-                )
-            if orderbook_provider is not None:
-                self.orderbook_provider = orderbook_provider
-            elif use_buffered_orderbook_provider:
-                self.orderbook_provider = BufferedPollingOrderbookDataProvider(
-                    exchange=exchange,
-                    symbol=symbol,
-                    depth_limit=depth_limit,
-                    poll_interval_ms=orderbook_poll_interval_ms,
-                    max_buffer_ms=orderbook_buffer_ms,
-                )
-            else:
-                self.orderbook_provider = RestOrderbookDataProvider(
-                    exchange=exchange,
-                    symbol=symbol,
-                    depth_limit=depth_limit,
-                )
+        bundle = MarketDataMux.build_providers(
+            exchange=exchange,
+            symbol=symbol,
+            trades_limit=trades_limit,
+            depth_limit=depth_limit,
+            trade_provider=trade_provider,
+            orderbook_provider=orderbook_provider,
+            use_buffered_orderbook_provider=use_buffered_orderbook_provider,
+            use_websocket_market_data=use_websocket_market_data,
+            trades_poll_interval_ms=trades_poll_interval_ms,
+            trade_buffer_ms=trade_buffer_ms,
+            orderbook_poll_interval_ms=orderbook_poll_interval_ms,
+            orderbook_buffer_ms=orderbook_buffer_ms,
+            websocket_reconnect_ms=websocket_reconnect_ms,
+            private_api_token=private_api_token,
+            anchor_exchange=anchor_exchange,
+            anchor_symbol=anchor_symbol,
+            use_anchor_websocket_market_data=use_anchor_websocket_market_data,
+            anchor_depth_limit=anchor_depth_limit,
+            anchor_orderbook_poll_interval_ms=anchor_orderbook_poll_interval_ms,
+            anchor_orderbook_buffer_ms=anchor_orderbook_buffer_ms,
+            anchor_websocket_reconnect_ms=anchor_websocket_reconnect_ms,
+        )
+        self.trade_provider = bundle.trade_provider
+        self.orderbook_provider = bundle.orderbook_provider
+        self.anchor_orderbook_provider = bundle.anchor_orderbook_provider
+
         self.anchor_exchange = str(anchor_exchange).strip() if anchor_exchange else ""
         self.anchor_symbol = (
             str(anchor_symbol).strip() if anchor_symbol else str(symbol).strip()
         )
-        self.anchor_orderbook_provider: OrderbookDataProvider | None = None
         self._anchor_tick_size: float | None = None
         self._anchor_lot_size: float | None = None
         self._anchor_symbol_asset_base: str = ""
         self._anchor_symbol_asset_quote: str = ""
         self.anchor_balances: dict[str, dict[str, float]] = {}
         if self.anchor_exchange:
-            _anchor_depth_limit = (
-                int(anchor_depth_limit)
-                if anchor_depth_limit is not None
-                else int(depth_limit)
-            )
-            _anchor_orderbook_poll_interval_ms = (
-                int(anchor_orderbook_poll_interval_ms)
-                if anchor_orderbook_poll_interval_ms is not None
-                else int(orderbook_poll_interval_ms)
-            )
-            _anchor_orderbook_buffer_ms = (
-                int(anchor_orderbook_buffer_ms)
-                if anchor_orderbook_buffer_ms is not None
-                else int(orderbook_buffer_ms)
-            )
-            _anchor_websocket_reconnect_ms = (
-                int(anchor_websocket_reconnect_ms)
-                if anchor_websocket_reconnect_ms is not None
-                else int(websocket_reconnect_ms)
-            )
-            if use_anchor_websocket_market_data:
-                self.anchor_orderbook_provider = WebSocketBufferedMarketDataProvider(
-                    exchange=self.anchor_exchange,
-                    symbol=self.anchor_symbol,
-                    trades_limit=1,
-                    depth_limit=_anchor_depth_limit,
-                    max_buffer_ms=_anchor_orderbook_buffer_ms,
-                    reconnect_ms=_anchor_websocket_reconnect_ms,
-                    private_api_token=None,
-                )
-            else:
-                self.anchor_orderbook_provider = BufferedPollingOrderbookDataProvider(
-                    exchange=self.anchor_exchange,
-                    symbol=self.anchor_symbol,
-                    depth_limit=_anchor_depth_limit,
-                    poll_interval_ms=_anchor_orderbook_poll_interval_ms,
-                    max_buffer_ms=_anchor_orderbook_buffer_ms,
-                )
             self._anchor_tick_size = max(
                 1e-12, float(get_tick_size(self.anchor_symbol, self.anchor_exchange))
             )
@@ -853,7 +776,6 @@ class OrderFlowStepper:
             self._anchor_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
                 _anchor_q_raw, self.anchor_exchange
             )
-            # Anchor price model is updated in the runner alongside other models.
         self.trade_provider.start()
         self.orderbook_provider.start()
         if self.anchor_orderbook_provider is not None:

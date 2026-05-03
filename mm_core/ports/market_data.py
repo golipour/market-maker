@@ -1,6 +1,34 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class TradeDataProvider(Protocol):
+    """Time-windowed trades for one venue symbol (tick/lot-normalized dict rows)."""
+
+    def get_trades(self, t_start_ms: int, t_end_ms: int) -> list[Any]:
+        ...
+
+    def start(self) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
+
+
+@runtime_checkable
+class OrderbookDataProvider(Protocol):
+    """Point-in-time order book snapshots for one venue symbol."""
+
+    def get_orderbook(self, t_end_ms: int) -> Any | None:
+        ...
+
+    def start(self) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
 
 
 @runtime_checkable

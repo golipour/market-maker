@@ -7,8 +7,9 @@ def create_stepper(**kwargs) -> StepperPort:
     """
     Runtime wiring for the current market-data stepper.
 
-    Today returns ``OrderFlowStepper`` from ``mm_runtime.order_flow_stepper``.
-    Later: capability-driven WS/REST mux and canonical events (see docs/ARCHITECTURE_RFC.md).
+    Returns ``OrderFlowStepper`` from ``mm_runtime.order_flow_stepper``. Provider selection
+    (REST vs buffered polling vs websocket for main + anchor) is centralized in
+    ``mm_runtime.market_data_mux.MarketDataMux`` (Phase 4).
     """
     from mm_runtime.order_flow_stepper import OrderFlowStepper
 
