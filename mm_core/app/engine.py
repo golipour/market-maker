@@ -12,6 +12,7 @@ from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
+from mm_core.app.model_updates import update_flow_models_after_step
 from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm_adapters.diagnostics.emitter import emit as emit_diagnostics
 
@@ -248,8 +249,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         )
 
     params = getattr(runner.mof_model, "get_params", lambda: {})()
-    runner.tester.update(prev_step, curr_step, params)
-    runner.mof_model.update(prev_step, curr_step)
+    update_flow_models_after_step(runner, prev_step, curr_step, params)
 
     if runner.price_model is not None:
         if runner.price_tester is not None:

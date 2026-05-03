@@ -32,7 +32,8 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 - **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`** (now includes typed **`main_instrument`**), **`OrderIntent`**, **`ExecutionReport`**, **`MarketEvent`**.
 - **`StateAssembler`** (`mm_core.app.state_assembler`): **ParsedStep → `StepSnapshot`**; **tuple → controller `State`** via **`controller_state()`** (engine uses this instead of calling `state_from_step` directly).
 - **`RolloutAssembler`** + **`RolloutFeatures`** (`mm_core.app.rollout_assembler`): read-only runner scalars for future MPC tensor packing; optimizer still internal to `market_making_controller`.
-- **Next**: replace tuple **`step`** in MOF/price updates with references built from contracts; add **`OrderIntent`** / **`ExecutionReport`** on live execution path.
+- **Next**: teach MOF/price `update()` to accept optional canonical views; expand **`ExecutionReport`** with exchange-specific fill fields from adapter responses.
+- **Live path**: `place_limit_order_lots_with_report` + JSON log event **`mm.execution`** (intent floats + `ExecutionReport`); MOF step updates consolidated in **`update_flow_models_after_step`**.
 
 ## Observability (Phase 7 target)
 

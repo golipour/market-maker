@@ -14,10 +14,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from mm_runtime.order_flow_stepper import OrderFlowStepper, Step
-from trade_stats import (
-    cancel_all_orders,
-    place_limit_order_lots,
-)
+from trade_stats import cancel_all_orders
 from order_flow_testers import MarketOrderFlowTester
 
 if TYPE_CHECKING:
@@ -28,10 +25,13 @@ from market_making_controller.state import DiscretizedOrderAction, State, ZERO_D
 from mm_core.pricing import mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow
 
 from mm_core.app.engine import advance_order_flow_runner
+from mm_core.domain.orders import ExecutionReport
+from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import (
     UnitConverter,
     instrument_spec_from_trade_stats,
 )
+from mm_adapters.exchanges.execution import execution_report_for_json, place_limit_order_lots_with_report
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
 
@@ -397,6 +397,7 @@ class OrderFlowRunner:
         _inst, spec = self._get_instrument_id_and_spec()
         if spec is None:
             spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+        place_instrument = _inst if _inst is not None else InstrumentId(exchange=ex, symbol=sym)
         uc = UnitConverter(spec)
         tick_size = float(spec.tick_size)
         lot_size = float(spec.lot_size)
@@ -465,13 +466,22 @@ class OrderFlowRunner:
                 f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
             )
             t0_place = time.perf_counter()
-            resp = place_limit_order_lots(
+            resp, report = place_limit_order_lots_with_report(
                 symbol=sym,
                 exchange=ex,
                 side="buy",
                 price_ticks=px,
                 qty_lots=q,
                 api_token=api_token,
+                instrument=place_instrument,
+            )
+            self._emit_execution_log(
+                instrument=place_instrument,
+                report=report,
+                resp=resp,
+                intent_side="buy",
+                price_quote=price_quote,
+                qty_base=amount_base,
             )
             place_elapsed_ms = (time.perf_counter() - t0_place) * 1000.0
             print(
@@ -534,13 +544,22 @@ class OrderFlowRunner:
                 f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
             )
             t0_place = time.perf_counter()
-            resp = place_limit_order_lots(
+            resp, report = place_limit_order_lots_with_report(
                 symbol=sym,
                 exchange=ex,
                 side="sell",
                 price_ticks=px,
                 qty_lots=q,
                 api_token=api_token,
+                instrument=place_instrument,
+            )
+            self._emit_execution_log(
+                instrument=place_instrument,
+                report=report,
+                resp=resp,
+                intent_side="sell",
+                price_quote=price_quote,
+                qty_base=amount_base,
             )
             place_elapsed_ms = (time.perf_counter() - t0_place) * 1000.0
             print(
@@ -558,6 +577,32 @@ class OrderFlowRunner:
                     )
                 except Exception:
                     pass
+
+    def _emit_execution_log(
+        self,
+        *,
+        instrument: InstrumentId,
+        report: ExecutionReport,
+        resp: dict,
+        intent_side: str,
+        price_quote: float,
+        qty_base: float,
+    ) -> None:
+        """Structured JSON log for Grafana/Loki when ``MM_JSON_LOG=1`` (best-effort)."""
+        try:
+            from mm_adapters.observability.jsonlog import emit as log_emit
+
+            ctx = get_context()
+            payload = execution_report_for_json(report)
+            payload["service"] = ctx.service
+            payload["env"] = ctx.env
+            payload["intent_side"] = intent_side
+            payload["intent_price_quote"] = float(price_quote)
+            payload["intent_qty_base"] = float(qty_base)
+            payload["raw_status"] = resp.get("status")
+            log_emit("mm.execution", payload)
+        except Exception:
+            pass
 
     def advance(self, t_end_ms: int | None = None) -> bool:
         """
