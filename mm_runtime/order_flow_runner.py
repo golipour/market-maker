@@ -36,9 +36,11 @@ from mm_core.units.converter import (
     UnitConverter,
     instrument_spec_from_trade_stats,
 )
+from mm_adapters.diagnostics.emitter import emit as _default_diagnostics_emit
 from mm_adapters.exchanges.execution import execution_report_for_json, place_limit_order_lots_with_report
-from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import metric_labels
+from mm_adapters.observability.jsonlog import emit as _default_structured_log_emit
+from mm_adapters.observability.metrics import REGISTRY as METRICS
 
 class OrderFlowRunner:
     """
@@ -185,6 +187,12 @@ class OrderFlowRunner:
         self.wealth_from_dw_hist: list[float] = []
         self._wealth_from_dw_baseline: float | None = None
         self._wealth_from_dw_running: float | None = None
+
+        # Observability ports: defaults use mm_adapters; core reads these via duck-typing (no mm_core→adapter import).
+        self.structured_log_emit = _default_structured_log_emit
+        self.metrics_registry = METRICS
+        self.metric_labels = metric_labels
+        self.diagnostics_emit = _default_diagnostics_emit
 
     def _get_instrument_id_and_spec(self) -> tuple[object | None, object | None]:
         """

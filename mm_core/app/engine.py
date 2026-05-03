@@ -9,15 +9,17 @@ from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETI
 
 from mm_core.app.parsed_step import parse_step
 from mm_core.app.state_assembler import StateAssembler
+from mm_core.app.observability_defaults import (
+    resolve_diagnostics_emit,
+    resolve_metric_labels,
+    resolve_metrics_registry,
+    resolve_structured_log,
+)
 from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
-from mm_adapters.observability.jsonlog import emit as log_emit
-from mm_adapters.observability.metrics import REGISTRY as METRICS
-from mm_adapters.observability.context import metric_labels
 from mm_core.app.model_updates import update_flow_models_after_step
 from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm_core.pricing import main_inventory_value_ticks, portfolio_wealth_quote, portfolio_wealth_ticks
-from mm_adapters.diagnostics.emitter import emit as emit_diagnostics
 
 
 def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
@@ -31,6 +33,10 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     step = runner.stepper.advance(t_end_ms=t_end_ms)
     if step is None:
         return False
+    log_emit = resolve_structured_log(runner)
+    METRICS = resolve_metrics_registry(runner)
+    metric_labels = resolve_metric_labels(runner)
+    emit_diagnostics = resolve_diagnostics_emit(runner)
     if not runner.anchor_hedge_enabled and len(step) >= 15:
         seq = list(step)
         step = Step(*(seq[:-2] + [0, 0]))
