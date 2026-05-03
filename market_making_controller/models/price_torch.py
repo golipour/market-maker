@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
+from mm_core.pricing.policies import DEFAULT_REFERENCE_DEPTH_LOTS
+
 from ..state import MarketState
 from ..torch_device import resolve_torch_device
 from ..ob_reference_prices import reference_prices_from_transition
@@ -207,7 +209,7 @@ class TorchResidualPriceModel:
         learn_residual: bool = True,
         sigma_min: float = 1e-6,
         device: str | None = None,
-        representative_price_target_depth_lots: float = 1000.0,
+        representative_price_target_depth_lots: float = DEFAULT_REFERENCE_DEPTH_LOTS,
     ):
         self._init_mu = float(residual_mu)
         self._init_sigma = max(1e-12, float(residual_sigma))

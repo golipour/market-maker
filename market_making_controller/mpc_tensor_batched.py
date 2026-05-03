@@ -20,6 +20,7 @@ from .state_tensor import (
 )
 from .reward_tensor import terminal_objective
 
+from mm_core.pricing import target_depth_lots_from_price_model
 from mm_core.pricing.simulated_rep_prices import (
     representative_prices_batched as _representative_prices_batched,
 )
@@ -774,7 +775,7 @@ class MonteCarloMPCTensorBatched:
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
         spread_grid_rep = torch_mod.arange(1.0, float(self.ob_levels) + 1.0, dtype=dtype, device=_device)
-        target_depth = float(getattr(self.price_model, "_target_depth_lots", 1000.0))
+        target_depth = target_depth_lots_from_price_model(self.price_model)
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
         # and anchor delta shocks (used when anchor hedge is enabled).

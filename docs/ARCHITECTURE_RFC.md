@@ -45,7 +45,7 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 1. ~~Skeleton + wrappers~~ — **Phase 1**: `mm_runtime` owns runner/stepper; root shims.
 2. ~~**Phase 2**~~ **(partial / ongoing)**: `UnitConverter`, canonical orderbook DTOs, adapter `to_canonical_orderbook`, assemblers + `_execute_live_orders` on converter; step tuple unchanged.
 3. ~~**Phase 3**~~ **(in progress)**: `StateAssembler`, `RolloutFeatures`, typed `main_instrument` on `StepSnapshot`, engine wired; tuple still used for `state_after_step` / MOF.
-4. **Phase 5**: unify reference / valuation policies in `mm_core/pricing`.
+4. **Phase 5** **(partial)**: reference depth default + valuation helpers in `mm_core/pricing` (`policies`, `depth.target_depth_lots_from_price_model`, `valuation.portfolio_wealth_*`); observed VWAP math still in `ob_reference_prices` behind `mm_core.pricing.reference_prices`.
 5. **Phase 4**: `MarketDataMux` after contracts exist.
 6. **Phase 6**: multi-instrument / hedge policy.
 7. **Phase 8**: persistence, replay, safety.

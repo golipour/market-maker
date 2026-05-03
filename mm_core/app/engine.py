@@ -7,13 +7,14 @@ from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETI
 
 from mm_core.app.parsed_step import parse_step
 from mm_core.app.state_assembler import StateAssembler
-from mm_core.domain.types import InstrumentId
+from mm_core.domain.types import InstrumentId, ValuationPolicy
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
 from mm_core.app.model_updates import update_flow_models_after_step
 from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
+from mm_core.pricing import portfolio_wealth_quote, portfolio_wealth_ticks
 from mm_adapters.diagnostics.emitter import emit as emit_diagnostics
 
 
@@ -184,16 +185,22 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.delta_cross_pnl_hist.append(float(delta_pnl.cross_pnl))
         runner.delta_fee_pnl_hist.append(float(delta_pnl.fee_pnl))
 
-        # Option B consistency: mark-to-bid (sell-side representative price).
+        # Wealth: single valuation policy (default sell_ref / mark-to-bid).
         main_sell_ref_now = float(getattr(current_state, "sell_ref", mid_now_ticks))
-        inv_value = runner.inventory * main_sell_ref_now
         anchor_inv = int(getattr(current_state, "anchor_inventory", 0))
         anchor_cash_now = float(getattr(current_state, "anchor_cash", 0.0))
         anchor_sell_ref_now = getattr(current_state, "anchor_sell_ref", None)
-        anchor_sell_ref_used = (
-            float(anchor_sell_ref_now) if anchor_sell_ref_now is not None else main_sell_ref_now
+        wealth = portfolio_wealth_ticks(
+            cash_tick_lot=float(runner.cash),
+            inventory_lots=int(runner.inventory),
+            main_sell_ref_ticks=main_sell_ref_now,
+            main_mid_ticks=float(mid_now_ticks),
+            anchor_inventory_lots=anchor_inv,
+            anchor_cash_tick_lot=anchor_cash_now,
+            anchor_sell_ref_ticks=float(anchor_sell_ref_now) if anchor_sell_ref_now is not None else None,
+            policy=ValuationPolicy.sell_ref,
         )
-        wealth = runner.cash + inv_value + anchor_cash_now + anchor_inv * anchor_sell_ref_used
+        inv_value = runner.inventory * main_sell_ref_now
         t_fill = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
         runner.inv_times.append(t_fill)
         runner.inv_hist.append(runner.inventory)
@@ -218,8 +225,19 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 anchor = (snap.data.get("anchor") or {})
                 a_cash_quote = float(anchor.get("cash_quote", 0.0) or 0.0)
                 a_inv_base = float(anchor.get("inventory_base", 0.0) or 0.0)
-                a_sell_ref_quote = float(anchor.get("sell_ref_quote", sell_ref_quote) or sell_ref_quote)
-                wealth_quote = cash_quote + inv_base * sell_ref_quote + a_cash_quote + a_inv_base * a_sell_ref_quote
+                a_sell_ref_quote = anchor.get("sell_ref_quote")
+                a_sell_ref_opt = float(a_sell_ref_quote) if a_sell_ref_quote is not None else None
+                mid_q = float(miw.mid) if miw is not None else float((snap.data.get("main") or {}).get("mid", 0.0))
+                wealth_quote = portfolio_wealth_quote(
+                    cash_quote=cash_quote,
+                    inventory_base=inv_base,
+                    main_sell_ref_quote=sell_ref_quote,
+                    main_mid_quote=mid_q,
+                    anchor_cash_quote=a_cash_quote,
+                    anchor_inventory_base=a_inv_base,
+                    anchor_sell_ref_quote=a_sell_ref_opt,
+                    policy=ValuationPolicy.sell_ref,
+                )
                 runner.wealth_quote_times.append(t_fill)
                 runner.wealth_quote_hist.append(float(wealth_quote))
             except Exception:

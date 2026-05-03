@@ -1,13 +1,31 @@
 """
-Pricing utilities (observed and simulated).
+Pricing: observed refs (ticks), simulated reps (torch), depth policy, valuation.
 
-For now, this module re-exports existing helpers from `market_making_controller`.
-As we redesign, we will move implementations here and keep call sites stable.
+Observed reference math remains in ``market_making_controller.ob_reference_prices``; we re-export
+here as the stable ``mm_core`` surface. Valuation and depth defaults are Phase 5.
 """
 
-from .reference_prices import (
+from mm_core.pricing.depth import target_depth_lots_from_price_model
+from mm_core.pricing.policies import (
+    DEFAULT_REFERENCE_DEPTH_LOTS,
+    DEFAULT_VALUATION_POLICY,
+    ValuationPolicy,
+)
+from mm_core.pricing.reference_prices import (
     mid_after_market_order_flow_ticks,
     reference_prices_from_transition_ticks,
     reference_prices_from_orderbook_ticks,
 )
+from mm_core.pricing.valuation import portfolio_wealth_quote, portfolio_wealth_ticks
 
+__all__ = [
+    "ValuationPolicy",
+    "DEFAULT_VALUATION_POLICY",
+    "DEFAULT_REFERENCE_DEPTH_LOTS",
+    "target_depth_lots_from_price_model",
+    "portfolio_wealth_ticks",
+    "portfolio_wealth_quote",
+    "mid_after_market_order_flow_ticks",
+    "reference_prices_from_transition_ticks",
+    "reference_prices_from_orderbook_ticks",
+]

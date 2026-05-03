@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 """
-Observed reference/representative price computations (ticks-based at the MOF boundary).
+Observed reference/representative prices (**ticks**) — single implementation in
+``market_making_controller.ob_reference_prices``.
 
-These functions forward to `market_making_controller.ob_reference_prices`.
-Phase 5 will consolidate float policies with `mm_core/pricing` + valuation/reference modules.
+Depth for VWAP is aligned via ``mm_core.pricing.policies.DEFAULT_REFERENCE_DEPTH_LOTS`` and
+``price_model._target_depth_lots``. Wealth marking lives in ``mm_core.pricing.valuation``.
 """
 
 from market_making_controller.ob_reference_prices import (

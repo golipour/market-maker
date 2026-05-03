@@ -22,7 +22,10 @@ if TYPE_CHECKING:
     from market_making_controller.models import ExecutionRule, ExecutionModel
 
 from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
-from mm_core.pricing import mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow
+from mm_core.pricing import (
+    mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow,
+    target_depth_lots_from_price_model,
+)
 
 from mm_core.app.engine import advance_order_flow_runner
 from mm_core.domain.orders import ExecutionReport
@@ -290,7 +293,7 @@ class OrderFlowRunner:
         _tp, prev_ob, _bp, _sp, *_ = prev_step
         bid_prev = self._depth_by_price(prev_ob, "bid")
         ask_prev = self._depth_by_price(prev_ob, "ask")
-        target_depth = float(getattr(self.price_model, "_target_depth_lots", 1000.0))
+        target_depth = target_depth_lots_from_price_model(self.price_model)
         depth_cur: float | None = None
         if curr_step is not None:
             _tc, cur_ob, _bw, _sw, *_ = curr_step
