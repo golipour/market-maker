@@ -9,4 +9,3 @@ scrape_configs:
       - targets:
           # Your app runs on the host; enable metrics with MM_METRICS_PORT=8000.
           - host.docker.internal:8000
-

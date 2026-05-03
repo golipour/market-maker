@@ -144,7 +144,7 @@ Wire format is **`mm.diag.v2`**: **`SET`** stores a **`kind: full`** envelope (m
 | Mechanism | Location | Activation |
 |-----------|----------|------------|
 | **Prometheus metrics** | `mm_adapters/observability/metrics.py` | **`MM_METRICS_PORT`** set (e.g. `8000`) exposes **`/metrics`** HTTP in a background thread. |
-| **Scrape config** | `prometheus.yml` | Scrapes **`host.docker.internal:8000`** for job `market_maker` (host-run process). |
+| **Scrape config** | `docker/prometheus.yml` | Scrapes **`host.docker.internal:8000`** for job `market_maker` (host-run process). |
 | **Structured / JSON log** | `mm_adapters/observability/jsonlog.py` | Used from engine via **`log_emit`** where wired. |
 | **Context** | `mm_adapters/observability/context.py` | Correlation / metadata for logs or metrics. |
 
@@ -160,8 +160,8 @@ Services (from `docker-compose.yml`):
 |---------|---------|------|
 | **redis** | 6379 | Diagnostics transport (SET + Pub/Sub). |
 | **db** | 5432 | Postgres (application DB if used by future features). |
-| **prometheus** | 9090 | Scrapes `/metrics` from host (see `prometheus.yml`). |
-| **mimir** | 9009 | Long-term metrics backend (configured via `mimir.yaml`). |
+| **prometheus** | 9090 | Scrapes `/metrics` from host (see `docker/prometheus.yml`). |
+| **mimir** | 9009 | Long-term metrics backend (configured via `docker/mimir.yaml`). |
 | **grafana** | 3000 | Dashboards; provisions from `./grafana/`. |
 | **mm_viz** | 8501 | FastAPI + static diagnostics UI; **`depends_on: redis`**. |
 

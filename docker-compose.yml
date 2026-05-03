@@ -1,4 +1,6 @@
-# Full stack: `docker compose up` (or add `-d`).
+# Full stack: `docker compose up` (or add `-d`) from the repo root.
+# Prometheus and Mimir configs: docker/prometheus.yml, docker/mimir.yaml
+# (separate files — those daemons are configured by file, not by embedding in Compose).
 # Redis + diagnostics UI only (no Postgres / Prometheus / Grafana / Mimir):
 #   docker compose up -d redis mm_viz
 #   open http://localhost:8501
@@ -36,7 +38,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
 
   mimir:
@@ -48,7 +50,7 @@ services:
     ports:
       - "9009:9009"
     volumes:
-      - ./mimir.yaml:/etc/mimir/mimir.yaml
+      - ./docker/mimir.yaml:/etc/mimir/mimir.yaml
       - mimir_data:/data
 
   grafana:
