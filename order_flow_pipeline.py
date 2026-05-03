@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mm_core.domain.types import ValuationPolicy
+from mm_core.domain.types import InstrumentId, ValuationPolicy
+from mm_core.hedge.policy import HedgePolicy
 from mm_runtime.wiring import create_stepper
 from market_making_controller.models import (
     TorchHurdleWeibullModel,
@@ -41,6 +42,8 @@ def build_pipeline(
     lot_size: int = 1,
     exchange: str | None = None,
     symbol: str | None = None,
+    anchor_exchange: str | None = None,
+    anchor_symbol: str | None = None,
 ) -> tuple[
     TorchHurdleWeibullModel,
     MarketOrderFlowTester,
@@ -90,6 +93,24 @@ def build_pipeline(
         decay=float(config.get("anchor_price_model_decay", 0.97) or 0.97),
         sigma_min_ticks=float(config.get("anchor_price_model_sigma_min_ticks", 1.0) or 1.0),
     )
+    _ax = (
+        str(anchor_exchange).strip()
+        if anchor_exchange is not None
+        else str(config.get("anchor_exchange") or "").strip()
+    )
+    _asym = (
+        str(anchor_symbol).strip()
+        if anchor_symbol is not None
+        else str(config.get("anchor_symbol") or "").strip()
+    )
+    _hedge = HedgePolicy.from_mpc_and_instruments(
+        mpc_kw,
+        primary=InstrumentId(
+            exchange=str(exchange or "").strip(), symbol=str(symbol or "").strip()
+        ),
+        anchor_exchange=_ax or None,
+        anchor_symbol=_asym or None,
+    )
     mc_mpc_kw = {
         "n_components": mpc_kw["n_components"],
         "n_samples": mpc_kw["n_samples"],
@@ -114,12 +135,11 @@ def build_pipeline(
         "size_coef": mpc_kw.get("size_coef", 0.0),
         "spread_coef": mpc_kw.get("spread_coef", 0.0),
         "spread_target_lots": mpc_kw.get("spread_target_lots", 1.0),
-        "anchor_hedge_coef": 1.0 if bool(mpc_kw.get("anchor_hedge_enabled", mpc_kw.get("anchor_hedge_coef", 0.0))) else 0.0,
-        "anchor_hedge_fee": mpc_kw.get("anchor_hedge_fee", 0.0),
         "total_q_target": mpc_kw.get("total_q_target"),
         "project_total_q_target": mpc_kw.get("project_total_q_target", False),
         "soft_fill_temp": mpc_kw.get("soft_fill_temp", 1.0),
     }
+    mc_mpc_kw.update(_hedge.mpc_optimizer_kwargs())
     optimizer = MonteCarloMPCTensorBatched(
         price_model,
         market_order_flow_model,
@@ -374,9 +394,10 @@ def main() -> None:
             "size_coef": 0.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
             "spread_coef": 100.0,               # penalize bid+ask spread at spread_target_lots cumulative depth
             "spread_target_lots": 50.0,        # depth level used to measure bid/ask spread term
-            "anchor_hedge_enabled": True,    # when True, anchor hedge reward is added with fixed weight 1.0
-            "anchor_hedge_coef": 0.0,         # deprecated: kept for compatibility as ON/OFF fallback
-            "anchor_hedge_fee": 0.0000025,          # proportional fee factor on hedge contribution
+            "anchor_hedge_enabled": True,  # legacy ON/OFF (see mm_core.hedge.policy.HedgePolicy)
+            "anchor_hedge_coef": 0.0,  # deprecated ON/OFF fallback when combined with enabled
+            "anchor_hedge_fee": 0.0000025,  # proportional fee on simulated hedge venue trades
+            # Optional: "anchor_hedge_reward_weight": 1.0,  # scales hedge ΔW in MPC objective
             "target_inv": 1e3,
             "total_q_target": 1e3,           # finite-range target on [0, spread_max]
             "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
@@ -408,12 +429,19 @@ def main() -> None:
         lot_size=args["lot_size"],
         exchange=args["exchange"],
         symbol=args["symbol"],
+        anchor_exchange=args.get("anchor_exchange"),
+        anchor_symbol=args.get("anchor_symbol"),
     )
     spread_max = pipeline["mpc_kwargs"]["spread_max"]
     execution_mode = str(pipeline.get("execution_mode", "simulated")).lower()
     live_order_execution = execution_mode == "real"
     _mpc_cfg = (pipeline.get("mpc_kwargs", {}) or {})
-    anchor_hedge_enabled = bool(_mpc_cfg.get("anchor_hedge_enabled", _mpc_cfg.get("anchor_hedge_coef", 0.0)))
+    anchor_hedge_enabled = HedgePolicy.from_mpc_and_instruments(
+        _mpc_cfg,
+        primary=InstrumentId(exchange=args["exchange"], symbol=args["symbol"]),
+        anchor_exchange=args.get("anchor_exchange"),
+        anchor_symbol=args.get("anchor_symbol"),
+    ).include_anchor_in_portfolio
     exec_kw = pipeline.get("execution_model_kwargs", {}) or {}
     sim_initial_inventory = int(exec_kw.get("simulated_initial_inventory", 0))
     sim_initial_cash = float(exec_kw.get("simulated_initial_cash", 0.0))

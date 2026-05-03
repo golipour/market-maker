@@ -47,7 +47,7 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 3. ~~**Phase 3**~~ **(in progress)**: `StateAssembler`, `RolloutFeatures`, typed `main_instrument` on `StepSnapshot`, engine wired; tuple still used for `state_after_step` / MOF.
 4. **Phase 5** **(partial)**: reference depth default + valuation helpers in `mm_core/pricing` (`policies`, `depth.target_depth_lots_from_price_model`, `valuation.portfolio_wealth_*`); observed VWAP math still in `ob_reference_prices` behind `mm_core.pricing.reference_prices`.
 5. **Phase 4** **(partial)**: `MarketDataMux` (`mm_runtime/market_data_mux.py`) composes adapters from `mm_runtime/market_data_providers.py`; ports `TradeDataProvider` / `OrderbookDataProvider` live in `mm_core/ports/market_data.py`.
-6. **Phase 6**: multi-instrument / hedge policy.
+6. **Phase 6** **(partial)**: `mm_core/hedge/policy.HedgePolicy` names primary + anchor legs and maps to MPC fees / `anchor_hedge_reward_weight`; `MonteCarloMPCTensorBatched` scales hedge Δwealth in the objective. More than one hedge leg still future work.
 7. **Phase 8**: persistence, replay, safety.
 
 ---

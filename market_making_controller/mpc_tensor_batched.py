@@ -638,6 +638,7 @@ class MonteCarloMPCTensorBatched:
         spread_target_lots: float = 1.0,
         anchor_hedge_coef: float = 0.0,
         anchor_hedge_fee: float = 0.0,
+        anchor_hedge_reward_weight: float = 1.0,
         total_q_target: float | int | None = None,
         project_total_q_target: bool = False,
     ):
@@ -669,10 +670,10 @@ class MonteCarloMPCTensorBatched:
         self.size_coef = max(0.0, float(size_coef))
         self.spread_coef = max(0.0, float(spread_coef))
         self.spread_target_lots = max(0.0, float(spread_target_lots))
-        # Legacy knob kept for backward compatibility as hedge ON/OFF flag only.
-        # Anchor hedge contribution is always weighted by 1.0 when enabled.
+        # Legacy ``anchor_hedge_coef != 0`` enables hedge dynamics in rollouts (inventory coupling).
         self.anchor_hedge_enabled = bool(float(anchor_hedge_coef) != 0.0)
         self.anchor_hedge_fee = max(0.0, min(1.0 - 1e-9, float(anchor_hedge_fee)))
+        self.anchor_hedge_reward_weight = max(0.0, float(anchor_hedge_reward_weight))
         self.total_q_target = float(total_q_target) if total_q_target is not None else None
         self.project_total_q_target = bool(project_total_q_target)
         self._last_action: SigmoidMixtureAction | None = None
@@ -1039,13 +1040,12 @@ class MonteCarloMPCTensorBatched:
                     step_reward_main = _delta_wealth_mtm_batched(
                         sell_ref_t, inv_t, cash_t, sell_ref_next, inv_next, cash_next
                     )
-                    step_reward = step_reward_main
                     anchor_reward = torch_mod.zeros_like(step_reward_main)
                     if self.anchor_hedge_enabled:
                         anchor_wealth_t = anchor_cash_t + anchor_inv_t * anchor_sell_ref_t
                         anchor_wealth_next = anchor_cash_next + anchor_inv_next * anchor_sell_ref_next
                         anchor_reward = (anchor_wealth_next - anchor_wealth_t).squeeze(1)
-                        step_reward = step_reward + anchor_reward
+                    step_reward = step_reward_main + float(self.anchor_hedge_reward_weight) * anchor_reward
                     if h == 0:
                         step_reward_0 = step_reward
                     total_reward = total_reward + step_reward
