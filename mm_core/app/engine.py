@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any
 
+from market_making_controller.models.flow_implied import Step
 from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION
 
 from mm_core.app.parsed_step import parse_step
@@ -30,9 +32,18 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     if step is None:
         return False
     if not runner.anchor_hedge_enabled and len(step) >= 15:
-        step = tuple(list(step[:-2]) + [0, 0])
+        seq = list(step)
+        step = Step(*(seq[:-2] + [0, 0]))
     runner._step_counter += 1
     s = parse_step(step)
+    jp = os.environ.get("MM_STEP_JOURNAL_PATH", "").strip()
+    if jp:
+        try:
+            from mm_core.app.step_journal import append_step_journal
+
+            append_step_journal(jp, s)
+        except Exception:
+            pass
 
     # Migration aid: compute a typed snapshot in canonical float units.
     # This does not affect trading behavior; it is for observability/debugging and future refactors.
@@ -256,6 +267,8 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     # Score with previous params, then update estimators/models
     prev_step = runner.steps[-2] if len(runner.steps) >= 2 else None
     curr_step = step
+    parsed_prev = parse_step(prev_step) if prev_step is not None else None
+    parsed_curr = s
 
     rep_pred: tuple[float, float] | None = None
     if prev_step is not None and runner.price_model is not None:
@@ -274,8 +287,16 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     if runner.price_model is not None:
         if runner.price_tester is not None:
             price_params = runner.price_model.get_params()
-            runner.price_tester.update(prev_step, curr_step, price_params)
-        runner.price_model.update(prev_step, curr_step)
+            runner.price_tester.update(
+                prev_step,
+                curr_step,
+                price_params,
+                parsed_prev=parsed_prev,
+                parsed_curr=parsed_curr,
+            )
+        runner.price_model.update(
+            prev_step, curr_step, parsed_prev=parsed_prev, parsed_curr=parsed_curr
+        )
         if (
             prev_step is not None
             and rep_pred is not None

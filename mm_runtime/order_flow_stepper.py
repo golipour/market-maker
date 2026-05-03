@@ -914,7 +914,7 @@ class OrderFlowStepper:
         private_fills_ask = tuple(self.last_private_trade_fills_ask)
         private_trade_fee_tick_lot = self._private_trades_fee_tick_lot()
 
-        step: Step = (
+        step = Step(
             t_end_ms,
             ob,
             buy_lots,

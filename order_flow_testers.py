@@ -4,7 +4,7 @@ Order-flow log-loss testers: score market order flow and price models online.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -30,7 +30,7 @@ from market_making_controller.models.market_order_flow_torch import (
 class MarketOrderFlowModel(Protocol):
     """Market order flow model: update(prev_step, curr_step); get_plot_data()."""
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **kwargs: Any) -> None:
         ...
 
     def get_plot_data(self) -> dict:
@@ -41,7 +41,7 @@ class MarketOrderFlowModel(Protocol):
 class PriceModel(Protocol):
     """Price model: update(prev_step, curr_step); get_params(); get_plot_data()."""
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **kwargs: Any) -> None:
         ...
 
     def get_params(self) -> dict:
@@ -55,7 +55,7 @@ class PriceModel(Protocol):
 class MarketOrderFlowTester(Protocol):
     """Tests a market order flow model online given current params."""
 
-    def update(self, prev_step: Step | None, curr_step: Step, params: dict) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, params: dict, **kwargs: Any) -> None:
         ...
 
     def get_plot_data(self) -> dict:
@@ -201,7 +201,7 @@ class GeneralOrderFlowLogLossTester:
         self.nll_buy_hist: list[float] = []
         self.nll_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step, params: dict) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, params: dict, **_: Any) -> None:
         _t_end, ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -250,7 +250,7 @@ def _gaussian_nll(observed_delta: float, mu: float, sigma: float) -> float:
 class PriceTester(Protocol):
     """Tests a price (Δmid) model online given params and observed mid."""
 
-    def update(self, prev_step: Step | None, curr_step: Step, params: dict) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, params: dict, **kwargs: Any) -> None:
         ...
 
     def get_plot_data(self) -> dict:
@@ -275,7 +275,7 @@ class PriceLogLossTester:
         self.nll_hist: list[float] = []
         self._use_residual: bool = False  # set from price model when present
 
-    def update(self, prev_step: Step | None, curr_step: Step, params: dict) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, params: dict, **_: Any) -> None:
         _t_end, ob, buy_vol, sell_vol, *_ = curr_step
         mid_now = float(ob.mid)
         use_residual = hasattr(self.price_model, "sample_residual") and hasattr(

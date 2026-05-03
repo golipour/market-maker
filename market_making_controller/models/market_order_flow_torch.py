@@ -4,7 +4,7 @@ Torch-based market order flow models: EWMA-updated params, .sample() for pipelin
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -420,7 +420,7 @@ class TorchDiscreteGammaModel:
         self.shape_sell_hist: list[float] = []
         self.scale_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -555,7 +555,7 @@ class TorchWeibullModel:
         self.lambda_buy_hist: list[float] = []
         self.lambda_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, _ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -688,7 +688,7 @@ class TorchHurdleGammaModel:
         self.shape_sell_hist: list[float] = []
         self.scale_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, _ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -846,7 +846,7 @@ class TorchHurdleWeibullModel:
         self.lambda_buy_hist: list[float] = []
         self.lambda_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, _ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -1003,7 +1003,7 @@ class TorchHurdleLogNormalModel:
         self.sigma_buy_hist: list[float] = []
         self.sigma_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -1150,7 +1150,7 @@ class TorchHurdleLogStudentTModel:
         self.sigma_sell_hist: list[float] = []
         self.df_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)
@@ -1317,7 +1317,7 @@ class TorchHurdleGeneralizedParetoModel:
         self.u_buy_hist: list[float] = []
         self.u_sell_hist: list[float] = []
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         _t_end, _ob, buy_vol, sell_vol, *_ = curr_step
         x_buy = int(round(buy_vol)) if isinstance(buy_vol, (int, float)) else int(buy_vol)
         x_sell = int(round(sell_vol)) if isinstance(sell_vol, (int, float)) else int(sell_vol)

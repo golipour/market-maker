@@ -1,31 +1,42 @@
 """
 Order-book flow geometry shared by runner and animation.
 
-``Step`` type and ``limit_order_flow_observed`` (cumulative limit-order change vs distance
-from mid). MPC uses MOF-only book evolution; no ``flow_implied_mid`` here.
+``Step`` is a **NamedTuple** (tuple-compatible: indexing, unpacking, ``len``) with named fields.
+``limit_order_flow_observed`` (cumulative limit-order change vs distance from mid).
+MPC uses MOF-only book evolution; no ``flow_implied_mid`` here.
 """
 
 from __future__ import annotations
+
+from typing import NamedTuple
 
 import numpy as np
 
 from trade_stats import Orderbook
 
-# Unified step type (single source of truth for prices/portfolio values):
-# (t_end_ms, orderbook, buy_vol, sell_vol, inventory, cash,
-#  private_trade_fee_tick_lot, private_fills_bid, private_fills_ask,
-#  main_buy_ref_ticks, main_sell_ref_ticks,
-#  anchor_buy_ref_ticks, anchor_sell_ref_ticks,
-#  anchor_inventory, anchor_cash)
-# private_trade_fee_tick_lot: sum of exchange-reported trade fees in last_private_trades,
-#   converted to the same tick*lot units as cash (quote native / (tick_size * lot_size)).
-Step = tuple[
-    int, Orderbook, int, int, int, int, float,
-    tuple[tuple[int, int], ...], tuple[tuple[int, int], ...],
-    float, float,
-    float | None, float | None,
-    int, int,
-]
+
+class Step(NamedTuple):
+    """
+    Single source of truth for one advance of ``OrderFlowStepper``.
+
+    Legacy code used an anonymous 15-field tuple; field order is unchanged for compatibility.
+    """
+
+    t_end_ms: int
+    ob: Orderbook
+    buy_lots: int
+    sell_lots: int
+    inventory: int
+    cash: int | float
+    private_trade_fee_tick_lot: float
+    private_fills_bid: tuple[tuple[int, int], ...]
+    private_fills_ask: tuple[tuple[int, int], ...]
+    main_buy_ref: float
+    main_sell_ref: float
+    anchor_buy_ref: float | None
+    anchor_sell_ref: float | None
+    anchor_inventory: int
+    anchor_cash: int | float
 
 
 def limit_order_flow_observed(

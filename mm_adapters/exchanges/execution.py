@@ -29,6 +29,28 @@ def _order_id_from_response(resp: dict[str, Any]) -> str:
     return ""
 
 
+def _venue_metadata_snippet(resp: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "status",
+        "state",
+        "orderId",
+        "order_id",
+        "id",
+        "clientOrderId",
+        "client_order_id",
+        "msg",
+        "message",
+        "code",
+    )
+    out: dict[str, Any] = {k: resp[k] for k in keys if k in resp and resp[k] is not None}
+    inner = resp.get("order") if isinstance(resp.get("order"), dict) else resp.get("data")
+    if isinstance(inner, dict):
+        sub = {k: inner[k] for k in ("id", "status", "price", "amount") if k in inner}
+        if sub:
+            out["_order"] = sub
+    return out
+
+
 def execution_report_from_place_response(
     resp: dict[str, Any],
     *,
@@ -51,6 +73,7 @@ def execution_report_from_place_response(
         status=status,
         filled_qty=filled_qty,
         avg_price=avg_price,
+        venue_metadata=_venue_metadata_snippet(resp),
     )
 
 

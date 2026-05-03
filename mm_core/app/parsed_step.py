@@ -34,8 +34,12 @@ class ParsedStep:
     anchor_cash: int | float
 
 
-def parse_step(step: tuple) -> ParsedStep:
-    """Parse the order-flow step tuple. This is the single place that knows the tuple layout."""
+def parse_step(step: Any) -> ParsedStep:
+    """
+    Parse the order-flow step (15-field ``Step`` ``NamedTuple`` or equivalent plain tuple).
+
+    This is the single place that knows the field layout.
+    """
     (
         t_end_ms,
         ob,

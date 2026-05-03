@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .types import InstrumentId, Side
 
@@ -35,4 +36,6 @@ class ExecutionReport:
     avg_price: float | None = None
     fee: float | None = None
     fee_currency: str | None = None
+    # Exchange-specific payload subset for debugging / venue dashboards (keep small).
+    venue_metadata: dict[str, Any] | None = None
 

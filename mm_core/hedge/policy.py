@@ -1,9 +1,9 @@
 """
 Multi-instrument hedge policy (Phase 6).
 
-Today the controller supports **one primary** venue + **one hedge / anchor** leg in MPC and the
-stepper. This module names those legs and maps policy fields onto MPC kwargs (fee, reward weight,
-rollout enable flag). Additional hedge legs require extending ``MonteCarloMPCTensorBatched``.
+The stepper and execution path can record **one** hedge venue. ``MonteCarloMPCTensorBatched``
+simulates **at most one** hedge leg (anchor inventory coupled to main fills). If ``HedgePolicy``
+ever carries multiple ``hedge`` legs, **only the first** is honored by MPC until tensors are extended.
 """
 
 from __future__ import annotations

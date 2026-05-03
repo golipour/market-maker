@@ -15,41 +15,57 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 ## Naming
 
 - **Runner / stepper**: `OrderFlowRunner` and `OrderFlowStepper` live under **`mm_runtime.order_flow_*`**. Root modules re-export.
-- **Step tuple**: venue-native 15-field tuple until Phase 3; parsed view: `mm_core.app.parsed_step.ParsedStep` and `parse_step`.
+- **Step**: canonical type is **`market_making_controller.models.flow_implied.Step`** — a 15-field **`NamedTuple`** (tuple-compatible for legacy unpack/index). Parsed view: **`mm_core.app.parsed_step.ParsedStep`** and **`parse_step`**.
 - **Diagnostics JSON**: frame `schema: "DiagnosticsFrame"`; wire deltas: `mm.diag.v2` (see `mm_adapters.diagnostics`).
 
-## Unit policy (Phase 2 — complete; tuple deferred)
+## Unit policy (Phase 2 — complete)
 
 - **`InstrumentSpec`** + **`UnitConverter`** (`mm_core.units.converter`): single entry for tick/lot ↔ float; **`unit_converter_for(exchange, symbol)`** for edge lookup via `trade_stats`.
 - **Rounding** at the grid: `mm_core.units.rounding` (`round_price_to_tick`, `round_qty_to_lot`); `UnitConverter.price_ticks_from_quote` / `qty_lots_from_base` use these for reverse mapping.
 - **Canonical order book**: `mm_core.domain.orderbook` (`CanonicalLevel`, `CanonicalOrderbook`); normalize tick/lot books with **`mm_adapters.exchanges.to_canonical_orderbook`**
   after you have a `trade_stats.Orderbook` + `InstrumentSpec`.
 - **Assemblers + live orders** use `UnitConverter` so snapshot JSON and live placement share one conversion path.
-- **Deferred:** retire the 15-field step tuple end-to-end (`OrderFlowStepper`, MOF/price `update`, execution simulators) in favor of canonical DTOs — out of scope for “complete” here.
 
-## Contracts (Phase 3 — complete; tuple + MOF internals deferred)
+## Contracts (Phase 3 — complete)
 
-- **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`** (includes typed **`main_instrument`**), **`OrderIntent`**, **`ExecutionReport`**, **`MarketEvent`**.
-- **`StateAssembler`** (`mm_core.app.state_assembler`): **ParsedStep → `StepSnapshot`**; **tuple → controller `State`** via **`controller_state()`** (engine uses this instead of calling `state_from_step` directly).
-- **`RolloutAssembler`** + **`RolloutFeatures`**: exposed on diagnostics frames as **`point.rollout_features`** (`mm_core.diagnostics.diagnostics_frame`); MPC optimizer remains inside `market_making_controller`.
-- **Deferred:** optional canonical views on MOF/price `update()`; richer **`ExecutionReport`** fields per venue; removal of tuple from **`state_after_step`** / MOF paths.
+- **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`**, **`OrderIntent`**, **`ExecutionReport`** (includes optional **`venue_metadata`**), **`MarketEvent`**.
+- **`StateAssembler`**: **ParsedStep → `StepSnapshot`**; **tuple/`Step` → controller `State`** via **`controller_state()`**.
+- **`RolloutAssembler`**: **`RolloutFeatures`** on diagnostics **`point.rollout_features`**.
+- **MOF / price `update`**: receive optional **`parsed_prev`** / **`parsed_curr`** (`ParsedStep`) from **`update_flow_models_after_step`** and engine price path.
 - **Live path**: `place_limit_order_lots_with_report` + JSON **`mm.execution`**; MOF updates via **`update_flow_models_after_step`**.
+
+## Pricing (Phase 5 — complete)
+
+- Depth / valuation: **`mm_core.pricing`** (`policies`, `depth`, `valuation`); observed VWAP entry points **`reference_prices_*`** (implementation in **`ob_reference_prices`**, imported only via **`mm_core.pricing`** at call sites).
+
+## Market data (Phase 4 — complete)
+
+- **`MarketDataMux`** + **`mm_runtime/market_data_providers.py`**; ports **`TradeDataProvider`** / **`OrderbookDataProvider`** in **`mm_core/ports/market_data.py`**.
+
+## Hedge (Phase 6 — complete)
+
+- **`mm_core/hedge/policy.HedgePolicy`**: maps to MPC fees / **`anchor_hedge_reward_weight`**. **`MonteCarloMPCTensorBatched`** supports **one** simulated hedge leg; multiple hedge legs in policy would require tensor work later.
 
 ## Observability (Phase 7 — complete)
 
-- Logs: structured JSON (`mm_adapters.observability.jsonlog.emit`) merges `service`, `env`, optional `trace_id` / `run_id` from `get_context()` (`MM_TRACE_ID`, `MM_RUN_ID`).
-- Metrics: Prometheus registry (`REGISTRY`); `metric_labels()` adds `service`, `env`, optional `run_id`, optional `trace_id` only if `MM_METRICS_LABEL_TRACE=1`. OTLP/Mimir push remains optional.
+- Logs: **`jsonlog.emit`** + **`ObsContext`** (`MM_TRACE_ID`, `MM_RUN_ID`).
+- Metrics: **`metric_labels()`** + **`REGISTRY`** (`MM_METRICS_LABEL_TRACE` optional).
+
+## Persistence & replay (Phase 8 — partial)
+
+- **Journal**: set **`MM_STEP_JOURNAL_PATH`** → **`mm_core.app.step_journal.append_step_journal`** writes compact JSON lines per step (scalars + ob mid; not full books).
+- **Replay / safety**: full deterministic replay from journal alone is **not** implemented (needs stored books or venue replay APIs).
 
 ## Execution order (minimal risk)
 
 1. ~~Skeleton + wrappers~~ — **Phase 1**: `mm_runtime` owns runner/stepper; root shims.
-2. ~~**Phase 2**~~ — **complete** (unit/orderbook/assembler path); **deferred:** tuple retirement.
-3. ~~**Phase 3**~~ — **complete** (DTOs, assembler, engine, rollout features in diagnostics); **deferred:** tuple/MOF internals.
-4. ~~**Phase 5**~~ — **complete**: depth/valuation policies + **`mm_core.pricing`** facade over observed VWAPs (`reference_prices_*` re-export `ob_reference_prices`); implementation stays in one module for now.
-5. ~~**Phase 4**~~ — **complete**: `MarketDataMux` + `mm_runtime/market_data_providers.py`; ports in `mm_core/ports/market_data.py`.
-6. ~~**Phase 6**~~ — **complete** for **single hedge venue** (`HedgePolicy`, MPC weight/fee); **deferred:** multi-leg MPC tensors.
-7. ~~**Phase 7**~~ — **complete** (`ObsContext`, JSON + Prometheus correlation).
-8. **Phase 8**: persistence, replay, safety.
+2. ~~**Phase 2**~~ — **complete**.
+3. ~~**Phase 3**~~ — **complete**.
+4. ~~**Phase 5**~~ — **complete**.
+5. ~~**Phase 4**~~ — **complete**.
+6. ~~**Phase 6**~~ — **complete** (single hedge leg in MPC).
+7. ~~**Phase 7**~~ — **complete**.
+8. **Phase 8** — **partial**: on-disk step journal; **deferred:** durable full replay + safety controls.
 
 ---
 

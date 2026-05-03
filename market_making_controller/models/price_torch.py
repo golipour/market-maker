@@ -5,7 +5,7 @@ noise around MOF-only representative VWAPs (TorchResidualPriceModel).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -238,7 +238,7 @@ class TorchResidualPriceModel:
         """Average residual (e_buy + e_sell) / 2 from the last ``update``, or None."""
         return getattr(self, "_last_residual", None)
 
-    def update(self, prev_step: Step | None, curr_step: Step) -> None:
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         if prev_step is None:
             return
         _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
