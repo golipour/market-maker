@@ -18,6 +18,7 @@ from mm_core.app.observability_defaults import (
 from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_core.app.model_updates import update_flow_models_after_step
+from mm_core.app.step_economics_pg import keep_runner_pnl_series_memory, persist_step_economics_row
 from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm_core.pricing import main_inventory_value_ticks, portfolio_wealth_quote, portfolio_wealth_ticks
 
@@ -189,13 +190,32 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.cash = current_state.cash
         t_fill = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
         dW_step = float(delta_pnl.wealth_pnl)
-        runner.dW_times.append(t_fill)
-        runner.dW_hist.append(dW_step)
-        runner.pnl_times.append(t_fill)
-        runner.delta_spread_pnl_hist.append(float(delta_pnl.spread_pnl))
-        runner.delta_inventory_pnl_hist.append(float(delta_pnl.inventory_pnl))
-        runner.delta_cross_pnl_hist.append(float(delta_pnl.cross_pnl))
-        runner.delta_fee_pnl_hist.append(float(delta_pnl.fee_pnl))
+        try:
+            ex_pg = str(getattr(runner.stepper, "exchange", "") or "").strip()
+            sym_pg = str(getattr(runner.stepper, "symbol", "") or "").strip()
+            persist_step_economics_row(
+                t_fill=t_fill,
+                t_end_ms=int(s.t_end_ms),
+                step_counter=int(getattr(runner, "_step_counter", 0)),
+                exchange=ex_pg,
+                symbol=sym_pg,
+                d_w=float(dW_step),
+                spread_pnl=float(delta_pnl.spread_pnl),
+                inventory_pnl=float(delta_pnl.inventory_pnl),
+                cross_pnl=float(delta_pnl.cross_pnl),
+                fee_pnl=float(delta_pnl.fee_pnl),
+                wealth_pnl=float(delta_pnl.wealth_pnl),
+            )
+        except Exception:
+            pass
+        if keep_runner_pnl_series_memory():
+            runner.dW_times.append(t_fill)
+            runner.dW_hist.append(dW_step)
+            runner.pnl_times.append(t_fill)
+            runner.delta_spread_pnl_hist.append(float(delta_pnl.spread_pnl))
+            runner.delta_inventory_pnl_hist.append(float(delta_pnl.inventory_pnl))
+            runner.delta_cross_pnl_hist.append(float(delta_pnl.cross_pnl))
+            runner.delta_fee_pnl_hist.append(float(delta_pnl.fee_pnl))
 
         # Wealth: single valuation policy (default sell_ref / mark-to-bid).
         main_sell_ref_now = float(getattr(current_state, "sell_ref", mid_now_ticks))

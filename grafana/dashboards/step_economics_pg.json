@@ -1,0 +1,88 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", d_w FROM step_economics WHERE $__timeFilter(ts) ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Realized ΔW (wealth step)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", spread_pnl AS spread_pnl FROM step_economics WHERE $__timeFilter(ts) ORDER BY 1",
+          "refId": "A",
+          "alias": "spread"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", inventory_pnl AS inventory_pnl FROM step_economics WHERE $__timeFilter(ts) ORDER BY 1",
+          "refId": "B",
+          "alias": "inventory"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", cross_pnl AS cross_pnl FROM step_economics WHERE $__timeFilter(ts) ORDER BY 1",
+          "refId": "C",
+          "alias": "cross"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", fee_pnl AS fee_pnl FROM step_economics WHERE $__timeFilter(ts) ORDER BY 1",
+          "refId": "D",
+          "alias": "fee"
+        }
+      ],
+      "title": "PnL decomposition (per step)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["market-maker", "postgres"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "Step economics (PostgreSQL)",
+  "uid": "mm-step-economics-pg",
+  "version": 1,
+  "weekStart": ""
+}

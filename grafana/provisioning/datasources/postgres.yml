@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  # Matches docker-compose ``db`` service (PostgreSQL). Override URL/password via Grafana UI if needed.
+  - name: PostgreSQL
+    type: postgres
+    uid: postgres-mm
+    access: proxy
+    url: db:5432
+    user: meysam
+    secureJsonData:
+      password: Welcome123
+    jsonData:
+      database: postgres
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: false
