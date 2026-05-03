@@ -3,16 +3,16 @@ from __future__ import annotations
 """
 New runtime entrypoints.
 
-This module gradually replaces legacy scripts like `order_flow_pipeline.py` by
-delegation, so the operational entrypoint becomes `mm_runtime`.
+The operational entrypoint is `mm_runtime` (``python -m mm_runtime``). Runner and
+stepper implementations live under ``mm_runtime.order_flow_*``; ``order_flow_pipeline``
+still provides composition until wiring migrates here.
 """
 
 
 def run_order_flow_pipeline() -> None:
     """
-    Compatibility runner: delegates to legacy `order_flow_pipeline.main()`.
-
-    Next migrations will move composition/wiring here and shrink the legacy module.
+    Delegates to ``order_flow_pipeline.main()`` until pipeline construction moves
+    into this package.
     """
     import order_flow_pipeline
 

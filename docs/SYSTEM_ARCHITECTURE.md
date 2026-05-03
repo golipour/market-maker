@@ -67,7 +67,8 @@ flowchart TB
 
 | Layer / area | Role | Notable paths |
 |----------------|------|----------------|
-| **Runtime shell** | CLI and future composition root | `mm_runtime/` — `cli.py`, `run.py` (delegates to `order_flow_pipeline.main`), `wiring.py` (`create_stepper` → `OrderFlowStepper`) |
+| **Architecture** | Target boundaries, phases, unit policy | `docs/ARCHITECTURE_RFC.md` |
+| **Runtime shell** | CLI, wiring, integrated runner/stepper | `mm_runtime/` — `cli.py`, `run.py` (delegates to `order_flow_pipeline.main` until composition moves), `wiring.py` (`create_stepper` → `mm_runtime.order_flow_stepper`), `order_flow_runner.py`, `order_flow_stepper.py` (repo root files are **thin shims**) |
 | **Core** | Orchestration extract, domain types, diagnostics schema | `mm_core/app/engine.py` — one step of `OrderFlowRunner`; `mm_core/diagnostics/diagnostics_frame.py` — `build_diagnostics_frame`; `mm_core/app/parsed_step.py` — tuple → `ParsedStep`; `mm_core/domain/`, `mm_core/ports/`, `mm_core/units/` |
 | **Adapters** | I/O and side effects | `mm_adapters/diagnostics/emitter.py` — stdout + Redis; `mm_adapters/observability/` — metrics, JSON log, request context |
 | **Controller / models** | PyTorch models, MPC, state, rewards | `market_making_controller/` — `controller.py`, `mpc_tensor_batched.py`, `models/`, `state.py`, `reward_tensor.py` |
