@@ -18,37 +18,37 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 - **Step tuple**: venue-native 15-field tuple until Phase 3; parsed view: `mm_core.app.parsed_step.ParsedStep` and `parse_step`.
 - **Diagnostics JSON**: frame `schema: "DiagnosticsFrame"`; wire deltas: `mm.diag.v2` (see `mm_adapters.diagnostics`).
 
-## Unit policy (Phase 2 — in progress)
+## Unit policy (Phase 2 — complete; tuple deferred)
 
 - **`InstrumentSpec`** + **`UnitConverter`** (`mm_core.units.converter`): single entry for tick/lot ↔ float; **`unit_converter_for(exchange, symbol)`** for edge lookup via `trade_stats`.
 - **Rounding** at the grid: `mm_core.units.rounding` (`round_price_to_tick`, `round_qty_to_lot`); `UnitConverter.price_ticks_from_quote` / `qty_lots_from_base` use these for reverse mapping.
 - **Canonical order book**: `mm_core.domain.orderbook` (`CanonicalLevel`, `CanonicalOrderbook`); normalize tick/lot books with **`mm_adapters.exchanges.to_canonical_orderbook`**
   after you have a `trade_stats.Orderbook` + `InstrumentSpec`.
 - **Assemblers + live orders** use `UnitConverter` so snapshot JSON and live placement share one conversion path.
-- **Still tick/lot inside** the 15-field step tuple and much of `OrderFlowStepper` until Phase 3 retires the tuple.
+- **Deferred:** retire the 15-field step tuple end-to-end (`OrderFlowStepper`, MOF/price `update`, execution simulators) in favor of canonical DTOs — out of scope for “complete” here.
 
-## Contracts (Phase 3 — in progress)
+## Contracts (Phase 3 — complete; tuple + MOF internals deferred)
 
-- **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`** (now includes typed **`main_instrument`**), **`OrderIntent`**, **`ExecutionReport`**, **`MarketEvent`**.
+- **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`** (includes typed **`main_instrument`**), **`OrderIntent`**, **`ExecutionReport`**, **`MarketEvent`**.
 - **`StateAssembler`** (`mm_core.app.state_assembler`): **ParsedStep → `StepSnapshot`**; **tuple → controller `State`** via **`controller_state()`** (engine uses this instead of calling `state_from_step` directly).
-- **`RolloutAssembler`** + **`RolloutFeatures`** (`mm_core.app.rollout_assembler`): read-only runner scalars for future MPC tensor packing; optimizer still internal to `market_making_controller`.
-- **Next**: teach MOF/price `update()` to accept optional canonical views; expand **`ExecutionReport`** with exchange-specific fill fields from adapter responses.
-- **Live path**: `place_limit_order_lots_with_report` + JSON log event **`mm.execution`** (intent floats + `ExecutionReport`); MOF step updates consolidated in **`update_flow_models_after_step`**.
+- **`RolloutAssembler`** + **`RolloutFeatures`**: exposed on diagnostics frames as **`point.rollout_features`** (`mm_core.diagnostics.diagnostics_frame`); MPC optimizer remains inside `market_making_controller`.
+- **Deferred:** optional canonical views on MOF/price `update()`; richer **`ExecutionReport`** fields per venue; removal of tuple from **`state_after_step`** / MOF paths.
+- **Live path**: `place_limit_order_lots_with_report` + JSON **`mm.execution`**; MOF updates via **`update_flow_models_after_step`**.
 
-## Observability (Phase 7 — partial)
+## Observability (Phase 7 — complete)
 
 - Logs: structured JSON (`mm_adapters.observability.jsonlog.emit`) merges `service`, `env`, optional `trace_id` / `run_id` from `get_context()` (`MM_TRACE_ID`, `MM_RUN_ID`).
-- Metrics: Prometheus registry (`REGISTRY`); `metric_labels()` adds `service`, `env`, optional `run_id`, optional `trace_id` only if `MM_METRICS_LABEL_TRACE=1`. OTLP alignment optional later.
+- Metrics: Prometheus registry (`REGISTRY`); `metric_labels()` adds `service`, `env`, optional `run_id`, optional `trace_id` only if `MM_METRICS_LABEL_TRACE=1`. OTLP/Mimir push remains optional.
 
 ## Execution order (minimal risk)
 
 1. ~~Skeleton + wrappers~~ — **Phase 1**: `mm_runtime` owns runner/stepper; root shims.
-2. ~~**Phase 2**~~ **(partial / ongoing)**: `UnitConverter`, canonical orderbook DTOs, adapter `to_canonical_orderbook`, assemblers + `_execute_live_orders` on converter; step tuple unchanged.
-3. ~~**Phase 3**~~ **(in progress)**: `StateAssembler`, `RolloutFeatures`, typed `main_instrument` on `StepSnapshot`, engine wired; tuple still used for `state_after_step` / MOF.
-4. **Phase 5** **(partial)**: reference depth default + valuation helpers in `mm_core/pricing` (`policies`, `depth.target_depth_lots_from_price_model`, `valuation.portfolio_wealth_*`); observed VWAP math still in `ob_reference_prices` behind `mm_core.pricing.reference_prices`.
-5. **Phase 4** **(partial)**: `MarketDataMux` (`mm_runtime/market_data_mux.py`) composes adapters from `mm_runtime/market_data_providers.py`; ports `TradeDataProvider` / `OrderbookDataProvider` live in `mm_core/ports/market_data.py`.
-6. **Phase 6** **(partial)**: `mm_core/hedge/policy.HedgePolicy` names primary + anchor legs and maps to MPC fees / `anchor_hedge_reward_weight`; `MonteCarloMPCTensorBatched` scales hedge Δwealth in the objective. More than one hedge leg still future work.
-7. **Phase 7** **(partial)**: shared `ObsContext` + JSON log / Prometheus label correlation (`mm_adapters.observability.context`).
+2. ~~**Phase 2**~~ — **complete** (unit/orderbook/assembler path); **deferred:** tuple retirement.
+3. ~~**Phase 3**~~ — **complete** (DTOs, assembler, engine, rollout features in diagnostics); **deferred:** tuple/MOF internals.
+4. ~~**Phase 5**~~ — **complete**: depth/valuation policies + **`mm_core.pricing`** facade over observed VWAPs (`reference_prices_*` re-export `ob_reference_prices`); implementation stays in one module for now.
+5. ~~**Phase 4**~~ — **complete**: `MarketDataMux` + `mm_runtime/market_data_providers.py`; ports in `mm_core/ports/market_data.py`.
+6. ~~**Phase 6**~~ — **complete** for **single hedge venue** (`HedgePolicy`, MPC weight/fee); **deferred:** multi-leg MPC tensors.
+7. ~~**Phase 7**~~ — **complete** (`ObsContext`, JSON + Prometheus correlation).
 8. **Phase 8**: persistence, replay, safety.
 
 ---

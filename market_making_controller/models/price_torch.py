@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
+from mm_core.pricing import reference_prices_from_transition_ticks
 from mm_core.pricing.policies import DEFAULT_REFERENCE_DEPTH_LOTS
 
 from ..state import MarketState
 from ..torch_device import resolve_torch_device
-from ..ob_reference_prices import reference_prices_from_transition
 from .flow_implied import Step
 
 if TYPE_CHECKING:
@@ -243,7 +243,7 @@ class TorchResidualPriceModel:
             return
         _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
         _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
-        buy_real, sell_real, buy_cmp, sell_cmp = reference_prices_from_transition(
+        buy_real, sell_real, buy_cmp, sell_cmp = reference_prices_from_transition_ticks(
             prev_ob,
             cur_ob,
             float(buy_vol),

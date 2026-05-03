@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from mm_core.app.rollout_assembler import RolloutAssembler
+
 from market_making_controller.models.flow_implied import Step
 from market_making_controller.models.execution import cumulative_depth_curves, depth_from_sigmoid_params
 from market_making_controller.state import DiscretizedOrderAction, ob_to_ob_rel
@@ -412,6 +414,11 @@ def build_diagnostics_frame(
     )
 
     # QoL: include a compact "timeseries" point (used for streaming UI without recomputing).
+    try:
+        rollout_features = asdict(RolloutAssembler.features_from_runner(runner))
+    except Exception:
+        rollout_features = {}
+
     point = {
         "step_counter": _to_int(getattr(runner, "_step_counter", 0)),
         "inventory_lots": _to_float(getattr(runner, "inventory", float("nan"))),
@@ -419,6 +426,7 @@ def build_diagnostics_frame(
         "wealth_tick_lot": _to_float(getattr(runner, "wealth_hist", [float("nan")])[-1] if getattr(runner, "wealth_hist", None) else float("nan")),
         "wealth_quote": _to_float(getattr(runner, "wealth_quote_hist", [float("nan")])[-1] if getattr(runner, "wealth_quote_hist", None) else float("nan")),
         "mid_ticks": latest.get("mid_ticks"),
+        "rollout_features": rollout_features,
     }
 
     return {

@@ -1,8 +1,10 @@
 """
 Pricing: observed refs (ticks), simulated reps (torch), depth policy, valuation.
 
-Observed reference math remains in ``market_making_controller.ob_reference_prices``; we re-export
-here as the stable ``mm_core`` surface. Valuation and depth defaults are Phase 5.
+Observed reference math is implemented in ``market_making_controller.ob_reference_prices``;
+**import through this package** (e.g. ``reference_prices_from_orderbook_ticks``) so call sites
+do not depend on the controller module path. Valuation and depth live under ``policies`` /
+``valuation`` / ``depth``.
 """
 
 from mm_core.pricing.depth import target_depth_lots_from_price_model

@@ -13,7 +13,7 @@ from typing import Protocol
 
 from trade_stats import Orderbook
 
-from .ob_reference_prices import reference_prices_ticks_from_orderbook
+from mm_core.pricing import reference_prices_from_orderbook_ticks
 
 
 @dataclass(frozen=True)
@@ -487,7 +487,7 @@ def state_from_orderbook(
     """
     mid = float(ob.mid)
     ob_rel = ob_to_ob_rel(ob, spread_max=spread_max)
-    buy_ref, sell_ref = reference_prices_ticks_from_orderbook(ob, target_depth_lots=reference_depth_lots)
+    buy_ref, sell_ref = reference_prices_from_orderbook_ticks(ob, target_depth_lots=reference_depth_lots)
     return State(
         mid=mid,
         ob_rel=ob_rel,
