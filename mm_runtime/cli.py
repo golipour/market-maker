@@ -5,10 +5,8 @@ from typing import Sequence
 
 def main(argv: Sequence[str] | None = None) -> int:
     """
-    Temporary entrypoint.
-
-    For now we call the existing script entrypoint so behavior stays identical
-    while we migrate code into mm_core/mm_adapters/mm_runtime incrementally.
+    Load environment, optional Prometheus /metrics, then the default trading loop
+    (``mm_runtime.pipeline.main``).
     """
     from mm_runtime.local_env import load_local_env
 

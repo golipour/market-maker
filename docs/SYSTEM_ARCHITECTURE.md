@@ -68,14 +68,14 @@ flowchart TB
 | Layer / area | Role | Notable paths |
 |----------------|------|----------------|
 | **Architecture** | Target boundaries, phases, unit policy | `docs/ARCHITECTURE_RFC.md` |
-| **Runtime shell** | CLI, wiring, integrated runner/stepper | `mm_runtime/` — `cli.py`, `run.py` (delegates to `order_flow_pipeline.main` until composition moves), `wiring.py` (`create_stepper` → `mm_runtime.order_flow_stepper`), `order_flow_runner.py`, `order_flow_stepper.py` (repo root files are **thin shims**) |
+| **Runtime shell** | CLI, wiring, integrated runner/stepper, pipeline composition | `mm_runtime/` — `cli.py`, `run.py`, `pipeline.py` (`build_pipeline`, `create_runner`, `main`), `wiring.py` (`create_stepper` → `mm_runtime.order_flow_stepper`); root `order_flow_*.py` are **thin shims** where present |
 | **Core** | Orchestration extract, domain types, diagnostics schema | `mm_core/app/engine.py` — one step of `OrderFlowRunner`; `mm_core/diagnostics/diagnostics_frame.py` — `build_diagnostics_frame`; `mm_core/app/parsed_step.py` — tuple → `ParsedStep`; `mm_core/domain/`, `mm_core/ports/`, `mm_core/units/` |
 | **Adapters** | I/O and side effects | `mm_adapters/diagnostics/emitter.py` — stdout + Redis; `mm_adapters/observability/` — metrics, JSON log, request context |
 | **Controller / models** | PyTorch models, MPC, state, rewards | `market_making_controller/` — `controller.py`, `mpc_tensor_batched.py`, `models/`, `state.py`, `reward_tensor.py` |
-| **Trading loop** | Stepper, runner, pipeline, animation | `order_flow_stepper.py`, `order_flow_runner.py`, `order_flow_pipeline.py`, `order_flow_animation.py`, `trade_stats.py` |
+| **Trading loop** | Stepper, runner, pipeline, animation | `mm_runtime/pipeline.py`, `order_flow_stepper.py`, `order_flow_runner.py` (shims re-export `mm_runtime`), `order_flow_animation.py`, `trade_stats.py` |
 | **Viz** | Realtime debug UI | `mm_viz/server.py` (FastAPI, WebSocket, serves static files), `mm_viz/static/` (HTML/JS/Plotly/Chart.js), `mm_viz/mpl_figures.py` (reference / optional PNG) |
 
-The trading loop remains in the top-level `order_flow_*` modules; **`mm_core.app.engine`** centralizes per-step orchestration (parse step, execution, MPC, diagnostics emit).
+Pipeline assembly is in **`mm_runtime.pipeline`**; per-step logic uses top-level `order_flow_*` shims and **`mm_core.app.engine`** (parse step, execution, MPC, diagnostics emit).
 
 ---
 
@@ -83,11 +83,11 @@ The trading loop remains in the top-level `order_flow_*` modules; **`mm_core.app
 
 | Entry | Command / module | Behavior |
 |--------|------------------|----------|
-| **Primary (documented in practice)** | `python -m mm_runtime` or `python3 -m mm_runtime` | `mm_runtime/cli.py` dispatches; pipeline mode calls `order_flow_pipeline.main()` via `mm_runtime.run.run_order_flow_pipeline()` |
-| **Legacy direct** | `python order_flow_pipeline.py` | Same pipeline without the `mm_runtime` wrapper |
+| **Primary (documented in practice)** | `python -m mm_runtime` or `python3 -m mm_runtime` | `mm_runtime/cli.py` → `mm_runtime.run.run_order_flow_pipeline()` → `mm_runtime.pipeline.main()` (optional metrics server first) |
+| **Legacy direct** | `python order_flow_pipeline.py` | Shim to `mm_runtime.pipeline.main` (no extra CLI metrics unless you set `MM_METRICS_PORT` yourself) |
 | **Package** | `mm_runtime/__main__.py` → `cli.main()` | Same as `-m mm_runtime` |
 
-Configuration is typically loaded from **environment** (e.g. `.env` via `python-dotenv` where used) and/or **kwargs** passed into pipeline construction inside `order_flow_pipeline`.
+Configuration is typically loaded from **environment** (e.g. `.env` via `python-dotenv` where used) and/or **kwargs** passed into pipeline construction in **`mm_runtime.pipeline`** (or the `order_flow_pipeline` compatibility module).
 
 ---
 
@@ -96,7 +96,7 @@ Configuration is typically loaded from **environment** (e.g. `.env` via `python-
 The structural sequence is:
 
 1. **`OrderFlowStepper.advance(t_end_ms)`** fetches order book and trades for a time bucket, outputs a **Step** (or `None` on failure).
-2. **`OrderFlowRunner`** (driven from `order_flow_pipeline` / animation) calls into **`mm_core.app.engine.advance_order_flow_runner`** for the refactored path, which:
+2. **`OrderFlowRunner`** (driven from `mm_runtime.pipeline` / animation) calls into **`mm_core.app.engine.advance_order_flow_runner`** for the refactored path, which:
    - Parses the step tuple (`mm_core.app.parsed_step.parse_step` → `ParsedStep`), optional **step snapshot** for typed units.
    - Runs **execution** of the *previous* action against the *current* step (inventory, PnL, histories).
    - Runs **testers / diagnostics MC** (e.g. expected mid), **MPC** to choose the **next** action, updates histories (`delta_*`, rewards, J components, etc.).

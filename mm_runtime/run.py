@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 """
-New runtime entrypoints.
+Runtime entrypoints.
 
-The operational entrypoint is `mm_runtime` (``python -m mm_runtime``). Runner and
-stepper implementations live under ``mm_runtime.order_flow_*``; ``order_flow_pipeline``
-still provides composition until wiring migrates here.
+The operational entrypoint is ``python -m mm_runtime``. Pipeline composition is
+``mm_runtime.pipeline`` (``build_pipeline``, ``create_runner``, ``main``).
 """
 
 
 def run_order_flow_pipeline() -> None:
-    """
-    Delegates to ``order_flow_pipeline.main()`` until pipeline construction moves
-    into this package.
-    """
-    import order_flow_pipeline
+    """Run the default headless pipeline (same as ``mm_runtime.pipeline.main``)."""
+    from mm_runtime.pipeline import main
 
-    order_flow_pipeline.main()
+    main()
 
