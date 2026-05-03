@@ -87,16 +87,20 @@ REGISTRY = MetricsRegistry()
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
-        if self.path not in ("/metrics", "/metrics/"):
-            self.send_response(404)
+        try:
+            if self.path not in ("/metrics", "/metrics/"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = REGISTRY.render().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Scraper closed the socket early (timeout / cancel); normal under Prometheus/Grafana.
             return
-        body = REGISTRY.render().encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         # Silence default http.server logs; rely on structured logging instead.

@@ -44,10 +44,10 @@ from mm_adapters.observability.metrics import REGISTRY as METRICS
 
 class OrderFlowRunner:
     """
-    Runs the order-flow simulation step by step.
-    Each advance(): fetch step from stepper, apply transition via
-    ``runner_execution_model.state_after_step`` (falls back to ``execution_model``),
-    update estimators/testers, optionally get new action.
+    Runs the order-flow loop step by step.
+    Each advance(): fetch step from stepper, apply
+    ``runner_execution_model.state_after_step(prev_state, step)`` (falls back to ``execution_model``)
+    when ``_pending_state`` is set, update estimators/testers, optionally compute a new action.
 
     Diagnostic Monte Carlo uses ``expected_mid_n_samples`` for: E[mid] (MOF-only book + residual),
     rep-price prediction batches, and E[MOF] as the mean of repeated ``mof_model.sample()`` calls.
@@ -624,7 +624,7 @@ class OrderFlowRunner:
         """
         return advance_order_flow_runner(self, t_end_ms=t_end_ms)
 
-    def advance_scheduled(self, max_steps_per_call: int = 5) -> int:
+    def advance_scheduled(self, max_steps_per_call: int = 1) -> int:
         """
         Run steps at exact wall-clock cadence (self.stepper.T_ms), independent of animation refresh rate.
         Returns number of successful steps executed in this call.

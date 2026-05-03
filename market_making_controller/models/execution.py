@@ -1,6 +1,8 @@
 """
-Execution model: depth D(δ), fills f_b/f_a from order flow and orderbook;
-(state, action) → next state. Runner uses state_after_step; sets _last_dW, _last_pnl_decomp.
+Execution model: map prior controller ``State`` + new market ``Step`` → next ``State`` and ΔPnL.
+
+Depth/fill helpers above remain for MPC / ``ExecutionRule``; the runtime step uses
+``ObservedStepExecutionModel`` only (balances and refs from the step).
 """
 
 from __future__ import annotations
@@ -139,7 +141,7 @@ class DefaultExecutionRule:
 
 
 # -----------------------------------------------------------------------------
-# Execution model: (state, action) → next state
+# Execution model: prior state + step → next state + PnL
 # -----------------------------------------------------------------------------
 
 
@@ -155,12 +157,17 @@ class DeltaPnL:
 
 @runtime_checkable
 class ExecutionModel(Protocol):
-    """Protocol for execution: apply action on current step and return state + pnl."""
+    """
+    Protocol for execution: map previous state + new market step to state + pnl.
+
+    ``prev_action`` is for simulated / OB-fill models. Implementations that read
+    inventory and cash from the step (e.g. ``ObservedStepExecutionModel``) may ignore it.
+    """
 
     def state_after_step(
         self,
         prev_state: State,
-        prev_action: Action,
+        prev_action: Action | None,
         curr_step: Step,
         spread_max: float | None = None,
     ) -> tuple[State, DeltaPnL]:
@@ -169,9 +176,8 @@ class ExecutionModel(Protocol):
 
 class ObservedStepExecutionModel:
     """
-    Execution path for live / replay when inventory and cash come from the stepper
-    (balances + private fills), not from simulated OB-relative fills. ``prev_action`` is
-    ignored for state; PnL decomposition is chosen so components sum to ``wealth_pnl``.
+    Live / replay: inventory, cash, and refs come from the ``Step`` (exchange path).
+    PnL decomposition is chosen so components sum to ``wealth_pnl``.
     """
 
     def __init__(self, maker_fee: float = 0.0):
@@ -181,7 +187,6 @@ class ObservedStepExecutionModel:
     def state_after_step(
         self,
         prev_state: State,
-        prev_action: Action,
         curr_step: Step,
         spread_max: float | None = None,
     ) -> tuple[State, DeltaPnL]:

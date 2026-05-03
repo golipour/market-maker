@@ -53,7 +53,7 @@ class DiscretizedOrderAction:
     """
     Discrete ladder of orders per side: list of (spread_ticks, qty) so that
     cumulative volume at each spread approximates a continuous depth curve (e.g. sigmoid mixture).
-    Used by ExecutionModel for level-wise fills and cash.
+    Used with ExecutionRule / MPC-style fill logic over the book.
 
     Semantics: each (spread_ticks, qty) is MARGINAL — qty is the size at that level only.
     Cumulative depth at spread s = sum of qty over all levels with spread_ticks <= s (levels

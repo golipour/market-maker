@@ -175,14 +175,13 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.anchor_sigma_buy_hist.append(float(p.get("sigma_delta_buy", float("nan"))))
         runner.anchor_sigma_sell_hist.append(float(p.get("sigma_delta_sell", float("nan"))))
 
-    # Apply previous action with current step's volumes → current state
+    # Prior controller state vs current step → realized PnL (inventory/cash from step).
     current_state = None
     _exec = runner.runner_execution_model or runner.execution_model
     dW_step: float | None = None
-    if runner._pending_state is not None and runner._pending_action is not None and _exec is not None:
+    if runner._pending_state is not None and _exec is not None:
         current_state, delta_pnl = _exec.state_after_step(
             runner._pending_state,
-            runner._pending_action,
             step,
             spread_max=runner.spread_max,
         )
