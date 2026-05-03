@@ -20,10 +20,12 @@ from order_flow_testers import MarketOrderFlowTester
 if TYPE_CHECKING:
     from market_making_controller import Controller
     from market_making_controller.models import ExecutionRule, ExecutionModel
+    from mm_core.domain.types import ValuationPolicy
 
 from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
 from mm_core.pricing import (
     mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow,
+    resolve_valuation_policy,
     target_depth_lots_from_price_model,
 )
 
@@ -73,6 +75,7 @@ class OrderFlowRunner:
         action_start_after_steps: int = 0,
         anchor_hedge_enabled: bool = False,
         anchor_price_model: object | None = None,
+        valuation_policy: ValuationPolicy | str | None = None,
     ):
         self.stepper = stepper
         self.mof_model = model
@@ -93,6 +96,7 @@ class OrderFlowRunner:
         # Anchor rep-price delta model (updated in the runner alongside other models).
         # MPC reads its (mu, sigma) params from the model object (not from State).
         self.anchor_price_model = anchor_price_model
+        self.valuation_policy = resolve_valuation_policy(valuation_policy)
         # Cached instrument identity/spec (lazy-filled).
         self._instrument_id = None
         self._instrument_spec = None

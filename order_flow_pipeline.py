@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mm_core.domain.types import ValuationPolicy
 from mm_runtime.wiring import create_stepper
 from market_making_controller.models import (
     TorchHurdleWeibullModel,
@@ -204,6 +205,7 @@ def create_runner(
     use_anchor_portfolio_balances: bool = False,
     anchor_hedge_enabled: bool = False,
     anchor_price_model: object | None = None,
+    valuation_policy: ValuationPolicy | str | None = None,
 ) -> OrderFlowRunner:
     """
     Build OrderFlowStepper and OrderFlowRunner from pipeline components.
@@ -267,6 +269,7 @@ def create_runner(
         action_start_after_steps=action_start_after_steps,
         anchor_hedge_enabled=anchor_hedge_enabled,
         anchor_price_model=anchor_price_model,
+        valuation_policy=valuation_policy,
     )
 
 
@@ -324,6 +327,8 @@ def main() -> None:
         "enable_price_figure": False,   # Figure 4
         "enable_qq_figure": False,      # Figure 5
         "enable_anchor_figure": True,  # Figure 6
+        # Inventory marking for runner wealth / inv_value plots: "sell_ref" or "mid"
+        "valuation_policy": "sell_ref",
     }
 
     pipeline = {
@@ -460,6 +465,7 @@ def main() -> None:
         use_anchor_portfolio_balances=args["use_anchor_portfolio_balances"],
         anchor_hedge_enabled=anchor_hedge_enabled,
         anchor_price_model=anchor_price_model,
+        valuation_policy=args.get("valuation_policy"),
     )
     # Headless run loop. The runner emits a diagnostics frame each step when MM_DIAGNOSTICS=1.
     import time

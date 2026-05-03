@@ -64,3 +64,17 @@ def portfolio_wealth_quote(
     main_mark = float(main_sell_ref_quote)
     anchor_mark = float(anchor_sell_ref_quote) if anchor_sell_ref_quote is not None else main_mark
     return cash + inv * main_mark + ac + ai * anchor_mark
+
+
+def main_inventory_value_ticks(
+    *,
+    inventory_lots: int,
+    main_sell_ref_ticks: float,
+    main_mid_ticks: float,
+    policy: ValuationPolicy = ValuationPolicy.sell_ref,
+) -> float:
+    """Mark-to-market value of **main** inventory only (tick×lot); used for plotting ``inv_value``."""
+    inv = float(inventory_lots)
+    if policy == ValuationPolicy.mid:
+        return inv * float(main_mid_ticks)
+    return inv * float(main_sell_ref_ticks)
