@@ -6,23 +6,6 @@ from .types import InstrumentId
 
 
 @dataclass(frozen=True, slots=True)
-class StepSnapshot:
-    """
-    Windowed snapshot produced by the data layer for a single instrument.
-
-    Canonical float units:
-    - prices are quote/base floats
-    - volumes are base quantity floats
-    - cash is quote floats
-    """
-
-    instrument: InstrumentId
-    t_end_ms: int
-    # Minimal skeleton; will be expanded as we migrate away from tuple Step.
-    data: dict
-
-
-@dataclass(frozen=True, slots=True)
 class InstrumentSnapshot:
     instrument: InstrumentId
     t_ms: int
@@ -31,6 +14,21 @@ class InstrumentSnapshot:
     sell_ref: float
     inventory: float
     cash: float
+
+
+@dataclass(frozen=True, slots=True)
+class StepSnapshot:
+    """
+    Windowed snapshot for one instrument after assembly from the observed step.
+
+    ``main_instrument`` is the typed canonical view; ``data`` retains ``raw`` / ``main`` /
+    ``anchor`` dicts for backward compatibility and JSON logs.
+    """
+
+    instrument: InstrumentId
+    t_end_ms: int
+    data: dict
+    main_instrument: InstrumentSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

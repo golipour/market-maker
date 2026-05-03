@@ -74,5 +74,10 @@ def step_snapshot_from_step(
         "main": asdict(main),
         "anchor": anchor,
     }
-    return StepSnapshot(instrument=instrument, t_end_ms=int(step.t_end_ms), data=data)
+    return StepSnapshot(
+        instrument=instrument,
+        t_end_ms=int(step.t_end_ms),
+        data=data,
+        main_instrument=main,
+    )
 

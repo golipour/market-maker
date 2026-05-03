@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION, state_from_step
+from market_making_controller.state import DiscretizedOrderAction, ZERO_DISCRETIZED_ACTION
 
 from mm_core.app.parsed_step import parse_step
-from mm_core.app.assemblers import step_snapshot_from_step
+from mm_core.app.state_assembler import StateAssembler
 from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
@@ -46,7 +46,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
                 inst = InstrumentId(exchange=ex, symbol=sym)
         if inst is not None and spec is not None:
-            runner._last_step_snapshot = step_snapshot_from_step(s, instrument=inst, spec=spec)
+            runner._last_step_snapshot = StateAssembler.step_snapshot(s, instrument=inst, spec=spec)
     except Exception:
         runner._last_step_snapshot = None
 
@@ -54,7 +54,20 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     snap = getattr(runner, "_last_step_snapshot", None)
     if snap is not None and isinstance(getattr(snap, "data", None), dict):
         try:
-            main = snap.data.get("main") or {}
+            mi = getattr(snap, "main_instrument", None)
+            if mi is not None:
+                mid_q = float(mi.mid)
+                buy_ref_q = float(mi.buy_ref)
+                sell_ref_q = float(mi.sell_ref)
+                inv_b = float(mi.inventory)
+                cash_q = float(mi.cash)
+            else:
+                main = snap.data.get("main") or {}
+                mid_q = float(main.get("mid", 0.0))
+                buy_ref_q = float(main.get("buy_ref", 0.0))
+                sell_ref_q = float(main.get("sell_ref", 0.0))
+                inv_b = float(main.get("inventory", 0.0))
+                cash_q = float(main.get("cash", 0.0))
             anchor = snap.data.get("anchor") or {}
             ctx = get_context()
             log_emit(
@@ -67,11 +80,11 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     "t_end_ms": int(s.t_end_ms),
                     "step_counter": int(getattr(runner, "_step_counter", 0)),
                     # Canonical floats (quote/base):
-                    "mid_quote": float(main.get("mid", 0.0)),
-                    "buy_ref_quote": float(main.get("buy_ref", 0.0)),
-                    "sell_ref_quote": float(main.get("sell_ref", 0.0)),
-                    "inventory_base": float(main.get("inventory", 0.0)),
-                    "cash_quote": float(main.get("cash", 0.0)),
+                    "mid_quote": mid_q,
+                    "buy_ref_quote": buy_ref_q,
+                    "sell_ref_quote": sell_ref_q,
+                    "inventory_base": inv_b,
+                    "cash_quote": cash_q,
                     "anchor_sell_ref_quote": anchor.get("sell_ref_quote"),
                     "anchor_inventory_base": anchor.get("inventory_base"),
                     "anchor_cash_quote": anchor.get("cash_quote"),
@@ -89,11 +102,23 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
                 "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
             }
+            mi = getattr(snap, "main_instrument", None)
+            if mi is not None:
+                mid_q = float(mi.mid)
+                sell_ref_q = float(mi.sell_ref)
+                inv_b = float(mi.inventory)
+                cash_q = float(mi.cash)
+            else:
+                main = snap.data.get("main") or {}
+                mid_q = float(main.get("mid", 0.0))
+                sell_ref_q = float(main.get("sell_ref", 0.0))
+                inv_b = float(main.get("inventory", 0.0))
+                cash_q = float(main.get("cash", 0.0))
             METRICS.gauge("mm_step_counter", float(getattr(runner, "_step_counter", 0)), labels=labels, help="Step counter")
-            METRICS.gauge("mm_mid_quote", float(main.get("mid", 0.0)), labels=labels, help="Mid price in quote/base")
-            METRICS.gauge("mm_sell_ref_quote", float(main.get("sell_ref", 0.0)), labels=labels, help="Sell-side representative price in quote/base")
-            METRICS.gauge("mm_inventory_base", float(main.get("inventory", 0.0)), labels=labels, help="Inventory in base units")
-            METRICS.gauge("mm_cash_quote", float(main.get("cash", 0.0)), labels=labels, help="Cash in quote units")
+            METRICS.gauge("mm_mid_quote", mid_q, labels=labels, help="Mid price in quote/base")
+            METRICS.gauge("mm_sell_ref_quote", sell_ref_q, labels=labels, help="Sell-side representative price in quote/base")
+            METRICS.gauge("mm_inventory_base", inv_b, labels=labels, help="Inventory in base units")
+            METRICS.gauge("mm_cash_quote", cash_q, labels=labels, help="Cash in quote units")
             if runner.wealth_quote_hist:
                 METRICS.gauge("mm_wealth_quote", float(runner.wealth_quote_hist[-1]), labels=labels, help="Total wealth in quote units")
         except Exception:
@@ -179,11 +204,17 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         snap = getattr(runner, "_last_step_snapshot", None)
         if snap is not None and isinstance(getattr(snap, "data", None), dict):
             try:
-                main = (snap.data.get("main") or {})
+                miw = getattr(snap, "main_instrument", None)
+                if miw is not None:
+                    cash_quote = float(miw.cash)
+                    inv_base = float(miw.inventory)
+                    sell_ref_quote = float(miw.sell_ref)
+                else:
+                    main = (snap.data.get("main") or {})
+                    cash_quote = float(main.get("cash", 0.0))
+                    inv_base = float(main.get("inventory", 0.0))
+                    sell_ref_quote = float(main.get("sell_ref", 0.0))
                 anchor = (snap.data.get("anchor") or {})
-                cash_quote = float(main.get("cash", 0.0))
-                inv_base = float(main.get("inventory", 0.0))
-                sell_ref_quote = float(main.get("sell_ref", 0.0))
                 a_cash_quote = float(anchor.get("cash_quote", 0.0) or 0.0)
                 a_inv_base = float(anchor.get("inventory_base", 0.0) or 0.0)
                 a_sell_ref_quote = float(anchor.get("sell_ref_quote", sell_ref_quote) or sell_ref_quote)
@@ -249,7 +280,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     if runner.controller is not None:
         if current_state is None:
             if runner.runner_execution_model is not None:
-                current_state = state_from_step(
+                current_state = StateAssembler.controller_state(
                     step,
                     spread_max=runner.spread_max,
                 )

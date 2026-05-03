@@ -1,4 +1,4 @@
 """
-Application services (engines) that orchestrate components.
+Application services: engine orchestration, ``StateAssembler``, ``RolloutAssembler``.
 """
 

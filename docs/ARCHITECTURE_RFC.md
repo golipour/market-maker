@@ -27,10 +27,12 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 - **Assemblers + live orders** use `UnitConverter` so snapshot JSON and live placement share one conversion path.
 - **Still tick/lot inside** the 15-field step tuple and much of `OrderFlowStepper` until Phase 3 retires the tuple.
 
-## Contracts (Phase 3 target)
+## Contracts (Phase 3 — in progress)
 
-- **`InstrumentSnapshot`**, **`StepSnapshot`**, **`OrderIntent`**, **`ExecutionReport`** (`mm_core.domain`) — expand fields as tuples are retired.
-- **`StateAssembler`**, **`RolloutAssembler`**: not yet implemented; engine stays duck-typed on `OrderFlowRunner` until then.
+- **DTOs** (`mm_core.domain`): **`InstrumentSnapshot`**, **`StepSnapshot`** (now includes typed **`main_instrument`**), **`OrderIntent`**, **`ExecutionReport`**, **`MarketEvent`**.
+- **`StateAssembler`** (`mm_core.app.state_assembler`): **ParsedStep → `StepSnapshot`**; **tuple → controller `State`** via **`controller_state()`** (engine uses this instead of calling `state_from_step` directly).
+- **`RolloutAssembler`** + **`RolloutFeatures`** (`mm_core.app.rollout_assembler`): read-only runner scalars for future MPC tensor packing; optimizer still internal to `market_making_controller`.
+- **Next**: replace tuple **`step`** in MOF/price updates with references built from contracts; add **`OrderIntent`** / **`ExecutionReport`** on live execution path.
 
 ## Observability (Phase 7 target)
 
@@ -41,7 +43,7 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 
 1. ~~Skeleton + wrappers~~ — **Phase 1**: `mm_runtime` owns runner/stepper; root shims.
 2. ~~**Phase 2**~~ **(partial / ongoing)**: `UnitConverter`, canonical orderbook DTOs, adapter `to_canonical_orderbook`, assemblers + `_execute_live_orders` on converter; step tuple unchanged.
-3. **Phase 3**: DTOs + assemblers; engine consumes contracts.
+3. ~~**Phase 3**~~ **(in progress)**: `StateAssembler`, `RolloutFeatures`, typed `main_instrument` on `StepSnapshot`, engine wired; tuple still used for `state_after_step` / MOF.
 4. **Phase 5**: unify reference / valuation policies in `mm_core/pricing`.
 5. **Phase 4**: `MarketDataMux` after contracts exist.
 6. **Phase 6**: multi-instrument / hedge policy.
