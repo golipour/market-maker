@@ -9,8 +9,58 @@
   "panels": [
     {
       "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*)::bigint AS row_count FROM step_economics",
+          "refId": "A"
+        }
+      ],
+      "title": "Rows in step_economics",
+      "type": "stat"
+    },
+    {
+      "gridPos": { "h": 4, "w": 18, "x": 6, "y": 0 },
+      "id": 4,
+      "options": {
+        "content": "**Empty charts:** time range may exclude your data (try Last 24h). **0 rows:** run the market maker with `MM_STEP_ECONOMICS_DATABASE_URL` set (see `.env`). **Query error:** create the table once: `docker exec -i postgres psql -U meysam -d postgres < docker/postgres/step_economics.sql`",
+        "mode": "markdown"
+      },
+      "title": "",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
       "id": 1,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
@@ -29,7 +79,7 @@
     {
       "datasource": { "type": "postgres", "uid": "postgres-mm" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
       "id": 2,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
@@ -79,10 +129,10 @@
   "style": "dark",
   "tags": ["market-maker", "postgres"],
   "templating": { "list": [] },
-  "time": { "from": "now-6h", "to": "now" },
+  "time": { "from": "now-24h", "to": "now" },
   "timezone": "browser",
   "title": "Step economics (PostgreSQL)",
   "uid": "mm-step-economics-pg",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

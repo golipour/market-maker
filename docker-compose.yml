@@ -28,6 +28,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/step_economics.sql:/docker-entrypoint-initdb.d/99-step_economics.sql
 
   prometheus:
     image: prom/prometheus:latest
@@ -70,6 +71,7 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
+      - db
       - prometheus
       - mimir
       - redis
