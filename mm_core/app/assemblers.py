@@ -6,11 +6,7 @@ from typing import Any
 from mm_core.domain.snapshots import InstrumentSnapshot, StepSnapshot
 from mm_core.domain.types import InstrumentId
 from mm_core.app.parsed_step import ParsedStep
-from mm_core.units.converter import (
-    notional_from_tick_lot,
-    price_from_ticks,
-    qty_from_lots,
-)
+from mm_core.units.converter import UnitConverter
 from mm_core.units.spec import InstrumentSpec
 
 
@@ -19,16 +15,18 @@ def instrument_snapshot_from_step(
     *,
     instrument: InstrumentId,
     spec: InstrumentSpec,
+    unit_converter: UnitConverter | None = None,
 ) -> InstrumentSnapshot:
     """
     Convert tick/lot step fields into canonical float units.
     """
+    uc = unit_converter or UnitConverter(spec)
     # Keep tick precision: `step.ob.mid` and ref ticks may be float.
-    mid_quote = price_from_ticks(float(step.ob.mid), tick_size=spec.tick_size)
-    buy_ref_quote = price_from_ticks(float(step.main_buy_ref), tick_size=spec.tick_size)
-    sell_ref_quote = price_from_ticks(float(step.main_sell_ref), tick_size=spec.tick_size)
-    inv_base = qty_from_lots(int(step.inventory), lot_size=spec.lot_size)
-    cash_quote = notional_from_tick_lot(float(step.cash), tick_size=spec.tick_size, lot_size=spec.lot_size)
+    mid_quote = uc.price_from_ticks(float(step.ob.mid))
+    buy_ref_quote = uc.price_from_ticks(float(step.main_buy_ref))
+    sell_ref_quote = uc.price_from_ticks(float(step.main_sell_ref))
+    inv_base = uc.qty_from_lots(int(step.inventory))
+    cash_quote = uc.notional_from_tick_lot(float(step.cash))
     return InstrumentSnapshot(
         instrument=instrument,
         t_ms=int(step.t_end_ms),
@@ -49,20 +47,19 @@ def step_snapshot_from_step(
     """
     StepSnapshot for debugging/observability: raw tick/lot fields plus canonical floats.
     """
-    main = instrument_snapshot_from_step(step, instrument=instrument, spec=spec)
+    uc = UnitConverter(spec)
+    main = instrument_snapshot_from_step(
+        step, instrument=instrument, spec=spec, unit_converter=uc
+    )
     anchor = {
         "buy_ref_quote": (
-            price_from_ticks(float(step.anchor_buy_ref), tick_size=spec.tick_size)
-            if step.anchor_buy_ref is not None
-            else None
+            uc.price_from_ticks(float(step.anchor_buy_ref)) if step.anchor_buy_ref is not None else None
         ),
         "sell_ref_quote": (
-            price_from_ticks(float(step.anchor_sell_ref), tick_size=spec.tick_size)
-            if step.anchor_sell_ref is not None
-            else None
+            uc.price_from_ticks(float(step.anchor_sell_ref)) if step.anchor_sell_ref is not None else None
         ),
-        "inventory_base": qty_from_lots(int(step.anchor_inventory), lot_size=spec.lot_size),
-        "cash_quote": notional_from_tick_lot(float(step.anchor_cash), tick_size=spec.tick_size, lot_size=spec.lot_size),
+        "inventory_base": uc.qty_from_lots(int(step.anchor_inventory)),
+        "cash_quote": uc.notional_from_tick_lot(float(step.anchor_cash)),
     }
     data: dict[str, Any] = {
         "raw": {

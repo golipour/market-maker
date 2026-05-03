@@ -18,10 +18,14 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 - **Step tuple**: venue-native 15-field tuple until Phase 3; parsed view: `mm_core.app.parsed_step.ParsedStep` and `parse_step`.
 - **Diagnostics JSON**: frame `schema: "DiagnosticsFrame"`; wire deltas: `mm.diag.v2` (see `mm_adapters.diagnostics`).
 
-## Unit policy (Phase 2 target)
+## Unit policy (Phase 2 — in progress)
 
-- **Canonical** numeric types in new DTOs: `float` quote/base for prices, base qty for size, quote for cash/PnL where applicable.
-- **Edges only**: tick/lot/notional_tick_lot conversions via `mm_core.units` (`InstrumentSpec`, `converter`); venue adapters normalize REST/WS payloads before core.
+- **`InstrumentSpec`** + **`UnitConverter`** (`mm_core.units.converter`): single entry for tick/lot ↔ float; **`unit_converter_for(exchange, symbol)`** for edge lookup via `trade_stats`.
+- **Rounding** at the grid: `mm_core.units.rounding` (`round_price_to_tick`, `round_qty_to_lot`); `UnitConverter.price_ticks_from_quote` / `qty_lots_from_base` use these for reverse mapping.
+- **Canonical order book**: `mm_core.domain.orderbook` (`CanonicalLevel`, `CanonicalOrderbook`); normalize tick/lot books with **`mm_adapters.exchanges.to_canonical_orderbook`**
+  after you have a `trade_stats.Orderbook` + `InstrumentSpec`.
+- **Assemblers + live orders** use `UnitConverter` so snapshot JSON and live placement share one conversion path.
+- **Still tick/lot inside** the 15-field step tuple and much of `OrderFlowStepper` until Phase 3 retires the tuple.
 
 ## Contracts (Phase 3 target)
 
@@ -36,7 +40,7 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 ## Execution order (minimal risk)
 
 1. ~~Skeleton + wrappers~~ — **Phase 1**: `mm_runtime` owns runner/stepper; root shims.
-2. **Phase 2**: tighten canonical floats + conversions at edges.
+2. ~~**Phase 2**~~ **(partial / ongoing)**: `UnitConverter`, canonical orderbook DTOs, adapter `to_canonical_orderbook`, assemblers + `_execute_live_orders` on converter; step tuple unchanged.
 3. **Phase 3**: DTOs + assemblers; engine consumes contracts.
 4. **Phase 5**: unify reference / valuation policies in `mm_core/pricing`.
 5. **Phase 4**: `MarketDataMux` after contracts exist.

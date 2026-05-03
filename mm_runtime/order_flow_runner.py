@@ -29,11 +29,8 @@ from mm_core.pricing import mid_after_market_order_flow_ticks as mid_ticks_after
 
 from mm_core.app.engine import advance_order_flow_runner
 from mm_core.units.converter import (
+    UnitConverter,
     instrument_spec_from_trade_stats,
-    ladder_level_to_venue_order,
-    notional_from_tick_lot,
-    price_from_ticks,
-    qty_from_lots,
 )
 from mm_adapters.observability.metrics import REGISTRY as METRICS
 from mm_adapters.observability.context import get_context
@@ -400,6 +397,7 @@ class OrderFlowRunner:
         _inst, spec = self._get_instrument_id_and_spec()
         if spec is None:
             spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
+        uc = UnitConverter(spec)
         tick_size = float(spec.tick_size)
         lot_size = float(spec.lot_size)
         min_qty_lots = float(spec.min_qty_lots)
@@ -416,14 +414,14 @@ class OrderFlowRunner:
         )
         print(
             f"[live_execution] units base_qty={base_asset} quote={quote_asset} "
-            f"min_qty_base={qty_from_lots(int(round(min_qty_lots)), lot_size=lot_size):.12f} "
-            f"min_notional_quote={notional_from_tick_lot(min_notional_tick_lot, tick_size=tick_size, lot_size=lot_size):.12f}"
+            f"min_qty_base={uc.qty_from_lots(int(round(min_qty_lots))):.12f} "
+            f"min_notional_quote={uc.notional_from_tick_lot(min_notional_tick_lot):.12f}"
         )
 
         mid_ticks = float(state.mid)
-        mid_quote = price_from_ticks(int(round(mid_ticks)), tick_size=tick_size)
+        mid_quote = uc.price_from_ticks(int(round(mid_ticks)))
         for spread, qty in action.bids:
-            o = ladder_level_to_venue_order(
+            o = uc.ladder_to_venue_order(
                 side="buy",
                 mid_ticks=mid_ticks,
                 spread_ticks=float(spread),
@@ -433,8 +431,8 @@ class OrderFlowRunner:
                 continue
             q = int(o.qty_lots)
             px = int(o.price_ticks)
-            amount_base = float(q) * lot_size
-            price_quote = float(px) * tick_size
+            amount_base = uc.qty_from_lots(q)
+            price_quote = uc.price_from_ticks(px)
             notional_quote = amount_base * price_quote
             if min_qty_lots > 0.0 and float(q) < min_qty_lots:
                 print(
@@ -493,7 +491,7 @@ class OrderFlowRunner:
                     pass
 
         for spread, qty in action.asks:
-            o = ladder_level_to_venue_order(
+            o = uc.ladder_to_venue_order(
                 side="sell",
                 mid_ticks=mid_ticks,
                 spread_ticks=float(spread),
@@ -503,8 +501,8 @@ class OrderFlowRunner:
                 continue
             q = int(o.qty_lots)
             px = int(o.price_ticks)
-            amount_base = float(q) * lot_size
-            price_quote = float(px) * tick_size
+            amount_base = uc.qty_from_lots(q)
+            price_quote = uc.price_from_ticks(px)
             notional_quote = amount_base * price_quote
             if min_qty_lots > 0.0 and float(q) < min_qty_lots:
                 print(
