@@ -11,7 +11,7 @@ from mm_core.domain.types import InstrumentId
 from mm_core.units.converter import instrument_spec_from_trade_stats
 from mm_adapters.observability.jsonlog import emit as log_emit
 from mm_adapters.observability.metrics import REGISTRY as METRICS
-from mm_adapters.observability.context import get_context
+from mm_adapters.observability.context import metric_labels
 from mm_core.app.model_updates import update_flow_models_after_step
 from mm_core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm_core.pricing import main_inventory_value_ticks, portfolio_wealth_quote, portfolio_wealth_ticks
@@ -71,12 +71,9 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 inv_b = float(main.get("inventory", 0.0))
                 cash_q = float(main.get("cash", 0.0))
             anchor = snap.data.get("anchor") or {}
-            ctx = get_context()
             log_emit(
                 "mm.step",
                 {
-                    "service": ctx.service,
-                    "env": ctx.env,
                     "exchange": getattr(getattr(snap, "instrument", None), "exchange", None),
                     "symbol": getattr(getattr(snap, "instrument", None), "symbol", None),
                     "t_end_ms": int(s.t_end_ms),
@@ -97,13 +94,12 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
 
         # Optional metrics (enable by setting MM_METRICS_PORT).
         try:
-            ctx = get_context()
-            labels = {
-                "service": ctx.service,
-                "env": ctx.env,
-                "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
-                "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
-            }
+            labels = metric_labels(
+                extra={
+                    "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
+                    "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
+                }
+            )
             mi = getattr(snap, "main_instrument", None)
             if mi is not None:
                 mid_q = float(mi.mid)

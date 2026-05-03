@@ -38,7 +38,7 @@ from mm_core.units.converter import (
 )
 from mm_adapters.exchanges.execution import execution_report_for_json, place_limit_order_lots_with_report
 from mm_adapters.observability.metrics import REGISTRY as METRICS
-from mm_adapters.observability.context import get_context
+from mm_adapters.observability.context import metric_labels
 
 class OrderFlowRunner:
     """
@@ -368,10 +368,11 @@ class OrderFlowRunner:
                 print("[live_execution] skipped: missing private_api_token")
                 self._live_exec_warned_no_token = True
             try:
-                ctx = get_context()
                 METRICS.counter_inc(
                     "mm_live_execution_skipped_total",
-                    labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "reason": "missing_private_api_token"},
+                    labels=metric_labels(
+                        extra={"exchange": ex, "symbol": sym, "reason": "missing_private_api_token"}
+                    ),
                     help="Live execution skips by reason",
                 )
             except Exception:
@@ -390,10 +391,11 @@ class OrderFlowRunner:
         if str(cancel_resp.get("status", "")).lower() != "ok":
             print("[live_execution] skipped placements: cancel_all not ok")
             try:
-                ctx = get_context()
                 METRICS.counter_inc(
                     "mm_live_execution_skipped_total",
-                    labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "reason": "cancel_all_not_ok"},
+                    labels=metric_labels(
+                        extra={"exchange": ex, "symbol": sym, "reason": "cancel_all_not_ok"}
+                    ),
                     help="Live execution skips by reason",
                 )
             except Exception:
@@ -498,10 +500,9 @@ class OrderFlowRunner:
             if str(resp.get("status", "")).lower() == "ok":
                 avail_quote = max(0.0, avail_quote - notional_quote)
                 try:
-                    ctx = get_context()
                     METRICS.counter_inc(
                         "mm_orders_placed_total",
-                        labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "side": "buy"},
+                        labels=metric_labels(extra={"exchange": ex, "symbol": sym, "side": "buy"}),
                         help="Orders placed",
                     )
                 except Exception:
@@ -576,10 +577,9 @@ class OrderFlowRunner:
             if str(resp.get("status", "")).lower() == "ok":
                 avail_base = max(0.0, avail_base - amount_base)
                 try:
-                    ctx = get_context()
                     METRICS.counter_inc(
                         "mm_orders_placed_total",
-                        labels={"service": ctx.service, "env": ctx.env, "exchange": ex, "symbol": sym, "side": "sell"},
+                        labels=metric_labels(extra={"exchange": ex, "symbol": sym, "side": "sell"}),
                         help="Orders placed",
                     )
                 except Exception:
@@ -599,10 +599,7 @@ class OrderFlowRunner:
         try:
             from mm_adapters.observability.jsonlog import emit as log_emit
 
-            ctx = get_context()
             payload = execution_report_for_json(report)
-            payload["service"] = ctx.service
-            payload["env"] = ctx.env
             payload["intent_side"] = intent_side
             payload["intent_price_quote"] = float(price_quote)
             payload["intent_qty_base"] = float(qty_base)

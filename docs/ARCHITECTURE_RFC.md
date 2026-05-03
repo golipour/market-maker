@@ -35,10 +35,10 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 - **Next**: teach MOF/price `update()` to accept optional canonical views; expand **`ExecutionReport`** with exchange-specific fill fields from adapter responses.
 - **Live path**: `place_limit_order_lots_with_report` + JSON log event **`mm.execution`** (intent floats + `ExecutionReport`); MOF step updates consolidated in **`update_flow_models_after_step`**.
 
-## Observability (Phase 7 target)
+## Observability (Phase 7 — partial)
 
-- Logs: structured JSON (existing `mm_adapters.observability.jsonlog`), correlation via context.
-- Metrics: Prometheus registry (`METRICS`); OTLP/Mimir alignment optional later.
+- Logs: structured JSON (`mm_adapters.observability.jsonlog.emit`) merges `service`, `env`, optional `trace_id` / `run_id` from `get_context()` (`MM_TRACE_ID`, `MM_RUN_ID`).
+- Metrics: Prometheus registry (`REGISTRY`); `metric_labels()` adds `service`, `env`, optional `run_id`, optional `trace_id` only if `MM_METRICS_LABEL_TRACE=1`. OTLP alignment optional later.
 
 ## Execution order (minimal risk)
 
@@ -48,7 +48,8 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 4. **Phase 5** **(partial)**: reference depth default + valuation helpers in `mm_core/pricing` (`policies`, `depth.target_depth_lots_from_price_model`, `valuation.portfolio_wealth_*`); observed VWAP math still in `ob_reference_prices` behind `mm_core.pricing.reference_prices`.
 5. **Phase 4** **(partial)**: `MarketDataMux` (`mm_runtime/market_data_mux.py`) composes adapters from `mm_runtime/market_data_providers.py`; ports `TradeDataProvider` / `OrderbookDataProvider` live in `mm_core/ports/market_data.py`.
 6. **Phase 6** **(partial)**: `mm_core/hedge/policy.HedgePolicy` names primary + anchor legs and maps to MPC fees / `anchor_hedge_reward_weight`; `MonteCarloMPCTensorBatched` scales hedge Δwealth in the objective. More than one hedge leg still future work.
-7. **Phase 8**: persistence, replay, safety.
+7. **Phase 7** **(partial)**: shared `ObsContext` + JSON log / Prometheus label correlation (`mm_adapters.observability.context`).
+8. **Phase 8**: persistence, replay, safety.
 
 ---
 
