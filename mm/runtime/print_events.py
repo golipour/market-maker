@@ -11,8 +11,7 @@ from mm.bus.memory import InMemoryBus
 from mm.core.clock import WallClock
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.exchanges.capabilities import get_exchange_capabilities
-from mm.exchanges.factory import build_public_market_data_adapter
-from mm.exchanges.shared.provider_adapter import TransportMode
+from mm.exchanges.factory import select_public_market_data_adapter
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -21,8 +20,8 @@ class PrintStats:
     printed: int = 0
 
 
-def build_adapter(exchange: str, symbol: str, mode: TransportMode, depth: int, trades: int, poll_ms: int):
-    return build_public_market_data_adapter(
+def build_adapter_selection(exchange: str, symbol: str, mode: str, depth: int, trades: int, poll_ms: int):
+    return select_public_market_data_adapter(
         exchange,
         symbol,
         mode=mode,
@@ -34,11 +33,12 @@ def build_adapter(exchange: str, symbol: str, mode: TransportMode, depth: int, t
 
 def summarize_contract(exchange: str, symbol: str, mode: str, adapter: Any) -> dict[str, Any]:
     capabilities = get_exchange_capabilities(exchange)
+    public_caps = capabilities.public_market_data
     return {
         "type": "ContractCheck",
         "exchange": exchange,
         "symbol": symbol,
-        "public_market_transport": mode,
+        "requested_public_market_mode": mode,
         "public_market_adapter": type(adapter).__name__,
         "market_data_contract": {
             "scope": "public_only",
@@ -47,6 +47,10 @@ def summarize_contract(exchange: str, symbol: str, mode: str, adapter: Any) -> d
             "quantities": "float base units",
             "orderbook": "RawOrderbook snapshots/deltas normalized before aggregation",
             "trades": "RawTrade stream normalized before aggregation",
+        },
+        "complete_public_market_transports": {
+            "rest": public_caps.rest,
+            "websocket": public_caps.websocket,
         },
         "capabilities": asdict(capabilities),
     }
@@ -127,7 +131,7 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
 async def run(args: argparse.Namespace) -> None:
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
-    adapter = build_adapter(
+    selection = build_adapter_selection(
         exchange,
         args.symbol,
         mode,  # type: ignore[arg-type]
@@ -135,11 +139,14 @@ async def run(args: argparse.Namespace) -> None:
         args.trades,
         args.poll_ms,
     )
+    adapter = selection.adapter
     bus = InMemoryBus()
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
     scheduler = IntervalScheduler(WallClock())
     await engine.publish_on_intervals(scheduler, [args.interval_ms])
-    print(json.dumps(summarize_contract(exchange, args.symbol, mode, adapter), ensure_ascii=False))
+    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter)
+    contract["selected_public_market_transport"] = selection.transport
+    print(json.dumps(contract, ensure_ascii=False))
 
     event_topic = f"market:events:{exchange}:{args.symbol}:{args.interval_ms}"
     error_topic = f"market:errors:{exchange}:{args.symbol}"
@@ -186,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
     parser.add_argument("--symbol", default="BTC_IRT")
-    parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
+    parser.add_argument("--mode", choices=["auto", "rest", "websocket"], default="auto")
     parser.add_argument("--interval-ms", type=int, default=5000)
     parser.add_argument("--poll-ms", type=int, default=1000)
     parser.add_argument("--depth", type=int, default=10)
