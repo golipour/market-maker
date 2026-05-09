@@ -39,6 +39,7 @@ class RuntimeComponents:
     order_managers: dict[str, OrderManager] = field(default_factory=dict)
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = field(default_factory=dict)
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = field(default_factory=dict)
+    controller_runner: object | None = None
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
 
@@ -46,6 +47,8 @@ class RuntimeComponents:
         if self._started:
             return
         await self.frame_assembler.start()
+        if self.controller_runner is not None:
+            await self.controller_runner.start()
         for engine in self.engines.values():
             await engine.start()
         for reconciler in self.execution_reconcilers.values():
@@ -61,6 +64,8 @@ class RuntimeComponents:
             self._scheduler_task.cancel()
             await asyncio.gather(self._scheduler_task, return_exceptions=True)
             self._scheduler_task = None
+        if self.controller_runner is not None:
+            await self.controller_runner.stop()
         for reconciler in reversed(tuple(self.private_reconcilers.values())):
             await reconciler.stop()
         for reconciler in reversed(tuple(self.execution_reconcilers.values())):
@@ -127,13 +132,16 @@ async def build_runtime_components(
 
     for source in config.sources:
         private_config = config.private_config_for(source.role)
-        if private_config is None or not private_config.enabled:
+        if private_config is None:
+            continue
+        api_token = private_config.resolved_api_token(source.normalized_exchange())
+        if not api_token:
             continue
         private_selection = select_private_state_adapter(
             source.normalized_exchange(),
             source.symbol,
             mode=private_config.mode,
-            api_token=private_config.api_token,
+            api_token=api_token,
             poll_interval_ms=private_config.poll_interval_ms,
         )
         private_selections[source.role] = private_selection
@@ -152,7 +160,7 @@ async def build_runtime_components(
             order_selection = select_order_command_adapter(
                 source.normalized_exchange(),
                 source.symbol,
-                api_token=private_config.api_token,
+                api_token=api_token,
             )
             order_command_selections[source.role] = order_selection
             manager = order_managers.get(source.normalized_exchange())
@@ -183,6 +191,18 @@ async def build_runtime_components(
         hedge_grace_ms=config.hedge_grace_ms,
     )
 
+    controller_runner = None
+    if config.controller is not None and config.controller.enabled:
+        from mm.strategies.mpc_controller import MpcControllerRunner
+
+        controller_runner = MpcControllerRunner(
+            config=config.controller,
+            binding=config.binding,
+            frame_queue=runtime_bus.subscribe_queue(config.frame_topic),
+            order_managers=order_managers,
+            bus=runtime_bus,
+        )
+
     return RuntimeComponents(
         config=config,
         bus=runtime_bus,
@@ -195,6 +215,7 @@ async def build_runtime_components(
         order_managers=order_managers,
         private_reconcilers=private_reconcilers,
         execution_reconcilers=execution_reconcilers,
+        controller_runner=controller_runner,
     )
 
 

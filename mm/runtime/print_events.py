@@ -7,14 +7,14 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from mm.core.models.execution import Fill
+from mm.core.models.execution import Action, Fill
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.capabilities import get_exchange_capabilities
 from mm.execution.order_manager import ExecutionSnapshot
-from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, PrivateRuntimeConfig
+from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, PrivateRuntimeConfig, load_runtime_config
 from mm.runtime.engine import RuntimeComponents, build_runtime_components
 
 
@@ -247,7 +247,29 @@ def summarize_event(event: Any) -> dict[str, Any]:
             ],
             "note": "execution state is mirrored from private exchange state; print_events does not place or cancel orders",
         }
+    if isinstance(event, Action):
+        return {
+            "type": "StrategyAction",
+            "actor_id": event.actor_id,
+            "create_count": len(event.orders_to_create),
+            "cancel_count": len(event.orders_to_cancel),
+            "orders": [
+                {
+                    "exchange": order.exchange,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "price": order.price,
+                    "qty": order.qty,
+                    "notional": order.price * order.qty,
+                    "client_order_id": order.client_order_id,
+                }
+                for order in event.orders_to_create[:10]
+            ],
+            "unit_policy": "price=quote_per_base, qty=base, notional=quote",
+        }
     if isinstance(event, dict) and str(event.get("type", "")).startswith(("Execution", "Place", "Cancel")):
+        return event
+    if isinstance(event, dict) and str(event.get("type", "")).startswith(("Controller", "Strategy")):
         return event
     if isinstance(event, dict) and "error" in event:
         return {"type": "MarketDataError", **event}
@@ -298,6 +320,24 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
 
 
 async def run(args: argparse.Namespace) -> None:
+    if args.config:
+        runtime_config = load_runtime_config(args.config)
+        runtime = await build_runtime_components(runtime_config)
+        contract = runtime_config.as_contract()
+        contract["type"] = "RuntimeConfigCheck"
+        contract["selected_public_market_transports"] = {
+            role: selection.transport
+            for role, selection in runtime.public_market_selections.items()
+        }
+        contract["selected_private_state_modes"] = {
+            role: selection.mode
+            for role, selection in runtime.private_state_selections.items()
+        }
+        contract["controller_runner_enabled"] = runtime.controller_runner is not None
+        print(json.dumps(contract, ensure_ascii=False))
+        await run_print_loop(runtime, args)
+        return
+
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
     hedge_exchange = args.hedge_exchange.lower().strip() if args.hedge_exchange else None
@@ -418,6 +458,10 @@ async def run(args: argparse.Namespace) -> None:
     }
     print(json.dumps(contract, ensure_ascii=False))
 
+    await run_print_loop(runtime, args)
+
+
+async def run_print_loop(runtime: RuntimeComponents, args: argparse.Namespace) -> None:
     queues = build_print_queues(runtime, include_raw=args.raw)
 
     stats = PrintStats()
@@ -492,6 +536,19 @@ def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list
             f"execution:orders:{exchange}",
         ]
         queues.extend((topic, bus.subscribe_queue(topic)) for topic in execution_topics)
+    if config.controller is not None and config.controller.enabled:
+        queues.extend(
+            [
+                (
+                    config.controller.normalized_diagnostics_topic,
+                    bus.subscribe_queue(config.controller.normalized_diagnostics_topic),
+                ),
+                (
+                    config.controller.normalized_action_topic,
+                    bus.subscribe_queue(config.controller.normalized_action_topic),
+                ),
+            ]
+        )
     return queues
 
 
@@ -505,7 +562,8 @@ def resolve_api_token(exchange: str, explicit: str | None, env_name: str | None)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
-    parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
+    parser.add_argument("--config", default=None, help="Path to a JSON runtime config file.")
+    parser.add_argument("--exchange", choices=["nobitex", "wallex"], default=None)
     parser.add_argument("--symbol", default="BTC_IRT")
     parser.add_argument("--hedge-exchange", choices=["nobitex", "wallex"], default=None)
     parser.add_argument("--hedge-symbol", default=None)
@@ -528,7 +586,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-hedge-lag-ms", type=int, default=2000)
     parser.add_argument("--hedge-grace-ms", type=int, default=250)
     parser.add_argument("--raw", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.config is None and args.exchange is None:
+        parser.error("--exchange is required unless --config is provided")
+    return args
 
 
 def main() -> None:
