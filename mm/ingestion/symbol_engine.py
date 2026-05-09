@@ -82,10 +82,23 @@ class SymbolEngine:
     async def _feed_orderbook(self) -> None:
         try:
             async for book in self.adapter.orderbook_stream():
-                if book.is_snapshot:
-                    self.orderbook_manager.apply_snapshot(book)
-                else:
-                    self.orderbook_manager.apply_delta(book)
+                try:
+                    if book.is_snapshot:
+                        self.orderbook_manager.apply_snapshot(book)
+                    else:
+                        self.orderbook_manager.apply_delta(book)
+                except Exception as exc:
+                    await self.bus.publish(
+                        f"market:errors:{self.exchange}:{self.symbol}",
+                        {
+                            "source": "orderbook_normalization",
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                            "is_snapshot": book.is_snapshot,
+                            "timestamp_ms": book.timestamp_ms,
+                        },
+                    )
+                    continue
                 await self.bus.publish(f"market:raw:{self.exchange}:{self.symbol}:orderbook", book)
         except asyncio.CancelledError:
             raise

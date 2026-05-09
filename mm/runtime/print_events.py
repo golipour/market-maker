@@ -71,8 +71,8 @@ def summarize_contract(
             "single_transport": True,
             "prices": "float quote-per-base",
             "quantities": "float base units",
-            "orderbook": "RawOrderbook snapshots/deltas normalized before aggregation",
-            "trades": "RawTrade stream normalized before aggregation",
+            "orderbook": "REST snapshots and websocket snapshots/deltas are normalized into materialized snapshots before MarketEvent aggregation",
+            "trades": "REST batches and websocket trade events are normalized, sorted, and deduplicated before MarketEvent aggregation",
         },
         "complete_public_market_transports": {
             "rest": public_caps.rest,
@@ -100,22 +100,27 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "side": event.side,
             "price": event.price,
             "qty": event.qty,
+            "notional": event.price * event.qty,
         }
     if isinstance(event, RawOrderbook):
+        book_health = summarize_book_health(event)
         return {
             "type": "RawOrderbook",
             "exchange": event.exchange,
             "symbol": event.symbol,
             "timestamp_ms": event.timestamp_ms,
             "is_snapshot": event.is_snapshot,
+            "book_update_kind": "snapshot" if event.is_snapshot else "delta",
             "best_bid": event.bids[0].price if event.bids else None,
             "best_bid_qty": event.bids[0].qty if event.bids else None,
             "best_ask": event.asks[0].price if event.asks else None,
             "best_ask_qty": event.asks[0].qty if event.asks else None,
             "bid_levels": len(event.bids),
             "ask_levels": len(event.asks),
+            **book_health,
         }
     if isinstance(event, MarketEvent):
+        book_health = summarize_book_health(event.orderbook)
         return {
             "type": "MarketEvent",
             "exchange": event.exchange,
@@ -131,6 +136,9 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "microprice": event.microprice,
             "best_bid": event.orderbook.bids[0].price if event.orderbook.bids else None,
             "best_ask": event.orderbook.asks[0].price if event.orderbook.asks else None,
+            "orderbook_timestamp_ms": event.orderbook.timestamp_ms,
+            "orderbook_lag_ms": event.t_end_ms - event.orderbook.timestamp_ms,
+            **book_health,
         }
     if isinstance(event, PrivateStateSnapshot):
         return {
@@ -193,6 +201,24 @@ def summarize_event(event: Any) -> dict[str, Any]:
     if isinstance(event, dict) and "error" in event:
         return {"type": "MarketDataError", **event}
     return {"type": type(event).__name__, "repr": repr(event)}
+
+
+def summarize_book_health(book: RawOrderbook) -> dict[str, Any]:
+    best_bid = book.bids[0].price if book.bids else None
+    best_ask = book.asks[0].price if book.asks else None
+    spread = None
+    mid = None
+    is_crossed = False
+    if best_bid is not None and best_ask is not None:
+        spread = best_ask - best_bid
+        mid = (best_bid + best_ask) / 2.0
+        is_crossed = spread <= 0
+    return {
+        "spread": spread,
+        "mid": mid,
+        "is_crossed": is_crossed,
+        "is_one_sided": not book.bids or not book.asks,
+    }
 
 
 async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int, stats: PrintStats) -> None:

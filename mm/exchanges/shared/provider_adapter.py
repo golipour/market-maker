@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from collections.abc import AsyncIterator, Callable
 from collections import deque
@@ -286,7 +287,26 @@ def rows_to_levels(rows: Any, *, limit: int, reverse: bool = False) -> tuple[Pri
             qty = float(row[1])
         except (TypeError, ValueError):
             continue
-        if qty > 0:
+        if math.isfinite(price) and price > 0 and math.isfinite(qty) and qty > 0:
+            levels.append(PriceLevel(price=price, qty=qty))
+    levels.sort(key=lambda level: level.price, reverse=reverse)
+    return tuple(levels)
+
+
+def rows_to_delta_levels(rows: Any, *, limit: int, reverse: bool = False) -> tuple[PriceLevel, ...]:
+    """Normalize depth delta rows while preserving qty=0 deletions."""
+    levels: list[PriceLevel] = []
+    if not isinstance(rows, list):
+        return ()
+    for row in rows[:limit]:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        try:
+            price = float(row[0])
+            qty = float(row[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(price) and price > 0 and math.isfinite(qty):
             levels.append(PriceLevel(price=price, qty=qty))
     levels.sort(key=lambda level: level.price, reverse=reverse)
     return tuple(levels)
@@ -303,12 +323,25 @@ def update_depth_side(
     descending: bool,
     limit: int,
     row_parser: Callable[[Any], tuple[str, str] | None],
+    incremental: bool = False,
 ) -> list[list[str]]:
-    parsed = []
+    parsed: list[list[str]] = []
     if isinstance(rows, list):
         for row in rows:
             item = row_parser(row)
             if item is not None:
                 parsed.append([item[0], item[1]])
+    if incremental:
+        by_price: dict[str, str] = {str(row[0]): str(row[1]) for row in current}
+        for price, qty in parsed:
+            try:
+                qty_value = float(qty)
+            except (TypeError, ValueError):
+                continue
+            if qty_value <= 0:
+                by_price.pop(str(price), None)
+            else:
+                by_price[str(price)] = str(qty)
+        parsed = [[price, qty] for price, qty in by_price.items()]
     parsed.sort(key=lambda row: float(row[0]), reverse=descending)
     return parsed[:limit] if parsed else current

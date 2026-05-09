@@ -8,6 +8,7 @@ import pytest
 from mm.bus.memory import InMemoryBus
 from mm.core.interfaces.market_data import AbstractMarketDataAdapter
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
+from mm.ingestion.orderbook import OrderbookManager
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -112,3 +113,58 @@ async def test_symbol_engine_publishes_raw_and_market_events():
         assert seen.microprice == pytest.approx((100.0 * 4.0 + 101.0 * 2.0) / 6.0)
     finally:
         await engine.stop()
+
+
+def test_orderbook_manager_materializes_websocket_deltas_for_market_events():
+    manager = OrderbookManager()
+    manager.apply_snapshot(
+        RawOrderbook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            timestamp_ms=1_000,
+            bids=(PriceLevel(100.0, 2.0), PriceLevel(99.0, 3.0)),
+            asks=(PriceLevel(101.0, 4.0), PriceLevel(102.0, 5.0)),
+            is_snapshot=True,
+        )
+    )
+
+    manager.apply_delta(
+        RawOrderbook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            timestamp_ms=1_500,
+            bids=(PriceLevel(100.0, 1.25), PriceLevel(98.0, 2.5)),
+            asks=(PriceLevel(101.0, 0.0), PriceLevel(100.5, 1.0)),
+            is_snapshot=False,
+        )
+    )
+
+    snapshot = manager.snapshot_at(2_000)
+
+    assert snapshot.is_snapshot is True
+    assert snapshot.timestamp_ms == 1_500
+    assert snapshot.bids[:3] == (
+        PriceLevel(100.0, 1.25),
+        PriceLevel(99.0, 3.0),
+        PriceLevel(98.0, 2.5),
+    )
+    assert snapshot.asks[:2] == (
+        PriceLevel(100.5, 1.0),
+        PriceLevel(102.0, 5.0),
+    )
+
+
+def test_orderbook_manager_requires_snapshot_before_delta():
+    manager = OrderbookManager()
+
+    with pytest.raises(LookupError, match="delta received before initial snapshot"):
+        manager.apply_delta(
+            RawOrderbook(
+                exchange="nobitex",
+                symbol="BTC_IRT",
+                timestamp_ms=1_000,
+                bids=(PriceLevel(100.0, 2.0),),
+                asks=(),
+                is_snapshot=False,
+            )
+        )
