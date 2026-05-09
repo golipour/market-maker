@@ -38,7 +38,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     METRICS = resolve_metrics_registry(runner)
     metric_labels = resolve_metric_labels(runner)
     emit_diagnostics = resolve_diagnostics_emit(runner)
-    if not runner.anchor_hedge_enabled and len(step) >= 15:
+    if not runner.hedge_enabled and len(step) >= 15:
         seq = list(step)
         step = Step(*(seq[:-2] + [0, 0]))
     runner._step_counter += 1
@@ -88,7 +88,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 sell_ref_q = float(main.get("sell_ref", 0.0))
                 inv_b = float(main.get("inventory", 0.0))
                 cash_q = float(main.get("cash", 0.0))
-            anchor = snap.data.get("anchor") or {}
+            hedge_snap = snap.data.get("hedge") or {}
             log_emit(
                 "mm.step",
                 {
@@ -102,9 +102,9 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     "sell_ref_quote": sell_ref_q,
                     "inventory_base": inv_b,
                     "cash_quote": cash_q,
-                    "anchor_sell_ref_quote": anchor.get("sell_ref_quote"),
-                    "anchor_inventory_base": anchor.get("inventory_base"),
-                    "anchor_cash_quote": anchor.get("cash_quote"),
+                    "hedge_sell_ref_quote": hedge_snap.get("sell_ref_quote"),
+                    "hedge_inventory_base": hedge_snap.get("inventory_base"),
+                    "hedge_cash_quote": hedge_snap.get("cash_quote"),
                 },
             )
         except Exception:
@@ -141,40 +141,40 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
             pass
     bucket_ms = runner.stepper.T_ms
     mid_now_ticks = float(s.ob.mid)
-    anchor_inventory = int(s.anchor_inventory)
-    anchor_cash = float(s.anchor_cash)
-    if not runner.anchor_hedge_enabled:
-        anchor_inventory = 0
-        anchor_cash = 0.0
-        anchor_buy_ref = None
-        anchor_sell_ref = None
+    hedge_inventory = int(s.hedge_inventory)
+    hedge_cash = float(s.hedge_cash)
+    if not runner.hedge_enabled:
+        hedge_inventory = 0
+        hedge_cash = 0.0
+        hedge_buy_ref = None
+        hedge_sell_ref = None
     else:
-        anchor_buy_ref = s.anchor_buy_ref
-        anchor_sell_ref = s.anchor_sell_ref
+        hedge_buy_ref = s.hedge_buy_ref
+        hedge_sell_ref = s.hedge_sell_ref
 
-    t_anchor_port = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
-    runner.anchor_portfolio_times.append(t_anchor_port)
-    runner.anchor_inventory_hist.append(int(anchor_inventory))
-    runner.anchor_cash_hist.append(float(anchor_cash))
+    t_hedge_port = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
+    runner.hedge_portfolio_times.append(t_hedge_port)
+    runner.hedge_inventory_hist.append(int(hedge_inventory))
+    runner.hedge_cash_hist.append(float(hedge_cash))
     t_main = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
     runner.main_reference_times.append(t_main)
     runner.main_buy_reference_hist.append(float(s.main_buy_ref))
     runner.main_sell_reference_hist.append(float(s.main_sell_ref))
 
-    if anchor_buy_ref is not None and anchor_sell_ref is not None:
-        if runner.anchor_price_model is not None:
-            runner.anchor_price_model.update(float(anchor_buy_ref), float(anchor_sell_ref))
-            runner.last_anchor_price_model_params = runner.anchor_price_model.get_params()
-        t_anchor = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
-        runner.anchor_reference_times.append(t_anchor)
-        runner.anchor_buy_reference_hist.append(float(anchor_buy_ref))
-        runner.anchor_sell_reference_hist.append(float(anchor_sell_ref))
-        p = runner.last_anchor_price_model_params or {}
-        runner.anchor_price_param_times.append(t_anchor)
-        runner.anchor_mu_buy_hist.append(float(p.get("mu_delta_buy", float("nan"))))
-        runner.anchor_mu_sell_hist.append(float(p.get("mu_delta_sell", float("nan"))))
-        runner.anchor_sigma_buy_hist.append(float(p.get("sigma_delta_buy", float("nan"))))
-        runner.anchor_sigma_sell_hist.append(float(p.get("sigma_delta_sell", float("nan"))))
+    if hedge_buy_ref is not None and hedge_sell_ref is not None:
+        if runner.hedge_price_model is not None:
+            runner.hedge_price_model.update(float(hedge_buy_ref), float(hedge_sell_ref))
+            runner.last_hedge_price_model_params = runner.hedge_price_model.get_params()
+        t_hedge = datetime.fromtimestamp(s.t_end_ms / 1000.0, tz=timezone.utc)
+        runner.hedge_reference_times.append(t_hedge)
+        runner.hedge_buy_reference_hist.append(float(hedge_buy_ref))
+        runner.hedge_sell_reference_hist.append(float(hedge_sell_ref))
+        p = runner.last_hedge_price_model_params or {}
+        runner.hedge_price_param_times.append(t_hedge)
+        runner.hedge_mu_buy_hist.append(float(p.get("mu_delta_buy", float("nan"))))
+        runner.hedge_mu_sell_hist.append(float(p.get("mu_delta_sell", float("nan"))))
+        runner.hedge_sigma_buy_hist.append(float(p.get("sigma_delta_buy", float("nan"))))
+        runner.hedge_sigma_sell_hist.append(float(p.get("sigma_delta_sell", float("nan"))))
 
     # Prior controller state vs current step → realized PnL (inventory/cash from step).
     current_state = None
@@ -219,18 +219,18 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
 
         # Wealth: single valuation policy (default sell_ref / mark-to-bid).
         main_sell_ref_now = float(getattr(current_state, "sell_ref", mid_now_ticks))
-        anchor_inv = int(getattr(current_state, "anchor_inventory", 0))
-        anchor_cash_now = float(getattr(current_state, "anchor_cash", 0.0))
-        anchor_sell_ref_now = getattr(current_state, "anchor_sell_ref", None)
+        hedge_inv = int(getattr(current_state, "hedge_inventory", 0))
+        hedge_cash_now = float(getattr(current_state, "hedge_cash", 0.0))
+        hedge_sell_ref_now = getattr(current_state, "hedge_sell_ref", None)
         vp = runner.valuation_policy
         wealth = portfolio_wealth_ticks(
             cash_tick_lot=float(runner.cash),
             inventory_lots=int(runner.inventory),
             main_sell_ref_ticks=main_sell_ref_now,
             main_mid_ticks=float(mid_now_ticks),
-            anchor_inventory_lots=anchor_inv,
-            anchor_cash_tick_lot=anchor_cash_now,
-            anchor_sell_ref_ticks=float(anchor_sell_ref_now) if anchor_sell_ref_now is not None else None,
+            hedge_inventory_lots=hedge_inv,
+            hedge_cash_tick_lot=hedge_cash_now,
+            hedge_sell_ref_ticks=float(hedge_sell_ref_now) if hedge_sell_ref_now is not None else None,
             policy=vp,
         )
         inv_value = main_inventory_value_ticks(
@@ -260,10 +260,10 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     cash_quote = float(main.get("cash", 0.0))
                     inv_base = float(main.get("inventory", 0.0))
                     sell_ref_quote = float(main.get("sell_ref", 0.0))
-                anchor = (snap.data.get("anchor") or {})
-                a_cash_quote = float(anchor.get("cash_quote", 0.0) or 0.0)
-                a_inv_base = float(anchor.get("inventory_base", 0.0) or 0.0)
-                a_sell_ref_quote = anchor.get("sell_ref_quote")
+                hedge_snap = (snap.data.get("hedge") or {})
+                a_cash_quote = float(hedge_snap.get("cash_quote", 0.0) or 0.0)
+                a_inv_base = float(hedge_snap.get("inventory_base", 0.0) or 0.0)
+                a_sell_ref_quote = hedge_snap.get("sell_ref_quote")
                 a_sell_ref_opt = float(a_sell_ref_quote) if a_sell_ref_quote is not None else None
                 mid_q = float(miw.mid) if miw is not None else float((snap.data.get("main") or {}).get("mid", 0.0))
                 wealth_quote = portfolio_wealth_quote(
@@ -271,9 +271,9 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     inventory_base=inv_base,
                     main_sell_ref_quote=sell_ref_quote,
                     main_mid_quote=mid_q,
-                    anchor_cash_quote=a_cash_quote,
-                    anchor_inventory_base=a_inv_base,
-                    anchor_sell_ref_quote=a_sell_ref_opt,
+                    hedge_cash_quote=a_cash_quote,
+                    hedge_inventory_base=a_inv_base,
+                    hedge_sell_ref_quote=a_sell_ref_opt,
                     policy=vp,
                 )
                 runner.wealth_quote_times.append(t_fill)
@@ -385,7 +385,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                 runner.J_uniformity_hist.append(float(comp.get("term_uniformity", 0.0)))
                 runner.J_spread_hist.append(float(comp.get("term_spread", 0.0)))
                 runner.main_reward_opt_hist.append(float(getattr(opt, "_last_main_reward_mean", float("nan"))))
-                runner.anchor_reward_opt_hist.append(float(getattr(opt, "_last_anchor_reward_mean", float("nan"))))
+                runner.hedge_reward_opt_hist.append(float(getattr(opt, "_last_hedge_reward_mean", float("nan"))))
                 comp_init = getattr(opt, "_last_J_components_initial", None)
                 if isinstance(comp_init, dict):
                     runner.J_mean_init_hist.append(float(comp_init.get("term_reward", 0.0)))
@@ -394,7 +394,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     runner.J_uniformity_init_hist.append(float(comp_init.get("term_uniformity", 0.0)))
                     runner.J_spread_init_hist.append(float(comp_init.get("term_spread", 0.0)))
                     runner.main_reward_init_hist.append(float(getattr(opt, "_last_main_reward_mean_initial", float("nan"))))
-                    runner.anchor_reward_init_hist.append(float(getattr(opt, "_last_anchor_reward_mean_initial", float("nan"))))
+                    runner.hedge_reward_init_hist.append(float(getattr(opt, "_last_hedge_reward_mean_initial", float("nan"))))
                 else:
                     runner.J_mean_init_hist.append(float("nan"))
                     runner.J_inv_init_hist.append(float("nan"))
@@ -402,7 +402,7 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
                     runner.J_uniformity_init_hist.append(float("nan"))
                     runner.J_spread_init_hist.append(float("nan"))
                     runner.main_reward_init_hist.append(float("nan"))
-                    runner.anchor_reward_init_hist.append(float("nan"))
+                    runner.hedge_reward_init_hist.append(float("nan"))
 
         runner._pending_action = action
         runner._pending_state = current_state

@@ -248,7 +248,7 @@ def build_diagnostics_frame(
     - Figure 3 (action/depth diagnostics)
     - Figure 4 (price diagnostics)
     - Figure 5 (volume QQ)
-    - Figure 6 (anchor vs main reps + anchor params/portfolio)
+    - Figure 6 (hedge vs main reps + hedge params/portfolio)
 
     The realtime UI (mm_viz) consumes this frame stream and renders the equivalent subplots.
     """
@@ -380,26 +380,26 @@ def build_diagnostics_frame(
         except Exception:
             price_diag["flow_nll_series"] = []
 
-    # Anchor diagnostics payload (series already on runner).
-    anchor_diag = {
+    # Hedge diagnostics payload (series already on runner).
+    hedge_diag = {
         "main_ref": {
             "t": [getattr(t, "timestamp", lambda: None)() for t in (getattr(runner, "main_reference_times", []) or [])],  # not used directly
             "buy": list(getattr(runner, "main_buy_reference_hist", []) or []),
             "sell": list(getattr(runner, "main_sell_reference_hist", []) or []),
         },
-        "anchor_ref": {
-            "buy": list(getattr(runner, "anchor_buy_reference_hist", []) or []),
-            "sell": list(getattr(runner, "anchor_sell_reference_hist", []) or []),
+        "hedge_ref": {
+            "buy": list(getattr(runner, "hedge_buy_reference_hist", []) or []),
+            "sell": list(getattr(runner, "hedge_sell_reference_hist", []) or []),
         },
-        "anchor_params": {
-            "mu_buy": list(getattr(runner, "anchor_mu_buy_hist", []) or []),
-            "mu_sell": list(getattr(runner, "anchor_mu_sell_hist", []) or []),
-            "sigma_buy": list(getattr(runner, "anchor_sigma_buy_hist", []) or []),
-            "sigma_sell": list(getattr(runner, "anchor_sigma_sell_hist", []) or []),
+        "hedge_params": {
+            "mu_buy": list(getattr(runner, "hedge_mu_buy_hist", []) or []),
+            "mu_sell": list(getattr(runner, "hedge_mu_sell_hist", []) or []),
+            "sigma_buy": list(getattr(runner, "hedge_sigma_buy_hist", []) or []),
+            "sigma_sell": list(getattr(runner, "hedge_sigma_sell_hist", []) or []),
         },
-        "anchor_portfolio": {
-            "inventory": list(getattr(runner, "anchor_inventory_hist", []) or []),
-            "cash": list(getattr(runner, "anchor_cash_hist", []) or []),
+        "hedge_portfolio": {
+            "inventory": list(getattr(runner, "hedge_inventory_hist", []) or []),
+            "cash": list(getattr(runner, "hedge_cash_hist", []) or []),
         },
     }
 
@@ -447,7 +447,7 @@ def build_diagnostics_frame(
         "lof_sample": lof_sample,
         "price_diag": price_diag,
         "volume_qq": _qq_data(runner),
-        "anchor_diag": anchor_diag,
+        "hedge_diag": hedge_diag,
         "loss_subplots": loss,
         "book_params": getattr(runner, "last_book_params", None),
         "sigmoid_action": getattr(runner, "last_sigmoid_action", None),
@@ -480,9 +480,9 @@ def build_diagnostics_frame(
             },
             "rewards": {
                 "main_opt": list(getattr(runner, "main_reward_opt_hist", []) or []),
-                "anchor_opt": list(getattr(runner, "anchor_reward_opt_hist", []) or []),
+                "hedge_opt": list(getattr(runner, "hedge_reward_opt_hist", []) or []),
                 "main_init": list(getattr(runner, "main_reward_init_hist", []) or []),
-                "anchor_init": list(getattr(runner, "anchor_reward_init_hist", []) or []),
+                "hedge_init": list(getattr(runner, "hedge_reward_init_hist", []) or []),
             },
             "wealth_tick_lot": list(getattr(runner, "wealth_hist", []) or []),
             "wealth_from_dw_tick_lot": list(getattr(runner, "wealth_from_dw_hist", []) or []),

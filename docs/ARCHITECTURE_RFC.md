@@ -44,7 +44,7 @@ This document locks the **target shape** of the system (hexagonal: **ports in `m
 
 ## Hedge (Phase 6 — complete)
 
-- **`mm_core/hedge/policy.HedgePolicy`**: maps to MPC fees / **`anchor_hedge_reward_weight`**. **`MonteCarloMPCTensorBatched`** supports **one** simulated hedge leg; multiple hedge legs in policy would require tensor work later.
+- **`mm_core/hedge/policy.HedgePolicy`**: maps to MPC fees / **`hedge_reward_weight`**. **`MonteCarloMPCTensorBatched`** supports **one** simulated hedge leg; multiple hedge legs in policy would require tensor work later.
 
 ## Observability (Phase 7 — complete)
 

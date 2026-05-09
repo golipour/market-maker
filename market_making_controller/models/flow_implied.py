@@ -33,10 +33,10 @@ class Step(NamedTuple):
     private_fills_ask: tuple[tuple[int, int], ...]
     main_buy_ref: float
     main_sell_ref: float
-    anchor_buy_ref: float | None
-    anchor_sell_ref: float | None
-    anchor_inventory: int
-    anchor_cash: int | float
+    hedge_buy_ref: float | None
+    hedge_sell_ref: float | None
+    hedge_inventory: int
+    hedge_cash: int | float
 
 
 def limit_order_flow_observed(

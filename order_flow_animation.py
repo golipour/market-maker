@@ -240,7 +240,7 @@ def run_animation(
     enable_action_figure: bool = True,
     enable_price_figure: bool = True,
     enable_qq_figure: bool = True,
-    enable_anchor_figure: bool = True,
+    enable_hedge_figure: bool = True,
 ) -> None:
     """
     Run the animation loop. Figure layout is built from runner: estimator and tester
@@ -274,7 +274,7 @@ def run_animation(
         fig_action.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
     ranges_action = {
         "J_components": (0, 1),
-        "main_anchor_rewards": (1, 2),
+        "main_hedge_rewards": (1, 2),
         "depth": (2, 3),
         "action_depth": (3, 5),
     }
@@ -297,14 +297,14 @@ def run_animation(
         fig_qq.suptitle("Trade volume QQ: observed vs learned model", fontsize=12)
         fig_qq.tight_layout(rect=(0.02, 0.02, 0.98, 0.96))
 
-    # Figure 6: main/anchor representative buy/sell prices in a single subplot.
-    fig_anchor = None
-    axes_anchor = None
-    if enable_anchor_figure:
-        fig_anchor, axes_anchor = plt.subplots(3, 1, figsize=(10, 11.0), sharex=False)
-        axes_anchor = np.atleast_1d(axes_anchor).ravel()
-        fig_anchor.suptitle("Main vs Anchor Representative Prices", fontsize=12)
-        fig_anchor.tight_layout(rect=(0.02, 0.02, 0.98, 0.94))
+    # Figure 6: main/hedge representative buy/sell prices in a single subplot.
+    fig_hedge = None
+    axes_hedge = None
+    if enable_hedge_figure:
+        fig_hedge, axes_hedge = plt.subplots(3, 1, figsize=(10, 11.0), sharex=False)
+        axes_hedge = np.atleast_1d(axes_hedge).ravel()
+        fig_hedge.suptitle("Main vs hedge representative prices", fontsize=12)
+        fig_hedge.tight_layout(rect=(0.02, 0.02, 0.98, 0.94))
 
     # Figure 2 — NLL / predictive log loss. Must be created before plt.show(); figures made only
     # inside FuncAnimation callbacks often never get a window on Qt/GTk backends.
@@ -427,9 +427,9 @@ def run_animation(
         if axes_qq is not None and fig_qq is not None:
             draw_volume_qq_window(axes_qq, runner, fig_qq)
             fig_qq.canvas.draw_idle()
-        if axes_anchor is not None and fig_anchor is not None:
-            draw_anchor_reference_window(axes_anchor, runner, fig_anchor)
-            fig_anchor.canvas.draw_idle()
+        if axes_hedge is not None and fig_hedge is not None:
+            draw_hedge_reference_window(axes_hedge, runner, fig_hedge)
+            fig_hedge.canvas.draw_idle()
         if enable_loss_figure:
             subplots_loss = _log_loss_subplots_data(
                 runner.tester,
@@ -804,37 +804,37 @@ def draw_mid_price_window(axes_mid_price, dates: list, runner: OrderFlowRunner, 
         fig.autofmt_xdate()
 
 
-def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> None:
-    """Figure 6: representative prices, anchor delta params, anchor inv/cash."""
-    axes = np.atleast_1d(axes_anchor).ravel()
-    ax_anchor = axes[0]
+def draw_hedge_reference_window(axes_hedge, runner: OrderFlowRunner, fig) -> None:
+    """Figure 6: representative prices, hedge delta params, hedge inv/cash."""
+    axes = np.atleast_1d(axes_hedge).ravel()
+    ax_hedge = axes[0]
     ax_params = axes[1] if len(axes) > 1 else None
     ax_portfolio = axes[2] if len(axes) > 2 else None
-    ax_anchor.clear()
-    ax_anchor.set_xlabel("Time")
-    ax_anchor.set_ylabel("Representative price (ticks)")
-    ax_anchor.set_title("Main + Anchor representative buy/sell")
-    ax_anchor.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-    ax_anchor.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax_hedge.clear()
+    ax_hedge.set_xlabel("Time")
+    ax_hedge.set_ylabel("Representative price (ticks)")
+    ax_hedge.set_title("Main + hedge representative buy/sell")
+    ax_hedge.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    ax_hedge.xaxis.set_major_locator(mdates.AutoDateLocator())
 
     t_main = list(getattr(runner, "main_reference_times", []) or [])
     y_main_buy = list(getattr(runner, "main_buy_reference_hist", []) or [])
     y_main_sell = list(getattr(runner, "main_sell_reference_hist", []) or [])
-    t_anchor = list(getattr(runner, "anchor_reference_times", []) or [])
-    y_anchor_buy = list(getattr(runner, "anchor_buy_reference_hist", []) or [])
-    y_anchor_sell = list(getattr(runner, "anchor_sell_reference_hist", []) or [])
+    t_hedge = list(getattr(runner, "hedge_reference_times", []) or [])
+    y_hedge_buy = list(getattr(runner, "hedge_buy_reference_hist", []) or [])
+    y_hedge_sell = list(getattr(runner, "hedge_sell_reference_hist", []) or [])
 
     plotted_any = False
     all_y: list[float] = []
     if t_main and len(t_main) == len(y_main_buy) == len(y_main_sell):
-        ax_anchor.plot(
+        ax_hedge.plot(
             t_main,
             y_main_buy,
             color="navy",
             linewidth=1.4,
             label="Main buy rep",
         )
-        ax_anchor.plot(
+        ax_hedge.plot(
             t_main,
             y_main_sell,
             color="green",
@@ -844,59 +844,59 @@ def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> N
         all_y.extend(float(v) for v in y_main_buy)
         all_y.extend(float(v) for v in y_main_sell)
         plotted_any = True
-    if t_anchor and len(t_anchor) == len(y_anchor_buy) == len(y_anchor_sell):
-        ax_anchor.plot(
-            t_anchor,
-            y_anchor_buy,
+    if t_hedge and len(t_hedge) == len(y_hedge_buy) == len(y_hedge_sell):
+        ax_hedge.plot(
+            t_hedge,
+            y_hedge_buy,
             color="darkorange",
             linewidth=1.2,
             linestyle="--",
-            label="Anchor buy rep",
+            label="Hedge buy rep",
         )
-        ax_anchor.plot(
-            t_anchor,
-            y_anchor_sell,
+        ax_hedge.plot(
+            t_hedge,
+            y_hedge_sell,
             color="red",
             linewidth=1.2,
             linestyle="--",
-            label="Anchor sell rep",
+            label="Hedge sell rep",
         )
-        all_y.extend(float(v) for v in y_anchor_buy)
-        all_y.extend(float(v) for v in y_anchor_sell)
+        all_y.extend(float(v) for v in y_hedge_buy)
+        all_y.extend(float(v) for v in y_hedge_sell)
         plotted_any = True
 
     if plotted_any:
-        ax_anchor.legend(loc="upper right")
-        t_all = t_main + t_anchor
+        ax_hedge.legend(loc="upper right")
+        t_all = t_main + t_hedge
         t_all.sort()
         if len(t_all) > 1:
-            ax_anchor.set_xlim(t_all[0], t_all[-1])
+            ax_hedge.set_xlim(t_all[0], t_all[-1])
         y_lo, y_hi = _finite_series_ylim(all_y, pad_min=1.0, default=(0.0, 1.0))
-        ax_anchor.set_ylim(y_lo, y_hi)
+        ax_hedge.set_ylim(y_lo, y_hi)
     else:
-        ax_anchor.set_xlim(0, 1)
-        ax_anchor.set_ylim(0, 1)
-        ax_anchor.text(
+        ax_hedge.set_xlim(0, 1)
+        ax_hedge.set_ylim(0, 1)
+        ax_hedge.text(
             0.5,
             0.5,
             "Waiting for representative prices...",
             ha="center",
             va="center",
-            transform=ax_anchor.transAxes,
+            transform=ax_hedge.transAxes,
         )
 
     if ax_params is not None:
         ax_params.clear()
         ax_params.set_xlabel("Time")
         ax_params.set_ylabel("Delta ticks")
-        ax_params.set_title("Anchor Gaussian learned delta params (EWMA MLE)")
+        ax_params.set_title("Hedge Gaussian learned delta params (EWMA MLE)")
         ax_params.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax_params.xaxis.set_major_locator(mdates.AutoDateLocator())
-        t_p = list(getattr(runner, "anchor_price_param_times", []) or [])
-        mu_b = list(getattr(runner, "anchor_mu_buy_hist", []) or [])
-        mu_s = list(getattr(runner, "anchor_mu_sell_hist", []) or [])
-        sg_b = list(getattr(runner, "anchor_sigma_buy_hist", []) or [])
-        sg_s = list(getattr(runner, "anchor_sigma_sell_hist", []) or [])
+        t_p = list(getattr(runner, "hedge_price_param_times", []) or [])
+        mu_b = list(getattr(runner, "hedge_mu_buy_hist", []) or [])
+        mu_s = list(getattr(runner, "hedge_mu_sell_hist", []) or [])
+        sg_b = list(getattr(runner, "hedge_sigma_buy_hist", []) or [])
+        sg_s = list(getattr(runner, "hedge_sigma_sell_hist", []) or [])
         n_p = min(len(t_p), len(mu_b), len(mu_s), len(sg_b), len(sg_s))
         if n_p > 0:
             t = t_p[:n_p]
@@ -919,7 +919,7 @@ def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> N
             ax_params.text(
                 0.5,
                 0.5,
-                "Waiting for learned anchor params...",
+                "Waiting for learned hedge params...",
                 ha="center",
                 va="center",
                 transform=ax_params.transAxes,
@@ -929,19 +929,19 @@ def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> N
         ax_portfolio.clear()
         ax_portfolio.set_xlabel("Time")
         ax_portfolio.set_ylabel("Main units")
-        ax_portfolio.set_title("Anchor inventory/cash (converted to main exchange units)")
+        ax_portfolio.set_title("Hedge inventory/cash (converted to main exchange units)")
         ax_portfolio.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax_portfolio.xaxis.set_major_locator(mdates.AutoDateLocator())
-        t_a = list(getattr(runner, "anchor_portfolio_times", []) or [])
-        inv_a = list(getattr(runner, "anchor_inventory_hist", []) or [])
-        cash_a = list(getattr(runner, "anchor_cash_hist", []) or [])
+        t_a = list(getattr(runner, "hedge_portfolio_times", []) or [])
+        inv_a = list(getattr(runner, "hedge_inventory_hist", []) or [])
+        cash_a = list(getattr(runner, "hedge_cash_hist", []) or [])
         n_a = min(len(t_a), len(inv_a), len(cash_a))
         if n_a > 0:
             t = t_a[:n_a]
             y_inv = [float(v) for v in inv_a[:n_a]]
             y_cash = [float(v) for v in cash_a[:n_a]]
-            ax_portfolio.plot(t, y_inv, color="navy", linewidth=1.2, label="Anchor inventory (lots)")
-            ax_portfolio.plot(t, y_cash, color="darkgreen", linewidth=1.2, label="Anchor cash (tick*lot)")
+            ax_portfolio.plot(t, y_inv, color="navy", linewidth=1.2, label="Hedge inventory (lots)")
+            ax_portfolio.plot(t, y_cash, color="darkgreen", linewidth=1.2, label="Hedge cash (tick*lot)")
             ax_portfolio.legend(loc="upper right", fontsize=8)
             if n_a > 1:
                 ax_portfolio.set_xlim(t[0], t[-1])
@@ -953,7 +953,7 @@ def draw_anchor_reference_window(axes_anchor, runner: OrderFlowRunner, fig) -> N
             ax_portfolio.text(
                 0.5,
                 0.5,
-                "Waiting for anchor inventory/cash...",
+                "Waiting for hedge inventory/cash...",
                 ha="center",
                 va="center",
                 transform=ax_portfolio.transAxes,
@@ -1544,42 +1544,42 @@ def draw_dynamic(
         if fig:
             fig.autofmt_xdate()
 
-    # --- Main/anchor reward (init vs opt) ---
-    start, end = ranges.get("main_anchor_rewards", (0, 0))
+    # --- Main/hedge reward (init vs opt) ---
+    start, end = ranges.get("main_hedge_rewards", (0, 0))
     if end > start and runner is not None:
         ax = axes[start]
         ax.clear()
         ax.set_xlabel("Time")
         ax.set_ylabel("Reward (tick×lot)")
-        ax.set_title("Main and anchor rewards (initial vs optimal)")
+        ax.set_title("Main and hedge rewards (initial vs optimal)")
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
         ax.xaxis.set_major_locator(mdates.AutoDateLocator())
         ax.axhline(0, color="gray", linewidth=0.8, linestyle="-")
         t_comp = getattr(runner, "J_comp_times", None) or []
         main_opt = getattr(runner, "main_reward_opt_hist", None) or []
-        anchor_opt = getattr(runner, "anchor_reward_opt_hist", None) or []
+        hedge_opt = getattr(runner, "hedge_reward_opt_hist", None) or []
         main_init = getattr(runner, "main_reward_init_hist", None) or []
-        anchor_init = getattr(runner, "anchor_reward_init_hist", None) or []
-        n_opt = min(len(t_comp), len(main_opt), len(anchor_opt))
+        hedge_init = getattr(runner, "hedge_reward_init_hist", None) or []
+        n_opt = min(len(t_comp), len(main_opt), len(hedge_opt))
         if n_opt > 0:
             t = t_comp[:n_opt]
             y_main_opt = [float(v) for v in main_opt[:n_opt]]
-            y_anchor_opt = [float(v) for v in anchor_opt[:n_opt]]
+            y_hedge_opt = [float(v) for v in hedge_opt[:n_opt]]
             ax.plot(t, y_main_opt, color="blue", linewidth=1.2, label="Main reward (opt)")
-            ax.plot(t, y_anchor_opt, color="orange", linewidth=1.2, label="Anchor reward (opt)")
-            n_init = min(len(t_comp), len(main_init), len(anchor_init))
+            ax.plot(t, y_hedge_opt, color="orange", linewidth=1.2, label="Hedge reward (opt)")
+            n_init = min(len(t_comp), len(main_init), len(hedge_init))
             if n_init > 0:
                 t_i = t_comp[:n_init]
                 y_main_init = [float(v) for v in main_init[:n_init]]
-                y_anchor_init = [float(v) for v in anchor_init[:n_init]]
+                y_hedge_init = [float(v) for v in hedge_init[:n_init]]
                 ax.plot(t_i, y_main_init, color="blue", linewidth=1.1, linestyle=":", label="Main reward (init)")
-                ax.plot(t_i, y_anchor_init, color="orange", linewidth=1.1, linestyle=":", label="Anchor reward (init)")
+                ax.plot(t_i, y_hedge_init, color="orange", linewidth=1.1, linestyle=":", label="Hedge reward (init)")
             ax.legend(loc="upper right", fontsize=7)
             if n_opt > 1:
                 ax.set_xlim(t[0], t[-1])
-            all_y = y_main_opt + y_anchor_opt
+            all_y = y_main_opt + y_hedge_opt
             if n_init > 0:
-                all_y += y_main_init + y_anchor_init
+                all_y += y_main_init + y_hedge_init
             lo, hi = _finite_series_ylim(all_y, pad_min=1.0)
             ax.set_ylim(lo, hi)
         else:

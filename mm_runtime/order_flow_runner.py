@@ -75,8 +75,8 @@ class OrderFlowRunner:
         expected_mid_debug_every: int = 1,
         live_order_execution: bool = False,
         action_start_after_steps: int = 0,
-        anchor_hedge_enabled: bool = False,
-        anchor_price_model: object | None = None,
+        hedge_enabled: bool = False,
+        hedge_price_model: object | None = None,
         valuation_policy: ValuationPolicy | str | None = None,
     ):
         self.stepper = stepper
@@ -94,10 +94,10 @@ class OrderFlowRunner:
         self.expected_mid_debug_every = max(1, int(expected_mid_debug_every))
         self.live_order_execution = bool(live_order_execution)
         self.action_start_after_steps = max(0, int(action_start_after_steps))
-        self.anchor_hedge_enabled = bool(anchor_hedge_enabled)
+        self.hedge_enabled = bool(hedge_enabled)
         # Anchor rep-price delta model (updated in the runner alongside other models).
         # MPC reads its (mu, sigma) params from the model object (not from State).
-        self.anchor_price_model = anchor_price_model
+        self.hedge_price_model = hedge_price_model
         self.valuation_policy = resolve_valuation_policy(valuation_policy)
         # Cached instrument identity/spec (lazy-filled).
         self._instrument_id = None
@@ -126,22 +126,22 @@ class OrderFlowRunner:
         self.pred_buy_rep_prev_error_hist: list[float] = []
         self.pred_sell_rep_prev_error_hist: list[float] = []
         self.market_implied_mid_hist: list[float] = []  # mid from prev OB minus realized market flow only (for plot)
-        self.anchor_buy_reference_hist: list[float] = []
-        self.anchor_sell_reference_hist: list[float] = []
-        self.anchor_reference_times: list[datetime] = []
-        self.anchor_price_param_times: list[datetime] = []
-        self.anchor_mu_buy_hist: list[float] = []
-        self.anchor_mu_sell_hist: list[float] = []
-        self.anchor_sigma_buy_hist: list[float] = []
-        self.anchor_sigma_sell_hist: list[float] = []
-        self.anchor_portfolio_times: list[datetime] = []
-        self.anchor_inventory_hist: list[int] = []
-        self.anchor_cash_hist: list[float] = []
+        self.hedge_buy_reference_hist: list[float] = []
+        self.hedge_sell_reference_hist: list[float] = []
+        self.hedge_reference_times: list[datetime] = []
+        self.hedge_price_param_times: list[datetime] = []
+        self.hedge_mu_buy_hist: list[float] = []
+        self.hedge_mu_sell_hist: list[float] = []
+        self.hedge_sigma_buy_hist: list[float] = []
+        self.hedge_sigma_sell_hist: list[float] = []
+        self.hedge_portfolio_times: list[datetime] = []
+        self.hedge_inventory_hist: list[int] = []
+        self.hedge_cash_hist: list[float] = []
         self.main_buy_reference_hist: list[float] = []
         self.main_sell_reference_hist: list[float] = []
         self.main_reference_times: list[datetime] = []
-        self.last_anchor_orderbook = None
-        self.last_anchor_price_model_params: dict | None = None
+        self.last_hedge_orderbook = None
+        self.last_hedge_price_model_params: dict | None = None
         self.last_book_params: dict | None = None  # fitted depth params from last MPC step (for animation)
         # E[ΔW_next]: optimizer expected one-step wealth change (t -> t+1), mean over MC samples.
         self.E_dW_times: list[datetime] = []  # when action was taken
@@ -158,9 +158,9 @@ class OrderFlowRunner:
         self.J_uniformity_init_hist: list[float] = []
         self.J_spread_init_hist: list[float] = []
         self.main_reward_opt_hist: list[float] = []
-        self.anchor_reward_opt_hist: list[float] = []
+        self.hedge_reward_opt_hist: list[float] = []
         self.main_reward_init_hist: list[float] = []
-        self.anchor_reward_init_hist: list[float] = []
+        self.hedge_reward_init_hist: list[float] = []
         # Realized ΔW: actual wealth change in one step when fills are applied. Often 0 or small if no fills.
         self.dW_times: list[datetime] = []  # when fills were applied
         self.dW_hist: list[float] = []

@@ -43,10 +43,10 @@ def compact_step_dict(parsed: ParsedStep) -> dict[str, Any]:
         "cash": float(parsed.cash),
         "main_buy_ref": float(parsed.main_buy_ref),
         "main_sell_ref": float(parsed.main_sell_ref),
-        "anchor_buy_ref": parsed.anchor_buy_ref,
-        "anchor_sell_ref": parsed.anchor_sell_ref,
-        "anchor_inventory": int(parsed.anchor_inventory),
-        "anchor_cash": float(parsed.anchor_cash),
+        "hedge_buy_ref": parsed.hedge_buy_ref,
+        "hedge_sell_ref": parsed.hedge_sell_ref,
+        "hedge_inventory": int(parsed.hedge_inventory),
+        "hedge_cash": float(parsed.hedge_cash),
     }
 
 

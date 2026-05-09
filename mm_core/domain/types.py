@@ -11,7 +11,7 @@ class InstrumentId:
 
     Examples:
       - exchange="nobitex", symbol="BTC_USDT"
-      - exchange="wallex",  symbol="BTC_USDT"  (anchor)
+      - exchange="wallex",  symbol="BTC_USDT"  (hedge)
     """
 
     exchange: str

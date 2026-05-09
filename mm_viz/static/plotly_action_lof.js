@@ -220,10 +220,10 @@ function buildActionDepthPlotly(frame) {
 
   // Row 1 — rewards
   const mainOpt = Array.isArray(rw.main_opt) ? rw.main_opt.map(num) : [];
-  const anchorOpt = Array.isArray(rw.anchor_opt) ? rw.anchor_opt.map(num) : [];
+  const hedgeOpt = Array.isArray(rw.hedge_opt) ? rw.hedge_opt.map(num) : [];
   const mainInit = Array.isArray(rw.main_init) ? rw.main_init.map(num) : [];
-  const anchorInit = Array.isArray(rw.anchor_init) ? rw.anchor_init.map(num) : [];
-  const nOpt = Math.min(mainOpt.length, anchorOpt.length);
+  const hedgeInit = Array.isArray(rw.hedge_init) ? rw.hedge_init.map(num) : [];
+  const nOpt = Math.min(mainOpt.length, hedgeOpt.length);
   if (nOpt > 0) {
     const t = Array.from({ length: nOpt }, (_, j) => j);
     data.push(
@@ -242,15 +242,15 @@ function buildActionDepthPlotly(frame) {
         {
           type: "scatter",
           mode: "lines",
-          name: "Anchor reward (opt)",
+          name: "Hedge reward (opt)",
           x: t,
-          y: anchorOpt.slice(0, nOpt),
+          y: hedgeOpt.slice(0, nOpt),
           line: { color: "orange", width: 1.2 },
         },
         1
       )
     );
-    const nI = Math.min(mainInit.length, anchorInit.length);
+    const nI = Math.min(mainInit.length, hedgeInit.length);
     if (nI > 0) {
       const ti = Array.from({ length: nI }, (_, j) => j);
       data.push(
@@ -269,9 +269,9 @@ function buildActionDepthPlotly(frame) {
           {
             type: "scatter",
             mode: "lines",
-            name: "Anchor reward (init)",
+            name: "Hedge reward (init)",
             x: ti,
-            y: anchorInit.slice(0, nI),
+            y: hedgeInit.slice(0, nI),
             line: { color: "orange", width: 1.1, dash: "dot" },
           },
           1
@@ -280,8 +280,8 @@ function buildActionDepthPlotly(frame) {
     }
     layout.yaxis2.title = { text: "Reward (tick×lot)", font: { size: 10 } };
     layout.xaxis2.title = { text: "Decision index", font: { size: 10 } };
-    const ally = mainOpt.slice(0, nOpt).concat(anchorOpt.slice(0, nOpt));
-    if (nI > 0) ally.push(...mainInit.slice(0, nI), ...anchorInit.slice(0, nI));
+    const ally = mainOpt.slice(0, nOpt).concat(hedgeOpt.slice(0, nOpt));
+    if (nI > 0) ally.push(...mainInit.slice(0, nI), ...hedgeInit.slice(0, nI));
     const [lo, hi] = finiteSeriesYlim([ally], 1.0, 0.1);
     layout.yaxis2.range = [lo, hi];
     layout.xaxis2.range = nOpt > 1 ? [0, nOpt - 1] : [0, 1];

@@ -2,7 +2,7 @@
 Multi-instrument hedge policy (Phase 6).
 
 The stepper and execution path can record **one** hedge venue. ``MonteCarloMPCTensorBatched``
-simulates **at most one** hedge leg (anchor inventory coupled to main fills). If ``HedgePolicy``
+simulates **at most one** hedge leg (hedge-venue inventory coupled to main fills). If ``HedgePolicy``
 ever carries multiple ``hedge`` legs, **only the first** is honored by MPC until tensors are extended.
 """
 
@@ -32,12 +32,12 @@ class HedgePolicy:
     """
     Declarative hedge setup: which instruments participate and how MPC weights hedge PnL.
 
-    - ``anchor_execution_fee``: proportional fee on simulated hedge venue trades (MPC ``anchor_hedge_fee``).
+    - ``hedge_execution_fee``: proportional fee on simulated hedge venue trades (MPC ``hedge_fee``).
     - ``hedge_reward_weight``: scales hedge-leg Δwealth inside the MPC objective (0 = ignore hedge PnL).
     """
 
     legs: tuple[HedgeInstrumentLeg, ...]
-    anchor_execution_fee: float
+    hedge_execution_fee: float
     hedge_reward_weight: float
 
     @property
@@ -56,23 +56,23 @@ class HedgePolicy:
         return len(self.hedge_legs) > 0
 
     @property
-    def include_anchor_in_portfolio(self) -> bool:
-        """Runner/engine: treat anchor balances/refs as part of strategy state (matches MPC hedge dynamics)."""
+    def include_hedge_in_portfolio(self) -> bool:
+        """Runner/engine: treat hedge balances/refs as part of strategy state (matches MPC hedge dynamics)."""
         return self.hedge_reward_weight > 0.0 and self.has_hedge_venue
 
     def mpc_optimizer_kwargs(self) -> dict[str, float]:
         """
         Keyword arguments for ``MonteCarloMPCTensorBatched``.
 
-        ``anchor_hedge_coef`` remains the legacy on/off for **simulating** hedge inventory in rollouts.
-        ``anchor_hedge_reward_weight`` scales hedge Δwealth in the objective.
+        ``hedge_coef`` remains the legacy on/off for **simulating** hedge inventory in rollouts.
+        ``hedge_reward_weight`` scales hedge Δwealth in the objective.
         """
-        dyn = self.include_anchor_in_portfolio
+        dyn = self.include_hedge_in_portfolio
         w = float(self.hedge_reward_weight) if dyn else 0.0
         return {
-            "anchor_hedge_coef": 1.0 if dyn else 0.0,
-            "anchor_hedge_fee": float(self.anchor_execution_fee),
-            "anchor_hedge_reward_weight": w,
+            "hedge_coef": 1.0 if dyn else 0.0,
+            "hedge_fee": float(self.hedge_execution_fee),
+            "hedge_reward_weight": w,
         }
 
     @classmethod
@@ -81,40 +81,40 @@ class HedgePolicy:
         mpc_kw: dict,
         *,
         primary: InstrumentId,
-        anchor_exchange: str | None,
-        anchor_symbol: str | None,
+        hedge_exchange: str | None,
+        hedge_symbol: str | None,
     ) -> HedgePolicy:
         """
-        Build policy from ``mpc_kwargs`` plus venue wiring (primary + optional anchor).
+        Build policy from ``mpc_kwargs`` plus venue wiring (primary + optional hedge venue).
 
-        Legacy: ``anchor_hedge_enabled`` / ``anchor_hedge_coef`` gate hedge; optional
-        ``anchor_hedge_reward_weight`` scales hedge contribution (default 1.0 when enabled).
+        Legacy: ``hedge_enabled`` / ``hedge_coef`` gate hedge; optional
+        ``hedge_reward_weight`` scales hedge contribution (default 1.0 when enabled).
         """
-        fee = float(mpc_kw.get("anchor_hedge_fee", 0.0))
+        fee = float(mpc_kw.get("hedge_fee", 0.0))
         legacy_on = bool(
-            mpc_kw.get("anchor_hedge_enabled", mpc_kw.get("anchor_hedge_coef", 0.0))
+            mpc_kw.get("hedge_enabled", mpc_kw.get("hedge_coef", 0.0))
         )
-        if "anchor_hedge_reward_weight" in mpc_kw:
-            w = float(mpc_kw["anchor_hedge_reward_weight"])
+        if "hedge_reward_weight" in mpc_kw:
+            w = float(mpc_kw["hedge_reward_weight"])
         else:
             w = 1.0 if legacy_on else 0.0
 
         legs: list[HedgeInstrumentLeg] = [
             HedgeInstrumentLeg(primary, HedgeLegRole.primary),
         ]
-        ax = str(anchor_exchange or "").strip()
+        ax = str(hedge_exchange or "").strip()
         if ax:
-            sym_a = str(anchor_symbol or "").strip() or primary.symbol
+            sym_a = str(hedge_symbol or "").strip() or primary.symbol
             legs.append(
                 HedgeInstrumentLeg(InstrumentId(exchange=ax, symbol=sym_a), HedgeLegRole.hedge)
             )
 
-        # No anchor venue → cannot simulate hedge; force weight 0 for consistency.
+        # No hedge venue → cannot simulate hedge; force weight 0 for consistency.
         if not ax:
             w = 0.0
 
         return cls(
             legs=tuple(legs),
-            anchor_execution_fee=fee,
+            hedge_execution_fee=fee,
             hedge_reward_weight=max(0.0, w),
         )

@@ -326,24 +326,24 @@ function renderAll() {
     destroyChart("cQqSell");
   }
 
-  const ad = f.anchor_diag || {};
-  makeLineChart("cAnchorRef", "Ref prices", {
+  const ad = f.hedge_diag || {};
+  makeLineChart("cHedgeRef", "Ref prices", {
     main_buy: tail((ad.main_ref || {}).buy || []),
     main_sell: tail((ad.main_ref || {}).sell || []),
-    anchor_buy: tail((ad.anchor_ref || {}).buy || []),
-    anchor_sell: tail((ad.anchor_ref || {}).sell || []),
+    hedge_buy: tail((ad.hedge_ref || {}).buy || []),
+    hedge_sell: tail((ad.hedge_ref || {}).sell || []),
   });
-  const ap = ad.anchor_params || {};
-  makeLineChart("cAnchorParams", "Anchor δ params", {
+  const ap = ad.hedge_params || {};
+  makeLineChart("cHedgeParams", "Hedge δ params", {
     mu_buy: tail(ap.mu_buy),
     mu_sell: tail(ap.mu_sell),
     sigma_buy: tail(ap.sigma_buy),
     sigma_sell: tail(ap.sigma_sell),
   });
-  const port = ad.anchor_portfolio || {};
-  makeLineChart("cAnchorPort", "Anchor portfolio", {
-    anchor_inventory: tail(port.inventory),
-    anchor_cash: tail(port.cash),
+  const port = ad.hedge_portfolio || {};
+  makeLineChart("cHedgePort", "Hedge portfolio", {
+    hedge_inventory: tail(port.inventory),
+    hedge_cash: tail(port.cash),
   });
 
   el("priceMeta").textContent = JSON.stringify(

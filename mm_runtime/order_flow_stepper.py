@@ -47,9 +47,9 @@ from mm_runtime.market_data_providers import (
 )
 
 
-class AnchorGaussianRepPriceModel:
+class HedgeGaussianRepPriceModel:
     """
-    Gaussian model for anchor representative-price deltas (buy/sell), updated via
+    Gaussian model for hedge representative-price deltas (buy/sell), updated via
     EWMA sufficient statistics (exponentially weighted MLE).
     """
 
@@ -173,25 +173,25 @@ class OrderFlowStepper:
         private_api_token: str | None = None,
         step_window_mode: str = "lookback",
         balance_update_mode: str = "events",
-        anchor_exchange: str | None = None,
-        anchor_symbol: str | None = None,
-        use_anchor_websocket_market_data: bool = True,
-        anchor_depth_limit: int | None = None,
-        anchor_orderbook_poll_interval_ms: int | None = None,
-        anchor_orderbook_buffer_ms: int | None = None,
-        anchor_websocket_reconnect_ms: int | None = None,
+        hedge_exchange: str | None = None,
+        hedge_symbol: str | None = None,
+        use_hedge_websocket_market_data: bool = True,
+        hedge_depth_limit: int | None = None,
+        hedge_orderbook_poll_interval_ms: int | None = None,
+        hedge_orderbook_buffer_ms: int | None = None,
+        hedge_websocket_reconnect_ms: int | None = None,
         main_representative_price_target_depth_lots: float | None = None,
-        anchor_representative_price_target_depth_lots: float = 1000.0,
-        use_anchor_gaussian_price_model: bool = True,
-        anchor_price_model_decay: float = 0.97,
-        anchor_price_model_sigma_min_ticks: float = 1.0,
-        anchor_private_api_token: str | None = None,
-        use_anchor_portfolio_balances: bool = False,
+        hedge_representative_price_target_depth_lots: float = 1000.0,
+        use_hedge_gaussian_price_model: bool = True,
+        hedge_price_model_decay: float = 0.97,
+        hedge_price_model_sigma_min_ticks: float = 1.0,
+        hedge_private_api_token: str | None = None,
+        use_hedge_portfolio_balances: bool = False,
     ):
         self.exchange = exchange
         self.symbol = symbol
         self.private_api_token = private_api_token
-        self.anchor_private_api_token = anchor_private_api_token or private_api_token
+        self.hedge_private_api_token = hedge_private_api_token or private_api_token
         self._exchange_adapter = EXCHANGES.get(str(exchange or "").lower().strip())
         self.T_ms = max(1, T_ms)
         self.trades_limit = trades_limit
@@ -210,15 +210,15 @@ class OrderFlowStepper:
         )
         if main_representative_price_target_depth_lots is None:
             main_representative_price_target_depth_lots = (
-                anchor_representative_price_target_depth_lots
+                hedge_representative_price_target_depth_lots
             )
-        # Use a single depth target for BOTH main and anchor representative prices.
+        # Use a single depth target for BOTH main and hedge representative prices.
         # This keeps Step semantics consistent across venues.
         self._representative_price_target_depth_lots = max(
             1e-9, float(main_representative_price_target_depth_lots)
         )
         self.steps: list[Step] = []
-        self.use_anchor_portfolio_balances = bool(use_anchor_portfolio_balances)
+        self.use_hedge_portfolio_balances = bool(use_hedge_portfolio_balances)
         # Buffered private exchange events (if websocket private channels are enabled).
         self.last_private_trades: list[dict] = []
         self.last_private_orders: list[dict] = []
@@ -252,66 +252,66 @@ class OrderFlowStepper:
             orderbook_buffer_ms=orderbook_buffer_ms,
             websocket_reconnect_ms=websocket_reconnect_ms,
             private_api_token=private_api_token,
-            anchor_exchange=anchor_exchange,
-            anchor_symbol=anchor_symbol,
-            use_anchor_websocket_market_data=use_anchor_websocket_market_data,
-            anchor_depth_limit=anchor_depth_limit,
-            anchor_orderbook_poll_interval_ms=anchor_orderbook_poll_interval_ms,
-            anchor_orderbook_buffer_ms=anchor_orderbook_buffer_ms,
-            anchor_websocket_reconnect_ms=anchor_websocket_reconnect_ms,
+            hedge_exchange=hedge_exchange,
+            hedge_symbol=hedge_symbol,
+            use_hedge_websocket_market_data=use_hedge_websocket_market_data,
+            hedge_depth_limit=hedge_depth_limit,
+            hedge_orderbook_poll_interval_ms=hedge_orderbook_poll_interval_ms,
+            hedge_orderbook_buffer_ms=hedge_orderbook_buffer_ms,
+            hedge_websocket_reconnect_ms=hedge_websocket_reconnect_ms,
         )
         self.trade_provider = bundle.trade_provider
         self.orderbook_provider = bundle.orderbook_provider
-        self.anchor_orderbook_provider = bundle.anchor_orderbook_provider
+        self.hedge_orderbook_provider = bundle.hedge_orderbook_provider
 
-        self.anchor_exchange = str(anchor_exchange).strip() if anchor_exchange else ""
-        self.anchor_symbol = (
-            str(anchor_symbol).strip() if anchor_symbol else str(symbol).strip()
+        self.hedge_exchange = str(hedge_exchange).strip() if hedge_exchange else ""
+        self.hedge_symbol = (
+            str(hedge_symbol).strip() if hedge_symbol else str(symbol).strip()
         )
-        self._anchor_tick_size: float | None = None
-        self._anchor_lot_size: float | None = None
-        self._anchor_symbol_asset_base: str = ""
-        self._anchor_symbol_asset_quote: str = ""
-        self.anchor_balances: dict[str, dict[str, float]] = {}
-        if self.anchor_exchange:
-            self._anchor_tick_size = max(
-                1e-12, float(get_tick_size(self.anchor_symbol, self.anchor_exchange))
+        self._hedge_tick_size: float | None = None
+        self._hedge_lot_size: float | None = None
+        self._hedge_symbol_asset_base: str = ""
+        self._hedge_symbol_asset_quote: str = ""
+        self.hedge_balances: dict[str, dict[str, float]] = {}
+        if self.hedge_exchange:
+            self._hedge_tick_size = max(
+                1e-12, float(get_tick_size(self.hedge_symbol, self.hedge_exchange))
             )
-            self._anchor_lot_size = max(
-                1e-12, float(get_lot_size(self.anchor_symbol, self.anchor_exchange))
+            self._hedge_lot_size = max(
+                1e-12, float(get_lot_size(self.hedge_symbol, self.hedge_exchange))
             )
-            self._anchor_symbol_asset_base, _anchor_q_raw = self._symbol_assets_for(
-                self.anchor_symbol
+            self._hedge_symbol_asset_base, _hedge_q_raw = self._symbol_assets_for(
+                self.hedge_symbol
             )
-            self._anchor_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
-                _anchor_q_raw, self.anchor_exchange
+            self._hedge_symbol_asset_quote = self._normalize_quote_asset_for_exchange(
+                _hedge_q_raw, self.hedge_exchange
             )
         self.trade_provider.start()
         self.orderbook_provider.start()
-        if self.anchor_orderbook_provider is not None:
-            self.anchor_orderbook_provider.start()
+        if self.hedge_orderbook_provider is not None:
+            self.hedge_orderbook_provider.start()
         self._initialize_balances()
-        self._initialize_anchor_balances()
+        self._initialize_hedge_balances()
 
-    def _convert_anchor_ob_to_main_units(
-        self, anchor_ob: Orderbook
+    def _convert_hedge_ob_to_main_units(
+        self, hedge_ob: Orderbook
     ) -> Orderbook | None:
-        """Map anchor orderbook ticks/lots to main exchange tick/lot units."""
-        if self._anchor_tick_size is None or self._anchor_lot_size is None:
+        """Map hedge orderbook ticks/lots to main exchange tick/lot units."""
+        if self._hedge_tick_size is None or self._hedge_lot_size is None:
             return None
-        price_scale = float(self._anchor_tick_size / self._tick_size)
-        quote_scale = float(self._anchor_quote_to_main_quote_scale())
-        qty_scale = float(self._anchor_lot_size / self._lot_size)
+        price_scale = float(self._hedge_tick_size / self._tick_size)
+        quote_scale = float(self._hedge_quote_to_main_quote_scale())
+        qty_scale = float(self._hedge_lot_size / self._lot_size)
 
         bids = []
         asks = []
-        for lev in anchor_ob.bids:
+        for lev in hedge_ob.bids:
             p_main = max(1, int(round(float(lev.price) * price_scale * quote_scale)))
             q_main = max(0, int(round(float(lev.qty) * qty_scale)))
             if q_main <= 0:
                 continue
             bids.append((p_main, q_main))
-        for lev in anchor_ob.asks:
+        for lev in hedge_ob.asks:
             p_main = max(1, int(round(float(lev.price) * price_scale * quote_scale)))
             q_main = max(0, int(round(float(lev.qty) * qty_scale)))
             if q_main <= 0:
@@ -341,28 +341,28 @@ class OrderFlowStepper:
             for (p, q) in asks
         ]
         return Orderbook(
-            t_ms=int(anchor_ob.t_ms),
+            t_ms=int(hedge_ob.t_ms),
             mid=float(mid_main),
             tick_size=float(self._tick_size),
             bids=bid_levels,
             asks=ask_levels,
         )
 
-    def _anchor_quote_to_main_quote_scale(self) -> float:
+    def _hedge_quote_to_main_quote_scale(self) -> float:
         """
-        Convert anchor quote-currency price units into main quote-currency units.
+        Convert hedge quote-currency price units into main quote-currency units.
         Most markets are already aligned (scale=1). Handle common Iran quote aliases:
           1 TMN = 10 IRT (Rial).
         """
         main_q = str(self._main_symbol_asset_quote or "").upper().strip()
-        anchor_q = str(self._anchor_symbol_asset_quote or "").upper().strip()
-        if not main_q or not anchor_q or main_q == anchor_q:
+        hedge_q = str(self._hedge_symbol_asset_quote or "").upper().strip()
+        if not main_q or not hedge_q or main_q == hedge_q:
             return 1.0
         # Toman -> Rial
-        if anchor_q == "TMN" and main_q in {"IRT", "RLS"}:
+        if hedge_q == "TMN" and main_q in {"IRT", "RLS"}:
             return 10.0
         # Rial -> Toman
-        if anchor_q in {"IRT", "RLS"} and main_q == "TMN":
+        if hedge_q in {"IRT", "RLS"} and main_q == "TMN":
             return 0.1
         return 1.0
 
@@ -731,46 +731,46 @@ class OrderFlowStepper:
             cash_tick_lot = cash_native / (self._tick_size * self._lot_size)
         return int(round(inv_lots)), int(round(cash_tick_lot))
 
-    def _anchor_balance_total(self, asset: str) -> float:
+    def _hedge_balance_total(self, asset: str) -> float:
         for a in self._balance_asset_aliases(asset):
-            if a in self.anchor_balances:
-                return self._to_float((self.anchor_balances.get(a) or {}).get("total", 0.0))
+            if a in self.hedge_balances:
+                return self._to_float((self.hedge_balances.get(a) or {}).get("total", 0.0))
         return 0.0
 
-    def _initialize_anchor_balances(self) -> None:
-        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
-            self.anchor_balances = {}
+    def _initialize_hedge_balances(self) -> None:
+        if not (self.use_hedge_portfolio_balances and self.hedge_exchange):
+            self.hedge_balances = {}
             return
-        raw = get_balances(self.anchor_exchange, api_token=self.anchor_private_api_token) or {}
-        self.anchor_balances = self._normalize_balances(raw)
+        raw = get_balances(self.hedge_exchange, api_token=self.hedge_private_api_token) or {}
+        self.hedge_balances = self._normalize_balances(raw)
 
-    def _refresh_anchor_balances_from_rest(self) -> None:
-        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
-            self.anchor_balances = {}
+    def _refresh_hedge_balances_from_rest(self) -> None:
+        if not (self.use_hedge_portfolio_balances and self.hedge_exchange):
+            self.hedge_balances = {}
             return
-        fresh = get_balances(self.anchor_exchange, api_token=self.anchor_private_api_token) or {}
+        fresh = get_balances(self.hedge_exchange, api_token=self.hedge_private_api_token) or {}
         if fresh:
-            self.anchor_balances = self._normalize_balances(fresh)
+            self.hedge_balances = self._normalize_balances(fresh)
 
-    def _anchor_inventory_cash_in_main_units(self) -> tuple[int, int]:
+    def _hedge_inventory_cash_in_main_units(self) -> tuple[int, int]:
         """
-        Convert anchor-account balances to main model units:
+        Convert hedge-account balances to main model units:
         - inventory in main lots
         - cash in main tick*lot units
         """
-        if not (self.use_anchor_portfolio_balances and self.anchor_exchange):
+        if not (self.use_hedge_portfolio_balances and self.hedge_exchange):
             return 0, 0
-        base = self._anchor_symbol_asset_base
-        quote = self._anchor_symbol_asset_quote
+        base = self._hedge_symbol_asset_base
+        quote = self._hedge_symbol_asset_quote
         if not base and not quote:
             return 0, 0
         inv_lots = 0.0
         cash_tick_lot = 0.0
         if base:
-            inv_native = self._anchor_balance_total(base)
+            inv_native = self._hedge_balance_total(base)
             inv_lots = inv_native / max(1e-12, self._lot_size)
         if quote:
-            cash_native = self._anchor_balance_total(quote)
+            cash_native = self._hedge_balance_total(quote)
             cash_tick_lot = cash_native / max(1e-12, self._tick_size * self._lot_size)
         return int(round(inv_lots)), int(round(cash_tick_lot))
 
@@ -833,8 +833,8 @@ class OrderFlowStepper:
     def close(self) -> None:
         self.trade_provider.stop()
         self.orderbook_provider.stop()
-        if self.anchor_orderbook_provider is not None:
-            self.anchor_orderbook_provider.stop()
+        if self.hedge_orderbook_provider is not None:
+            self.hedge_orderbook_provider.stop()
 
     def advance(self, t_end_ms: int | None = None) -> Step | None:
         """Fetch one step for [t_end_ms - T_ms, t_end_ms]. Return None on orderbook failure."""
@@ -855,23 +855,23 @@ class OrderFlowStepper:
         main_buy_ref = float(m_buy)
         main_sell_ref = float(m_sell)
 
-        # Anchor representative prices (ticks), converted into main tick units.
-        anchor_buy_ref: float | None = None
-        anchor_sell_ref: float | None = None
-        if self.anchor_orderbook_provider is not None:
+        # Hedge representative prices (ticks), converted into main tick units.
+        hedge_buy_ref: float | None = None
+        hedge_sell_ref: float | None = None
+        if self.hedge_orderbook_provider is not None:
             try:
-                anchor_ob_raw = self.anchor_orderbook_provider.get_orderbook(t_end_ms)
+                hedge_ob_raw = self.hedge_orderbook_provider.get_orderbook(t_end_ms)
             except Exception:
-                anchor_ob_raw = None
-            if anchor_ob_raw is not None:
-                anchor_ob_main = self._convert_anchor_ob_to_main_units(anchor_ob_raw)
-                if anchor_ob_main is not None:
+                hedge_ob_raw = None
+            if hedge_ob_raw is not None:
+                hedge_ob_main = self._convert_hedge_ob_to_main_units(hedge_ob_raw)
+                if hedge_ob_main is not None:
                     a_buy, a_sell = reference_prices_ticks_from_orderbook(
-                        anchor_ob_main,
+                        hedge_ob_main,
                         target_depth_lots=self._representative_price_target_depth_lots,
                     )
-                    anchor_buy_ref = float(a_buy)
-                    anchor_sell_ref = float(a_sell)
+                    hedge_buy_ref = float(a_buy)
+                    hedge_sell_ref = float(a_sell)
         trades_list = self.trade_provider.get_trades(t_start_ms, t_end_ms)
         if hasattr(self.trade_provider, "get_private_trades"):
             try:
@@ -905,11 +905,11 @@ class OrderFlowStepper:
         else:
             # REST-mode balance source of truth: replace balances each step.
             self._refresh_balances_from_rest()
-        self._refresh_anchor_balances_from_rest()
+        self._refresh_hedge_balances_from_rest()
 
         buy_lots, sell_lots = self._buy_sell_lots_from_trades(trades_list)
         inventory, cash = self._inventory_cash_from_balances()
-        anchor_inventory, anchor_cash = self._anchor_inventory_cash_in_main_units()
+        hedge_inventory, hedge_cash = self._hedge_inventory_cash_in_main_units()
         private_fills_bid = tuple(self.last_private_trade_fills_bid)
         private_fills_ask = tuple(self.last_private_trade_fills_ask)
         private_trade_fee_tick_lot = self._private_trades_fee_tick_lot()
@@ -926,10 +926,10 @@ class OrderFlowStepper:
             private_fills_ask,
             main_buy_ref,
             main_sell_ref,
-            anchor_buy_ref,
-            anchor_sell_ref,
-            int(anchor_inventory),
-            int(anchor_cash),
+            hedge_buy_ref,
+            hedge_sell_ref,
+            int(hedge_inventory),
+            int(hedge_cash),
         )
         self.steps.append(step)
         return step

@@ -13,8 +13,8 @@ class ParsedStep:
       (t_end_ms, ob, buy_lots, sell_lots, inventory, cash,
        private_trade_fee_tick_lot, private_fills_bid, private_fills_ask,
        main_buy_ref_ticks, main_sell_ref_ticks,
-       anchor_buy_ref_ticks, anchor_sell_ref_ticks,
-       anchor_inventory, anchor_cash)
+       hedge_buy_ref_ticks, hedge_sell_ref_ticks,
+       hedge_inventory, hedge_cash)
     """
 
     t_end_ms: int
@@ -28,10 +28,10 @@ class ParsedStep:
     private_fills_ask: tuple[tuple[int, int], ...]
     main_buy_ref: float
     main_sell_ref: float
-    anchor_buy_ref: float | None
-    anchor_sell_ref: float | None
-    anchor_inventory: int
-    anchor_cash: int | float
+    hedge_buy_ref: float | None
+    hedge_sell_ref: float | None
+    hedge_inventory: int
+    hedge_cash: int | float
 
 
 def parse_step(step: Any) -> ParsedStep:
@@ -52,10 +52,10 @@ def parse_step(step: Any) -> ParsedStep:
         private_fills_ask,
         main_buy_ref,
         main_sell_ref,
-        anchor_buy_ref,
-        anchor_sell_ref,
-        anchor_inventory,
-        anchor_cash,
+        hedge_buy_ref,
+        hedge_sell_ref,
+        hedge_inventory,
+        hedge_cash,
     ) = step
     return ParsedStep(
         t_end_ms=int(t_end_ms),
@@ -69,8 +69,8 @@ def parse_step(step: Any) -> ParsedStep:
         private_fills_ask=tuple(private_fills_ask),
         main_buy_ref=float(main_buy_ref),
         main_sell_ref=float(main_sell_ref),
-        anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
-        anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
-        anchor_inventory=int(anchor_inventory),
-        anchor_cash=anchor_cash,
+        hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
+        hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
+        hedge_inventory=int(hedge_inventory),
+        hedge_cash=hedge_cash,
     )

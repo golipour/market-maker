@@ -295,10 +295,10 @@ async def run(args: argparse.Namespace) -> None:
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
     primary_spec = build_instrument_spec(exchange, args.symbol)
-    anchor_exchange = args.anchor_exchange.lower().strip() if args.anchor_exchange else None
-    anchor_mode = (args.anchor_mode or mode).lower().strip()
-    anchor_spec = build_instrument_spec(anchor_exchange, args.symbol) if anchor_exchange else None
-    binding = SymbolBinding(primary=primary_spec, secondary=anchor_spec)
+    hedge_exchange = args.hedge_exchange.lower().strip() if args.hedge_exchange else None
+    hedge_mode = (args.hedge_mode or mode).lower().strip()
+    hedge_spec = build_instrument_spec(hedge_exchange, args.symbol) if hedge_exchange else None
+    binding = SymbolBinding(primary=primary_spec, hedge=hedge_spec)
     selection = build_adapter_selection(
         exchange,
         args.symbol,
@@ -308,12 +308,12 @@ async def run(args: argparse.Namespace) -> None:
         args.poll_ms,
     )
     adapter = selection.adapter
-    anchor_selection = None
-    if anchor_exchange:
-        anchor_selection = build_adapter_selection(
-            anchor_exchange,
+    hedge_selection = None
+    if hedge_exchange:
+        hedge_selection = build_adapter_selection(
+            hedge_exchange,
             args.symbol,
-            anchor_mode,
+            hedge_mode,
             args.depth,
             args.trades,
             args.poll_ms,
@@ -331,12 +331,12 @@ async def run(args: argparse.Namespace) -> None:
     )
     bus = InMemoryBus()
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
-    anchor_engine = None
-    if anchor_selection is not None:
-        anchor_engine = build_symbol_engine(
-            exchange=anchor_exchange,
+    hedge_engine = None
+    if hedge_selection is not None:
+        hedge_engine = build_symbol_engine(
+            exchange=hedge_exchange,
             symbol=args.symbol,
-            adapter=anchor_selection.adapter,
+            adapter=hedge_selection.adapter,
             bus=bus,
         )
     if api_token:
@@ -355,8 +355,8 @@ async def run(args: argparse.Namespace) -> None:
         )
     scheduler = IntervalScheduler(WallClock())
     await engine.publish_on_intervals(scheduler, [args.interval_ms])
-    if anchor_engine is not None:
-        await anchor_engine.publish_on_intervals(scheduler, [args.interval_ms])
+    if hedge_engine is not None:
+        await hedge_engine.publish_on_intervals(scheduler, [args.interval_ms])
     private_contract = {
         "requested_transport_mode": private_selection.requested_mode,
         "selected_transport": private_selection.mode,
@@ -378,13 +378,13 @@ async def run(args: argparse.Namespace) -> None:
         }
     contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, binding, private_contract)
     contract["selected_public_market_transport"] = selection.transport
-    if anchor_selection is not None:
-        contract["anchor_public_market"] = {
-            "exchange": anchor_exchange,
+    if hedge_selection is not None:
+        contract["hedge_public_market"] = {
+            "exchange": hedge_exchange,
             "symbol": args.symbol,
-            "requested_transport_mode": anchor_selection.requested_mode,
-            "selected_public_market_transport": anchor_selection.transport,
-            "public_market_adapter": type(anchor_selection.adapter).__name__,
+            "requested_transport_mode": hedge_selection.requested_mode,
+            "selected_public_market_transport": hedge_selection.transport,
+            "public_market_adapter": type(hedge_selection.adapter).__name__,
             "symbol_policy": "same domain symbol as primary; no tick-size conversion is applied",
         }
     print(json.dumps(contract, ensure_ascii=False))
@@ -395,12 +395,12 @@ async def run(args: argparse.Namespace) -> None:
         (event_topic, bus.subscribe_queue(event_topic)),
         (error_topic, bus.subscribe_queue(error_topic)),
     ]
-    if anchor_exchange:
-        anchor_event_topic = f"market:events:{anchor_exchange}:{args.symbol}:{args.interval_ms}"
-        anchor_error_topic = f"market:errors:{anchor_exchange}:{args.symbol}"
+    if hedge_exchange:
+        hedge_event_topic = f"market:events:{hedge_exchange}:{args.symbol}:{args.interval_ms}"
+        hedge_error_topic = f"market:errors:{hedge_exchange}:{args.symbol}"
         queues.extend([
-            (anchor_event_topic, bus.subscribe_queue(anchor_event_topic)),
-            (anchor_error_topic, bus.subscribe_queue(anchor_error_topic)),
+            (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
+            (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
         ])
     if args.raw:
         trade_topic = f"market:raw:{exchange}:{args.symbol}:trades"
@@ -409,12 +409,12 @@ async def run(args: argparse.Namespace) -> None:
             (trade_topic, bus.subscribe_queue(trade_topic)),
             (book_topic, bus.subscribe_queue(book_topic)),
         ])
-        if anchor_exchange:
-            anchor_trade_topic = f"market:raw:{anchor_exchange}:{args.symbol}:trades"
-            anchor_book_topic = f"market:raw:{anchor_exchange}:{args.symbol}:orderbook"
+        if hedge_exchange:
+            hedge_trade_topic = f"market:raw:{hedge_exchange}:{args.symbol}:trades"
+            hedge_book_topic = f"market:raw:{hedge_exchange}:{args.symbol}:orderbook"
             queues.extend([
-                (anchor_trade_topic, bus.subscribe_queue(anchor_trade_topic)),
-                (anchor_book_topic, bus.subscribe_queue(anchor_book_topic)),
+                (hedge_trade_topic, bus.subscribe_queue(hedge_trade_topic)),
+                (hedge_book_topic, bus.subscribe_queue(hedge_book_topic)),
             ])
     if private_reconciler is not None:
         private_topics = [
@@ -437,8 +437,8 @@ async def run(args: argparse.Namespace) -> None:
     scheduler_task = asyncio.create_task(scheduler.run())
     try:
         await engine.start()
-        if anchor_engine is not None:
-            await anchor_engine.start()
+        if hedge_engine is not None:
+            await hedge_engine.start()
         if execution_reconciler is not None:
             await execution_reconciler.start()
         if private_reconciler is not None:
@@ -466,8 +466,8 @@ async def run(args: argparse.Namespace) -> None:
             await private_reconciler.stop()
         if execution_reconciler is not None:
             await execution_reconciler.stop()
-        if anchor_engine is not None:
-            await anchor_engine.stop()
+        if hedge_engine is not None:
+            await hedge_engine.stop()
         await engine.stop()
 
 
@@ -483,8 +483,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
     parser.add_argument("--symbol", default="BTC_IRT")
-    parser.add_argument("--anchor-exchange", choices=["nobitex", "wallex"], default=None)
-    parser.add_argument("--anchor-mode", choices=["rest", "websocket"], default=None)
+    parser.add_argument("--hedge-exchange", choices=["nobitex", "wallex"], default=None)
+    parser.add_argument("--hedge-mode", choices=["rest", "websocket"], default=None)
     parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
     parser.add_argument("--private-api-token", default=None)
     parser.add_argument("--private-api-token-env", default=None)

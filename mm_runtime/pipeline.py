@@ -44,8 +44,8 @@ def build_pipeline(
     lot_size: int = 1,
     exchange: str | None = None,
     symbol: str | None = None,
-    anchor_exchange: str | None = None,
-    anchor_symbol: str | None = None,
+    hedge_exchange: str | None = None,
+    hedge_symbol: str | None = None,
 ) -> tuple[
     TorchHurdleWeibullModel,
     MarketOrderFlowTester,
@@ -68,7 +68,7 @@ def build_pipeline(
         DefaultExecutionRule,
         ObservedStepExecutionModel,
     )
-    from order_flow_stepper import AnchorGaussianRepPriceModel
+    from order_flow_stepper import HedgeGaussianRepPriceModel
 
     mpc_kw = config["mpc_kwargs"]
     spread_max = mpc_kw["spread_max"]
@@ -90,27 +90,27 @@ def build_pipeline(
     # maker_fee is retained for MPC compatibility (it reads execution_model.maker_fee).
     execution_model = ObservedStepExecutionModel(maker_fee=float(exec_kw.get("maker_fee", 0.0)))
     runner_execution_model = execution_model
-    anchor_price_model = AnchorGaussianRepPriceModel(
-        decay=float(config.get("anchor_price_model_decay", 0.97) or 0.97),
-        sigma_min_ticks=float(config.get("anchor_price_model_sigma_min_ticks", 1.0) or 1.0),
+    hedge_price_model = HedgeGaussianRepPriceModel(
+        decay=float(config.get("hedge_price_model_decay", 0.97) or 0.97),
+        sigma_min_ticks=float(config.get("hedge_price_model_sigma_min_ticks", 1.0) or 1.0),
     )
     _ax = (
-        str(anchor_exchange).strip()
-        if anchor_exchange is not None
-        else str(config.get("anchor_exchange") or "").strip()
+        str(hedge_exchange).strip()
+        if hedge_exchange is not None
+        else str(config.get("hedge_exchange") or "").strip()
     )
     _asym = (
-        str(anchor_symbol).strip()
-        if anchor_symbol is not None
-        else str(config.get("anchor_symbol") or "").strip()
+        str(hedge_symbol).strip()
+        if hedge_symbol is not None
+        else str(config.get("hedge_symbol") or "").strip()
     )
     _hedge = HedgePolicy.from_mpc_and_instruments(
         mpc_kw,
         primary=InstrumentId(
             exchange=str(exchange or "").strip(), symbol=str(symbol or "").strip()
         ),
-        anchor_exchange=_ax or None,
-        anchor_symbol=_asym or None,
+        hedge_exchange=_ax or None,
+        hedge_symbol=_asym or None,
     )
     mc_mpc_kw = {
         "n_components": mpc_kw["n_components"],
@@ -145,7 +145,7 @@ def build_pipeline(
         price_model,
         market_order_flow_model,
         execution_model,
-        anchor_price_model=anchor_price_model,
+        hedge_price_model=hedge_price_model,
         **{k: v for k, v in mc_mpc_kw.items() if k in _get_init_params(MonteCarloMPCTensorBatched)},
     )
     # Bounds: bid/ask spread always [1, spread_max]; single source is spread_max.
@@ -171,7 +171,7 @@ def build_pipeline(
         execution_rule,
         execution_model,
         runner_execution_model,
-        anchor_price_model,
+        hedge_price_model,
     )
 
 
@@ -210,22 +210,22 @@ def create_runner(
     expected_mid_debug_every: int = 1,
     live_order_execution: bool = False,
     action_start_after_steps: int = 0,
-    anchor_exchange: str | None = None,
-    anchor_symbol: str | None = None,
-    use_anchor_websocket_market_data: bool = True,
-    anchor_depth_limit: int | None = None,
-    anchor_orderbook_poll_interval_ms: int | None = None,
-    anchor_orderbook_buffer_ms: int | None = None,
-    anchor_websocket_reconnect_ms: int | None = None,
+    hedge_exchange: str | None = None,
+    hedge_symbol: str | None = None,
+    use_hedge_websocket_market_data: bool = True,
+    hedge_depth_limit: int | None = None,
+    hedge_orderbook_poll_interval_ms: int | None = None,
+    hedge_orderbook_buffer_ms: int | None = None,
+    hedge_websocket_reconnect_ms: int | None = None,
     main_representative_price_target_depth_lots: float | None = None,
-    anchor_representative_price_target_depth_lots: float = 1000.0,
-    use_anchor_gaussian_price_model: bool = True,
-    anchor_price_model_decay: float = 0.97,
-    anchor_price_model_sigma_min_ticks: float = 1.0,
-    anchor_private_api_token: str | None = None,
-    use_anchor_portfolio_balances: bool = False,
-    anchor_hedge_enabled: bool = False,
-    anchor_price_model: object | None = None,
+    hedge_representative_price_target_depth_lots: float = 1000.0,
+    use_hedge_gaussian_price_model: bool = True,
+    hedge_price_model_decay: float = 0.97,
+    hedge_price_model_sigma_min_ticks: float = 1.0,
+    hedge_private_api_token: str | None = None,
+    use_hedge_portfolio_balances: bool = False,
+    hedge_enabled: bool = False,
+    hedge_price_model: object | None = None,
     valuation_policy: ValuationPolicy | str | None = None,
 ) -> OrderFlowRunner:
     """
@@ -254,20 +254,20 @@ def create_runner(
         private_api_token=private_api_token,
         step_window_mode=step_window_mode,
         balance_update_mode=balance_update_mode,
-        anchor_exchange=anchor_exchange,
-        anchor_symbol=anchor_symbol,
-        use_anchor_websocket_market_data=use_anchor_websocket_market_data,
-        anchor_depth_limit=anchor_depth_limit,
-        anchor_orderbook_poll_interval_ms=anchor_orderbook_poll_interval_ms,
-        anchor_orderbook_buffer_ms=anchor_orderbook_buffer_ms,
-        anchor_websocket_reconnect_ms=anchor_websocket_reconnect_ms,
+        hedge_exchange=hedge_exchange,
+        hedge_symbol=hedge_symbol,
+        use_hedge_websocket_market_data=use_hedge_websocket_market_data,
+        hedge_depth_limit=hedge_depth_limit,
+        hedge_orderbook_poll_interval_ms=hedge_orderbook_poll_interval_ms,
+        hedge_orderbook_buffer_ms=hedge_orderbook_buffer_ms,
+        hedge_websocket_reconnect_ms=hedge_websocket_reconnect_ms,
         main_representative_price_target_depth_lots=main_representative_price_target_depth_lots,
-        anchor_representative_price_target_depth_lots=anchor_representative_price_target_depth_lots,
-        use_anchor_gaussian_price_model=use_anchor_gaussian_price_model,
-        anchor_price_model_decay=anchor_price_model_decay,
-        anchor_price_model_sigma_min_ticks=anchor_price_model_sigma_min_ticks,
-        anchor_private_api_token=anchor_private_api_token,
-        use_anchor_portfolio_balances=use_anchor_portfolio_balances,
+        hedge_representative_price_target_depth_lots=hedge_representative_price_target_depth_lots,
+        use_hedge_gaussian_price_model=use_hedge_gaussian_price_model,
+        hedge_price_model_decay=hedge_price_model_decay,
+        hedge_price_model_sigma_min_ticks=hedge_price_model_sigma_min_ticks,
+        hedge_private_api_token=hedge_private_api_token,
+        use_hedge_portfolio_balances=use_hedge_portfolio_balances,
     )
     return OrderFlowRunner(
         stepper=stepper,
@@ -288,8 +288,8 @@ def create_runner(
         expected_mid_debug_every=expected_mid_debug_every,
         live_order_execution=live_order_execution,
         action_start_after_steps=action_start_after_steps,
-        anchor_hedge_enabled=anchor_hedge_enabled,
-        anchor_price_model=anchor_price_model,
+        hedge_enabled=hedge_enabled,
+        hedge_price_model=hedge_price_model,
         valuation_policy=valuation_policy,
     )
 
@@ -308,7 +308,7 @@ def main() -> None:
     args = {
         "exchange": "nobitex",
         "symbol": "USDT_IRT",
-        "anchor_exchange": "wallex",
+        "hedge_exchange": "wallex",
         "T_ms": 10000,
         "animation_interval_ms": 10000,
         "orderbook_ticks": 50,
@@ -329,25 +329,25 @@ def main() -> None:
         "expected_mid_n_samples": 32,
         "expected_mid_debug": False,
         "expected_mid_debug_every": 1,
-        "anchor_symbol": None,  # defaults to args["symbol"] when anchor_exchange is set
-        "use_anchor_websocket_market_data": True,
-        "anchor_depth_limit": None,  # defaults to depth_limit
-        "anchor_orderbook_poll_interval_ms": None,  # only used when anchor websocket is disabled
-        "anchor_orderbook_buffer_ms": None,  # defaults to orderbook_buffer_ms
-        "anchor_websocket_reconnect_ms": None,  # defaults to websocket_reconnect_ms
-        "main_representative_price_target_depth_lots": None,  # None => same as anchor target depth
-        "anchor_representative_price_target_depth_lots": 1e3,
-        "use_anchor_gaussian_price_model": True,
-        "anchor_price_model_decay": 0.9,
-        "anchor_price_model_sigma_min_ticks": 1.0,
-        "anchor_private_api_token": "18404|41TYyNTlan4QZhnaBykIkIwbCxZz3roczX7Pvuyr",  # defaults to private_api_token when None
-        "use_anchor_portfolio_balances": True,
+        "hedge_symbol": None,  # defaults to args["symbol"] when hedge_exchange is set
+        "use_hedge_websocket_market_data": True,
+        "hedge_depth_limit": None,  # defaults to depth_limit
+        "hedge_orderbook_poll_interval_ms": None,  # only used when hedge websocket is disabled
+        "hedge_orderbook_buffer_ms": None,  # defaults to orderbook_buffer_ms
+        "hedge_websocket_reconnect_ms": None,  # defaults to websocket_reconnect_ms
+        "main_representative_price_target_depth_lots": None,  # None => same as hedge target depth
+        "hedge_representative_price_target_depth_lots": 1e3,
+        "use_hedge_gaussian_price_model": True,
+        "hedge_price_model_decay": 0.9,
+        "hedge_price_model_sigma_min_ticks": 1.0,
+        "hedge_private_api_token": "18404|41TYyNTlan4QZhnaBykIkIwbCxZz3roczX7Pvuyr",  # defaults to private_api_token when None
+        "use_hedge_portfolio_balances": True,
         # Plot windows toggles (performance): Figure 1 (main) is always enabled.
         "enable_loss_figure": False,    # Figure 2
         "enable_action_figure": True,  # Figure 3
         "enable_price_figure": False,   # Figure 4
         "enable_qq_figure": False,      # Figure 5
-        "enable_anchor_figure": True,  # Figure 6
+        "enable_hedge_figure": True,  # Figure 6
         # Inventory marking for runner wealth / inv_value plots: "sell_ref" or "mid"
         "valuation_policy": "sell_ref",
     }
@@ -395,10 +395,10 @@ def main() -> None:
             "size_coef": 0.0,                 # penalize (Q_range_bid-target)^2 + (Q_range_ask-target)^2
             "spread_coef": 100.0,               # penalize bid+ask spread at spread_target_lots cumulative depth
             "spread_target_lots": 50.0,        # depth level used to measure bid/ask spread term
-            "anchor_hedge_enabled": True,  # legacy ON/OFF (see mm_core.hedge.policy.HedgePolicy)
-            "anchor_hedge_coef": 0.0,  # deprecated ON/OFF fallback when combined with enabled
-            "anchor_hedge_fee": 0.0000025,  # proportional fee on simulated hedge venue trades
-            # Optional: "anchor_hedge_reward_weight": 1.0,  # scales hedge ΔW in MPC objective
+            "hedge_enabled": True,  # legacy ON/OFF (see mm_core.hedge.policy.HedgePolicy)
+            "hedge_coef": 0.0,  # deprecated ON/OFF fallback when combined with enabled
+            "hedge_fee": 0.0000025,  # proportional fee on simulated hedge venue trades
+            # Optional: "hedge_reward_weight": 1.0,  # scales hedge ΔW in MPC objective
             "target_inv": 1e3,
             "total_q_target": 1e3,           # finite-range target on [0, spread_max]
             "project_total_q_target": False,  # if True, rescale L after updates to match total_q_target
@@ -423,26 +423,26 @@ def main() -> None:
         execution_rule,
         execution_model,
         runner_execution_model,
-        anchor_price_model,
+        hedge_price_model,
     ) = build_pipeline(
         pipeline,
         decay=args["decay"],
         lot_size=args["lot_size"],
         exchange=args["exchange"],
         symbol=args["symbol"],
-        anchor_exchange=args.get("anchor_exchange"),
-        anchor_symbol=args.get("anchor_symbol"),
+        hedge_exchange=args.get("hedge_exchange"),
+        hedge_symbol=args.get("hedge_symbol"),
     )
     spread_max = pipeline["mpc_kwargs"]["spread_max"]
     execution_mode = str(pipeline.get("execution_mode", "simulated")).lower()
     live_order_execution = execution_mode == "real"
     _mpc_cfg = (pipeline.get("mpc_kwargs", {}) or {})
-    anchor_hedge_enabled = HedgePolicy.from_mpc_and_instruments(
+    hedge_enabled = HedgePolicy.from_mpc_and_instruments(
         _mpc_cfg,
         primary=InstrumentId(exchange=args["exchange"], symbol=args["symbol"]),
-        anchor_exchange=args.get("anchor_exchange"),
-        anchor_symbol=args.get("anchor_symbol"),
-    ).include_anchor_in_portfolio
+        hedge_exchange=args.get("hedge_exchange"),
+        hedge_symbol=args.get("hedge_symbol"),
+    ).include_hedge_in_portfolio
     exec_kw = pipeline.get("execution_model_kwargs", {}) or {}
     sim_initial_inventory = int(exec_kw.get("simulated_initial_inventory", 0))
     sim_initial_cash = float(exec_kw.get("simulated_initial_cash", 0.0))
@@ -478,22 +478,22 @@ def main() -> None:
         expected_mid_debug_every=args["expected_mid_debug_every"],
         live_order_execution=live_order_execution,
         action_start_after_steps=args["action_start_after_steps"],
-        anchor_exchange=args["anchor_exchange"],
-        anchor_symbol=args["anchor_symbol"],
-        use_anchor_websocket_market_data=args["use_anchor_websocket_market_data"],
-        anchor_depth_limit=args["anchor_depth_limit"],
-        anchor_orderbook_poll_interval_ms=args["anchor_orderbook_poll_interval_ms"],
-        anchor_orderbook_buffer_ms=args["anchor_orderbook_buffer_ms"],
-        anchor_websocket_reconnect_ms=args["anchor_websocket_reconnect_ms"],
+        hedge_exchange=args["hedge_exchange"],
+        hedge_symbol=args["hedge_symbol"],
+        use_hedge_websocket_market_data=args["use_hedge_websocket_market_data"],
+        hedge_depth_limit=args["hedge_depth_limit"],
+        hedge_orderbook_poll_interval_ms=args["hedge_orderbook_poll_interval_ms"],
+        hedge_orderbook_buffer_ms=args["hedge_orderbook_buffer_ms"],
+        hedge_websocket_reconnect_ms=args["hedge_websocket_reconnect_ms"],
         main_representative_price_target_depth_lots=args["main_representative_price_target_depth_lots"],
-        anchor_representative_price_target_depth_lots=args["anchor_representative_price_target_depth_lots"],
-        use_anchor_gaussian_price_model=args["use_anchor_gaussian_price_model"],
-        anchor_price_model_decay=args["anchor_price_model_decay"],
-        anchor_price_model_sigma_min_ticks=args["anchor_price_model_sigma_min_ticks"],
-        anchor_private_api_token=args["anchor_private_api_token"],
-        use_anchor_portfolio_balances=args["use_anchor_portfolio_balances"],
-        anchor_hedge_enabled=anchor_hedge_enabled,
-        anchor_price_model=anchor_price_model,
+        hedge_representative_price_target_depth_lots=args["hedge_representative_price_target_depth_lots"],
+        use_hedge_gaussian_price_model=args["use_hedge_gaussian_price_model"],
+        hedge_price_model_decay=args["hedge_price_model_decay"],
+        hedge_price_model_sigma_min_ticks=args["hedge_price_model_sigma_min_ticks"],
+        hedge_private_api_token=args["hedge_private_api_token"],
+        use_hedge_portfolio_balances=args["use_hedge_portfolio_balances"],
+        hedge_enabled=hedge_enabled,
+        hedge_price_model=hedge_price_model,
         valuation_policy=args.get("valuation_policy"),
     )
     # Headless run loop. The runner emits a diagnostics frame each step when MM_DIAGNOSTICS=1.

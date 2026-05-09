@@ -340,7 +340,7 @@ def _mid_from_book_best_levels_batched(
 ) -> torch.Tensor:
     """
     Mid implied by post-flow best bid/ask from level volumes.
-    center_mid anchors absolute prices; spread_grid is 1..n_levels.
+    center_mid sets the absolute price reference; spread_grid is 1..n_levels.
     """
     big = float(spread_grid.max().item()) + 1000.0
     mask_b = (ob_bids > 0).to(center_mid.dtype)
@@ -610,7 +610,7 @@ class MonteCarloMPCTensorBatched:
         price_model: Any,
         market_flow_model: Any,
         execution_model: Any,
-        anchor_price_model: Any = None,
+        hedge_price_model: Any = None,
         n_components: int = 2,
         n_samples: int = 32,
         horizon: int = 4,
@@ -636,16 +636,16 @@ class MonteCarloMPCTensorBatched:
         size_coef: float = 0.0,
         spread_coef: float = 0.0,
         spread_target_lots: float = 1.0,
-        anchor_hedge_coef: float = 0.0,
-        anchor_hedge_fee: float = 0.0,
-        anchor_hedge_reward_weight: float = 1.0,
+        hedge_coef: float = 0.0,
+        hedge_fee: float = 0.0,
+        hedge_reward_weight: float = 1.0,
         total_q_target: float | int | None = None,
         project_total_q_target: bool = False,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
         self.execution_model = execution_model
-        self.anchor_price_model = anchor_price_model
+        self.hedge_price_model = hedge_price_model
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
@@ -670,10 +670,10 @@ class MonteCarloMPCTensorBatched:
         self.size_coef = max(0.0, float(size_coef))
         self.spread_coef = max(0.0, float(spread_coef))
         self.spread_target_lots = max(0.0, float(spread_target_lots))
-        # Legacy ``anchor_hedge_coef != 0`` enables hedge dynamics in rollouts (inventory coupling).
-        self.anchor_hedge_enabled = bool(float(anchor_hedge_coef) != 0.0)
-        self.anchor_hedge_fee = max(0.0, min(1.0 - 1e-9, float(anchor_hedge_fee)))
-        self.anchor_hedge_reward_weight = max(0.0, float(anchor_hedge_reward_weight))
+        # Legacy ``hedge_coef != 0`` enables hedge dynamics in rollouts (inventory coupling).
+        self.hedge_enabled = bool(float(hedge_coef) != 0.0)
+        self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
+        self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
         self.total_q_target = float(total_q_target) if total_q_target is not None else None
         self.project_total_q_target = bool(project_total_q_target)
         self._last_action: SigmoidMixtureAction | None = None
@@ -682,9 +682,9 @@ class MonteCarloMPCTensorBatched:
         self._last_J_mean_raw: float = 0.0
         self._last_E_dW_next: float = 0.0
         self._last_main_reward_mean: float = 0.0
-        self._last_anchor_reward_mean: float = 0.0
+        self._last_hedge_reward_mean: float = 0.0
         self._last_main_reward_mean_initial: float = 0.0
-        self._last_anchor_reward_mean_initial: float = 0.0
+        self._last_hedge_reward_mean_initial: float = 0.0
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
         self._x_torch: Any = None
         self._optimizer: Any = None
@@ -779,22 +779,22 @@ class MonteCarloMPCTensorBatched:
         target_depth = target_depth_lots_from_price_model(self.price_model)
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
-        # and anchor delta shocks (used when anchor hedge is enabled).
+        # and hedge delta shocks (used when hedge dynamics are enabled).
         def draw_samples():
             buy_vol = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             sell_vol = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             eps_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             eps_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            if self.anchor_price_model is not None and hasattr(self.anchor_price_model, "sample_deltas"):
-                d_anchor_buy, d_anchor_sell = self.anchor_price_model.sample_deltas(
+            if self.hedge_price_model is not None and hasattr(self.hedge_price_model, "sample_deltas"):
+                d_hedge_buy, d_hedge_sell = self.hedge_price_model.sample_deltas(
                     (self.n_samples, self.horizon),
                     device=_device,
                     dtype=dtype,
                     torch_mod=torch_mod,
                 )
             else:
-                d_anchor_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-                d_anchor_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
+                d_hedge_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
+                d_hedge_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
             for s in range(self.n_samples):
                 for h in range(self.horizon):
                     bv, sv = self.market_flow_model.sample((1,), device=_device, dtype=dtype)
@@ -803,7 +803,7 @@ class MonteCarloMPCTensorBatched:
                     eb, es = self.price_model.sample_residual((), device=_device, dtype=dtype)
                     eps_buy[s, h] = eb.squeeze()
                     eps_sell[s, h] = es.squeeze()
-            return buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell
+            return buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell
 
         batch_time_sec = 0.0
         if self.fixed_mc_samples:
@@ -813,8 +813,8 @@ class MonteCarloMPCTensorBatched:
                 fixed_sell_vol,
                 fixed_eps_buy,
                 fixed_eps_sell,
-                fixed_d_anchor_buy,
-                fixed_d_anchor_sell,
+                fixed_d_hedge_buy,
+                fixed_d_hedge_sell,
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
 
@@ -823,7 +823,7 @@ class MonteCarloMPCTensorBatched:
         best_J_mean: float | None = None  # E[ΔW] for the best action (for E_dW plot)
         best_J_mean_next: float | None = None  # E[ΔW_{t->t+1}] for best action
         best_main_reward_mean: float | None = None
-        best_anchor_reward_mean: float | None = None
+        best_hedge_reward_mean: float | None = None
         self._last_J_components_initial = None
         captured_initial_components = False
         t0 = time.perf_counter()
@@ -855,17 +855,17 @@ class MonteCarloMPCTensorBatched:
                     )
 
                 if self.fixed_mc_samples:
-                    buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell = (
+                    buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell = (
                         fixed_buy_vol,
                         fixed_sell_vol,
                         fixed_eps_buy,
                         fixed_eps_sell,
-                        fixed_d_anchor_buy,
-                        fixed_d_anchor_sell,
+                        fixed_d_hedge_buy,
+                        fixed_d_hedge_sell,
                     )
                 else:
                     t_batch = time.perf_counter()
-                    buy_vol, sell_vol, eps_buy, eps_sell, d_anchor_buy, d_anchor_sell = draw_samples()
+                    buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell = draw_samples()
                     batch_time_sec += time.perf_counter() - t_batch
 
                 inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
@@ -873,27 +873,27 @@ class MonteCarloMPCTensorBatched:
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
                 mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
-                anchor_buy_ref_t = torch_mod.full(
+                hedge_buy_ref_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.anchor_buy_ref if state.anchor_buy_ref is not None else state.buy_ref),
+                    float(state.hedge_buy_ref if state.hedge_buy_ref is not None else state.buy_ref),
                     dtype=dtype,
                     device=_device,
                 )
-                anchor_sell_ref_t = torch_mod.full(
+                hedge_sell_ref_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.anchor_sell_ref if state.anchor_sell_ref is not None else state.sell_ref),
+                    float(state.hedge_sell_ref if state.hedge_sell_ref is not None else state.sell_ref),
                     dtype=dtype,
                     device=_device,
                 )
-                anchor_inv_t = torch_mod.full(
+                hedge_inv_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(getattr(state, "anchor_inventory", 0)),
+                    float(getattr(state, "hedge_inventory", 0)),
                     dtype=dtype,
                     device=_device,
                 )
-                anchor_cash_t = torch_mod.full(
+                hedge_cash_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(getattr(state, "anchor_cash", 0.0)),
+                    float(getattr(state, "hedge_cash", 0.0)),
                     dtype=dtype,
                     device=_device,
                 )
@@ -903,7 +903,7 @@ class MonteCarloMPCTensorBatched:
 
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                total_anchor_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
+                total_hedge_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 action_uniformity_sum = torch_mod.zeros((), dtype=dtype, device=_device)
                 action_size_sum = torch_mod.zeros((), dtype=dtype, device=_device)
                 action_spread_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -997,28 +997,28 @@ class MonteCarloMPCTensorBatched:
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
-                    if self.anchor_hedge_enabled:
-                        d_buy = d_anchor_buy[:, h : h + 1]
-                        d_sell = d_anchor_sell[:, h : h + 1]
-                        anchor_buy_ref_next = anchor_buy_ref_t + d_buy
-                        anchor_sell_ref_next = anchor_sell_ref_t + d_sell
+                    if self.hedge_enabled:
+                        d_buy = d_hedge_buy[:, h : h + 1]
+                        d_sell = d_hedge_sell[:, h : h + 1]
+                        hedge_buy_ref_next = hedge_buy_ref_t + d_buy
+                        hedge_sell_ref_next = hedge_sell_ref_t + d_sell
                         d_inv = inv_delta.unsqueeze(1)  # fee-adjusted executed inventory change
-                        # Hedge trade at t+1 on anchor:
-                        # - d_inv>0 (longer main) -> sell anchor inventory at anchor bid
-                        # - d_inv<0 (shorter main) -> buy anchor inventory at anchor ask
-                        trade_cash_anchor = torch_mod.where(
+                        # Hedge trade at t+1 on hedge venue:
+                        # - d_inv>0 (longer main) -> sell hedge inventory at hedge bid
+                        # - d_inv<0 (shorter main) -> buy hedge inventory at hedge ask
+                        trade_cash_hedge = torch_mod.where(
                             d_inv >= 0.0,
-                            d_inv * anchor_sell_ref_next,
-                            d_inv * anchor_buy_ref_next,
+                            d_inv * hedge_sell_ref_next,
+                            d_inv * hedge_buy_ref_next,
                         )
-                        one_minus_anchor_fee = float(1.0 - self.anchor_hedge_fee)
-                        anchor_cash_next = anchor_cash_t + trade_cash_anchor * one_minus_anchor_fee
-                        anchor_inv_next = anchor_inv_t - d_inv
+                        one_minus_hedge_fee = float(1.0 - self.hedge_fee)
+                        hedge_cash_next = hedge_cash_t + trade_cash_hedge * one_minus_hedge_fee
+                        hedge_inv_next = hedge_inv_t - d_inv
                     else:
-                        anchor_buy_ref_next = anchor_buy_ref_t
-                        anchor_sell_ref_next = anchor_sell_ref_t
-                        anchor_cash_next = anchor_cash_t
-                        anchor_inv_next = anchor_inv_t
+                        hedge_buy_ref_next = hedge_buy_ref_t
+                        hedge_sell_ref_next = hedge_sell_ref_t
+                        hedge_cash_next = hedge_cash_t
+                        hedge_inv_next = hedge_inv_t
                     mid_next = _mid_from_book_best_levels_batched(
                         ob_bids_next,
                         ob_asks_next,
@@ -1040,25 +1040,25 @@ class MonteCarloMPCTensorBatched:
                     step_reward_main = _delta_wealth_mtm_batched(
                         sell_ref_t, inv_t, cash_t, sell_ref_next, inv_next, cash_next
                     )
-                    anchor_reward = torch_mod.zeros_like(step_reward_main)
-                    if self.anchor_hedge_enabled:
-                        anchor_wealth_t = anchor_cash_t + anchor_inv_t * anchor_sell_ref_t
-                        anchor_wealth_next = anchor_cash_next + anchor_inv_next * anchor_sell_ref_next
-                        anchor_reward = (anchor_wealth_next - anchor_wealth_t).squeeze(1)
-                    step_reward = step_reward_main + float(self.anchor_hedge_reward_weight) * anchor_reward
+                    hedge_reward = torch_mod.zeros_like(step_reward_main)
+                    if self.hedge_enabled:
+                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * hedge_sell_ref_t
+                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * hedge_sell_ref_next
+                        hedge_reward = (hedge_wealth_next - hedge_wealth_t).squeeze(1)
+                    step_reward = step_reward_main + float(self.hedge_reward_weight) * hedge_reward
                     if h == 0:
                         step_reward_0 = step_reward
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
-                    total_anchor_reward = total_anchor_reward + anchor_reward
+                    total_hedge_reward = total_hedge_reward + hedge_reward
 
                     mid_fallback_t = mid_next
                     inv_t = inv_next
                     cash_t = cash_next
-                    anchor_buy_ref_t = anchor_buy_ref_next
-                    anchor_sell_ref_t = anchor_sell_ref_next
-                    anchor_cash_t = anchor_cash_next
-                    anchor_inv_t = anchor_inv_next
+                    hedge_buy_ref_t = hedge_buy_ref_next
+                    hedge_sell_ref_t = hedge_sell_ref_next
+                    hedge_cash_t = hedge_cash_next
+                    hedge_inv_t = hedge_inv_next
 
                 # total_reward = ΔW per trajectory (same as W(s_{t+H}) - W(s_t)); inv_t = terminal inventory
                 action_uniformity_mean = action_uniformity_sum / float(self.horizon)
@@ -1073,8 +1073,8 @@ class MonteCarloMPCTensorBatched:
                 main_reward_mean_raw = torch_mod.nan_to_num(
                     total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
-                anchor_reward_mean_raw = torch_mod.nan_to_num(
-                    total_anchor_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                hedge_reward_mean_raw = torch_mod.nan_to_num(
+                    total_hedge_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
                 J, components = terminal_objective(
                     total_reward,
@@ -1102,12 +1102,12 @@ class MonteCarloMPCTensorBatched:
                 if not captured_initial_components:
                     self._last_J_components_initial = dict(self._last_J_components)
                     self._last_main_reward_mean_initial = _finite_item(main_reward_mean_raw)
-                    self._last_anchor_reward_mean_initial = _finite_item(anchor_reward_mean_raw)
+                    self._last_hedge_reward_mean_initial = _finite_item(hedge_reward_mean_raw)
                     captured_initial_components = True
                 self._last_J_mean_raw = _finite_item(J_mean_raw)
                 self._last_E_dW_next = _finite_item(J_mean_next_raw)
                 self._last_main_reward_mean = _finite_item(main_reward_mean_raw)
-                self._last_anchor_reward_mean = _finite_item(anchor_reward_mean_raw)
+                self._last_hedge_reward_mean = _finite_item(hedge_reward_mean_raw)
                 loss = -J
                 if torch_mod.isfinite(loss):
                     loss.backward()
@@ -1125,8 +1125,8 @@ class MonteCarloMPCTensorBatched:
                 best_J_mean_next = jn if math.isfinite(jn) else 0.0
                 mr = float(self._last_main_reward_mean)
                 best_main_reward_mean = mr if math.isfinite(mr) else 0.0
-                ar = float(self._last_anchor_reward_mean)
-                best_anchor_reward_mean = ar if math.isfinite(ar) else 0.0
+                ar = float(self._last_hedge_reward_mean)
+                best_hedge_reward_mean = ar if math.isfinite(ar) else 0.0
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -1158,8 +1158,8 @@ class MonteCarloMPCTensorBatched:
             self._last_E_dW_next = float(best_J_mean_next)
         if best_main_reward_mean is not None and math.isfinite(float(best_main_reward_mean)):
             self._last_main_reward_mean = float(best_main_reward_mean)
-        if best_anchor_reward_mean is not None and math.isfinite(float(best_anchor_reward_mean)):
-            self._last_anchor_reward_mean = float(best_anchor_reward_mean)
+        if best_hedge_reward_mean is not None and math.isfinite(float(best_hedge_reward_mean)):
+            self._last_hedge_reward_mean = float(best_hedge_reward_mean)
         if self.warm_start:
             self._last_action = best_action
         print(

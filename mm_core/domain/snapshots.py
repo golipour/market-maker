@@ -22,7 +22,7 @@ class StepSnapshot:
     Windowed snapshot for one instrument after assembly from the observed step.
 
     ``main_instrument`` is the typed canonical view; ``data`` retains ``raw`` / ``main`` /
-    ``anchor`` dicts for backward compatibility and JSON logs.
+    ``hedge`` dicts for backward compatibility and JSON logs.
     """
 
     instrument: InstrumentId

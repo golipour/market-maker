@@ -21,7 +21,7 @@ def representative_prices_batched(
     VWAP representative buy/sell prices to shared depth from level volumes.
 
     - `ob_bids`, `ob_asks`: (n_samples, n_levels) nonnegative volumes per spread level.
-    - `center_mid`: (n_samples, 1) mid anchor for absolute price reconstruction.
+    - `center_mid`: (n_samples, 1) mid reference for absolute price reconstruction.
     - `spread_grid`: (n_levels,) spread ticks for each level (typically 1..n_levels).
     - `target_depth`: max depth (in lots) to VWAP into (shared across bid+ask).
 

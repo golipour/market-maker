@@ -100,7 +100,7 @@ The structural sequence is:
    - Parses the step tuple (`mm_core.app.parsed_step.parse_step` → `ParsedStep`), optional **step snapshot** for typed units.
    - Runs **execution** of the *previous* action against the *current* step (inventory, PnL, histories).
    - Runs **testers / diagnostics MC** (e.g. expected mid), **MPC** to choose the **next** action, updates histories (`delta_*`, rewards, J components, etc.).
-3. At the end of a successful step, **`build_diagnostics_frame(runner, exchange, symbol, spread_max)`** assembles a large JSON-serializable **DiagnosticsFrame** (runner series, depth, action_depth, price diagnostics, LOF, anchor, loss specs, etc.).
+3. At the end of a successful step, **`build_diagnostics_frame(runner, exchange, symbol, spread_max)`** assembles a large JSON-serializable **DiagnosticsFrame** (runner series, depth, action_depth, price diagnostics, LOF, hedge, loss specs, etc.).
 4. **`emit_diagnostics(frame)`** (adapters) may print JSON and/or write to **Redis** (see §6).
 
 For **full narrative** of delayed execution, MPC vs diagnostic sampling, and model roles, see [PIPELINE_AND_DATA_FLOW.md](./PIPELINE_AND_DATA_FLOW.md).
@@ -133,7 +133,7 @@ Wire format is **`mm.diag.v2`**: **`SET`** stores a **`kind: full`** envelope (m
   - **Lifespan**: background **async Redis** loop — periodic **`GET`** of latest key + **`SUBSCRIBE`** to Pub/Sub; deduplicates by **`point.step_counter`**; maintains an in-memory deque of frames (**`MM_VIZ_MAX_FRAMES`**).
   - **`WebSocket /ws`**: pushes **`{type:"frame", frame: {...}}`** or compact **`{type:"frame_delta", patch: ...}`** when the Pub/Sub message is a delta; initial snapshot if already buffered.
   - **REST**: `/api/latest`, `/api/config`, `/api/history_steps`; optional **`/api/figures/*.png`** (matplotlib) for API/debug — **main UI uses client-side Plotly/Chart.js**, not PNG refresh.
-- **Static SPA** (`mm_viz/static/`): **Chart.js** for overview/price/QQ/anchor line charts; **Plotly.js** for Action & Depth and LOF panels (built from the same frame JSON in `plotly_action_lof.js`, aligned with `mpl_figures.py`).
+- **Static SPA** (`mm_viz/static/`): **Chart.js** for overview/price/QQ/hedge line charts; **Plotly.js** for Action & Depth and LOF panels (built from the same frame JSON in `plotly_action_lof.js`, aligned with `mpl_figures.py`).
 
 **Important:** If **`mm_viz` runs in Docker** and the market maker on the **host**, both must use a **Redis URL that resolves from each process** (e.g. host → `127.0.0.1`, container → `redis` service name).
 
@@ -177,7 +177,7 @@ To run **only Redis + `mm_viz`** (no DB/metrics containers):
 ## 8. Data shapes (conceptual)
 
 - **Step** (time bucket): order book + buy/sell volumes in lots; see pipeline doc.
-- **Diagnostics frame**: single JSON object per step, including **`point`** (e.g. `step_counter`), **`runner_series`** (full histories as arrays), **`depth`**, **`action_depth`**, **`price_diag`**, **`lof_*`**, **`anchor_diag`**, etc. The UI **tails** long series (e.g. last 500 points) for performance.
+- **Diagnostics frame**: single JSON object per step, including **`point`** (e.g. `step_counter`), **`runner_series`** (full histories as arrays), **`depth`**, **`action_depth`**, **`price_diag`**, **`lof_*`**, **`hedge_diag`**, etc. The UI **tails** long series (e.g. last 500 points) for performance.
 
 ---
 

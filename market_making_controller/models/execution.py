@@ -202,29 +202,29 @@ class ObservedStepExecutionModel:
             _private_fills_ask,
             main_buy_ref,
             main_sell_ref,
-            anchor_buy_ref,
-            anchor_sell_ref,
-            anchor_inventory,
-            anchor_cash,
+            hedge_buy_ref,
+            hedge_sell_ref,
+            hedge_inventory,
+            hedge_cash,
         ) = curr_step
         mid_curr = float(ob_curr.mid)
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         cash_f = float(cash_new)
         inv_i = int(inv_new)
-        anchor_inv_i = int(anchor_inventory)
-        anchor_cash_f = float(anchor_cash)
+        hedge_inv_i = int(hedge_inventory)
+        hedge_cash_f = float(hedge_cash)
 
         # Option B: liquidation-style mark-to-bid (sell-side representative price).
         main_ref_prev = float(prev_state.sell_ref)
         main_ref_next = float(main_sell_ref)
-        anchor_ref_prev = float(
-            prev_state.anchor_sell_ref
-            if prev_state.anchor_sell_ref is not None
+        hedge_ref_prev = float(
+            prev_state.hedge_sell_ref
+            if prev_state.hedge_sell_ref is not None
             else prev_state.sell_ref
         )
-        anchor_ref_next = float(
-            anchor_sell_ref
-            if anchor_sell_ref is not None
+        hedge_ref_next = float(
+            hedge_sell_ref
+            if hedge_sell_ref is not None
             else main_ref_next
         )
 
@@ -233,10 +233,10 @@ class ObservedStepExecutionModel:
         main_wealth_pnl = main_wealth_after - main_wealth_before
         wealth_before = (
             main_wealth_before
-            + float(getattr(prev_state, "anchor_cash", 0.0))
-            + int(getattr(prev_state, "anchor_inventory", 0)) * anchor_ref_prev
+            + float(getattr(prev_state, "hedge_cash", 0.0))
+            + int(getattr(prev_state, "hedge_inventory", 0)) * hedge_ref_prev
         )
-        wealth_after = main_wealth_after + anchor_cash_f + anchor_inv_i * anchor_ref_next
+        wealth_after = main_wealth_after + hedge_cash_f + hedge_inv_i * hedge_ref_next
         wealth_pnl = wealth_after - wealth_before
         inventory_pnl = prev_state.inventory * (main_ref_next - main_ref_prev)
         delta_inv = inv_i - prev_state.inventory
@@ -254,10 +254,10 @@ class ObservedStepExecutionModel:
             cash=cash_f,
             buy_ref=float(main_buy_ref),
             sell_ref=float(main_sell_ref),
-            anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
-            anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
-            anchor_inventory=anchor_inv_i,
-            anchor_cash=anchor_cash_f,
+            hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
+            hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
+            hedge_inventory=hedge_inv_i,
+            hedge_cash=hedge_cash_f,
         )
         return next_state, DeltaPnL(
             spread_pnl=float(spread_pnl),

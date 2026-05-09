@@ -44,7 +44,7 @@ def _finite_series_ylim(
 def figure_action_depth_window(frame: dict[str, Any]) -> plt.Figure:
     """
     Match ``fig_action`` in ``order_flow_animation.run_animation``:
-    5 rows — J components, main/anchor rewards, depth, action marginal, action cumulative.
+    5 rows — J components, main/hedge rewards, depth, action marginal, action cumulative.
     X-axis for rows 0–1 is decision index (same ordering as the runner histories).
     """
     rs = (frame.get("runner_series") or {}) if isinstance(frame, dict) else {}
@@ -99,32 +99,32 @@ def figure_action_depth_window(frame: dict[str, Any]) -> plt.Figure:
         ax_j.set_xlim(0, 1)
         ax_j.set_ylim(-1, 1)
 
-    # --- Row 1: Main / anchor rewards ---
+    # --- Row 1: Main / hedge rewards ---
     ax_rw.set_xlabel("Decision index")
     ax_rw.set_ylabel("Reward (tick×lot)")
-    ax_rw.set_title("Main and anchor rewards (initial vs optimal)")
+    ax_rw.set_title("Main and hedge rewards (initial vs optimal)")
     ax_rw.axhline(0, color="gray", linewidth=0.8, linestyle="-")
 
     main_opt = list(rw.get("main_opt") or [])
-    anchor_opt = list(rw.get("anchor_opt") or [])
+    hedge_opt = list(rw.get("hedge_opt") or [])
     main_init = list(rw.get("main_init") or [])
-    anchor_init = list(rw.get("anchor_init") or [])
-    n_opt = min(len(main_opt), len(anchor_opt))
+    hedge_init = list(rw.get("hedge_init") or [])
+    n_opt = min(len(main_opt), len(hedge_opt))
     if n_opt > 0:
         t = np.arange(n_opt, dtype=np.float64)
         ax_rw.plot(t, main_opt[:n_opt], color="blue", linewidth=1.2, label="Main reward (opt)")
-        ax_rw.plot(t, anchor_opt[:n_opt], color="orange", linewidth=1.2, label="Anchor reward (opt)")
-        n_init = min(len(main_init), len(anchor_init))
+        ax_rw.plot(t, hedge_opt[:n_opt], color="orange", linewidth=1.2, label="Hedge reward (opt)")
+        n_init = min(len(main_init), len(hedge_init))
         if n_init > 0:
             ti = np.arange(n_init, dtype=np.float64)
             ax_rw.plot(ti, main_init[:n_init], color="blue", linewidth=1.1, linestyle=":", label="Main reward (init)")
-            ax_rw.plot(ti, anchor_init[:n_init], color="orange", linewidth=1.1, linestyle=":", label="Anchor reward (init)")
+            ax_rw.plot(ti, hedge_init[:n_init], color="orange", linewidth=1.1, linestyle=":", label="Hedge reward (init)")
         ax_rw.legend(loc="upper right", fontsize=7)
         if n_opt > 1:
             ax_rw.set_xlim(t[0], t[-1])
-        all_y = main_opt[:n_opt] + anchor_opt[:n_opt]
+        all_y = main_opt[:n_opt] + hedge_opt[:n_opt]
         if n_init > 0:
-            all_y = all_y + main_init[:n_init] + anchor_init[:n_init]
+            all_y = all_y + main_init[:n_init] + hedge_init[:n_init]
         lo, hi = _finite_series_ylim(all_y, pad_min=1.0)
         ax_rw.set_ylim(lo, hi)
     else:

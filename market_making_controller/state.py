@@ -410,10 +410,10 @@ class State:
     cash: float = 0.0
     buy_ref: float = 0.0
     sell_ref: float = 0.0
-    anchor_buy_ref: float | None = None
-    anchor_sell_ref: float | None = None
-    anchor_inventory: int = 0
-    anchor_cash: float = 0.0
+    hedge_buy_ref: float | None = None
+    hedge_sell_ref: float | None = None
+    hedge_inventory: int = 0
+    hedge_cash: float = 0.0
 
     @property
     def x(self) -> MarketState:
@@ -428,10 +428,10 @@ def state_from_ob_and_flow(
     sell_vol: float,
     inventory: int,
     cash: float = 0.0,
-    anchor_buy_ref: float | None = None,
-    anchor_sell_ref: float | None = None,
-    anchor_inventory: int = 0,
-    anchor_cash: float = 0.0,
+    hedge_buy_ref: float | None = None,
+    hedge_sell_ref: float | None = None,
+    hedge_inventory: int = 0,
+    hedge_cash: float = 0.0,
 ) -> State:
     """Build State from mid, orderbook levels (spread_ticks, qty), flow, and position."""
     ob_rel = OrderbookRelative(
@@ -447,10 +447,10 @@ def state_from_ob_and_flow(
         cash=cash,
         buy_ref=mid,
         sell_ref=mid,
-        anchor_buy_ref=anchor_buy_ref,
-        anchor_sell_ref=anchor_sell_ref,
-        anchor_inventory=int(anchor_inventory),
-        anchor_cash=float(anchor_cash),
+        hedge_buy_ref=hedge_buy_ref,
+        hedge_sell_ref=hedge_sell_ref,
+        hedge_inventory=int(hedge_inventory),
+        hedge_cash=float(hedge_cash),
     )
 
 
@@ -476,10 +476,10 @@ def state_from_orderbook(
     cash: float = 0.0,
     spread_max: float | None = None,
     reference_depth_lots: float = 1000.0,
-    anchor_buy_ref: float | None = None,
-    anchor_sell_ref: float | None = None,
-    anchor_inventory: int = 0,
-    anchor_cash: float = 0.0,
+    hedge_buy_ref: float | None = None,
+    hedge_sell_ref: float | None = None,
+    hedge_inventory: int = 0,
+    hedge_cash: float = 0.0,
 ) -> State:
     """
     Build State from trade_stats Orderbook and flow/position.
@@ -497,10 +497,10 @@ def state_from_orderbook(
         cash=cash,
         buy_ref=buy_ref,
         sell_ref=sell_ref,
-        anchor_buy_ref=anchor_buy_ref,
-        anchor_sell_ref=anchor_sell_ref,
-        anchor_inventory=int(anchor_inventory),
-        anchor_cash=float(anchor_cash),
+        hedge_buy_ref=hedge_buy_ref,
+        hedge_sell_ref=hedge_sell_ref,
+        hedge_inventory=int(hedge_inventory),
+        hedge_cash=float(hedge_cash),
     )
 
 
@@ -525,10 +525,10 @@ def state_from_step(
         _private_fills_ask,
         main_buy_ref,
         main_sell_ref,
-        anchor_buy_ref,
-        anchor_sell_ref,
-        anchor_inventory,
-        anchor_cash,
+        hedge_buy_ref,
+        hedge_sell_ref,
+        hedge_inventory,
+        hedge_cash,
     ) = step
     mid = float(ob.mid)
     ob_rel = ob_to_ob_rel(ob, spread_max=spread_max)
@@ -541,8 +541,8 @@ def state_from_step(
         cash=float(cash),
         buy_ref=float(main_buy_ref),
         sell_ref=float(main_sell_ref),
-        anchor_buy_ref=float(anchor_buy_ref) if anchor_buy_ref is not None else None,
-        anchor_sell_ref=float(anchor_sell_ref) if anchor_sell_ref is not None else None,
-        anchor_inventory=int(anchor_inventory),
-        anchor_cash=float(anchor_cash),
+        hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
+        hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
+        hedge_inventory=int(hedge_inventory),
+        hedge_cash=float(hedge_cash),
     )

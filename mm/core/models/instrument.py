@@ -61,11 +61,11 @@ class InstrumentSpec:
 @dataclass(frozen=True, slots=True)
 class SymbolBinding:
     primary: InstrumentSpec
-    secondary: InstrumentSpec | None = None
+    hedge: InstrumentSpec | None = None
 
     @property
     def comparable(self) -> bool:
-        return self.secondary is None or self.primary.is_comparable_to(self.secondary)
+        return self.hedge is None or self.primary.is_comparable_to(self.hedge)
 
     def as_contract(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -78,9 +78,9 @@ class SymbolBinding:
                 "rounding_boundary": "order command adapter only",
             },
         }
-        if self.secondary is not None:
-            out["secondary"] = instrument_contract(self.secondary)
-            out["comparison"] = self.primary.comparison_policy(self.secondary)
+        if self.hedge is not None:
+            out["hedge"] = instrument_contract(self.hedge)
+            out["comparison"] = self.primary.comparison_policy(self.hedge)
         return out
 
 
