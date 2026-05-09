@@ -14,7 +14,9 @@ from mm.core.models.execution import Fill
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.capabilities import get_exchange_capabilities
-from mm.exchanges.factory import select_private_state_adapter, select_public_market_data_adapter
+from mm.exchanges.factory import select_order_command_adapter, select_private_state_adapter, select_public_market_data_adapter
+from mm.execution.order_manager import ExecutionSnapshot, OrderManager
+from mm.execution.reconciler import ExecutionStateReconciler
 from mm.private_state.reconciler import PrivateStateReconciler
 from mm.runtime.pipeline import build_symbol_engine
 
@@ -198,6 +200,31 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "fee": event.fee,
             "timestamp_ms": event.timestamp_ms,
         }
+    if isinstance(event, ExecutionSnapshot):
+        live_orders = sorted(event.live_orders.values(), key=lambda item: item.exchange_order_id)
+        return {
+            "type": "ExecutionSnapshot",
+            "exchange": event.exchange,
+            "timestamp_ms": event.timestamp_ms,
+            "live_order_count": event.live_order_count,
+            "live_order_ids": [item.exchange_order_id for item in live_orders[:10]],
+            "live_orders": [
+                {
+                    "exchange_order_id": item.exchange_order_id,
+                    "actor_id": item.actor_id,
+                    "symbol": item.order.symbol,
+                    "side": item.order.side,
+                    "price": item.order.price,
+                    "remaining_qty": item.remaining_qty,
+                    "filled_qty": item.filled_qty,
+                    "status": item.status,
+                }
+                for item in live_orders[:5]
+            ],
+            "note": "execution state is mirrored from private exchange state; print_events does not place or cancel orders",
+        }
+    if isinstance(event, dict) and str(event.get("type", "")).startswith(("Execution", "Place", "Cancel")):
+        return event
     if isinstance(event, dict) and "error" in event:
         return {"type": "MarketDataError", **event}
     return {"type": type(event).__name__, "repr": repr(event)}
@@ -260,6 +287,7 @@ async def run(args: argparse.Namespace) -> None:
     adapter = selection.adapter
     private_selection = None
     private_reconciler = None
+    execution_reconciler = None
     api_token = resolve_api_token(exchange, args.private_api_token, args.private_api_token_env)
     private_selection = build_private_state_selection(
         exchange,
@@ -271,6 +299,14 @@ async def run(args: argparse.Namespace) -> None:
     bus = InMemoryBus()
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
     if api_token:
+        order_command_selection = select_order_command_adapter(exchange, args.symbol, api_token=api_token)
+        order_manager = OrderManager(
+            exchange=exchange,
+            command_adapter=order_command_selection.adapter,
+            bus=bus,
+            cancel_missing=False,
+        )
+        execution_reconciler = ExecutionStateReconciler(exchange, order_manager, bus)
         private_reconciler = PrivateStateReconciler(
             exchange=exchange,
             adapter=private_selection.adapter,
@@ -289,6 +325,14 @@ async def run(args: argparse.Namespace) -> None:
         "open_orders": "OpenOrder stream uses float base qty and quote-per-base price",
         "fallback": "uses REST when websocket private state is not fully supported",
     }
+    if api_token:
+        private_contract["execution"] = {
+            "enabled": True,
+            "order_command_transport": "rest",
+            "print_events_mode": "observe_only",
+            "safety": "does not place or cancel orders unless an actor calls OrderManager.sync",
+            "live_orders": "ExecutionSnapshot mirrors private open orders for own-order subtraction and execution recovery",
+        }
     contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, private_contract)
     contract["selected_public_market_transport"] = selection.transport
     print(json.dumps(contract, ensure_ascii=False))
@@ -316,12 +360,19 @@ async def run(args: argparse.Namespace) -> None:
             f"private:state:{exchange}:errors",
         ]
         queues.extend((topic, bus.subscribe_queue(topic)) for topic in private_topics)
+        execution_topics = [
+            f"execution:state:{exchange}",
+            f"execution:orders:{exchange}",
+        ]
+        queues.extend((topic, bus.subscribe_queue(topic)) for topic in execution_topics)
 
     stats = PrintStats()
     print_task = asyncio.create_task(print_events(queues, args.events, stats))
     scheduler_task = asyncio.create_task(scheduler.run())
     try:
         await engine.start()
+        if execution_reconciler is not None:
+            await execution_reconciler.start()
         if private_reconciler is not None:
             await private_reconciler.start()
         try:
@@ -345,6 +396,8 @@ async def run(args: argparse.Namespace) -> None:
         await asyncio.gather(print_task, return_exceptions=True)
         if private_reconciler is not None:
             await private_reconciler.stop()
+        if execution_reconciler is not None:
+            await execution_reconciler.stop()
         await engine.stop()
 
 

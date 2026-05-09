@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.interfaces.market_data import PublicMarketDataAdapter
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.exchanges.capabilities import (
@@ -11,6 +12,7 @@ from mm.exchanges.capabilities import (
 )
 from mm.exchanges.nobitex import NobitexMarketDataAdapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
+from mm.exchanges.shared.execution import TradeStatsRestOrderCommandAdapter
 from mm.exchanges.shared.provider_adapter import TransportMode
 from mm.exchanges.wallex import WallexMarketDataAdapter
 from mm.exchanges.wallex.private_state import WallexRestPrivateStateAdapter
@@ -36,6 +38,14 @@ class PrivateStateAdapterSelection:
     requested_mode: str
     mode: str
     adapter: AbstractPrivateStateAdapter
+
+
+@dataclass(frozen=True, slots=True)
+class OrderCommandAdapterSelection:
+    exchange: str
+    symbol: str
+    transport: str
+    adapter: AbstractOrderCommandAdapter
 
 
 def build_public_market_data_adapter(
@@ -150,3 +160,38 @@ def select_private_state_adapter(
         mode=selected_mode,
         adapter=adapter,
     )
+
+
+def build_order_command_adapter(
+    exchange: str,
+    symbol: str,
+    *,
+    api_token: str | None,
+) -> AbstractOrderCommandAdapter:
+    return select_order_command_adapter(exchange, symbol, api_token=api_token).adapter
+
+
+def select_order_command_adapter(
+    exchange: str,
+    symbol: str,
+    *,
+    api_token: str | None,
+) -> OrderCommandAdapterSelection:
+    exchange_key = exchange.lower().strip()
+    capabilities = resolve_order_command_transport(exchange_key)
+    adapter = TradeStatsRestOrderCommandAdapter(exchange_key, symbol, api_token=api_token)
+    return OrderCommandAdapterSelection(
+        exchange=exchange_key,
+        symbol=symbol,
+        transport=capabilities,
+        adapter=adapter,
+    )
+
+
+def resolve_order_command_transport(exchange: str) -> str:
+    from mm.exchanges.capabilities import get_exchange_capabilities
+
+    capabilities = get_exchange_capabilities(exchange).order_commands
+    if capabilities.place_rest and capabilities.cancel_rest:
+        return "rest"
+    raise ValueError(f"{exchange} does not support complete REST order commands")
