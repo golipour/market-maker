@@ -7,7 +7,13 @@ from mm.core.models.market import RawOrderbook, RawTrade
 
 
 class AbstractMarketDataAdapter(ABC):
-    """Provides RawTrade and RawOrderbook streams for one exchange symbol."""
+    """Public, read-only market data for one exchange symbol.
+
+    Implementations must be single-transport from the engine's point of view:
+    either REST polling or websocket streaming. Any exchange-specific bootstrap
+    needed to make a websocket depth feed valid must stay internal to the
+    adapter and still emit normalized RawTrade/RawOrderbook objects.
+    """
 
     @abstractmethod
     async def connect(self) -> None:
@@ -24,4 +30,7 @@ class AbstractMarketDataAdapter(ABC):
     @abstractmethod
     def orderbook_stream(self) -> AsyncIterator[RawOrderbook]:
         ...
+
+
+PublicMarketDataAdapter = AbstractMarketDataAdapter
 

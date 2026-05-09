@@ -3,16 +3,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from mm.aggregation.scheduler import IntervalScheduler
 from mm.bus.memory import InMemoryBus
 from mm.core.clock import WallClock
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
-from mm.exchanges.nobitex import NobitexMarketDataAdapter
+from mm.exchanges.capabilities import get_exchange_capabilities
+from mm.exchanges.factory import build_public_market_data_adapter
 from mm.exchanges.shared.provider_adapter import TransportMode
-from mm.exchanges.wallex import WallexMarketDataAdapter
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -22,23 +22,34 @@ class PrintStats:
 
 
 def build_adapter(exchange: str, symbol: str, mode: TransportMode, depth: int, trades: int, poll_ms: int):
-    if exchange == "nobitex":
-        return NobitexMarketDataAdapter(
-            symbol,
-            mode=mode,
-            depth_limit=depth,
-            trades_limit=trades,
-            poll_interval_ms=poll_ms,
-        )
-    if exchange == "wallex":
-        return WallexMarketDataAdapter(
-            symbol,
-            mode=mode,
-            depth_limit=depth,
-            trades_limit=trades,
-            poll_interval_ms=poll_ms,
-        )
-    raise ValueError(f"unsupported exchange: {exchange}")
+    return build_public_market_data_adapter(
+        exchange,
+        symbol,
+        mode=mode,
+        depth_limit=depth,
+        trades_limit=trades,
+        poll_interval_ms=poll_ms,
+    )
+
+
+def summarize_contract(exchange: str, symbol: str, mode: str, adapter: Any) -> dict[str, Any]:
+    capabilities = get_exchange_capabilities(exchange)
+    return {
+        "type": "ContractCheck",
+        "exchange": exchange,
+        "symbol": symbol,
+        "public_market_transport": mode,
+        "public_market_adapter": type(adapter).__name__,
+        "market_data_contract": {
+            "scope": "public_only",
+            "single_transport": True,
+            "prices": "float quote-per-base",
+            "quantities": "float base units",
+            "orderbook": "RawOrderbook snapshots/deltas normalized before aggregation",
+            "trades": "RawTrade stream normalized before aggregation",
+        },
+        "capabilities": asdict(capabilities),
+    }
 
 
 def summarize_event(event: Any) -> dict[str, Any]:
@@ -58,6 +69,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "exchange": event.exchange,
             "symbol": event.symbol,
             "timestamp_ms": event.timestamp_ms,
+            "is_snapshot": event.is_snapshot,
             "best_bid": event.bids[0].price if event.bids else None,
             "best_bid_qty": event.bids[0].qty if event.bids else None,
             "best_ask": event.asks[0].price if event.asks else None,
@@ -127,6 +139,7 @@ async def run(args: argparse.Namespace) -> None:
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
     scheduler = IntervalScheduler(WallClock())
     await engine.publish_on_intervals(scheduler, [args.interval_ms])
+    print(json.dumps(summarize_contract(exchange, args.symbol, mode, adapter), ensure_ascii=False))
 
     event_topic = f"market:events:{exchange}:{args.symbol}:{args.interval_ms}"
     error_topic = f"market:errors:{exchange}:{args.symbol}"
