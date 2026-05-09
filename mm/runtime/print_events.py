@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from mm.aggregation.scheduler import IntervalScheduler
 from mm.bus.memory import InMemoryBus
 from mm.core.clock import WallClock
+from mm.core.models.execution import Fill
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
+from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.capabilities import get_exchange_capabilities
-from mm.exchanges.factory import select_public_market_data_adapter
+from mm.exchanges.factory import select_private_state_adapter, select_public_market_data_adapter
+from mm.private_state.reconciler import PrivateStateReconciler
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -31,14 +35,36 @@ def build_adapter_selection(exchange: str, symbol: str, mode: str, depth: int, t
     )
 
 
-def summarize_contract(exchange: str, symbol: str, mode: str, adapter: Any) -> dict[str, Any]:
+def build_private_state_selection(
+    exchange: str,
+    symbol: str,
+    mode: str,
+    api_token: str | None,
+    poll_ms: int,
+):
+    return select_private_state_adapter(
+        exchange,
+        symbol,
+        mode=mode,
+        api_token=api_token,
+        poll_interval_ms=poll_ms,
+    )
+
+
+def summarize_contract(
+    exchange: str,
+    symbol: str,
+    mode: str,
+    adapter: Any,
+    private_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     capabilities = get_exchange_capabilities(exchange)
     public_caps = capabilities.public_market_data
-    return {
+    out = {
         "type": "ContractCheck",
         "exchange": exchange,
         "symbol": symbol,
-        "requested_public_market_mode": mode,
+        "requested_transport_mode": mode,
         "public_market_adapter": type(adapter).__name__,
         "market_data_contract": {
             "scope": "public_only",
@@ -52,8 +78,16 @@ def summarize_contract(exchange: str, symbol: str, mode: str, adapter: Any) -> d
             "rest": public_caps.rest,
             "websocket": public_caps.websocket,
         },
+        "order_commands": {
+            "requested_transport_mode": mode,
+            "selected_transport": "rest",
+            "reason": "private order commands are always REST",
+        },
         "capabilities": asdict(capabilities),
     }
+    if private_state is not None:
+        out["private_state"] = private_state
+    return out
 
 
 def summarize_event(event: Any) -> dict[str, Any]:
@@ -98,6 +132,64 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "best_bid": event.orderbook.bids[0].price if event.orderbook.bids else None,
             "best_ask": event.orderbook.asks[0].price if event.orderbook.asks else None,
         }
+    if isinstance(event, PrivateStateSnapshot):
+        return {
+            "type": "PrivateStateSnapshot",
+            "exchange": event.exchange,
+            "timestamp_ms": event.timestamp_ms,
+            "balance_assets": sorted(event.balances),
+            "balance_count": len(event.balances),
+            "open_order_count": len(event.open_orders),
+            "open_order_ids": sorted(event.open_orders)[:10],
+        }
+    if isinstance(event, Balance):
+        return {
+            "type": "Balance",
+            "exchange": event.exchange,
+            "asset": event.asset,
+            "free": event.free,
+            "locked": event.locked,
+            "timestamp_ms": event.timestamp_ms,
+        }
+    if isinstance(event, OpenOrder):
+        return {
+            "type": "OpenOrder",
+            "exchange": event.order.exchange,
+            "symbol": event.order.symbol,
+            "exchange_order_id": event.exchange_order_id,
+            "actor_id": event.actor_id,
+            "side": event.order.side,
+            "price": event.order.price,
+            "remaining_qty": event.remaining_qty,
+            "filled_qty": event.filled_qty,
+            "status": event.status,
+            "timestamp_ms": event.timestamp_ms,
+        }
+    if isinstance(event, OrderUpdate):
+        return {
+            "type": "OrderUpdate",
+            "exchange": event.exchange,
+            "symbol": event.symbol,
+            "exchange_order_id": event.exchange_order_id,
+            "actor_id": event.actor_id,
+            "status": event.status,
+            "remaining_qty": event.remaining_qty,
+            "filled_qty": event.filled_qty,
+            "timestamp_ms": event.timestamp_ms,
+        }
+    if isinstance(event, Fill):
+        return {
+            "type": "Fill",
+            "exchange": event.exchange,
+            "symbol": event.symbol,
+            "exchange_order_id": event.exchange_order_id,
+            "actor_id": event.actor_id,
+            "side": event.side,
+            "price": event.price,
+            "qty": event.qty,
+            "fee": event.fee,
+            "timestamp_ms": event.timestamp_ms,
+        }
     if isinstance(event, dict) and "error" in event:
         return {"type": "MarketDataError", **event}
     return {"type": type(event).__name__, "repr": repr(event)}
@@ -140,11 +232,38 @@ async def run(args: argparse.Namespace) -> None:
         args.poll_ms,
     )
     adapter = selection.adapter
+    private_selection = None
+    private_reconciler = None
+    api_token = resolve_api_token(exchange, args.private_api_token, args.private_api_token_env)
+    private_selection = build_private_state_selection(
+        exchange,
+        args.symbol,
+        mode,
+        api_token,
+        args.private_poll_ms,
+    )
     bus = InMemoryBus()
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
+    if api_token:
+        private_reconciler = PrivateStateReconciler(
+            exchange=exchange,
+            adapter=private_selection.adapter,
+            bus=bus,
+        )
     scheduler = IntervalScheduler(WallClock())
     await engine.publish_on_intervals(scheduler, [args.interval_ms])
-    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter)
+    private_contract = {
+        "requested_transport_mode": private_selection.requested_mode,
+        "selected_transport": private_selection.mode,
+        "adapter": type(private_selection.adapter).__name__,
+        "scope": "private_balances_and_orders_only",
+        "enabled": bool(api_token),
+        "token_configured": bool(api_token),
+        "balances": "Balance stream uses float asset units",
+        "open_orders": "OpenOrder stream uses float base qty and quote-per-base price",
+        "fallback": "uses REST when websocket private state is not fully supported",
+    }
+    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, private_contract)
     contract["selected_public_market_transport"] = selection.transport
     print(json.dumps(contract, ensure_ascii=False))
 
@@ -161,12 +280,24 @@ async def run(args: argparse.Namespace) -> None:
             (trade_topic, bus.subscribe_queue(trade_topic)),
             (book_topic, bus.subscribe_queue(book_topic)),
         ])
+    if private_reconciler is not None:
+        private_topics = [
+            f"private:state:{exchange}:snapshot",
+            f"private:state:{exchange}:balances",
+            f"private:state:{exchange}:open_orders",
+            f"private:state:{exchange}:order_updates",
+            f"private:state:{exchange}:fills",
+            f"private:state:{exchange}:errors",
+        ]
+        queues.extend((topic, bus.subscribe_queue(topic)) for topic in private_topics)
 
     stats = PrintStats()
     print_task = asyncio.create_task(print_events(queues, args.events, stats))
     scheduler_task = asyncio.create_task(scheduler.run())
     try:
         await engine.start()
+        if private_reconciler is not None:
+            await private_reconciler.start()
         try:
             await asyncio.wait_for(print_task, timeout=args.timeout_s)
         except asyncio.TimeoutError:
@@ -186,14 +317,27 @@ async def run(args: argparse.Namespace) -> None:
         await asyncio.gather(scheduler_task, return_exceptions=True)
         print_task.cancel()
         await asyncio.gather(print_task, return_exceptions=True)
+        if private_reconciler is not None:
+            await private_reconciler.stop()
         await engine.stop()
+
+
+def resolve_api_token(exchange: str, explicit: str | None, env_name: str | None) -> str | None:
+    if explicit:
+        return explicit
+    if env_name:
+        return os.environ.get(env_name)
+    return os.environ.get(f"{exchange.upper()}_API_TOKEN")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
     parser.add_argument("--symbol", default="BTC_IRT")
-    parser.add_argument("--mode", choices=["auto", "rest", "websocket"], default="auto")
+    parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
+    parser.add_argument("--private-api-token", default=None)
+    parser.add_argument("--private-api-token-env", default=None)
+    parser.add_argument("--private-poll-ms", type=int, default=5000)
     parser.add_argument("--interval-ms", type=int, default=5000)
     parser.add_argument("--poll-ms", type=int, default=1000)
     parser.add_argument("--depth", type=int, default=10)

@@ -2,15 +2,22 @@ from mm.exchanges.capabilities import (
     EXCHANGE_CAPABILITIES,
     ExchangeCapabilities,
     OrderCommandCapabilities,
+    PrivateStateMode,
     PrivateStateCapabilities,
     PublicMarketDataCapabilities,
+    RequestedTransportMode,
     get_exchange_capabilities,
+    resolve_private_state_mode,
     resolve_public_market_transport,
+    validate_private_state_mode,
     validate_public_market_transport,
 )
 from mm.exchanges.factory import (
+    PrivateStateAdapterSelection,
     PublicMarketDataAdapterSelection,
+    build_private_state_adapter,
     build_public_market_data_adapter,
+    select_private_state_adapter,
     select_public_market_data_adapter,
 )
 
@@ -19,12 +26,19 @@ __all__ = [
     "ExchangeCapabilities",
     "OrderCommandCapabilities",
     "PrivateStateCapabilities",
+    "PrivateStateMode",
     "PublicMarketDataCapabilities",
+    "RequestedTransportMode",
+    "PrivateStateAdapterSelection",
     "PublicMarketDataAdapterSelection",
+    "build_private_state_adapter",
     "build_public_market_data_adapter",
     "get_exchange_capabilities",
+    "resolve_private_state_mode",
     "resolve_public_market_transport",
+    "select_private_state_adapter",
     "select_public_market_data_adapter",
+    "validate_private_state_mode",
     "validate_public_market_transport",
 ]
 """Exchange adapters for the new engine."""

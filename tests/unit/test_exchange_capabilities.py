@@ -8,6 +8,7 @@ from mm.exchanges.capabilities import (
     OrderCommandCapabilities,
     PrivateStateCapabilities,
     PublicMarketDataCapabilities,
+    resolve_private_state_mode,
     resolve_public_market_transport,
     validate_public_market_transport,
 )
@@ -16,8 +17,9 @@ from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
 from mm.exchanges.nobitex.ws import NobitexWsMarketDataAdapter
 
 
-def test_auto_public_market_transport_prefers_complete_websocket() -> None:
-    assert resolve_public_market_transport("nobitex", "auto") == "websocket"
+def test_rest_is_default_transport_semantics() -> None:
+    assert resolve_public_market_transport("nobitex", "rest") == "rest"
+    assert resolve_private_state_mode("nobitex", "rest") == "rest"
 
 
 def test_factory_returns_selected_single_transport_adapter() -> None:
@@ -30,7 +32,7 @@ def test_factory_returns_selected_single_transport_adapter() -> None:
     assert isinstance(websocket.adapter, NobitexWsMarketDataAdapter)
 
 
-def test_public_transport_requires_trades_and_orderbook_on_same_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_websocket_request_falls_back_to_rest_for_unsupported_parts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         EXCHANGE_CAPABILITIES,
         "partial",
@@ -56,4 +58,5 @@ def test_public_transport_requires_trades_and_orderbook_on_same_transport(monkey
     with pytest.raises(ValueError, match="missing: orderbook"):
         validate_public_market_transport("partial", "websocket")
 
-    assert resolve_public_market_transport("partial", "auto") == "rest"
+    assert resolve_public_market_transport("partial", "websocket") == "rest"
+    assert resolve_private_state_mode("partial", "websocket") == "rest"
