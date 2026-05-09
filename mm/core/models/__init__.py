@@ -1,4 +1,5 @@
 from mm.core.models.execution import Action, ActorState, Fill, Order
+from mm.core.models.instrument import InstrumentSpec, SymbolBinding
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 
@@ -7,6 +8,7 @@ __all__ = [
     "ActorState",
     "Balance",
     "Fill",
+    "InstrumentSpec",
     "MarketEvent",
     "OpenOrder",
     "Order",
@@ -15,4 +17,5 @@ __all__ = [
     "PrivateStateSnapshot",
     "RawOrderbook",
     "RawTrade",
+    "SymbolBinding",
 ]

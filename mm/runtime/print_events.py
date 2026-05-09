@@ -11,6 +11,7 @@ from mm.aggregation.scheduler import IntervalScheduler
 from mm.bus.memory import InMemoryBus
 from mm.core.clock import WallClock
 from mm.core.models.execution import Fill
+from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.capabilities import get_exchange_capabilities
@@ -58,6 +59,7 @@ def summarize_contract(
     symbol: str,
     mode: str,
     adapter: Any,
+    binding: SymbolBinding,
     private_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     capabilities = get_exchange_capabilities(exchange)
@@ -76,6 +78,7 @@ def summarize_contract(
             "orderbook": "REST snapshots and websocket snapshots/deltas are normalized into materialized snapshots before MarketEvent aggregation",
             "trades": "REST batches and websocket trade events are normalized, sorted, and deduplicated before MarketEvent aggregation",
         },
+        "instrument_units": binding.as_contract(),
         "complete_public_market_transports": {
             "rest": public_caps.rest,
             "websocket": public_caps.websocket,
@@ -94,22 +97,27 @@ def summarize_contract(
 
 def summarize_event(event: Any) -> dict[str, Any]:
     if isinstance(event, RawTrade):
+        instrument = build_instrument_spec(event.exchange, event.symbol)
         return {
             "type": "RawTrade",
             "exchange": event.exchange,
             "symbol": event.symbol,
+            "instrument": instrument_contract(instrument),
             "timestamp_ms": event.timestamp_ms,
             "side": event.side,
             "price": event.price,
             "qty": event.qty,
             "notional": event.price * event.qty,
+            "unit_policy": "price=quote_per_base, qty=base, notional=quote",
         }
     if isinstance(event, RawOrderbook):
         book_health = summarize_book_health(event)
+        instrument = build_instrument_spec(event.exchange, event.symbol)
         return {
             "type": "RawOrderbook",
             "exchange": event.exchange,
             "symbol": event.symbol,
+            "instrument": instrument_contract(instrument),
             "timestamp_ms": event.timestamp_ms,
             "is_snapshot": event.is_snapshot,
             "book_update_kind": "snapshot" if event.is_snapshot else "delta",
@@ -119,14 +127,17 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "best_ask_qty": event.asks[0].qty if event.asks else None,
             "bid_levels": len(event.bids),
             "ask_levels": len(event.asks),
+            "unit_policy": "price=quote_per_base, qty=base",
             **book_health,
         }
     if isinstance(event, MarketEvent):
         book_health = summarize_book_health(event.orderbook)
+        instrument = build_instrument_spec(event.exchange, event.symbol)
         return {
             "type": "MarketEvent",
             "exchange": event.exchange,
             "symbol": event.symbol,
+            "instrument": instrument_contract(instrument),
             "interval_ms": event.interval_ms,
             "t_start_ms": event.t_start_ms,
             "t_end_ms": event.t_end_ms,
@@ -140,6 +151,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "best_ask": event.orderbook.asks[0].price if event.orderbook.asks else None,
             "orderbook_timestamp_ms": event.orderbook.timestamp_ms,
             "orderbook_lag_ms": event.t_end_ms - event.orderbook.timestamp_ms,
+            "unit_policy": "prices/vwap/microprice=quote_per_base, volumes=base, notionals=quote",
             **book_health,
         }
     if isinstance(event, PrivateStateSnapshot):
@@ -162,10 +174,12 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "timestamp_ms": event.timestamp_ms,
         }
     if isinstance(event, OpenOrder):
+        instrument = build_instrument_spec(event.order.exchange, event.order.symbol)
         return {
             "type": "OpenOrder",
             "exchange": event.order.exchange,
             "symbol": event.order.symbol,
+            "instrument": instrument_contract(instrument),
             "exchange_order_id": event.exchange_order_id,
             "actor_id": event.actor_id,
             "side": event.order.side,
@@ -174,6 +188,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "filled_qty": event.filled_qty,
             "status": event.status,
             "timestamp_ms": event.timestamp_ms,
+            "unit_policy": "price=quote_per_base, remaining_qty/filled_qty=base",
         }
     if isinstance(event, OrderUpdate):
         return {
@@ -188,10 +203,12 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "timestamp_ms": event.timestamp_ms,
         }
     if isinstance(event, Fill):
+        instrument = build_instrument_spec(event.exchange, event.symbol)
         return {
             "type": "Fill",
             "exchange": event.exchange,
             "symbol": event.symbol,
+            "instrument": instrument_contract(instrument),
             "exchange_order_id": event.exchange_order_id,
             "actor_id": event.actor_id,
             "side": event.side,
@@ -199,6 +216,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "qty": event.qty,
             "fee": event.fee,
             "timestamp_ms": event.timestamp_ms,
+            "unit_policy": "price=quote_per_base, qty=base",
         }
     if isinstance(event, ExecutionSnapshot):
         live_orders = sorted(event.live_orders.values(), key=lambda item: item.exchange_order_id)
@@ -276,6 +294,11 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
 async def run(args: argparse.Namespace) -> None:
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
+    primary_spec = build_instrument_spec(exchange, args.symbol)
+    anchor_exchange = args.anchor_exchange.lower().strip() if args.anchor_exchange else None
+    anchor_mode = (args.anchor_mode or mode).lower().strip()
+    anchor_spec = build_instrument_spec(anchor_exchange, args.symbol) if anchor_exchange else None
+    binding = SymbolBinding(primary=primary_spec, secondary=anchor_spec)
     selection = build_adapter_selection(
         exchange,
         args.symbol,
@@ -285,6 +308,16 @@ async def run(args: argparse.Namespace) -> None:
         args.poll_ms,
     )
     adapter = selection.adapter
+    anchor_selection = None
+    if anchor_exchange:
+        anchor_selection = build_adapter_selection(
+            anchor_exchange,
+            args.symbol,
+            anchor_mode,
+            args.depth,
+            args.trades,
+            args.poll_ms,
+        )
     private_selection = None
     private_reconciler = None
     execution_reconciler = None
@@ -298,6 +331,14 @@ async def run(args: argparse.Namespace) -> None:
     )
     bus = InMemoryBus()
     engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
+    anchor_engine = None
+    if anchor_selection is not None:
+        anchor_engine = build_symbol_engine(
+            exchange=anchor_exchange,
+            symbol=args.symbol,
+            adapter=anchor_selection.adapter,
+            bus=bus,
+        )
     if api_token:
         order_command_selection = select_order_command_adapter(exchange, args.symbol, api_token=api_token)
         order_manager = OrderManager(
@@ -314,6 +355,8 @@ async def run(args: argparse.Namespace) -> None:
         )
     scheduler = IntervalScheduler(WallClock())
     await engine.publish_on_intervals(scheduler, [args.interval_ms])
+    if anchor_engine is not None:
+        await anchor_engine.publish_on_intervals(scheduler, [args.interval_ms])
     private_contract = {
         "requested_transport_mode": private_selection.requested_mode,
         "selected_transport": private_selection.mode,
@@ -333,8 +376,17 @@ async def run(args: argparse.Namespace) -> None:
             "safety": "does not place or cancel orders unless an actor calls OrderManager.sync",
             "live_orders": "ExecutionSnapshot mirrors private open orders for own-order subtraction and execution recovery",
         }
-    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, private_contract)
+    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, binding, private_contract)
     contract["selected_public_market_transport"] = selection.transport
+    if anchor_selection is not None:
+        contract["anchor_public_market"] = {
+            "exchange": anchor_exchange,
+            "symbol": args.symbol,
+            "requested_transport_mode": anchor_selection.requested_mode,
+            "selected_public_market_transport": anchor_selection.transport,
+            "public_market_adapter": type(anchor_selection.adapter).__name__,
+            "symbol_policy": "same domain symbol as primary; no tick-size conversion is applied",
+        }
     print(json.dumps(contract, ensure_ascii=False))
 
     event_topic = f"market:events:{exchange}:{args.symbol}:{args.interval_ms}"
@@ -343,6 +395,13 @@ async def run(args: argparse.Namespace) -> None:
         (event_topic, bus.subscribe_queue(event_topic)),
         (error_topic, bus.subscribe_queue(error_topic)),
     ]
+    if anchor_exchange:
+        anchor_event_topic = f"market:events:{anchor_exchange}:{args.symbol}:{args.interval_ms}"
+        anchor_error_topic = f"market:errors:{anchor_exchange}:{args.symbol}"
+        queues.extend([
+            (anchor_event_topic, bus.subscribe_queue(anchor_event_topic)),
+            (anchor_error_topic, bus.subscribe_queue(anchor_error_topic)),
+        ])
     if args.raw:
         trade_topic = f"market:raw:{exchange}:{args.symbol}:trades"
         book_topic = f"market:raw:{exchange}:{args.symbol}:orderbook"
@@ -350,6 +409,13 @@ async def run(args: argparse.Namespace) -> None:
             (trade_topic, bus.subscribe_queue(trade_topic)),
             (book_topic, bus.subscribe_queue(book_topic)),
         ])
+        if anchor_exchange:
+            anchor_trade_topic = f"market:raw:{anchor_exchange}:{args.symbol}:trades"
+            anchor_book_topic = f"market:raw:{anchor_exchange}:{args.symbol}:orderbook"
+            queues.extend([
+                (anchor_trade_topic, bus.subscribe_queue(anchor_trade_topic)),
+                (anchor_book_topic, bus.subscribe_queue(anchor_book_topic)),
+            ])
     if private_reconciler is not None:
         private_topics = [
             f"private:state:{exchange}:snapshot",
@@ -371,6 +437,8 @@ async def run(args: argparse.Namespace) -> None:
     scheduler_task = asyncio.create_task(scheduler.run())
     try:
         await engine.start()
+        if anchor_engine is not None:
+            await anchor_engine.start()
         if execution_reconciler is not None:
             await execution_reconciler.start()
         if private_reconciler is not None:
@@ -398,6 +466,8 @@ async def run(args: argparse.Namespace) -> None:
             await private_reconciler.stop()
         if execution_reconciler is not None:
             await execution_reconciler.stop()
+        if anchor_engine is not None:
+            await anchor_engine.stop()
         await engine.stop()
 
 
@@ -413,6 +483,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
     parser.add_argument("--symbol", default="BTC_IRT")
+    parser.add_argument("--anchor-exchange", choices=["nobitex", "wallex"], default=None)
+    parser.add_argument("--anchor-mode", choices=["rest", "websocket"], default=None)
     parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
     parser.add_argument("--private-api-token", default=None)
     parser.add_argument("--private-api-token-env", default=None)
