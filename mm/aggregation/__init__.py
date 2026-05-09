@@ -1,0 +1,2 @@
+"""Deterministic market-event aggregation."""
+

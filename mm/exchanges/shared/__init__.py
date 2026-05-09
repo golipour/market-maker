@@ -1,0 +1,2 @@
+"""Shared exchange adapter utilities."""
+

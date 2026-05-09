@@ -1,0 +1,8 @@
+[
+  "BTCTMN@buyDepth",
+  [
+    {"price": "1000000", "quantity": "0.50"},
+    {"price": "999000", "quantity": "1.25"}
+  ]
+]
+

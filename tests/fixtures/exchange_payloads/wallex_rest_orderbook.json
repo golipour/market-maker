@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "result": {
+    "bid": [
+      {"price": "1000000", "quantity": "0.50", "sum": "0.50"},
+      {"price": "999000", "quantity": "1.25", "sum": "1.75"}
+    ],
+    "ask": [
+      {"price": "1001000", "quantity": "0.40", "sum": "0.40"},
+      {"price": "1002000", "quantity": "2.00", "sum": "2.40"}
+    ]
+  }
+}
+

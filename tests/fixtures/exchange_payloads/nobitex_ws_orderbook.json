@@ -1,0 +1,9 @@
+{
+  "push": {
+    "channel": "public:orderbook-BTCIRT",
+    "pub": {
+      "data": "{\"lastUpdate\":1710000003000,\"bids\":[[\"1000000\",\"0.50\"]],\"asks\":[[\"1001000\",\"0.40\"]]}"
+    }
+  }
+}
+

@@ -1,0 +1,9 @@
+{
+  "push": {
+    "channel": "public:trades-BTCIRT",
+    "pub": {
+      "data": "{\"id\":\"nw1\",\"time\":1710000004000,\"price\":\"1001000\",\"volume\":\"0.20\",\"type\":\"buy\"}"
+    }
+  }
+}
+

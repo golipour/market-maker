@@ -1,0 +1,8 @@
+{
+  "status": "ok",
+  "trades": [
+    {"id": "n2", "time": 1710000002000, "price": "1001000", "volume": "0.20", "type": "buy"},
+    {"id": "n1", "time": 1710000001000, "price": "1000000", "volume": "0.10", "type": "sell"}
+  ]
+}
+

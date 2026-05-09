@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
+from mm.exchanges.nobitex.ws import NobitexWsMarketDataAdapter
+from mm.exchanges.wallex.rest import WallexRestMarketDataAdapter
+from mm.exchanges.wallex.ws import WallexWsMarketDataAdapter
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "exchange_payloads"
+
+
+class FakeRestClient:
+    def __init__(self, payloads: dict[str, object]):
+        self.payloads = payloads
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def get_json(self, path: str, params: dict | None = None):
+        self.calls.append((path, params))
+        return self.payloads[path]
+
+
+def load_fixture(name: str):
+    return json.loads((FIXTURES / name).read_text())
+
+
+@pytest.mark.asyncio
+async def test_nobitex_rest_payloads_normalize_to_raw_events():
+    adapter = NobitexRestMarketDataAdapter("BTC_IRT", depth_limit=2, trades_limit=2)
+    adapter._client = FakeRestClient(
+        {
+            "/v3/orderbook/BTCIRT": load_fixture("nobitex_rest_orderbook.json"),
+            "/v2/trades/BTCIRT": load_fixture("nobitex_rest_trades.json"),
+        }
+    )
+
+    book = await adapter.fetch_orderbook()
+    trades = await adapter.fetch_trades()
+
+    assert book.exchange == "nobitex"
+    assert book.symbol == "BTC_IRT"
+    assert [level.price for level in book.bids] == [1000000.0, 999000.0]
+    assert [level.qty for level in book.asks] == [0.4, 2.0]
+    assert [trade.trade_id for trade in trades] == ["n1", "n2"]
+    assert [trade.side for trade in trades] == ["sell", "buy"]
+
+
+@pytest.mark.asyncio
+async def test_wallex_rest_payloads_normalize_to_raw_events():
+    adapter = WallexRestMarketDataAdapter("BTC_IRT", depth_limit=2, trades_limit=2)
+    adapter._client = FakeRestClient(
+        {
+            "/v1/depth": load_fixture("wallex_rest_orderbook.json"),
+            "/v1/trades": load_fixture("wallex_rest_trades.json"),
+        }
+    )
+
+    book = await adapter.fetch_orderbook()
+    trades = await adapter.fetch_trades()
+
+    assert book.exchange == "wallex"
+    assert [level.price for level in book.bids] == [1000000.0, 999000.0]
+    assert [level.qty for level in book.asks] == [0.4, 2.0]
+    assert [trade.trade_id for trade in trades] == ["w1", "w2"]
+    assert [trade.side for trade in trades] == ["sell", "buy"]
+    assert adapter._client.calls[0] == ("/v1/depth", {"symbol": "BTCTMN"})
+
+
+@pytest.mark.asyncio
+async def test_nobitex_websocket_payloads_normalize_to_raw_events():
+    adapter = NobitexWsMarketDataAdapter("BTC_IRT", depth_limit=2)
+
+    await adapter.handle_message(load_fixture("nobitex_ws_orderbook.json"))
+    await adapter.handle_message(load_fixture("nobitex_ws_trade.json"))
+
+    book = await adapter._book_queue.get()
+    trade = await adapter._trade_queue.get()
+
+    assert book.bids[0].price == 1000000.0
+    assert book.asks[0].qty == 0.4
+    assert trade.trade_id == "nw1"
+    assert trade.side == "buy"
+
+
+@pytest.mark.asyncio
+async def test_wallex_websocket_payloads_normalize_to_raw_events():
+    adapter = WallexWsMarketDataAdapter("BTC_IRT", depth_limit=2)
+
+    await adapter.handle_message(load_fixture("wallex_ws_buy_depth.json"))
+    assert adapter._book_queue.empty()
+    await adapter.handle_message(load_fixture("wallex_ws_sell_depth.json"))
+    await adapter.handle_message(load_fixture("wallex_ws_trade.json"))
+
+    book = await adapter._book_queue.get()
+    trade = await adapter._trade_queue.get()
+
+    assert book.bids[0].price == 1000000.0
+    assert book.asks[0].price == 1001000.0
+    assert trade.trade_id == "ww1"
+    assert trade.timestamp_ms == 1710000002000
+    assert trade.side == "buy"
+

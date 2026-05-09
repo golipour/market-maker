@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "result": {
+    "latestTrades": [
+      {"id": "w2", "timestamp": "2024-03-09T16:00:02Z", "price": "1001000", "quantity": "0.20", "isBuyOrder": true},
+      {"id": "w1", "timestamp": "2024-03-09T16:00:01Z", "price": "1000000", "quantity": "0.10", "isBuyOrder": false}
+    ]
+  }
+}
+
