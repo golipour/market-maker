@@ -9,6 +9,7 @@ from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.actor import AbstractOrderManager, AbstractRiskEngine, AbstractStrategy
 from mm.core.models.execution import Action, ActorState, Fill
 from mm.core.models.market import MarketEvent
+from mm.core.models.strategy import StrategyInputFrame
 
 
 class Actor:
@@ -50,22 +51,43 @@ class Actor:
             await self.on_market_event(event)
 
     async def on_market_event(self, event: MarketEvent) -> list[Action]:
+        return await self.on_strategy_frame(StrategyInputFrame(primary=event))
+
+    async def on_strategy_frame(self, frame: StrategyInputFrame) -> list[Action]:
         t0 = time.monotonic_ns()
-        clean_event = _replace_event_orderbook(
-            event,
-            subtract_own_orders(event.orderbook, self.state.open_orders),
+        clean_primary = _replace_event_orderbook(
+            frame.primary,
+            subtract_own_orders(frame.primary.orderbook, self.state.open_orders),
         )
-        proposed = await self.strategy.on_market_event(clean_event, self.state)
-        approved = self.risk_engine.validate(proposed, self.state, clean_event)
+        clean_hedge = None
+        if frame.hedge is not None:
+            clean_hedge = _replace_event_orderbook(
+                frame.hedge,
+                subtract_own_orders(frame.hedge.orderbook, self.state.open_orders),
+            )
+        clean_frame = StrategyInputFrame(
+            primary=clean_primary,
+            hedge=clean_hedge,
+            primary_private=frame.primary_private,
+            hedge_private=frame.hedge_private,
+            hedge_status=frame.hedge_status,
+            hedge_lag_ms=frame.hedge_lag_ms,
+            max_hedge_lag_ms=frame.max_hedge_lag_ms,
+            created_at_ms=frame.created_at_ms,
+        )
+        proposed = await self.strategy.on_strategy_frame(clean_frame, self.state)
+        approved = self.risk_engine.validate_frame(proposed, self.state, clean_frame)
         await self._route_actions(approved)
         if self.bus is not None:
             await self.bus.publish(
                 f"actor:journal:{self.actor_id}",
                 {
                     "actor_id": self.actor_id,
-                    "exchange": event.exchange,
-                    "symbol": event.symbol,
-                    "t_end_ms": event.t_end_ms,
+                    "exchange": frame.primary.exchange,
+                    "symbol": frame.primary.symbol,
+                    "t_end_ms": frame.primary.t_end_ms,
+                    "hedge_status": frame.hedge_status,
+                    "hedge_lag_ms": frame.hedge_lag_ms,
                     "proposed_actions": len(proposed),
                     "approved_actions": len(approved),
                     "latency_ms": (time.monotonic_ns() - t0) / 1_000_000,

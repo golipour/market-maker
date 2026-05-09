@@ -8,12 +8,14 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from mm.aggregation.scheduler import IntervalScheduler
+from mm.actors.frame_assembler import StrategyInputFrameAssembler
 from mm.bus.memory import InMemoryBus
 from mm.core.clock import WallClock
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
+from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.capabilities import get_exchange_capabilities
 from mm.exchanges.factory import select_order_command_adapter, select_private_state_adapter, select_public_market_data_adapter
 from mm.execution.order_manager import ExecutionSnapshot, OrderManager
@@ -153,6 +155,43 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "orderbook_lag_ms": event.t_end_ms - event.orderbook.timestamp_ms,
             "unit_policy": "prices/vwap/microprice=quote_per_base, volumes=base, notionals=quote",
             **book_health,
+        }
+    if isinstance(event, StrategyInputFrame):
+        primary_book_health = summarize_book_health(event.primary.orderbook)
+        hedge_book_health = summarize_book_health(event.hedge.orderbook) if event.hedge is not None else {}
+        return {
+            "type": "StrategyInputFrame",
+            "primary_exchange": event.primary.exchange,
+            "primary_symbol": event.primary.symbol,
+            "interval_ms": event.primary.interval_ms,
+            "t_start_ms": event.primary.t_start_ms,
+            "t_end_ms": event.primary.t_end_ms,
+            "primary_best_bid": event.primary.orderbook.bids[0].price if event.primary.orderbook.bids else None,
+            "primary_best_ask": event.primary.orderbook.asks[0].price if event.primary.orderbook.asks else None,
+            "primary_mid": primary_book_health["mid"],
+            "primary_trade_count": len(event.primary.trades),
+            "hedge_status": event.hedge_status,
+            "has_hedge": event.has_hedge,
+            "hedge_exchange": event.hedge.exchange if event.hedge is not None else None,
+            "hedge_symbol": event.hedge.symbol if event.hedge is not None else None,
+            "hedge_t_end_ms": event.hedge.t_end_ms if event.hedge is not None else None,
+            "hedge_lag_ms": event.hedge_lag_ms,
+            "max_hedge_lag_ms": event.max_hedge_lag_ms,
+            "hedge_best_bid": event.hedge.orderbook.bids[0].price if event.hedge and event.hedge.orderbook.bids else None,
+            "hedge_best_ask": event.hedge.orderbook.asks[0].price if event.hedge and event.hedge.orderbook.asks else None,
+            "hedge_mid": hedge_book_health.get("mid"),
+            "hedge_trade_count": len(event.hedge.trades) if event.hedge is not None else None,
+            "primary_private_snapshot": event.primary_private is not None,
+            "primary_balance_assets": sorted(event.primary_private.balances) if event.primary_private is not None else [],
+            "primary_open_order_count": (
+                len(event.primary_private.open_orders) if event.primary_private is not None else None
+            ),
+            "hedge_private_snapshot": event.hedge_private is not None,
+            "created_at_ms": event.created_at_ms,
+            "frame_contract": (
+                "primary is always present; hedge is None unless a configured hedge exchange has a fresh aligned event"
+            ),
+            "unit_policy": "prices=quote_per_base, quantities/volumes=base, notionals=quote",
         }
     if isinstance(event, PrivateStateSnapshot):
         return {
@@ -387,17 +426,32 @@ async def run(args: argparse.Namespace) -> None:
             "public_market_adapter": type(hedge_selection.adapter).__name__,
             "symbol_policy": "same domain symbol as primary; no tick-size conversion is applied",
         }
+    contract["strategy_input_frame"] = {
+        "topic": f"strategy:frames:{exchange}:{args.symbol}:{args.interval_ms}",
+        "primary": "always present",
+        "hedge": "None when --hedge-exchange is omitted, missing, or stale",
+        "hedge_is_anchor": True,
+        "max_hedge_lag_ms": args.max_hedge_lag_ms,
+        "hedge_grace_ms": args.hedge_grace_ms,
+    }
     print(json.dumps(contract, ensure_ascii=False))
 
     event_topic = f"market:events:{exchange}:{args.symbol}:{args.interval_ms}"
     error_topic = f"market:errors:{exchange}:{args.symbol}"
+    frame_topic = f"strategy:frames:{exchange}:{args.symbol}:{args.interval_ms}"
     queues: list[tuple[str, asyncio.Queue]] = [
+        (frame_topic, bus.subscribe_queue(frame_topic)),
         (event_topic, bus.subscribe_queue(event_topic)),
         (error_topic, bus.subscribe_queue(error_topic)),
     ]
+    frame_primary_queue = bus.subscribe_queue(event_topic)
+    frame_hedge_queue = None
+    frame_primary_private_queue = None
+    frame_hedge_private_queue = None
     if hedge_exchange:
         hedge_event_topic = f"market:events:{hedge_exchange}:{args.symbol}:{args.interval_ms}"
         hedge_error_topic = f"market:errors:{hedge_exchange}:{args.symbol}"
+        frame_hedge_queue = bus.subscribe_queue(hedge_event_topic)
         queues.extend([
             (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
             (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
@@ -426,16 +480,30 @@ async def run(args: argparse.Namespace) -> None:
             f"private:state:{exchange}:errors",
         ]
         queues.extend((topic, bus.subscribe_queue(topic)) for topic in private_topics)
+        frame_primary_private_queue = bus.subscribe_queue(f"private:state:{exchange}:snapshot")
         execution_topics = [
             f"execution:state:{exchange}",
             f"execution:orders:{exchange}",
         ]
         queues.extend((topic, bus.subscribe_queue(topic)) for topic in execution_topics)
+    frame_assembler = StrategyInputFrameAssembler(
+        primary_queue=frame_primary_queue,
+        hedge_queue=frame_hedge_queue,
+        primary_private_queue=frame_primary_private_queue,
+        hedge_private_queue=frame_hedge_private_queue,
+        bus=bus,
+        output_topic=frame_topic,
+        max_hedge_lag_ms=args.max_hedge_lag_ms,
+        hedge_grace_ms=args.hedge_grace_ms,
+    )
 
     stats = PrintStats()
     print_task = asyncio.create_task(print_events(queues, args.events, stats))
     scheduler_task = asyncio.create_task(scheduler.run())
+    frame_task_started = False
     try:
+        await frame_assembler.start()
+        frame_task_started = True
         await engine.start()
         if hedge_engine is not None:
             await hedge_engine.start()
@@ -466,6 +534,8 @@ async def run(args: argparse.Namespace) -> None:
             await private_reconciler.stop()
         if execution_reconciler is not None:
             await execution_reconciler.stop()
+        if frame_task_started:
+            await frame_assembler.stop()
         if hedge_engine is not None:
             await hedge_engine.stop()
         await engine.stop()
@@ -495,6 +565,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trades", type=int, default=100)
     parser.add_argument("--events", type=int, default=10000, help="Stop after this many events; use 0 to run until timeout.")
     parser.add_argument("--timeout-s", type=float, default=60000.0)
+    parser.add_argument("--max-hedge-lag-ms", type=int, default=2000)
+    parser.add_argument("--hedge-grace-ms", type=int, default=250)
     parser.add_argument("--raw", action="store_true")
     return parser.parse_args()
 
