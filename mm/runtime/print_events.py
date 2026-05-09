@@ -7,53 +7,20 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from mm.aggregation.scheduler import IntervalScheduler
-from mm.actors.frame_assembler import StrategyInputFrameAssembler
-from mm.bus.memory import InMemoryBus
-from mm.core.clock import WallClock
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.capabilities import get_exchange_capabilities
-from mm.exchanges.factory import select_order_command_adapter, select_private_state_adapter, select_public_market_data_adapter
-from mm.execution.order_manager import ExecutionSnapshot, OrderManager
-from mm.execution.reconciler import ExecutionStateReconciler
-from mm.private_state.reconciler import PrivateStateReconciler
-from mm.runtime.pipeline import build_symbol_engine
+from mm.execution.order_manager import ExecutionSnapshot
+from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, PrivateRuntimeConfig
+from mm.runtime.engine import RuntimeComponents, build_runtime_components
 
 
 @dataclass(slots=True)
 class PrintStats:
     printed: int = 0
-
-
-def build_adapter_selection(exchange: str, symbol: str, mode: str, depth: int, trades: int, poll_ms: int):
-    return select_public_market_data_adapter(
-        exchange,
-        symbol,
-        mode=mode,
-        depth_limit=depth,
-        trades_limit=trades,
-        poll_interval_ms=poll_ms,
-    )
-
-
-def build_private_state_selection(
-    exchange: str,
-    symbol: str,
-    mode: str,
-    api_token: str | None,
-    poll_ms: int,
-):
-    return select_private_state_adapter(
-        exchange,
-        symbol,
-        mode=mode,
-        api_token=api_token,
-        poll_interval_ms=poll_ms,
-    )
 
 
 def summarize_contract(
@@ -333,73 +300,65 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
 async def run(args: argparse.Namespace) -> None:
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
-    primary_spec = build_instrument_spec(exchange, args.symbol)
     hedge_exchange = args.hedge_exchange.lower().strip() if args.hedge_exchange else None
     hedge_mode = (args.hedge_mode or mode).lower().strip()
-    hedge_spec = build_instrument_spec(hedge_exchange, args.symbol) if hedge_exchange else None
-    binding = SymbolBinding(primary=primary_spec, hedge=hedge_spec)
-    selection = build_adapter_selection(
-        exchange,
-        args.symbol,
-        mode,  # type: ignore[arg-type]
-        args.depth,
-        args.trades,
-        args.poll_ms,
-    )
-    adapter = selection.adapter
-    hedge_selection = None
-    if hedge_exchange:
-        hedge_selection = build_adapter_selection(
-            hedge_exchange,
-            args.symbol,
-            hedge_mode,
-            args.depth,
-            args.trades,
-            args.poll_ms,
-        )
-    private_selection = None
-    private_reconciler = None
-    execution_reconciler = None
+    hedge_symbol = args.hedge_symbol or args.symbol
     api_token = resolve_api_token(exchange, args.private_api_token, args.private_api_token_env)
-    private_selection = build_private_state_selection(
-        exchange,
-        args.symbol,
-        mode,
-        api_token,
-        args.private_poll_ms,
+    hedge_api_token = (
+        resolve_api_token(hedge_exchange, args.hedge_private_api_token, args.hedge_private_api_token_env)
+        if hedge_exchange
+        else None
     )
-    bus = InMemoryBus()
-    engine = build_symbol_engine(exchange=exchange, symbol=args.symbol, adapter=adapter, bus=bus)
-    hedge_engine = None
-    if hedge_selection is not None:
-        hedge_engine = build_symbol_engine(
-            exchange=hedge_exchange,
+    runtime_config = MarketMakerRuntimeConfig(
+        primary=MarketDataSourceConfig(
+            role="primary",
+            exchange=exchange,
             symbol=args.symbol,
-            adapter=hedge_selection.adapter,
-            bus=bus,
-        )
-    if api_token:
-        order_command_selection = select_order_command_adapter(exchange, args.symbol, api_token=api_token)
-        order_manager = OrderManager(
-            exchange=exchange,
-            command_adapter=order_command_selection.adapter,
-            bus=bus,
-            cancel_missing=False,
-        )
-        execution_reconciler = ExecutionStateReconciler(exchange, order_manager, bus)
-        private_reconciler = PrivateStateReconciler(
-            exchange=exchange,
-            adapter=private_selection.adapter,
-            bus=bus,
-        )
-    scheduler = IntervalScheduler(WallClock())
-    await engine.publish_on_intervals(scheduler, [args.interval_ms])
-    if hedge_engine is not None:
-        await hedge_engine.publish_on_intervals(scheduler, [args.interval_ms])
+            mode=mode,
+            depth_limit=args.depth,
+            trades_limit=args.trades,
+            poll_interval_ms=args.poll_ms,
+        ),
+        hedge=(
+            MarketDataSourceConfig(
+                role="hedge",
+                exchange=hedge_exchange,
+                symbol=hedge_symbol,
+                mode=hedge_mode,
+                depth_limit=args.depth,
+                trades_limit=args.trades,
+                poll_interval_ms=args.poll_ms,
+            )
+            if hedge_exchange
+            else None
+        ),
+        interval_ms=args.interval_ms,
+        max_hedge_lag_ms=args.max_hedge_lag_ms,
+        hedge_grace_ms=args.hedge_grace_ms,
+        primary_private=PrivateRuntimeConfig(
+            mode=args.private_mode,
+            api_token=api_token,
+            poll_interval_ms=args.private_poll_ms,
+        ),
+        hedge_private=(
+            PrivateRuntimeConfig(
+                mode=args.hedge_private_mode,
+                api_token=hedge_api_token,
+                poll_interval_ms=args.hedge_private_poll_ms,
+            )
+            if hedge_exchange
+            else None
+        ),
+    )
+    runtime = await build_runtime_components(runtime_config)
     private_contract = {
-        "requested_transport_mode": private_selection.requested_mode,
-        "selected_transport": private_selection.mode,
-        "adapter": type(private_selection.adapter).__name__,
+        "requested_transport_mode": args.private_mode,
+        "selected_transport": runtime.private_state_selections["primary"].mode
+        if "primary" in runtime.private_state_selections
+        else None,
+        "adapter": type(runtime.private_state_selections["primary"].adapter).__name__
+        if "primary" in runtime.private_state_selections
+        else None,
         "scope": "private_balances_and_orders_only",
         "enabled": bool(api_token),
         "token_configured": bool(api_token),
@@ -415,16 +374,39 @@ async def run(args: argparse.Namespace) -> None:
             "safety": "does not place or cancel orders unless an actor calls OrderManager.sync",
             "live_orders": "ExecutionSnapshot mirrors private open orders for own-order subtraction and execution recovery",
         }
-    contract = summarize_contract(exchange, args.symbol, selection.requested_mode, adapter, binding, private_contract)
+    selection = runtime.public_market_selections["primary"]
+    contract = summarize_contract(
+        exchange,
+        args.symbol,
+        selection.requested_mode,
+        selection.adapter,
+        runtime_config.binding,
+        private_contract,
+    )
+    contract["runtime_config"] = runtime_config.as_contract()
     contract["selected_public_market_transport"] = selection.transport
-    if hedge_selection is not None:
+    if hedge_exchange is not None:
+        hedge_selection = runtime.public_market_selections["hedge"]
         contract["hedge_public_market"] = {
             "exchange": hedge_exchange,
-            "symbol": args.symbol,
+            "symbol": hedge_symbol,
             "requested_transport_mode": hedge_selection.requested_mode,
             "selected_public_market_transport": hedge_selection.transport,
             "public_market_adapter": type(hedge_selection.adapter).__name__,
-            "symbol_policy": "same domain symbol as primary; no tick-size conversion is applied",
+            "role": "hedge",
+            "hedge_is_anchor": True,
+            "symbol_policy": "same domain symbol as primary by default; no tick-size conversion is applied",
+        }
+        contract["hedge_private_state"] = {
+            "requested_transport_mode": args.hedge_private_mode,
+            "selected_transport": runtime.private_state_selections["hedge"].mode
+            if "hedge" in runtime.private_state_selections
+            else None,
+            "adapter": type(runtime.private_state_selections["hedge"].adapter).__name__
+            if "hedge" in runtime.private_state_selections
+            else None,
+            "enabled": bool(hedge_api_token),
+            "token_configured": bool(hedge_api_token),
         }
     contract["strategy_input_frame"] = {
         "topic": f"strategy:frames:{exchange}:{args.symbol}:{args.interval_ms}",
@@ -436,81 +418,12 @@ async def run(args: argparse.Namespace) -> None:
     }
     print(json.dumps(contract, ensure_ascii=False))
 
-    event_topic = f"market:events:{exchange}:{args.symbol}:{args.interval_ms}"
-    error_topic = f"market:errors:{exchange}:{args.symbol}"
-    frame_topic = f"strategy:frames:{exchange}:{args.symbol}:{args.interval_ms}"
-    queues: list[tuple[str, asyncio.Queue]] = [
-        (frame_topic, bus.subscribe_queue(frame_topic)),
-        (event_topic, bus.subscribe_queue(event_topic)),
-        (error_topic, bus.subscribe_queue(error_topic)),
-    ]
-    frame_primary_queue = bus.subscribe_queue(event_topic)
-    frame_hedge_queue = None
-    frame_primary_private_queue = None
-    frame_hedge_private_queue = None
-    if hedge_exchange:
-        hedge_event_topic = f"market:events:{hedge_exchange}:{args.symbol}:{args.interval_ms}"
-        hedge_error_topic = f"market:errors:{hedge_exchange}:{args.symbol}"
-        frame_hedge_queue = bus.subscribe_queue(hedge_event_topic)
-        queues.extend([
-            (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
-            (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
-        ])
-    if args.raw:
-        trade_topic = f"market:raw:{exchange}:{args.symbol}:trades"
-        book_topic = f"market:raw:{exchange}:{args.symbol}:orderbook"
-        queues.extend([
-            (trade_topic, bus.subscribe_queue(trade_topic)),
-            (book_topic, bus.subscribe_queue(book_topic)),
-        ])
-        if hedge_exchange:
-            hedge_trade_topic = f"market:raw:{hedge_exchange}:{args.symbol}:trades"
-            hedge_book_topic = f"market:raw:{hedge_exchange}:{args.symbol}:orderbook"
-            queues.extend([
-                (hedge_trade_topic, bus.subscribe_queue(hedge_trade_topic)),
-                (hedge_book_topic, bus.subscribe_queue(hedge_book_topic)),
-            ])
-    if private_reconciler is not None:
-        private_topics = [
-            f"private:state:{exchange}:snapshot",
-            f"private:state:{exchange}:balances",
-            f"private:state:{exchange}:open_orders",
-            f"private:state:{exchange}:order_updates",
-            f"private:state:{exchange}:fills",
-            f"private:state:{exchange}:errors",
-        ]
-        queues.extend((topic, bus.subscribe_queue(topic)) for topic in private_topics)
-        frame_primary_private_queue = bus.subscribe_queue(f"private:state:{exchange}:snapshot")
-        execution_topics = [
-            f"execution:state:{exchange}",
-            f"execution:orders:{exchange}",
-        ]
-        queues.extend((topic, bus.subscribe_queue(topic)) for topic in execution_topics)
-    frame_assembler = StrategyInputFrameAssembler(
-        primary_queue=frame_primary_queue,
-        hedge_queue=frame_hedge_queue,
-        primary_private_queue=frame_primary_private_queue,
-        hedge_private_queue=frame_hedge_private_queue,
-        bus=bus,
-        output_topic=frame_topic,
-        max_hedge_lag_ms=args.max_hedge_lag_ms,
-        hedge_grace_ms=args.hedge_grace_ms,
-    )
+    queues = build_print_queues(runtime, include_raw=args.raw)
 
     stats = PrintStats()
     print_task = asyncio.create_task(print_events(queues, args.events, stats))
-    scheduler_task = asyncio.create_task(scheduler.run())
-    frame_task_started = False
     try:
-        await frame_assembler.start()
-        frame_task_started = True
-        await engine.start()
-        if hedge_engine is not None:
-            await hedge_engine.start()
-        if execution_reconciler is not None:
-            await execution_reconciler.start()
-        if private_reconciler is not None:
-            await private_reconciler.start()
+        await runtime.start()
         try:
             await asyncio.wait_for(print_task, timeout=args.timeout_s)
         except asyncio.TimeoutError:
@@ -525,20 +438,61 @@ async def run(args: argparse.Namespace) -> None:
                 ),
             }))
     finally:
-        scheduler.stop()
-        scheduler_task.cancel()
-        await asyncio.gather(scheduler_task, return_exceptions=True)
         print_task.cancel()
         await asyncio.gather(print_task, return_exceptions=True)
-        if private_reconciler is not None:
-            await private_reconciler.stop()
-        if execution_reconciler is not None:
-            await execution_reconciler.stop()
-        if frame_task_started:
-            await frame_assembler.stop()
-        if hedge_engine is not None:
-            await hedge_engine.stop()
-        await engine.stop()
+        await runtime.stop()
+
+
+def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list[tuple[str, asyncio.Queue]]:
+    config = runtime.config
+    bus = runtime.bus
+    primary_event_topic = config.primary.market_event_topic(config.interval_ms)
+    primary_error_topic = config.primary.market_error_topic()
+    queues: list[tuple[str, asyncio.Queue]] = [
+        (config.frame_topic, bus.subscribe_queue(config.frame_topic)),
+        (primary_event_topic, bus.subscribe_queue(primary_event_topic)),
+        (primary_error_topic, bus.subscribe_queue(primary_error_topic)),
+    ]
+    if config.hedge is not None:
+        hedge_event_topic = config.hedge.market_event_topic(config.interval_ms)
+        hedge_error_topic = config.hedge.market_error_topic()
+        queues.extend([
+            (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
+            (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
+        ])
+    if include_raw:
+        trade_topic = config.primary.raw_trade_topic()
+        book_topic = config.primary.raw_orderbook_topic()
+        queues.extend([
+            (trade_topic, bus.subscribe_queue(trade_topic)),
+            (book_topic, bus.subscribe_queue(book_topic)),
+        ])
+        if config.hedge is not None:
+            hedge_trade_topic = config.hedge.raw_trade_topic()
+            hedge_book_topic = config.hedge.raw_orderbook_topic()
+            queues.extend([
+                (hedge_trade_topic, bus.subscribe_queue(hedge_trade_topic)),
+                (hedge_book_topic, bus.subscribe_queue(hedge_book_topic)),
+            ])
+    for role, source in (("primary", config.primary), ("hedge", config.hedge)):
+        if source is None or role not in runtime.private_state_selections:
+            continue
+        exchange = source.normalized_exchange()
+        private_topics = [
+            f"private:state:{exchange}:snapshot",
+            f"private:state:{exchange}:balances",
+            f"private:state:{exchange}:open_orders",
+            f"private:state:{exchange}:order_updates",
+            f"private:state:{exchange}:fills",
+            f"private:state:{exchange}:errors",
+        ]
+        queues.extend((topic, bus.subscribe_queue(topic)) for topic in private_topics)
+        execution_topics = [
+            f"execution:state:{exchange}",
+            f"execution:orders:{exchange}",
+        ]
+        queues.extend((topic, bus.subscribe_queue(topic)) for topic in execution_topics)
+    return queues
 
 
 def resolve_api_token(exchange: str, explicit: str | None, env_name: str | None) -> str | None:
@@ -554,11 +508,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], required=True)
     parser.add_argument("--symbol", default="BTC_IRT")
     parser.add_argument("--hedge-exchange", choices=["nobitex", "wallex"], default=None)
+    parser.add_argument("--hedge-symbol", default=None)
     parser.add_argument("--hedge-mode", choices=["rest", "websocket"], default=None)
     parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
+    parser.add_argument("--private-mode", choices=["rest", "websocket"], default="rest")
     parser.add_argument("--private-api-token", default=None)
     parser.add_argument("--private-api-token-env", default=None)
     parser.add_argument("--private-poll-ms", type=int, default=5000)
+    parser.add_argument("--hedge-private-mode", choices=["rest", "websocket"], default="rest")
+    parser.add_argument("--hedge-private-api-token", default=None)
+    parser.add_argument("--hedge-private-api-token-env", default=None)
+    parser.add_argument("--hedge-private-poll-ms", type=int, default=5000)
     parser.add_argument("--interval-ms", type=int, default=5000)
     parser.add_argument("--poll-ms", type=int, default=1000)
     parser.add_argument("--depth", type=int, default=10)
