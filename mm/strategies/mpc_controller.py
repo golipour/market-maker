@@ -52,6 +52,7 @@ class MpcControllerRunner:
     _market_flow_model: Any = field(init=False, repr=False)
     _price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
+    _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
@@ -83,6 +84,7 @@ class MpcControllerRunner:
     async def on_frame(self, frame: StrategyInputFrame) -> Action:
         t0 = time.monotonic_ns()
         try:
+            self._frame_step += 1
             # Match mm_core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
             _update_hedge_rep_price_model(self._hedge_price_model, frame)
             state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
@@ -112,7 +114,7 @@ class MpcControllerRunner:
             )
             if not self.config.observe_only:
                 manager = self.order_managers.get(frame.primary.exchange.lower().strip())
-                if manager is not None:
+                if manager is not None and self._frame_step > self.config.action_start_after_steps:
                     await manager.sync([action])
             self._previous_frame = frame
             return action
@@ -147,6 +149,10 @@ class MpcControllerRunner:
             if self._hedge_price_model is not None and hasattr(self._hedge_price_model, "get_params")
             else {}
         )
+        warmup_skip = (
+            not self.config.observe_only
+            and self._frame_step <= self.config.action_start_after_steps
+        )
         payload = {
             "type": "ControllerDecision",
             "actor_id": self.config.actor_id,
@@ -154,6 +160,9 @@ class MpcControllerRunner:
             "symbol": frame.primary.symbol,
             "t_end_ms": frame.primary.t_end_ms,
             "observe_only": self.config.observe_only,
+            "frame_step": self._frame_step,
+            "action_start_after_steps": self.config.action_start_after_steps,
+            "live_execution_skipped_warmup": warmup_skip,
             "hedge_status": frame.hedge_status,
             "has_hedge": frame.has_hedge,
             "mid": state.mid,

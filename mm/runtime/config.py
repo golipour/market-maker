@@ -104,11 +104,17 @@ class ControllerRuntimeConfig:
     The controller consumes StrategyInputFrame objects and publishes controller
     diagnostics/actions. It is observe-only by default so live print_events runs
     never place or cancel orders unless config explicitly enables execution.
+
+    ``action_start_after_steps`` mirrors ``OrderFlowRunner.action_start_after_steps``:
+    MPC still runs every frame, but live ``OrderManager.sync`` is deferred until
+    ``frame_step > action_start_after_steps``.
     """
 
     enabled: bool = False
     actor_id: str = "mpc-controller"
     observe_only: bool = True
+    # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
+    action_start_after_steps: int = 0
     action_topic: str = "strategy:actions"
     diagnostics_topic: str = "strategy:controller"
     min_spread: float = 1.0
@@ -282,6 +288,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         enabled=bool(payload.get("enabled", False)),
         actor_id=str(payload.get("actor_id", "mpc-controller")),
         observe_only=bool(payload.get("observe_only", True)),
+        action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         diagnostics_topic=str(payload.get("diagnostics_topic", "strategy:controller")),
         min_spread=float(payload.get("min_spread", 1.0)),
@@ -327,6 +334,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "enabled": config.enabled,
         "actor_id": config.actor_id,
         "observe_only": config.observe_only,
+        "action_start_after_steps": config.action_start_after_steps,
         "diagnostics_topic": config.normalized_diagnostics_topic,
         "action_topic": config.normalized_action_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),

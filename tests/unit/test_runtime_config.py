@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, PrivateRuntimeConfig
+from mm.runtime.config import (
+    MarketDataSourceConfig,
+    MarketMakerRuntimeConfig,
+    PrivateRuntimeConfig,
+    runtime_config_from_mapping,
+)
 from mm.runtime.engine import build_runtime_components
 from mm.runtime.print_events import build_print_queues
 
@@ -20,6 +25,30 @@ def test_runtime_config_uses_hedge_as_only_secondary_source() -> None:
     assert contract["hedge"]["role"] == "hedge"
     assert config.frame_topic == "strategy:frames:nobitex:BTC_IRT:1000"
     assert config.binding.comparable is True
+
+
+def test_controller_action_start_after_steps_from_mapping() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"role": "primary", "exchange": "nobitex", "symbol": "BTC_IRT"},
+            "interval_ms": 1000,
+            "controller": {"enabled": True, "action_start_after_steps": 15},
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.action_start_after_steps == 15
+
+
+def test_controller_action_start_after_steps_clamps_negative() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"role": "primary", "exchange": "nobitex", "symbol": "BTC_IRT"},
+            "interval_ms": 1000,
+            "controller": {"enabled": True, "action_start_after_steps": -3},
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.action_start_after_steps == 0
 
 
 def test_runtime_config_rejects_anchor_like_secondary_roles() -> None:
