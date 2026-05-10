@@ -20,7 +20,7 @@ from mm.mpc.state_tensor import (
 )
 from mm.mpc.reward_tensor import terminal_objective
 
-from mm_core.pricing import target_depth_lots_from_price_model
+from mm.pricing import target_depth_lots_from_price_model
 from mm.mpc.vwap_prices import vwap_reference_prices_batched
 
 

@@ -240,7 +240,7 @@ class TorchResidualPriceModel:
     def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
         if prev_step is None:
             return
-        from mm_core.pricing import reference_prices_from_transition_ticks
+        from mm.pricing import reference_prices_from_transition_ticks
 
         _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
         _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step

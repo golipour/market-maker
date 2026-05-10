@@ -1,0 +1,7 @@
+{"ts_ms":1778428802869,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100}
+{"ts_ms":1778428810062,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428810000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778428811796,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428810000,"order_count":20,"latency_ms":1730.053937,"observe_only":true}
+{"ts_ms":1778428820007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428820000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778428820633,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428820000,"order_count":20,"latency_ms":621.896391,"observe_only":true}
+{"ts_ms":1778428830008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428830000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778428830648,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778428830000,"order_count":20,"latency_ms":635.753981,"observe_only":true}

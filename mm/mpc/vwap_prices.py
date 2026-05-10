@@ -1,12 +1,12 @@
 """VWAP reference pricing for batched MPC rollouts (``mm`` naming layer).
 
-The numeric implementation lives in ``mm_core.pricing.simulated_rep_prices``;
+The numeric implementation lives in ``mm.pricing.simulated_rep_prices``;
 this module exposes VWAP-oriented names for the new stack.
 """
 
 from __future__ import annotations
 
-from mm_core.pricing.simulated_rep_prices import representative_prices_batched as _core_representative_prices_batched
+from mm.pricing.simulated_rep_prices import representative_prices_batched as _core_representative_prices_batched
 
 
 def vwap_reference_prices_batched(
