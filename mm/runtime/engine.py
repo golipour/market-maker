@@ -19,6 +19,7 @@ from mm.exchanges.factory import (
 from mm.execution.order_manager import OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
+from mm.observability import log_event
 from mm.observability_setup import configure_observability
 from mm.env_loader import load_mm_env
 from mm.private_state.reconciler import PrivateStateReconciler
@@ -257,6 +258,7 @@ def _select_public_source(source: MarketDataSourceConfig) -> PublicMarketDataAda
 
 def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
     if not config.persistence.enabled:
+        log_event("persistence_disabled", {"reason": "config"})
         return ()
     topics = config.persistence.topics or _default_persistence_topics(config)
     daemons: list[object] = []
@@ -274,6 +276,15 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
                 run_id=config.observability.run_id,
             )
         )
+    else:
+        log_event(
+            "persistence_sink_missing",
+            {
+                "sink": "postgres",
+                "database_url_env": config.persistence.database_url_env,
+                "message": "persistence.enabled is true, but no database URL resolved",
+            },
+        )
     parquet_root = config.persistence.resolved_parquet_root()
     if parquet_root:
         from mm.persistence.parquet_writer import ParquetEventWriter
@@ -287,6 +298,23 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
                 flush_interval_ms=config.persistence.flush_interval_ms,
                 run_id=config.observability.run_id,
             )
+        )
+    if not daemons:
+        log_event(
+            "persistence_no_writers_configured",
+            {
+                "database_url_env": config.persistence.database_url_env,
+                "parquet_root_env": config.persistence.parquet_root_env,
+                "topic_count": len(topics),
+            },
+        )
+    else:
+        log_event(
+            "persistence_writers_configured",
+            {
+                "writers": [type(daemon).__name__ for daemon in daemons],
+                "topic_count": len(topics),
+            },
         )
     return tuple(daemons)
 

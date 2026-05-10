@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Simulated (tensor-batched) representative price computations used in MPC rollouts.
 
-Vendored from ``mm_core.pricing.simulated_rep_prices`` so ``mm.mpc`` does not import ``mm_core``.
+Vendored from ``mm.layers.core.pricing.simulated_rep_prices`` so ``mm.mpc`` does not import ``mm.layers.core``.
 """
 
 import torch

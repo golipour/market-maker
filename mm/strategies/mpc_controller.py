@@ -96,7 +96,7 @@ class MpcControllerRunner:
                 symbol=frame.primary.symbol,
             ):
                 self._frame_step += 1
-                # Match mm_core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
+                # Match mm.layers.core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
                 _update_hedge_rep_price_model(self._hedge_price_model, frame)
                 state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
                 _update_market_flow_model(self._market_flow_model, frame)

@@ -79,10 +79,13 @@ class PostgresEventWriter:
 
     async def start(self) -> None:
         self._stopped.clear()
-        await asyncio.to_thread(self._ensure_ready)
+        ready = await asyncio.to_thread(self._ensure_ready)
         self._tasks = [asyncio.create_task(self._consume(topic)) for topic in self.topics]
         self._tasks.append(asyncio.create_task(self._write_loop()))
-        log_event("postgres_event_writer_started", {"topics": list(self.topics), "batch_size": self.batch_size})
+        log_event(
+            "postgres_event_writer_started",
+            {"topics": list(self.topics), "batch_size": self.batch_size, "ready": ready},
+        )
 
     async def stop(self) -> None:
         self._stopped.set()
@@ -126,6 +129,14 @@ class PostgresEventWriter:
             import psycopg2.extras
         except ImportError:
             counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": "ImportError"})
+            log_event(
+                "postgres_event_writer_unavailable",
+                {
+                    "error": "ImportError",
+                    "message": "psycopg2 is not installed; postgres persistence batch was not written",
+                    "batch_size": len(batch),
+                },
+            )
             return
         with self._lock:
             try:
@@ -187,12 +198,19 @@ class PostgresEventWriter:
                 log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
                 return
 
-    def _ensure_ready(self) -> None:
+    def _ensure_ready(self) -> bool:
         try:
             import psycopg2
         except ImportError:
             counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": "ImportError"})
-            return
+            log_event(
+                "postgres_event_writer_unavailable",
+                {
+                    "error": "ImportError",
+                    "message": "psycopg2 is not installed; postgres persistence is disabled until dependency is installed",
+                },
+            )
+            return False
         with self._lock:
             try:
                 conn = psycopg2.connect(self.database_url)
@@ -202,11 +220,13 @@ class PostgresEventWriter:
                     conn.commit()
                     self._ready = True
                     log_event("postgres_event_writer_ready", {"database_url_configured": True})
+                    return True
                 finally:
                     conn.close()
             except Exception as exc:
                 counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
                 log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
+                return False
 
 
 def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:

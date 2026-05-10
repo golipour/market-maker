@@ -10,7 +10,7 @@ from typing import Any
 
 def gauge(name: str, value: float, *, labels: dict[str, Any] | None = None, help: str = "") -> None:
     try:
-        from mm_adapters.observability.metrics import REGISTRY
+        from mm.observability_metrics import REGISTRY
 
         REGISTRY.gauge(name, value, labels=labels, help=help)
     except Exception:
@@ -19,7 +19,7 @@ def gauge(name: str, value: float, *, labels: dict[str, Any] | None = None, help
 
 def counter_inc(name: str, inc: float = 1.0, *, labels: dict[str, Any] | None = None, help: str = "") -> None:
     try:
-        from mm_adapters.observability.metrics import REGISTRY
+        from mm.observability_metrics import REGISTRY
 
         REGISTRY.counter_inc(name, inc, labels=labels, help=help)
     except Exception:
@@ -32,7 +32,7 @@ def log_event(event: str, fields: dict[str, Any] | None = None) -> None:
         payload.update(fields)
     _append_log(payload)
     try:
-        from mm_adapters.observability.jsonlog import emit
+        from mm.observability_jsonlog import emit
 
         emit(event, fields)
     except Exception:

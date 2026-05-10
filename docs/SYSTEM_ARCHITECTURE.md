@@ -6,7 +6,7 @@ This document describes how the repository’s components fit together at runtim
 
 ## 1. High-level picture
 
-The system is a **closed loop**: exchange market data is bucketed into discrete **steps**; learned models and an **MPC controller** choose **quotes**; an **execution model** applies the previous action to the current step to update **inventory, cash, and wealth**; optional **diagnostics** serialize one JSON **frame per step** to Redis (and optionally stdout); a separate **mm_viz** web UI reads those frames and plots them in the browser.
+The system is a **closed loop**: exchange market data is bucketed into discrete **steps**; learned models and an **MPC controller** choose **quotes**; an **execution model** applies the previous action to the current step to update **inventory, cash, and wealth**; optional **diagnostics** serialize one JSON **frame per step** to Redis and/or stdout.
 
 ```mermaid
 flowchart TB
@@ -27,7 +27,7 @@ flowchart TB
 
   subgraph loop["Orchestration"]
     RUN["OrderFlowRunner.advance"]
-    ENG["mm_core.app.engine.advance_order_flow_runner"]
+    ENG["mm.layers.core.app.engine.advance_order_flow_runner"]
   end
 
   subgraph diag["Diagnostics"]
@@ -40,10 +40,6 @@ flowchart TB
     MET["Prometheus /metrics"]
   end
 
-  subgraph ui["Browser UI"]
-    VIZ["mm_viz: FastAPI + WebSocket + static Plotly/Chart.js"]
-  end
-
   REST --> TS
   TS --> ST
   ST --> RUN
@@ -54,12 +50,11 @@ flowchart TB
   ENG --> FV1
   FV1 --> EM
   EM -->|Pub/Sub + key| RS[(Redis)]
-  RS --> VIZ
   ENG --> LOG
   ENG --> MET
 ```
 
-**Process boundaries:** The market maker usually runs as a **Python process on the host** (or a custom container not defined in the default `docker-compose.yml`). **Redis, mm_viz, Prometheus, Grafana, Mimir, Postgres** are separate services, typically started with Docker Compose.
+**Process boundaries:** The market maker usually runs as a **Python process on the host** (or a custom container not defined in the default `docker-compose.yml`). **Redis, Prometheus, Grafana, and Postgres** are separate services, typically started with Docker Compose.
 
 ---
 
@@ -68,14 +63,13 @@ flowchart TB
 | Layer / area | Role | Notable paths |
 |----------------|------|----------------|
 | **Architecture** | Target boundaries, phases, unit policy | `docs/ARCHITECTURE_RFC.md` |
-| **Runtime shell** | CLI, wiring, integrated runner/stepper, pipeline composition | `mm_runtime/` — `cli.py`, `run.py`, `pipeline.py` (`build_pipeline`, `create_runner`, `main`), `wiring.py` (`create_stepper` → `mm_runtime.order_flow_stepper`); root `order_flow_*.py` are **thin shims** where present |
-| **Core** | Orchestration extract, domain types, diagnostics schema | `mm_core/app/engine.py` — one step of `OrderFlowRunner`; `mm_core/diagnostics/diagnostics_frame.py` — `build_diagnostics_frame`; `mm_core/app/parsed_step.py` — tuple → `ParsedStep`; `mm_core/domain/`, `mm_core/ports/`, `mm_core/units/` |
-| **Adapters** | I/O and side effects | `mm_adapters/diagnostics/emitter.py` — stdout + Redis; `mm_adapters/observability/` — metrics, JSON log, request context |
+| **Runtime shell** | CLI, wiring, integrated runner/stepper, pipeline composition | `mm.layers.runtime/` — `cli.py`, `run.py`, `pipeline.py` (`build_pipeline`, `create_runner`, `main`), `wiring.py` (`create_stepper` → `mm.layers.runtime.order_flow_stepper`); root `order_flow_*.py` are **thin shims** where present |
+| **Core** | Orchestration extract, domain types, diagnostics schema | `mm.layers.core/app/engine.py` — one step of `OrderFlowRunner`; `mm.layers.core/diagnostics/diagnostics_frame.py` — `build_diagnostics_frame`; `mm.layers.core/app/parsed_step.py` — tuple → `ParsedStep`; `mm.layers.core/domain/`, `mm.layers.core/ports/`, `mm.layers.core/units/` |
+| **Adapters** | I/O and side effects | `mm.layers.adapters/diagnostics/emitter.py` — stdout + Redis; `mm.layers.adapters/observability/` — metrics, JSON log, request context |
 | **Controller / models** | PyTorch models, MPC, state, rewards | `market_making_controller/` — `controller.py`, `mpc_tensor_batched.py`, `models/`, `state.py`, `reward_tensor.py` |
-| **Trading loop** | Stepper, runner, pipeline, animation | `mm_runtime/pipeline.py`, `order_flow_stepper.py`, `order_flow_runner.py` (shims re-export `mm_runtime`), `order_flow_animation.py`, `trade_stats.py` |
-| **Viz** | Realtime debug UI | `mm_viz/server.py` (FastAPI, WebSocket, serves static files), `mm_viz/static/` (HTML/JS/Plotly/Chart.js), `mm_viz/mpl_figures.py` (reference / optional PNG) |
+| **Trading loop** | Stepper, runner, pipeline, animation | `mm.layers.runtime/pipeline.py`, `order_flow_stepper.py`, `order_flow_runner.py` (shims re-export `mm.layers.runtime`), `order_flow_animation.py`, `trade_stats.py` |
 
-Pipeline assembly is in **`mm_runtime.pipeline`**; per-step logic uses top-level `order_flow_*` shims and **`mm_core.app.engine`** (parse step, execution, MPC, diagnostics emit).
+Pipeline assembly is in **`mm.layers.runtime.pipeline`**; per-step logic uses top-level `order_flow_*` shims and **`mm.layers.core.app.engine`** (parse step, execution, MPC, diagnostics emit).
 
 ---
 
@@ -83,11 +77,11 @@ Pipeline assembly is in **`mm_runtime.pipeline`**; per-step logic uses top-level
 
 | Entry | Command / module | Behavior |
 |--------|------------------|----------|
-| **Primary (documented in practice)** | `python -m mm_runtime` or `python3 -m mm_runtime` | `mm_runtime/cli.py` → `mm_runtime.run.run_order_flow_pipeline()` → `mm_runtime.pipeline.main()` (optional metrics server first) |
-| **Legacy direct** | `python order_flow_pipeline.py` | Shim to `mm_runtime.pipeline.main` (no extra CLI metrics unless you set `MM_METRICS_PORT` yourself) |
-| **Package** | `mm_runtime/__main__.py` → `cli.main()` | Same as `-m mm_runtime` |
+| **Primary (documented in practice)** | `python -m mm.layers.runtime` or `python3 -m mm.layers.runtime` | `mm.layers.runtime/cli.py` → `mm.layers.runtime.run.run_order_flow_pipeline()` → `mm.layers.runtime.pipeline.main()` (optional metrics server first) |
+| **Legacy direct** | `python order_flow_pipeline.py` | Shim to `mm.layers.runtime.pipeline.main` (no extra CLI metrics unless you set `MM_METRICS_PORT` yourself) |
+| **Package** | `mm.layers.runtime/__main__.py` → `cli.main()` | Same as `-m mm.layers.runtime` |
 
-Configuration is typically loaded from **environment** (e.g. `.env` via `python-dotenv` where used) and/or **kwargs** passed into pipeline construction in **`mm_runtime.pipeline`** (or the `order_flow_pipeline` compatibility module).
+Configuration is typically loaded from **environment** (e.g. `.env` via `python-dotenv` where used) and/or **kwargs** passed into pipeline construction in **`mm.layers.runtime.pipeline`** (or the `order_flow_pipeline` compatibility module).
 
 ---
 
@@ -96,8 +90,8 @@ Configuration is typically loaded from **environment** (e.g. `.env` via `python-
 The structural sequence is:
 
 1. **`OrderFlowStepper.advance(t_end_ms)`** fetches order book and trades for a time bucket, outputs a **Step** (or `None` on failure).
-2. **`OrderFlowRunner`** (driven from `mm_runtime.pipeline` / animation) calls into **`mm_core.app.engine.advance_order_flow_runner`** for the refactored path, which:
-   - Parses the step tuple (`mm_core.app.parsed_step.parse_step` → `ParsedStep`), optional **step snapshot** for typed units.
+2. **`OrderFlowRunner`** (driven from `mm.layers.runtime.pipeline` / animation) calls into **`mm.layers.core.app.engine.advance_order_flow_runner`** for the refactored path, which:
+   - Parses the step tuple (`mm.layers.core.app.parsed_step.parse_step` → `ParsedStep`), optional **step snapshot** for typed units.
    - Runs **execution** of the *previous* action against the *current* step (inventory, PnL, histories).
    - Runs **testers / diagnostics MC** (e.g. expected mid), **MPC** to choose the **next** action, updates histories (`delta_*`, rewards, J components, etc.).
 3. At the end of a successful step, **`build_diagnostics_frame(runner, exchange, symbol, spread_max)`** assembles a large JSON-serializable **DiagnosticsFrame** (runner series, depth, action_depth, price diagnostics, LOF, hedge, loss specs, etc.).
@@ -111,9 +105,9 @@ For **full narrative** of delayed execution, MPC vs diagnostic sampling, and mod
 
 ### 5.1 Frame builder
 
-- **`mm_core.diagnostics.diagnostics_frame.build_diagnostics_frame`** reads **duck-typed `runner`** state: histories on the runner, model plot hooks (`get_plot_data`, etc.), and embeds everything needed to reproduce desktop-style figures (Figure 1–6 style data).
+- **`mm.layers.core.diagnostics.diagnostics_frame.build_diagnostics_frame`** reads **duck-typed `runner`** state: histories on the runner, model plot hooks (`get_plot_data`, etc.), and embeds everything needed to reproduce desktop-style figures (Figure 1–6 style data).
 
-### 5.2 Emitter (`mm_adapters.diagnostics.emitter`)
+### 5.2 Emitter (`mm.layers.adapters.diagnostics.emitter`)
 
 Controlled by environment:
 
@@ -127,15 +121,9 @@ Controlled by environment:
 
 Wire format is **`mm.diag.v2`**: **`SET`** stores a **`kind: full`** envelope (merged frame in **`frame`**). **`PUBLISH`** sends **`kind: full`** or **`kind: delta`** (patch vs previous frame). On each emit: **`SET`** latest key, then **`PUBLISH`** channel. Failures are swallowed (best-effort).
 
-### 5.3 Realtime UI (`mm_viz`)
+### 5.3 Realtime UI
 
-- **`mm_viz/server.py`**: **FastAPI** app with:
-  - **Lifespan**: background **async Redis** loop — periodic **`GET`** of latest key + **`SUBSCRIBE`** to Pub/Sub; deduplicates by **`point.step_counter`**; maintains an in-memory deque of frames (**`MM_VIZ_MAX_FRAMES`**).
-  - **`WebSocket /ws`**: pushes **`{type:"frame", frame: {...}}`** or compact **`{type:"frame_delta", patch: ...}`** when the Pub/Sub message is a delta; initial snapshot if already buffered.
-  - **REST**: `/api/latest`, `/api/config`, `/api/history_steps`; optional **`/api/figures/*.png`** (matplotlib) for API/debug — **main UI uses client-side Plotly/Chart.js**, not PNG refresh.
-- **Static SPA** (`mm_viz/static/`): **Chart.js** for overview/price/QQ/hedge line charts; **Plotly.js** for Action & Depth and LOF panels (built from the same frame JSON in `plotly_action_lof.js`, aligned with `mpl_figures.py`).
-
-**Important:** If **`mm_viz` runs in Docker** and the market maker on the **host**, both must use a **Redis URL that resolves from each process** (e.g. host → `127.0.0.1`, container → `redis` service name).
+The legacy `mm.layers.viz` FastAPI/browser UI has been removed from the default code path. Diagnostics frames remain available as stdout JSON or Redis `SET`/PubSub payloads for external tools.
 
 ---
 
@@ -143,10 +131,10 @@ Wire format is **`mm.diag.v2`**: **`SET`** stores a **`kind: full`** envelope (m
 
 | Mechanism | Location | Activation |
 |-----------|----------|------------|
-| **Prometheus metrics** | `mm_adapters/observability/metrics.py` | **`MM_METRICS_PORT`** set (e.g. `8000`) exposes **`/metrics`** HTTP in a background thread. |
+| **Prometheus metrics** | `mm.observability_metrics.py` | **`MM_METRICS_PORT`** set (e.g. `8000`) exposes **`/metrics`** HTTP in a background thread. |
 | **Scrape config** | `docker/prometheus.yml` | Scrapes **`host.docker.internal:8000`** for job `market_maker` (host-run process). |
-| **Structured / JSON log** | `mm_adapters/observability/jsonlog.py` | Used from engine via **`log_emit`** where wired. |
-| **Context** | `mm_adapters/observability/context.py` | Correlation / metadata for logs or metrics. |
+| **Structured / JSON log** | `mm.observability_jsonlog.py` | Used from engine via **`log_emit`** where wired. |
+| **Context** | `mm.observability_context.py` | Correlation / metadata for logs or metrics. |
 
 Grafana/Mimir/Prometheus in **`docker-compose.yml`** form a **metrics stack**; the trading app is **not** required to run inside Compose for metrics if the host exposes `MM_METRICS_PORT`.
 
@@ -161,16 +149,9 @@ Services (from `docker-compose.yml`):
 | **redis** | 6379 | Diagnostics transport (SET + Pub/Sub). |
 | **db** | 5432 | Postgres (application DB if used by future features). |
 | **prometheus** | 9090 | Scrapes `/metrics` from host (see `docker/prometheus.yml`). |
-| **mimir** | 9009 | Long-term metrics backend (configured via `docker/mimir.yaml`). |
 | **grafana** | 3000 | Dashboards; provisions from `./grafana/`. |
-| **mm_viz** | 8501 | FastAPI + static diagnostics UI; **`depends_on: redis`**. |
 
-**Volumes:** persistent data for Redis, Postgres, Prometheus, Mimir, Grafana.
-
-To run **only Redis + `mm_viz`** (no DB/metrics containers):  
-`docker compose up -d redis mm_viz`
-
-**Rebuild note:** The **`mm_viz` image** must be **rebuilt** after UI/code changes (`docker compose build mm_viz`) or Compose will reuse an old image.
+**Volumes:** persistent data for Redis, Postgres, Prometheus, and Grafana.
 
 ---
 
@@ -183,9 +164,9 @@ To run **only Redis + `mm_viz`** (no DB/metrics containers):
 
 ## 9. Extension points and migration notes
 
-- **`mm_core.ports.market_data.StepperPort`** / **`mm_runtime.wiring.create_stepper`**: intended to replace direct `OrderFlowStepper` construction with a cleaner factory (currently still returns **`OrderFlowStepper`**).
-- **`mm_core.app.engine.advance_order_flow_runner`**: central place to add cross-cutting behavior (metrics, tracing) without editing `order_flow_runner.py` everywhere.
-- **Desktop animation**: `order_flow_animation.py` remains the reference for figure layout; **`mm_viz/mpl_figures.py`** (matplotlib) and **`mm_viz/static/plotly_action_lof.js`** mirror that behavior for server PNG or browser Plotly, respectively.
+- **`mm.layers.core.ports.market_data.StepperPort`** / **`mm.layers.runtime.wiring.create_stepper`**: intended to replace direct `OrderFlowStepper` construction with a cleaner factory (currently still returns **`OrderFlowStepper`**).
+- **`mm.layers.core.app.engine.advance_order_flow_runner`**: central place to add cross-cutting behavior (metrics, tracing) without editing `order_flow_runner.py` everywhere.
+- **Desktop animation**: `order_flow_animation.py` remains the reference for local figure layout when the legacy order-flow path is used.
 
 ---
 
@@ -205,9 +186,8 @@ To run **only Redis + `mm_viz`** (no DB/metrics containers):
 |----------|-----------------|-------|
 | `MM_DIAGNOSTICS` | `1` | Enables frame build + emit. |
 | `MM_DIAGNOSTICS_REDIS_URL` | `redis://127.0.0.1:6379/0` (host) | Must match where Redis listens. |
-| `MM_DIAGNOSTICS_CHANNEL` | `mm.diagnostics.v1` | Must match `mm_viz` / emitter. |
+| `MM_DIAGNOSTICS_CHANNEL` | `mm.diagnostics.v1` | Redis Pub/Sub channel used by `mm.diagnostics_emitter`. |
 | `MM_DIAGNOSTICS_REDIS_LATEST_KEY` | `mm_diagnostics:latest` | GET key for last frame. |
-| `MM_VIZ_MAX_FRAMES` | `2000` | Server-side ring buffer of frames (viz). |
 | `MM_METRICS_PORT` | `8000` | Enables Prometheus exporter on that port. |
 
-**`mm_core`** and **`mm_adapters`** provide orchestration, domain typing, and side-effect boundaries; the long-lived trading modules (`order_flow_*`, `trade_stats`, …) remain the integration surface for venues and models.
+**`mm.layers.core`** and **`mm.layers.adapters`** provide orchestration, domain typing, and side-effect boundaries; the long-lived trading modules (`order_flow_*`, `trade_stats`, …) remain the integration surface for venues and models.

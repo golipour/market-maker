@@ -3,7 +3,7 @@
 ### Goal
 Make controller/MPC/execution logic human-readable and exchange-agnostic by using **real float units** internally, and restricting tick/lot rounding to exchange adapters only.
 
-### Canonical units (inside `mm_core/`)
+### Canonical units (inside `mm.layers.core/`)
 
 - **price**: quote per base (float)  
   Example: BTC/USDT → `price = 65000.25` means 65,000.25 USDT per 1 BTC.
@@ -18,7 +18,7 @@ Make controller/MPC/execution logic human-readable and exchange-agnostic by usin
 
 ### Where tick/lot/min-size belongs
 
-All exchange microstructure constraints live in `mm_adapters/`:
+All exchange microstructure constraints live in `mm.layers.adapters/`:
 
 - tick size (price step)
 - quantity step / lot size

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from mm.runtime.config import (
     MarketDataSourceConfig,
     MarketMakerRuntimeConfig,
+    PersistenceRuntimeConfig,
     PrivateRuntimeConfig,
     runtime_config_from_mapping,
 )
+from mm.env_loader import load_mm_env
 from mm.runtime.engine import build_runtime_components
 from mm.runtime.print_events import build_print_queues
 
@@ -34,6 +38,51 @@ def test_runtime_config_auto_enables_persistence_from_env(monkeypatch) -> None:
     )
 
     assert config.persistence.enabled is True
+
+
+def test_load_mm_env_reads_repo_and_package_env(tmp_path, monkeypatch) -> None:
+    package_root = tmp_path / "mm"
+    package_root.mkdir()
+    (tmp_path / ".env").write_text("MM_DATABASE_URL=postgresql://repo\n", encoding="utf-8")
+    (package_root / ".env").write_text("NOBITEX_API_TOKEN=package-token\n", encoding="utf-8")
+    monkeypatch.delenv("MM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("NOBITEX_API_TOKEN", raising=False)
+    monkeypatch.setattr("mm.env_loader.mm_package_root", lambda: package_root)
+
+    assert load_mm_env() is True
+
+    assert os.environ["MM_DATABASE_URL"] == "postgresql://repo"
+    assert os.environ["NOBITEX_API_TOKEN"] == "package-token"
+
+
+@pytest.mark.asyncio
+async def test_persistence_enabled_without_database_url_builds_no_writer(monkeypatch) -> None:
+    monkeypatch.delenv("MM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("MM_PARQUET_ROOT", raising=False)
+    monkeypatch.setattr("mm.runtime.engine.load_mm_env", lambda: False)
+    config = MarketMakerRuntimeConfig(
+        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+        persistence=PersistenceRuntimeConfig(enabled=True),
+    )
+
+    runtime = await build_runtime_components(config)
+
+    assert runtime.persistence_daemons == ()
+
+
+@pytest.mark.asyncio
+async def test_persistence_enabled_with_database_url_builds_postgres_writer(monkeypatch) -> None:
+    monkeypatch.setenv("MM_DATABASE_URL", "postgresql://example")
+    monkeypatch.delenv("MM_PARQUET_ROOT", raising=False)
+    monkeypatch.setattr("mm.runtime.engine.load_mm_env", lambda: False)
+    config = MarketMakerRuntimeConfig(
+        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+        persistence=PersistenceRuntimeConfig(enabled=True),
+    )
+
+    runtime = await build_runtime_components(config)
+
+    assert [type(daemon).__name__ for daemon in runtime.persistence_daemons] == ["PostgresEventWriter"]
 
 
 def test_controller_action_start_after_steps_from_mapping() -> None:

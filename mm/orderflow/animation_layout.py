@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mm_runtime.order_flow_runner import OrderFlowRunner
+    from mm.layers.runtime.order_flow_runner import OrderFlowRunner
 
 
 def get_estimator_plot_specs(estimator) -> list[dict]:

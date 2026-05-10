@@ -11,7 +11,7 @@ from mm.pricing.reference_prices_ticks import (
 )
 from mm.pricing.simulated_rep_prices import representative_prices_batched
 
-# Match ``mm_core.pricing`` public names for tick helpers.
+# Match ``mm.layers.core.pricing`` public names for tick helpers.
 mid_after_market_order_flow_ticks = mid_ticks_after_market_order_flow
 reference_prices_from_orderbook_ticks = reference_prices_ticks_from_orderbook
 

@@ -44,7 +44,6 @@ flowchart TD
 
     controllerRunner --> diagBridge[DiagnosticsBridge]
     diagBridge -->|mm.diag.v2 via emitter| redisDiag[(Redis latest key + PubSub)]
-    redisDiag --> mmViz[mm_viz]
 
     observability[ObservabilityWrappers] --> jsonLog[stdout JSON logs]
     observability --> metrics[PrometheusRegistry]
@@ -138,14 +137,14 @@ flowchart TD
 ### Logs
 
 - **Source calls**: `mm.observability.log_event(...)` from frame assembler, controller, order manager, control plane.
-- **Backend**: `mm_adapters.observability.jsonlog.emit`.
+- **Backend**: `mm.layers.adapters.observability.jsonlog.emit`.
 - **Destination**: stdout JSON lines (enabled by `MM_JSON_LOG` or runtime observability config).
 - **Infra shipping**: Docker Compose includes Alloy/Loki path for container logs.
 
 ### Metrics
 
 - **Source calls**: `gauge(...)`, `counter_inc(...)`, `latency_metric(...)`.
-- **Backend**: in-process `mm_adapters.observability.metrics.REGISTRY`.
+- **Backend**: in-process `mm.observability_metrics.REGISTRY`.
 - **Destination**:
   - exposed at `/metrics` if `MM_METRICS_PORT` is set,
   - scraped by Prometheus/Grafana stack.
@@ -157,16 +156,16 @@ flowchart TD
 - **Destination**: OTLP exporter configured in runtime observability settings, then Tempo/Alloy stack.
 - If OTel SDK is unavailable or disabled, spans safely no-op.
 
-### Diagnostics (`mm_viz`)
+### Diagnostics Side Channel
 
 - **Source**: `MpcControllerRunner` decision payload.
 - **Bridge**: `mm.diagnostics_bridge.emit_controller_diagnostics`.
-- **Backend**: `mm_adapters.diagnostics.emitter`.
+- **Backend**: `mm.diagnostics_emitter`.
 - **Destination**:
   - Redis latest key (`SET`)
   - Redis Pub/Sub channel
   - optional stdout JSON delta/full payloads
-- **Consumer**: `mm_viz`.
+- **Consumer**: optional Redis/stdout consumers. The legacy `mm.layers.viz` service has been removed from the default runtime.
 
 ## 4) How to check strategy actions now
 
@@ -207,11 +206,7 @@ Monitor:
 
 These show what was requested, accepted, and what the live local order view is.
 
-## D) Observe in UI (`mm_viz`)
-
-If diagnostics are enabled (`MM_DIAGNOSTICS=1`) and Redis is reachable, `mm_viz` displays bridged controller diagnostics in realtime.
-
-## E) Query persisted actions/events
+## D) Query persisted actions/events
 
 If persistence is enabled:
 

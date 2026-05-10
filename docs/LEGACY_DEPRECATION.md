@@ -7,10 +7,10 @@ The async `mm/` runtime is the target for new production features.
 These modules remain available while callers migrate:
 
 - Root `order_flow_*.py` modules
-- `mm_runtime.order_flow_runner`
-- `mm_runtime.order_flow_stepper`
+- `mm.layers.runtime.order_flow_runner`
+- `mm.layers.runtime.order_flow_stepper`
 - `market_making_controller` model/controller shims
-- `mm_core` runner-oriented diagnostics and step economics hooks
+- `mm.layers.core` runner-oriented diagnostics and step economics hooks
 
 ## Deprecation Conditions
 

@@ -1,6 +1,6 @@
 """Hedge-venue reference price dynamics for MPC rollouts.
 
-Legacy behaviour matches ``mm_runtime.order_flow_stepper.HedgeGaussianPriceModel``:
+Legacy behaviour matches ``mm.layers.runtime.order_flow_stepper.HedgeGaussianPriceModel``:
 EWMA on (buy, sell) representative-price *deltas*, then Gaussian ``sample_deltas``
 for the optimiser. Observations and deltas use the same numeric units as the
 runtime (quote-per-base floats in the new stack; historically ticks in the old).

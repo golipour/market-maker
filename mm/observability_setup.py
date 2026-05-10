@@ -15,7 +15,7 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
     if config.metrics_enabled:
         os.environ.setdefault("MM_METRICS_PORT", str(config.metrics_port))
         try:
-            from mm_adapters.observability.metrics import start_server
+            from mm.observability_metrics import start_server
 
             start_server(port=config.metrics_port)
         except Exception:

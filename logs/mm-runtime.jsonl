@@ -8,3 +8,371 @@
 {"ts_ms":1778429310188,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100}
 {"ts_ms":1778429320049,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778429320000,"hedge_status":"ready","hedge_lag_ms":0}
 {"ts_ms":1778429321590,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778429320000,"order_count":20,"latency_ms":1536.931775,"observe_only":true}
+{"ts_ms":1778430249192,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100}
+{"ts_ms":1778430260050,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430260000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778430261757,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430260000,"order_count":20,"latency_ms":1703.088841,"observe_only":true}
+{"ts_ms":1778430270008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430270000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778430270691,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430270000,"order_count":20,"latency_ms":678.679077,"observe_only":true}
+{"ts_ms":1778430280007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430280000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778430280919,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430280000,"order_count":20,"latency_ms":905.025696,"observe_only":true}
+{"ts_ms":1778430290007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430290000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778430290960,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778430290000,"order_count":20,"latency_ms":949.552612,"observe_only":true}
+{"ts_ms":1778431624008,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778431624012,"event":"persistence_sink_missing","sink":"parquet","parquet_root_env":"MM_PARQUET_ROOT","message":"persistence.enabled is true, but no parquet root resolved"}
+{"ts_ms":1778431624012,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778431624020,"event":"persistence_sink_missing","sink":"parquet","parquet_root_env":"MM_PARQUET_ROOT","message":"persistence.enabled is true, but no parquet root resolved"}
+{"ts_ms":1778431624020,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778431624034,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778431645186,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778431645186,"event":"persistence_sink_missing","sink":"parquet","parquet_root_env":"MM_PARQUET_ROOT","message":"persistence.enabled is true, but no parquet root resolved"}
+{"ts_ms":1778431645186,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778431645190,"event":"persistence_sink_missing","sink":"parquet","parquet_root_env":"MM_PARQUET_ROOT","message":"persistence.enabled is true, but no parquet root resolved"}
+{"ts_ms":1778431645190,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778431645202,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778431728232,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778431728234,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778431728239,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778431728252,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778431737736,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778431737736,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778431737741,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778431737752,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778432090744,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":11}
+{"ts_ms":1778432090748,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence is disabled until dependency is installed"}
+{"ts_ms":1778432090748,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100,"ready":false}
+{"ts_ms":1778432090797,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432090835,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432104418,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432104423,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432105015,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432105017,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432105019,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432105022,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432105230,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432105232,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432110053,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432110055,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432110056,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432110000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778432111661,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432110000,"order_count":20,"latency_ms":1600.727641,"observe_only":true}
+{"ts_ms":1778432111675,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432111678,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432114961,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432114970,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432114979,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432114983,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432114993,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115001,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115142,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115152,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115164,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115172,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432115181,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115192,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115200,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115208,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115214,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115228,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115234,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115244,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115253,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115259,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115268,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115281,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115304,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":7}
+{"ts_ms":1778432115324,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115335,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115344,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115361,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432115375,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115386,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115398,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115414,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115432,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432115464,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115471,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115483,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115494,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115519,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432115532,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115549,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115567,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115580,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115594,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115601,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115610,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115620,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115627,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115636,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115642,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115660,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115675,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115689,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115712,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115721,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115734,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115741,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115754,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115768,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115778,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432115786,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115797,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115802,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115813,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115825,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115831,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115843,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115848,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115856,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115865,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115871,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115880,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115888,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115900,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115904,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115918,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115923,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115935,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115941,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432115946,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115958,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432115964,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432115972,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115981,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115990,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432115997,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116004,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116013,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116020,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432116029,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116041,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116050,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116060,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116068,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116078,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116086,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116095,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116107,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116118,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116129,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":7}
+{"ts_ms":1778432116137,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116146,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116156,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116166,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116173,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116183,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116193,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116202,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116214,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116226,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":8}
+{"ts_ms":1778432116235,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116240,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432116249,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116253,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116266,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116274,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116284,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116289,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116296,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116302,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116312,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116320,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116330,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116337,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116347,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116359,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116367,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116379,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116389,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116396,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116411,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116420,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":7}
+{"ts_ms":1778432116430,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116437,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116448,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116457,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116463,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116471,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116482,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116487,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432116500,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116507,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116520,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116531,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116539,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116552,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116557,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116566,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116573,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432116587,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116597,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432116604,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432116610,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116618,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432116620,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432120004,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432120006,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432120007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432120000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778432120650,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432120000,"order_count":20,"latency_ms":639.152489,"observe_only":true}
+{"ts_ms":1778432120659,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432120663,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432129896,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432129898,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432129900,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432129902,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432130005,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432130006,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432130007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432130000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778432130648,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432130000,"order_count":20,"latency_ms":636.260563,"observe_only":true}
+{"ts_ms":1778432130658,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432130665,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432135008,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432135016,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135022,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135029,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135036,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135047,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135057,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135067,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135075,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135085,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135095,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135105,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135112,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135119,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135129,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135137,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135146,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135152,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135160,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135169,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135181,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135186,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135201,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135210,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135220,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135230,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135240,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135248,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135261,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135269,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135281,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135286,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135298,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135305,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135319,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135330,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432135337,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135347,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135359,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432135368,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135378,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135385,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135394,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135405,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135416,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135421,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135431,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135453,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432135466,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135477,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135495,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135508,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432135522,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135549,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135562,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135600,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135617,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135646,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135662,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135695,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135714,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135725,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135731,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135737,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135749,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135768,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135776,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432135800,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135814,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432135830,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432135837,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135852,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135867,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432135880,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":10}
+{"ts_ms":1778432135888,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135897,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135905,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135913,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135920,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135932,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135942,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135951,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135961,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432135970,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432135985,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432135992,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136003,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136013,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136028,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136037,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136051,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136058,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136071,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136081,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136094,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136102,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136109,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136115,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432136120,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432136135,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136147,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432136157,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136167,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136173,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136188,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136203,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136216,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136225,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136232,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136242,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136251,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136259,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136267,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136272,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136282,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432136297,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432136302,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136312,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136318,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136328,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136340,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136349,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432136354,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136363,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136369,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136372,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432136382,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136387,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136397,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136403,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136413,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136419,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136432,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136437,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136449,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136454,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136463,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136472,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432136483,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":6}
+{"ts_ms":1778432136489,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432136496,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136504,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778432136512,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":8}
+{"ts_ms":1778432136518,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":4}
+{"ts_ms":1778432136527,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":5}
+{"ts_ms":1778432140005,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432140005,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778432140007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432140000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778432140656,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432140000,"order_count":20,"latency_ms":641.851214,"observe_only":true}
+{"ts_ms":1778432140664,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778432140666,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}

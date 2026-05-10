@@ -123,7 +123,7 @@ def reference_prices_from_transition(
     return br, sr, bc, sc
 
 
-# Alias matching ``mm_core.pricing`` / call sites in ``mm.mpc.price_torch``.
+# Alias matching ``mm.layers.core.pricing`` / call sites in ``mm.mpc.price_torch``.
 reference_prices_from_transition_ticks = reference_prices_from_transition
 
 

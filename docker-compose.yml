@@ -1,10 +1,6 @@
 # Full stack: `docker compose up` (or add `-d`) from the repo root.
 # Prometheus config: docker/prometheus.yml
 # (separate files — those daemons are configured by file, not by embedding in Compose).
-# Redis + diagnostics UI only (no Postgres / Prometheus / Grafana):
-#   docker compose up -d redis mm_viz
-#   open http://localhost:8501
-#
 # Parquet: there is no Parquet container. The Python runtime writes files under
 # MM_PARQUET_ROOT (see mm/persistence/parquet_writer.py). Run the engine on the
 # host with e.g. MM_PARQUET_ROOT=./data/parquet, or bind-mount parquet_data (below)
@@ -141,37 +137,6 @@ services:
       - loki
       - tempo
       - redis
-
-  # After changing mm_viz, rebuild: `docker compose build mm_viz --no-cache` then `docker compose up -d mm_viz`
-  # (Plain `up` reuses the cached image.)
-  mm_viz:
-    build:
-      context: .
-      dockerfile: mm_viz/Dockerfile
-    image: market_maker-mm_viz
-    container_name: mm_viz
-    restart: "no"
-    environment:
-      MM_DIAGNOSTICS_REDIS_URL: redis://redis:6379/0
-      MM_DIAGNOSTICS_CHANNEL: mm.diagnostics.v1
-      MM_DIAGNOSTICS_REDIS_LATEST_KEY: mm_diagnostics:latest
-      MM_VIZ_MAX_FRAMES: "2000"
-    ports:
-      - "8501:8501"
-    depends_on:
-      - redis
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/api/config', timeout=3)",
-        ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 25s
 
 volumes:
   redis-data:

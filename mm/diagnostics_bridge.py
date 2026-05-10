@@ -44,10 +44,10 @@ def controller_decision_to_diagnostics_frame(payload: dict[str, Any]) -> dict[st
 
 
 def emit_controller_diagnostics(payload: dict[str, Any]) -> None:
-    """Best-effort bridge to the existing mm_viz Redis/PubSub diagnostics contract."""
+    """Best-effort bridge from controller decisions to diagnostics sinks."""
 
     try:
-        from mm_adapters.diagnostics.emitter import emit
+        from mm.diagnostics_emitter import emit
 
         emit(controller_decision_to_diagnostics_frame(payload))
     except Exception:

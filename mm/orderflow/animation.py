@@ -14,8 +14,8 @@ import matplotlib.animation as animation
 import matplotlib.dates as mdates
 import numpy as np
 
-from mm_runtime.order_flow_stepper import Step
-from mm_runtime.order_flow_runner import OrderFlowRunner
+from mm.layers.runtime.order_flow_stepper import Step
+from mm.layers.runtime.order_flow_runner import OrderFlowRunner
 from mm.orderflow.testers import MarketOrderFlowTester
 
 from mm.orderflow.animation_layout import build_layout, section_ranges
@@ -1947,6 +1947,6 @@ def draw_dynamic(
 
 
 if __name__ == "__main__":
-    from mm_runtime.pipeline import main
+    from mm.layers.runtime.pipeline import main
     main()
 
