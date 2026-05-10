@@ -164,7 +164,6 @@ class MpcControllerRunner:
 
 
 def _build_controller(config: ControllerRuntimeConfig) -> Any:
-    from market_making_controller.models.execution import ObservedStepExecutionModel
     from market_making_controller.models.market_order_flow_torch import (
         TorchDiscreteGammaModel,
         TorchHurdleGammaModel,
@@ -174,6 +173,8 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     )
     from market_making_controller.models.price_torch import TorchResidualPriceModel
     from market_making_controller.mpc_tensor_batched import MonteCarloMPCTensorBatched
+
+    from mm.core.models.real_execution import RealExecutionModel
 
     flow_cfg = dict(config.market_flow_model or {})
     flow_kind = str(flow_cfg.pop("kind", "hurdle_lognormal")).lower()
@@ -197,10 +198,12 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     price_model = TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
 
     execution_cfg = dict(config.execution_model or {})
-    execution_kind = str(execution_cfg.pop("kind", "observed_step")).lower()
-    if execution_kind != "observed_step":
+    execution_kind = str(execution_cfg.pop("kind", "real")).lower()
+    if execution_kind == "observed_step":
+        execution_kind = "real"
+    if execution_kind != "real":
         raise ValueError(f"unsupported execution_model kind: {execution_kind}")
-    execution_model = ObservedStepExecutionModel(**execution_cfg)
+    execution_model = RealExecutionModel(**execution_cfg)
 
     optimizer_cfg = dict(config.optimizer or {})
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()

@@ -275,7 +275,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "model_inputs": {
             "price_model": config.price_model or {"kind": "gaussian"},
             "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},
-            "execution_model": config.execution_model or {"kind": "observed_step"},
+            "execution_model": config.execution_model or {"kind": "real"},
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "float_bridge": {

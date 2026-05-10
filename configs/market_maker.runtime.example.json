@@ -3,7 +3,7 @@
     "exchange": "nobitex",
     "symbol": "BTC_IRT",
     "mode": "rest",
-    "depth_limit": 20,
+    "depth_limit": 100,
     "trades_limit": 200,
     "poll_interval_ms": 1000
   },
@@ -11,7 +11,7 @@
     "exchange": "wallex",
     "symbol": "BTC_IRT",
     "mode": "rest",
-    "depth_limit": 20,
+    "depth_limit": 100,
     "trades_limit": 200,
     "poll_interval_ms": 1000
   },
@@ -40,7 +40,7 @@
     "max_spread": 50.0,
     "qty_step": 0.0001,
     "min_order_qty": 0.0001,
-    "max_orders_per_side": 3,
+    "max_orders_per_side": 10,
     "price_model": {
       "kind": "residual",
       "residual_decay": 0.95,
@@ -54,16 +54,16 @@
       "init_sigma": 1.0
     },
     "execution_model": {
-      "kind": "observed_step",
-      "maker_fee": 0.0
+      "kind": "real",
+      "maker_fee": 0.00015
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
       "n_components": 2,
-      "n_samples": 4,
-      "horizon": 2,
-      "adam_epochs": 5,
-      "adam_lr": 0.03,
+      "n_samples": 64,
+      "horizon": 1,
+      "adam_epochs": 50,
+      "adam_lr": 1e-3,
       "device": "cpu",
       "total_q_target": 0.001,
       "project_total_q_target": true
