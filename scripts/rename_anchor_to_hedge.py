@@ -19,7 +19,7 @@ def skip(path: Path) -> bool:
 
 def transform(text: str) -> str:
     text = text.replace("anchor_hedge_", "hedge_")
-    text = text.replace("AnchorGaussianRepPriceModel", "HedgeGaussianRepPriceModel")
+    text = text.replace("AnchorGaussianRepPriceModel", "HedgeGaussianPriceModel")
     text = text.replace("anchor_", "hedge_")
     text = text.replace("_anchor_", "_hedge_")
     text = text.replace('"anchor"', '"hedge"')

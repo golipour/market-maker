@@ -47,7 +47,7 @@ from mm_runtime.market_data_providers import (
 )
 
 
-class HedgeGaussianRepPriceModel:
+class HedgeGaussianPriceModel:
     """
     Gaussian model for hedge representative-price deltas (buy/sell), updated via
     EWMA sufficient statistics (exponentially weighted MLE).

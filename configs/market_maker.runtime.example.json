@@ -57,6 +57,11 @@
       "init_mu": 0.0,
       "init_sigma": 1.0
     },
+    "hedge_price_model": {
+      "kind": "legacy",
+      "decay": 0.97,
+      "sigma_min_quote": 1.0
+    },
     "execution_model": {
       "kind": "real",
       "maker_fee": 0.00015,
@@ -70,6 +75,7 @@
       "adam_epochs": 50,
       "adam_lr": 1e-3,
       "device": "cpu",
+      "hedge_coef": 0.01,
       "total_q_target": 0.001,
       "project_total_q_target": true
     }

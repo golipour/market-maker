@@ -43,6 +43,7 @@ class MpcControllerRunner:
         self._controller = _build_controller(self.config)
         self._market_flow_model = getattr(self._controller, "market_flow_model", None)
         self._price_model = getattr(self._controller, "price_model", None)
+        self._hedge_price_model = getattr(self._controller, "hedge_price_model", None)
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -66,6 +67,8 @@ class MpcControllerRunner:
     async def on_frame(self, frame: StrategyInputFrame) -> Action:
         t0 = time.monotonic_ns()
         try:
+            # Match mm_core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
+            _update_hedge_rep_price_model(self._hedge_price_model, frame)
             state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
             _update_market_flow_model(self._market_flow_model, frame)
             _update_float_price_model(self._price_model, self._previous_frame, frame)
@@ -123,6 +126,11 @@ class MpcControllerRunner:
     ) -> None:
         price_params = self._price_model.get_params() if hasattr(self._price_model, "get_params") else {}
         flow_params = self._market_flow_model.get_params() if hasattr(self._market_flow_model, "get_params") else {}
+        hedge_price_params = (
+            self._hedge_price_model.get_params()
+            if self._hedge_price_model is not None and hasattr(self._hedge_price_model, "get_params")
+            else {}
+        )
         payload = {
             "type": "ControllerDecision",
             "actor_id": self.config.actor_id,
@@ -146,6 +154,12 @@ class MpcControllerRunner:
             "market_flow_model": {
                 "kind": (self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"),
                 "params": flow_params,
+            },
+            "hedge_price_model": {
+                "kind": (self.config.hedge_price_model or {}).get("kind", "legacy"),
+                "params": hedge_price_params,
+                "active_in_mpc": self._hedge_price_model is not None
+                and float(getattr(self._controller, "hedge_coef", 0.0) or 0.0) != 0.0,
             },
             "optimizer": {
                 "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
@@ -232,12 +246,50 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)
+    hedge_price_model = _build_hedge_price_model(config.hedge_price_model)
     return MonteCarloMPCTensorBatched(
         price_model=price_model,
         market_flow_model=market_flow_model,
         execution_model=execution_model,
+        hedge_price_model=hedge_price_model,
         **optimizer_defaults,
     )
+
+
+def _build_hedge_price_model(cfg: dict[str, Any] | None) -> Any:
+    from mm.mpc.hedge_price_torch import GaussianHedgeDeltaModel, HedgeGaussianPriceModel
+
+    if not cfg:
+        return None
+    kind = str(cfg.get("kind", "legacy")).lower().strip()
+    if kind in ("none", "null", "disabled"):
+        return None
+    if kind in ("legacy", "ewma_gaussian", "hedge_gaussian_rep"):
+        payload = {k: v for k, v in cfg.items() if k != "kind"}
+        return HedgeGaussianPriceModel(**payload)
+    if kind == "gaussian":
+        payload = {k: v for k, v in cfg.items() if k != "kind"}
+        return GaussianHedgeDeltaModel(**payload)
+    raise ValueError(f"unsupported hedge_price_model kind: {kind}")
+
+
+def _hedge_reference_prices(book: RawOrderbook) -> tuple[float, float]:
+    """Hedge buy (ask) and sell (bid) reference prices in quote-per-base."""
+    buy_ref = book.asks[0].price if book.asks else _mid(book)
+    sell_ref = book.bids[0].price if book.bids else _mid(book)
+    return float(buy_ref), float(sell_ref)
+
+
+def _update_hedge_rep_price_model(model: Any, frame: StrategyInputFrame) -> None:
+    if model is None or not hasattr(model, "update"):
+        return
+    if frame.hedge is None:
+        return
+    try:
+        buy_ref, sell_ref = _hedge_reference_prices(frame.hedge.orderbook)
+    except ValueError:
+        return
+    model.update(buy_ref, sell_ref)
 
 
 def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_max: float):

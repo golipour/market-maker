@@ -120,6 +120,7 @@ class ControllerRuntimeConfig:
     vwap_depth: float | None = None
     price_model: dict[str, Any] | None = None
     market_flow_model: dict[str, Any] | None = None
+    hedge_price_model: dict[str, Any] | None = None
     execution_model: dict[str, Any] | None = None
     optimizer: dict[str, Any] | None = None
 
@@ -296,6 +297,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         ),
         price_model=_dict_or_none(payload.get("price_model")),
         market_flow_model=_dict_or_none(payload.get("market_flow_model")),
+        hedge_price_model=_dict_or_none(payload.get("hedge_price_model")),
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
     )
@@ -336,6 +338,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "model_inputs": {
             "price_model": config.price_model or {"kind": "gaussian"},
             "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},
+            "hedge_price_model": config.hedge_price_model
+            or {
+                "kind": "legacy",
+                "note": "EWMA Gaussian deltas on hedge refs; set optimizer.hedge_coef non-zero for rollouts",
+            },
             "execution_model": config.execution_model or {"kind": "real"},
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },

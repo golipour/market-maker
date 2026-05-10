@@ -68,7 +68,7 @@ def build_pipeline(
         DefaultExecutionRule,
         ObservedStepExecutionModel,
     )
-    from order_flow_stepper import HedgeGaussianRepPriceModel
+    from order_flow_stepper import HedgeGaussianPriceModel
 
     mpc_kw = config["mpc_kwargs"]
     spread_max = mpc_kw["spread_max"]
@@ -100,7 +100,7 @@ def build_pipeline(
         hedge_fee=em_hedge_fee,
     )
     runner_execution_model = execution_model
-    hedge_price_model = HedgeGaussianRepPriceModel(
+    hedge_price_model = HedgeGaussianPriceModel(
         decay=float(config.get("hedge_price_model_decay", 0.97) or 0.97),
         sigma_min_ticks=float(config.get("hedge_price_model_sigma_min_ticks", 1.0) or 1.0),
     )
