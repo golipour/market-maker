@@ -228,6 +228,8 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
+    if "spread_depth" not in optimizer_cfg and "spread_target_lots" in optimizer_cfg:
+        optimizer_cfg["spread_depth"] = optimizer_cfg.pop("spread_target_lots")
     grid = config.orderbook_grid
     # orderbook_grid is the single source of truth for model spread buckets.
     for grid_key in ("spread_max", "n_grid", "ob_levels", "price_step"):

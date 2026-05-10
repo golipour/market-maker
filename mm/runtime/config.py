@@ -346,6 +346,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "execution_model": config.execution_model or {"kind": "real"},
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
+        "spread_depth_semantics": (
+            "optimizer.spread_depth is cumulative base-asset quantity for the spread penalty "
+            "(see MPC _action_spread_at_vwap_qty); not exchange lot size. "
+            "Legacy key spread_target_lots is still accepted as an alias."
+        ),
         "float_bridge": {
             "mid": "quote-per-base float",
             "relative_book_spread": "absolute quote-per-base distance from mid",

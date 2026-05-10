@@ -643,7 +643,9 @@ class MonteCarloMPCTensorBatched:
         reward_coef: float = 1.0,
         size_coef: float = 0.0,
         spread_coef: float = 0.0,
+        spread_depth: float | None = None,
         spread_target_lots: float = 1.0,
+        hedge_enabled: bool | None = None,
         hedge_coef: float = 0.0,
         hedge_fee: float = 0.0,
         hedge_reward_weight: float = 1.0,
@@ -678,9 +680,17 @@ class MonteCarloMPCTensorBatched:
         self.reward_coef = float(reward_coef)
         self.size_coef = max(0.0, float(size_coef))
         self.spread_coef = max(0.0, float(spread_coef))
-        self.spread_target_lots = max(0.0, float(spread_target_lots))
-        # Legacy ``hedge_coef != 0`` enables hedge dynamics in rollouts (inventory coupling).
-        self.hedge_enabled = bool(float(hedge_coef) != 0.0)
+        # Cumulative base-asset depth at which the spread penalty measures bid/ask width
+        # (see ``_action_spread_at_vwap_qty``). ``spread_target_lots`` is a deprecated alias.
+        if spread_depth is not None:
+            self.spread_depth = max(0.0, float(spread_depth))
+        else:
+            self.spread_depth = max(0.0, float(spread_target_lots))
+        if hedge_enabled is not None:
+            self.hedge_enabled = bool(hedge_enabled)
+        else:
+            # Legacy: non-zero hedge_coef enables hedge dynamics in rollouts.
+            self.hedge_enabled = bool(float(hedge_coef) != 0.0)
         # Rollout hedge fee: prefer ``execution_model.hedge_fee`` inside ``optimize()`` when set;
         # otherwise this constructor value is used (backward compatible).
         self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
@@ -951,7 +961,7 @@ class MonteCarloMPCTensorBatched:
                         action_h,
                         n,
                         self.spread_max,
-                        self.spread_target_lots,
+                        self.spread_depth,
                         use_softplus=True,
                     )
                     sell_h = sell_vol[:, h : h + 1]
