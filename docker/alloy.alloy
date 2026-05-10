@@ -29,28 +29,18 @@ otelcol.exporter.otlp "tempo" {
   }
 }
 
-// Glob paths require file_match { enabled = true } (see Alloy loki.source.file docs).
-// Host repo ./logs is mounted here as /var/log/market_maker (docker-compose alloy service).
 loki.source.file "docker_logs" {
   targets = [
-    {__path__ = "/var/lib/docker/containers/*/*.log", "job" = "docker"},
+    {__path__ = "/var/lib/docker/containers/*/*.log", job = "docker"},
   ]
   forward_to = [loki.write.default.receiver]
-  file_match {
-    enabled     = true
-    sync_period = "10s"
-  }
 }
 
 loki.source.file "runtime_logs" {
   targets = [
-    {__path__ = "/var/log/market_maker/*.jsonl", "job" = "market-maker-runtime"},
+    {__path__ = "/var/log/market_maker/*.jsonl", job = "market-maker-runtime"},
   ]
   forward_to = [loki.write.default.receiver]
-  file_match {
-    enabled     = true
-    sync_period = "10s"
-  }
 }
 
 loki.write "default" {

@@ -75,8 +75,6 @@ services:
       - ./docker/tempo.yaml:/etc/tempo/tempo.yaml
       - tempo_data:/tmp/tempo
 
-  # Alloy tails ./logs/*.jsonl on the host as /var/log/market_maker/*.jsonl (see docker/alloy.alloy).
-  # Point the runtime at the same path via observability.log_path or MM_LOG_PATH (e.g. logs/mm-runtime.jsonl).
   alloy:
     image: grafana/alloy:latest
     container_name: alloy
