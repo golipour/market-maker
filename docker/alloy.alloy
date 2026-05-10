@@ -36,6 +36,13 @@ loki.source.file "docker_logs" {
   forward_to = [loki.write.default.receiver]
 }
 
+loki.source.file "runtime_logs" {
+  targets = [
+    {__path__ = "/var/log/market_maker/*.jsonl", job = "market-maker-runtime"},
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+
 loki.write "default" {
   endpoint {
     url = "http://loki:3100/loki/api/v1/push"

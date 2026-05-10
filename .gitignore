@@ -3,3 +3,6 @@ __pycache__/
 
 # Local secrets / env (copy from .env.example)
 .env
+
+# Runtime event lake (Parquet / JSONL); set MM_PARQUET_ROOT to repo-root data/parquet
+/data/

@@ -27,6 +27,15 @@ def test_runtime_config_uses_hedge_as_only_secondary_source() -> None:
     assert config.binding.comparable is True
 
 
+def test_runtime_config_auto_enables_persistence_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("MM_DATABASE_URL", "postgresql://example")
+    config = runtime_config_from_mapping(
+        {"primary": {"role": "primary", "exchange": "nobitex", "symbol": "BTC_IRT"}}
+    )
+
+    assert config.persistence.enabled is True
+
+
 def test_controller_action_start_after_steps_from_mapping() -> None:
     config = runtime_config_from_mapping(
         {

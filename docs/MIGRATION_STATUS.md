@@ -38,6 +38,36 @@ observability, replay, and admin daemons:
 Durable buses and persistence writers wrap these payloads in the versioned
 `mm.event` envelope defined in `mm.core.events`.
 
+## Clean Runtime Event Flow
+
+The `mm/` runtime now treats Redis Streams as a durable external log, not as the
+in-process object transport. Runtime subscribers receive typed Python objects;
+Redis receives compact `mm.event` envelopes suitable for persistence, replay,
+and admin readers.
+
+Important durable topics:
+
+- raw public market data: `market:raw:*`
+- aggregated market events: `market:events:*`
+- strategy frames and controller decisions: `strategy:frames:*`, `strategy:controller`
+- strategy actions and execution state: `strategy:actions`, `execution:*`
+- private balances/orders/fills: `private:state:*`
+- admin and risk events: `admin:*`, `risk:events`
+
+Large private snapshots are compacted before they are written to Redis Streams:
+zero balances are omitted, non-zero balances are retained, and open orders are
+kept. The full typed snapshot remains available inside the process for
+execution reconciliation.
+
+Postgres persistence is enabled when `persistence.enabled` is true in runtime
+config, or automatically when `MM_DATABASE_URL` is present and no persistence
+block is supplied. The writer creates `mm_events`, `mm_latest_state`, and
+`admin_audit_log` at startup.
+
+Prometheus metrics use the `mm_` prefix and are exposed on `MM_METRICS_PORT`
+from the runtime, and also from the admin API at `/metrics`. JSON runtime logs
+are written to `MM_LOG_PATH` so Alloy can ship them to Loki.
+
 ## Migration Rule
 
 New production features should be reachable from `mm/`. Legacy modules may keep

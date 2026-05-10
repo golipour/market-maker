@@ -51,6 +51,10 @@ class RuntimeComponents:
     async def start(self) -> None:
         if self._started:
             return
+        for daemon in self.persistence_daemons:
+            start = getattr(daemon, "start", None)
+            if start is not None:
+                await start()
         await self.frame_assembler.start()
         if self.controller_runner is not None:
             await self.controller_runner.start()
@@ -62,10 +66,6 @@ class RuntimeComponents:
             await reconciler.start()
         for reconciler in self.private_reconcilers.values():
             await reconciler.start()
-        for daemon in self.persistence_daemons:
-            start = getattr(daemon, "start", None)
-            if start is not None:
-                await start()
         self._scheduler_task = asyncio.create_task(self.scheduler.run())
         self._started = True
 

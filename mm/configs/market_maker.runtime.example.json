@@ -15,11 +15,11 @@
     "trades_limit": 200,
     "poll_interval_ms": 1000
   },
-  "interval_ms": 5000,
+  "interval_ms": 10000,
   "max_hedge_lag_ms": 2000,
   "hedge_grace_ms": 250,
   "bus": {
-    "kind": "memory",
+    "kind": "redis_streams",
     "redis_url": "redis://localhost:6379/0",
     "stream_prefix": "mm",
     "consumer_group": "mm-runtime",
@@ -28,7 +28,7 @@
     "read_block_ms": 1000
   },
   "persistence": {
-    "enabled": false,
+    "enabled": true,
     "database_url_env": "MM_DATABASE_URL",
     "parquet_root_env": "MM_PARQUET_ROOT",
     "batch_size": 100,
@@ -38,20 +38,22 @@
     "service_name": "market-maker",
     "run_id": "",
     "metrics_enabled": true,
+    "metrics_port": 8000,
     "json_logs": true,
+    "log_path": "logs/mm-runtime.jsonl",
     "otel_enabled": false,
     "otlp_endpoint": "http://localhost:4318"
   },
   "primary_private": {
     "mode": "rest",
     "api_token_env": "NOBITEX_API_TOKEN",
-    "poll_interval_ms": 5000,
+    "poll_interval_ms": 10000,
     "enable_execution": true
   },
   "hedge_private": {
     "mode": "rest",
     "api_token_env": "WALLEX_API_TOKEN",
-    "poll_interval_ms": 5000,
+    "poll_interval_ms": 10000,
     "enable_execution": true
   },
   "controller": {

@@ -1,9 +1,22 @@
 # Full stack: `docker compose up` (or add `-d`) from the repo root.
-# Prometheus and Mimir configs: docker/prometheus.yml, docker/mimir.yaml
+# Prometheus config: docker/prometheus.yml
 # (separate files — those daemons are configured by file, not by embedding in Compose).
-# Redis + diagnostics UI only (no Postgres / Prometheus / Grafana / Mimir):
+# Redis + diagnostics UI only (no Postgres / Prometheus / Grafana):
 #   docker compose up -d redis mm_viz
 #   open http://localhost:8501
+#
+# Parquet: there is no Parquet container. The Python runtime writes files under
+# MM_PARQUET_ROOT (see mm/persistence/parquet_writer.py). Run the engine on the
+# host with e.g. MM_PARQUET_ROOT=./data/parquet, or bind-mount parquet_data (below)
+# into your own engine image. For S3-style lakes, add MinIO or another object store
+# separately and point writers/readers at that API — not required for local dev.
+#
+# Postgres URL for mm persistence (host machine, ports published as below):
+#   MM_DATABASE_URL=postgresql://meysam:Welcome123@localhost:5432/postgres
+#
+# Redis Streams bus (host → compose Redis):
+#   MM_BUS_KIND=redis_streams  (and bus.redis_url in runtime JSON), or set
+#   MM_BUS_REDIS_URL=redis://localhost:6379/0 for the admin API helper bus.
 #
 services:
   redis:
@@ -42,18 +55,6 @@ services:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
 
-  mimir:
-    image: grafana/mimir:latest
-    container_name: mimir
-    restart: "no"
-    command:
-      - -config.file=/etc/mimir/mimir.yaml
-    ports:
-      - "9009:9009"
-    volumes:
-      - ./docker/mimir.yaml:/etc/mimir/mimir.yaml
-      - mimir_data:/data
-
   loki:
     image: grafana/loki:latest
     container_name: loki
@@ -88,9 +89,35 @@ services:
     volumes:
       - ./docker/alloy.alloy:/etc/alloy/config.alloy
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./logs:/var/log/market_maker:ro
     depends_on:
       - loki
       - tempo
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    restart: "no"
+    ports:
+      - "5540:5540"
+    depends_on:
+      - redis
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: "no"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+      PGADMIN_CONFIG_LOGIN_BANNER: "'Market maker local pgAdmin'"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
 
   grafana:
     image: grafana/grafana:latest
@@ -111,7 +138,6 @@ services:
     depends_on:
       - db
       - prometheus
-      - mimir
       - loki
       - tempo
       - redis
@@ -151,7 +177,13 @@ volumes:
   redis-data:
   postgres_data:
   prometheus_data:
-  mimir_data:
   grafana_data:
   loki_data:
   tempo_data:
+  pgadmin_data:
+  # Optional: mount as MM_PARQUET_ROOT when running the engine in Docker, e.g.
+  #   volumes:
+  #     - parquet_data:/data/parquet
+  #   environment:
+  #     MM_PARQUET_ROOT: /data/parquet
+  parquet_data:

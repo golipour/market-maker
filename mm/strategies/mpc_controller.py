@@ -55,6 +55,7 @@ class MpcControllerRunner:
     _controller: Any = field(init=False, repr=False)
     _market_flow_model: Any = field(init=False, repr=False)
     _price_model: Any = field(init=False, repr=False)
+    _hedge_price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)

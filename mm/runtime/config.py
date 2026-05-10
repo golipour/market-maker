@@ -117,7 +117,9 @@ class ObservabilityRuntimeConfig:
     service_name: str = "market-maker"
     run_id: str = ""
     metrics_enabled: bool = True
+    metrics_port: int = 8000
     json_logs: bool = True
+    log_path: str | None = "logs/mm-runtime.jsonl"
     otel_enabled: bool = False
     otlp_endpoint: str | None = None
 
@@ -289,7 +291,9 @@ class MarketMakerRuntimeConfig:
                 "service_name": self.observability.service_name,
                 "run_id": self.observability.run_id,
                 "metrics_enabled": self.observability.metrics_enabled,
+                "metrics_port": self.observability.metrics_port,
                 "json_logs": self.observability.json_logs,
+                "log_path": self.observability.log_path,
                 "otel_enabled": self.observability.otel_enabled,
             },
         }
@@ -385,7 +389,9 @@ def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
 
 def _persistence_from_mapping(payload: Any) -> PersistenceRuntimeConfig:
     if not isinstance(payload, dict):
-        return PersistenceRuntimeConfig()
+        return PersistenceRuntimeConfig(
+            enabled=bool(os.environ.get("MM_DATABASE_URL", "").strip() or os.environ.get("MM_PARQUET_ROOT", "").strip())
+        )
     topics = payload.get("topics", ())
     if isinstance(topics, str):
         topics_tuple = (topics,)
@@ -394,7 +400,7 @@ def _persistence_from_mapping(payload: Any) -> PersistenceRuntimeConfig:
     else:
         topics_tuple = ()
     return PersistenceRuntimeConfig(
-        enabled=bool(payload.get("enabled", False)),
+        enabled=bool(payload.get("enabled", bool(payload.get("database_url") or payload.get("parquet_root")))),
         database_url=payload.get("database_url"),
         database_url_env=str(payload.get("database_url_env", "MM_DATABASE_URL")),
         parquet_root=payload.get("parquet_root"),
@@ -412,7 +418,9 @@ def _observability_from_mapping(payload: Any) -> ObservabilityRuntimeConfig:
         service_name=str(payload.get("service_name", "market-maker")),
         run_id=str(payload.get("run_id", "")),
         metrics_enabled=bool(payload.get("metrics_enabled", True)),
+        metrics_port=int(payload.get("metrics_port", 8000)),
         json_logs=bool(payload.get("json_logs", True)),
+        log_path=payload.get("log_path", "logs/mm-runtime.jsonl"),
         otel_enabled=bool(payload.get("otel_enabled", False)),
         otlp_endpoint=payload.get("otlp_endpoint"),
     )

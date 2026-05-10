@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from mm.bus.base import AbstractEventBus
@@ -35,6 +36,23 @@ def create_admin_app(bus: AbstractEventBus | None = None) -> FastAPI:
     @app.get("/api/admin/config")
     async def config(_: None = Depends(_require_auth)) -> dict[str, Any]:
         return {"bus": _bus_config_from_env().kind, "admin_auth": bool(_admin_token())}
+
+    @app.get("/api/admin/status")
+    async def status(_: None = Depends(_require_auth)) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "bus": _bus_config_from_env().kind,
+            "database_url_configured": bool(os.environ.get("MM_DATABASE_URL", "").strip()),
+            "parquet_root_configured": bool(os.environ.get("MM_PARQUET_ROOT", "").strip()),
+            "metrics_port": os.environ.get("MM_METRICS_PORT", ""),
+            "log_path": os.environ.get("MM_LOG_PATH", ""),
+        }
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        from mm_adapters.observability.metrics import REGISTRY
+
+        return Response(REGISTRY.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.post("/api/admin/commands")
     async def command(command: AdminCommand, user: str = Depends(_require_auth)) -> dict[str, Any]:

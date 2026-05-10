@@ -10,6 +10,16 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
 
     if config.json_logs:
         os.environ.setdefault("MM_JSON_LOG", "1")
+    if config.log_path:
+        os.environ.setdefault("MM_LOG_PATH", config.log_path)
+    if config.metrics_enabled:
+        os.environ.setdefault("MM_METRICS_PORT", str(config.metrics_port))
+        try:
+            from mm_adapters.observability.metrics import start_server
+
+            start_server(port=config.metrics_port)
+        except Exception:
+            pass
     if config.run_id:
         os.environ.setdefault("MM_RUN_ID", config.run_id)
     if config.service_name:

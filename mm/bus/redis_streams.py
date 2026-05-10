@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
+from mm.core.models.private import Balance, PrivateStateSnapshot
 
 
 class RedisStreamsBus(AbstractEventBus):
@@ -33,10 +35,16 @@ class RedisStreamsBus(AbstractEventBus):
         self._redis: Any | None = None
         self._closed = False
         self._forward_tasks: list[asyncio.Task] = []
+        self._subscribers: dict[str, list[asyncio.Queue[Any]]] = defaultdict(list)
 
     async def publish(self, topic: str, event: Any) -> None:
+        for queue in list(self._subscribers.get(topic, ())):
+            await queue.put(event)
         r = await self._client()
-        envelope = envelope_event(topic, event, run_id=self.run_id, source="redis-streams-bus")
+        stream_event = _compact_stream_event(topic, event)
+        if stream_event is None:
+            return
+        envelope = envelope_event(topic, stream_event, run_id=self.run_id, source="redis-streams-bus")
         kwargs: dict[str, Any] = {}
         if self.maxlen is not None and self.maxlen > 0:
             kwargs = {"maxlen": int(self.maxlen), "approximate": True}
@@ -52,23 +60,18 @@ class RedisStreamsBus(AbstractEventBus):
 
     def subscribe_queue(self, topic: str) -> asyncio.Queue[Any]:
         queue: asyncio.Queue[Any] = asyncio.Queue()
-        task = asyncio.create_task(self._forward(topic, queue))
-        self._forward_tasks.append(task)
+        self._subscribers[topic].append(queue)
         return queue
 
     async def subscribe(self, topic: str) -> AsyncIterator[Any]:
-        r = await self._client()
-        stream = self._stream(topic)
-        last_id = "$"
-        while not self._closed:
-            rows = await r.xread({stream: last_id}, block=self.read_block_ms, count=100)
-            for _, messages in rows:
-                for message_id, fields in messages:
-                    last_id = message_id
-                    raw = fields.get("data") if isinstance(fields, dict) else None
-                    if raw is None:
-                        continue
-                    yield decode_envelope(raw).payload
+        queue = self.subscribe_queue(topic)
+        try:
+            while not self._closed:
+                yield await queue.get()
+        finally:
+            subscribers = self._subscribers.get(topic)
+            if subscribers and queue in subscribers:
+                subscribers.remove(queue)
 
     async def subscribe_envelopes(self, topic: str, *, start_id: str = "0-0") -> AsyncIterator[Any]:
         """Read envelopes from a topic, useful for replay and persistence daemons."""
@@ -95,6 +98,7 @@ class RedisStreamsBus(AbstractEventBus):
         if self._redis is not None:
             await self._redis.aclose()
             self._redis = None
+        self._subscribers.clear()
 
     async def _forward(self, topic: str, queue: asyncio.Queue[Any]) -> None:
         async for event in self.subscribe(topic):
@@ -110,3 +114,27 @@ class RedisStreamsBus(AbstractEventBus):
     def _stream(self, topic: str) -> str:
         normalized = topic.replace(":", ".").strip(".")
         return f"{self.stream_prefix}.{normalized}"
+
+
+def _compact_stream_event(topic: str, event: Any) -> Any | None:
+    if topic.endswith(":balances") and isinstance(event, Balance):
+        if float(event.free) == 0.0 and float(event.locked) == 0.0:
+            return None
+        return event
+    if topic.endswith(":snapshot") and isinstance(event, PrivateStateSnapshot):
+        balances = {
+            asset: balance
+            for asset, balance in event.balances.items()
+            if float(balance.free) != 0.0 or float(balance.locked) != 0.0
+        }
+        return {
+            "type": "PrivateStateSnapshotSummary",
+            "exchange": event.exchange,
+            "timestamp_ms": event.timestamp_ms,
+            "balance_count": len(event.balances),
+            "nonzero_balance_count": len(balances),
+            "balances": balances,
+            "open_order_count": len(event.open_orders),
+            "open_orders": event.open_orders,
+        }
+    return event

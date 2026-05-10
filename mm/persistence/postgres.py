@@ -7,6 +7,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import EventEnvelope, envelope_event, to_jsonable
+from mm.observability import counter_inc, gauge, log_event
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS mm_events (
@@ -78,8 +79,10 @@ class PostgresEventWriter:
 
     async def start(self) -> None:
         self._stopped.clear()
+        await asyncio.to_thread(self._ensure_ready)
         self._tasks = [asyncio.create_task(self._consume(topic)) for topic in self.topics]
         self._tasks.append(asyncio.create_task(self._write_loop()))
+        log_event("postgres_event_writer_started", {"topics": list(self.topics), "batch_size": self.batch_size})
 
     async def stop(self) -> None:
         self._stopped.set()
@@ -116,10 +119,13 @@ class PostgresEventWriter:
             raise
 
     def _write_batch(self, batch: list[EventEnvelope]) -> None:
+        if not batch:
+            return
         try:
             import psycopg2
             import psycopg2.extras
         except ImportError:
+            counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": "ImportError"})
             return
         with self._lock:
             try:
@@ -172,10 +178,35 @@ class PostgresEventWriter:
                                 latest_rows,
                             )
                     conn.commit()
+                    counter_inc("mm_persistence_events_written_total", len(batch), labels={"writer": "postgres"})
+                    gauge("mm_persistence_batch_size", len(batch), labels={"writer": "postgres"})
                 finally:
                     conn.close()
-            except Exception:
+            except Exception as exc:
+                counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
+                log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
                 return
+
+    def _ensure_ready(self) -> None:
+        try:
+            import psycopg2
+        except ImportError:
+            counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": "ImportError"})
+            return
+        with self._lock:
+            try:
+                conn = psycopg2.connect(self.database_url)
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(_DDL)
+                    conn.commit()
+                    self._ready = True
+                    log_event("postgres_event_writer_ready", {"database_url_configured": True})
+                finally:
+                    conn.close()
+            except Exception as exc:
+                counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
+                log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
 
 
 def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
