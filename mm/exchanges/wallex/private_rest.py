@@ -65,6 +65,11 @@ def _delete_auth(path: str, api_token: str, params: dict[str, Any] | None = None
 
 
 def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
+    """Return all wallet rows Wallex exposes (often includes many zero balances).
+
+    Non-zero filtering for snapshots and strategy frames is applied in
+    ``RestPollingPrivateStateAdapter.normalize_balances`` so all exchanges share one path.
+    """
     if not api_token:
         return {}
     candidates = [

@@ -3,6 +3,9 @@ from __future__ import annotations
 from mm.core.models.execution import Fill
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 
+# Match `mm.exchanges.shared.private_state._BALANCE_TOTAL_EPS` so zero rows drop out of snapshots.
+_BALANCE_TOTAL_EPS = 1e-10
+
 
 class PrivateStateStore:
     """Current private exchange state in normalized float domain values."""
@@ -22,7 +25,11 @@ class PrivateStateStore:
 
     def apply_balance(self, balance: Balance) -> PrivateStateSnapshot:
         self._timestamp_ms = max(self._timestamp_ms, int(balance.timestamp_ms))
-        self._balances[balance.asset.upper()] = balance
+        key = balance.asset.upper()
+        if abs(float(balance.free)) + abs(float(balance.locked)) <= _BALANCE_TOTAL_EPS:
+            self._balances.pop(key, None)
+        else:
+            self._balances[key] = balance
         return self.snapshot()
 
     def apply_open_order(self, open_order: OpenOrder) -> PrivateStateSnapshot:

@@ -376,3 +376,87 @@
 {"ts_ms":1778432140656,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778432140000,"order_count":20,"latency_ms":641.851214,"observe_only":true}
 {"ts_ms":1778432140664,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
 {"ts_ms":1778432140666,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442954435,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":11}
+{"ts_ms":1778442954439,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence is disabled until dependency is installed"}
+{"ts_ms":1778442954439,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100,"ready":false}
+{"ts_ms":1778442954494,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442954498,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442987661,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442987667,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442993673,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442993673,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442996845,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778442996848,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778442996850,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778442996851,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778443000058,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443000058,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443000061,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443000000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443002072,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443000000,"order_count":20,"latency_ms":2009.452587,"observe_only":true}
+{"ts_ms":1778443002082,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778443002084,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443007526,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443007528,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":3}
+{"ts_ms":1778443010005,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443010005,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443010008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443010000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443010580,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443010000,"order_count":20,"latency_ms":570.089364,"observe_only":true}
+{"ts_ms":1778443010585,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":2}
+{"ts_ms":1778443010586,"event":"postgres_event_writer_unavailable","error":"ImportError","message":"psycopg2 is not installed; postgres persistence batch was not written","batch_size":1}
+{"ts_ms":1778443458871,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":11}
+{"ts_ms":1778443458932,"event":"postgres_event_writer_ready","database_url_configured":true}
+{"ts_ms":1778443458933,"event":"postgres_event_writer_started","topics":["market:events:nobitex:BTC_IRT:10000","strategy:frames:nobitex:BTC_IRT:10000","strategy:actions","execution:orders:nobitex","execution:state:nobitex","private:state:nobitex:snapshot","strategy:controller","market:events:wallex:BTC_IRT:10000","execution:orders:wallex","execution:state:wallex","private:state:wallex:snapshot"],"batch_size":100,"ready":true}
+{"ts_ms":1778443485676,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443490051,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443490000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443491480,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443490000,"order_count":20,"latency_ms":1427.60122,"observe_only":true}
+{"ts_ms":1778443495787,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443500007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443500000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443500617,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443500000,"order_count":20,"latency_ms":608.093489,"observe_only":true}
+{"ts_ms":1778443510008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443510000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443510588,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443510000,"order_count":20,"latency_ms":578.627117,"observe_only":true}
+{"ts_ms":1778443514049,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443520009,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443520000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443520633,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443520000,"order_count":20,"latency_ms":622.662161,"observe_only":true}
+{"ts_ms":1778443530008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443530000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443530596,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443530000,"order_count":20,"latency_ms":586.170976,"observe_only":true}
+{"ts_ms":1778443531449,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443536230,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443540009,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443540000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443540602,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443540000,"order_count":20,"latency_ms":591.587692,"observe_only":true}
+{"ts_ms":1778443550008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443550000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443550689,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443550000,"order_count":20,"latency_ms":677.77858,"observe_only":true}
+{"ts_ms":1778443554234,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443558419,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443560008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443560000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443560714,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443560000,"order_count":20,"latency_ms":704.021658,"observe_only":true}
+{"ts_ms":1778443570007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443570000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443570749,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443570000,"order_count":20,"latency_ms":739.604479,"observe_only":true}
+{"ts_ms":1778443575414,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443580008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443580000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443580789,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443580000,"order_count":20,"latency_ms":779.159062,"observe_only":true}
+{"ts_ms":1778443590010,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443590000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443590619,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443590000,"order_count":20,"latency_ms":607.670684,"observe_only":true}
+{"ts_ms":1778443600008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443600000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443600590,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443600000,"order_count":20,"latency_ms":580.500637,"observe_only":true}
+{"ts_ms":1778443603293,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443610007,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443610000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443610590,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443610000,"order_count":20,"latency_ms":580.954019,"observe_only":true}
+{"ts_ms":1778443617355,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443620008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443620000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443620611,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443620000,"order_count":20,"latency_ms":601.912856,"observe_only":true}
+{"ts_ms":1778443630008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443630000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443630601,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443630000,"order_count":20,"latency_ms":591.784019,"observe_only":true}
+{"ts_ms":1778443640008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443640000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443640598,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443640000,"order_count":20,"latency_ms":588.549331,"observe_only":true}
+{"ts_ms":1778443650008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443650000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443650598,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443650000,"order_count":20,"latency_ms":588.541992,"observe_only":true}
+{"ts_ms":1778443660008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443660000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443660587,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443660000,"order_count":20,"latency_ms":576.467226,"observe_only":true}
+{"ts_ms":1778443670008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443670000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443670614,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443670000,"order_count":20,"latency_ms":604.310243,"observe_only":true}
+{"ts_ms":1778443676409,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443680010,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443680000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443680660,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443680000,"order_count":20,"latency_ms":646.850579,"observe_only":true}
+{"ts_ms":1778443687443,"event":"postgres_event_writer_error","error":"CardinalityViolation","message":"ON CONFLICT DO UPDATE command cannot affect row a second time\nHINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.\n"}
+{"ts_ms":1778443690008,"event":"strategy_frame","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443690000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1778443690607,"event":"controller_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"BTC_IRT","t_end_ms":1778443690000,"order_count":20,"latency_ms":596.876557,"observe_only":true}

@@ -171,6 +171,7 @@ class PostgresEventWriter:
                             for envelope in batch
                             if _is_latest_state(envelope)
                         ]
+                        latest_rows = _dedupe_latest_rows_by_state_key(latest_rows)
                         if latest_rows:
                             psycopg2.extras.execute_values(
                                 cur,
@@ -264,3 +265,20 @@ def _latest_key(envelope: EventEnvelope) -> str:
     if envelope.actor_id:
         return f"{envelope.topic}:{envelope.actor_id}"
     return envelope.topic
+
+
+def _dedupe_latest_rows_by_state_key(
+    latest_rows: list[tuple[Any, ...]],
+) -> list[tuple[Any, ...]]:
+    """One row per ``state_key`` per INSERT.
+
+    Postgres raises ``CardinalityViolation`` if ``ON CONFLICT (state_key) DO UPDATE``
+    sees duplicate ``state_key`` values in the same VALUES list. Many ``Balance``
+    events share ``topic`` + ``exchange`` and therefore the same ``state_key``.
+    """
+
+    by_key: dict[str, tuple[Any, ...]] = {}
+    for row in latest_rows:
+        state_key = str(row[0])
+        by_key[state_key] = row
+    return list(by_key.values())

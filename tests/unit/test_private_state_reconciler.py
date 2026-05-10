@@ -13,6 +13,7 @@ from mm.exchanges.factory import select_private_state_adapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 from mm.private_state.reconciler import PrivateStateReconciler
+from mm.private_state.store import PrivateStateStore
 
 
 class FakePrivateStateAdapter(AbstractPrivateStateAdapter):
@@ -140,3 +141,29 @@ def test_rest_private_state_normalizes_open_orders_to_float_domain() -> None:
     assert order.order.price == 1_000_000.0
     assert order.remaining_qty == pytest.approx(0.4)
     assert order.order.order_type == "limit"
+
+
+def test_rest_private_state_normalize_balances_skips_zero_rows() -> None:
+    adapter = RestPollingPrivateStateAdapter(
+        "wallex",
+        "BTC_IRT",
+        api_token="token",
+    )
+    out = adapter.normalize_balances(
+        {
+            "BTC": {"free": 0.01, "locked": 0.0},
+            "ETH": {"free": 0.0, "locked": 0.0},
+            "USDT": {"free": 0.0, "locked": 1e-11},
+        },
+        timestamp_ms=1,
+    )
+    assert set(out) == {"BTC"}
+    assert out["BTC"].free == pytest.approx(0.01)
+
+
+def test_private_state_store_apply_balance_pops_zero() -> None:
+    store = PrivateStateStore("wallex")
+    store.apply_balance(Balance("wallex", "BTC", 1.0, 0.0, 1))
+    assert "BTC" in store.snapshot().balances
+    store.apply_balance(Balance("wallex", "BTC", 0.0, 0.0, 2))
+    assert "BTC" not in store.snapshot().balances

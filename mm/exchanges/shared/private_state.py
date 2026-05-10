@@ -8,6 +8,9 @@ from mm.core.models.execution import Fill, Order
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import AsyncRateLimiter, now_ms
 
+# Drop dust and API rows where both legs are zero so snapshots and strategy frames stay small.
+_BALANCE_TOTAL_EPS = 1e-10
+
 
 class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
     """REST-polling private state adapter.
@@ -60,10 +63,22 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         while self._connected:
             try:
                 snapshot = await self.snapshot()
-                for asset, balance in snapshot.balances.items():
+                balances = snapshot.balances
+                for asset, balance in balances.items():
                     if self._last_balances.get(asset) != balance:
                         yield balance
-                self._last_balances = dict(snapshot.balances)
+                for asset in list(self._last_balances.keys()):
+                    if asset not in balances:
+                        prev = self._last_balances[asset]
+                        if abs(float(prev.free)) + abs(float(prev.locked)) > _BALANCE_TOTAL_EPS:
+                            yield Balance(
+                                exchange=self.exchange,
+                                asset=asset,
+                                free=0.0,
+                                locked=0.0,
+                                timestamp_ms=snapshot.timestamp_ms,
+                            )
+                self._last_balances = dict(balances)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -127,11 +142,14 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             free = _safe_float(bucket.get("free", 0.0))
             locked = _safe_float(bucket.get("locked", 0.0))
             total = _safe_float(bucket.get("total", free + locked))
+            locked = max(0.0, locked)
+            if abs(free) + abs(locked) <= _BALANCE_TOTAL_EPS:
+                continue
             balances[asset_key] = Balance(
                 exchange=self.exchange,
                 asset=asset_key,
                 free=free,
-                locked=max(0.0, locked),
+                locked=locked,
                 timestamp_ms=timestamp_ms,
             )
             _ = total
