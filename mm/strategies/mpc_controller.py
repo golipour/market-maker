@@ -18,6 +18,22 @@ from mm.core.models.strategy import StrategyInputFrame
 from mm.runtime.config import ControllerRuntimeConfig
 
 
+def normalize_mpc_optimizer_config(optimizer_cfg: dict[str, Any]) -> None:
+    """Map JSON-friendly optimizer keys to ``MonteCarloMPCTensorBatched`` kwargs (in place).
+
+    Accepts legacy names alongside the new config names.
+    """
+
+    if "spread_depth" not in optimizer_cfg and "spread_target_lots" in optimizer_cfg:
+        optimizer_cfg["spread_depth"] = optimizer_cfg.pop("spread_target_lots")
+    if "target_inventory_level" in optimizer_cfg:
+        optimizer_cfg["target_inv"] = optimizer_cfg.pop("target_inventory_level")
+    if "max_total_qty" in optimizer_cfg:
+        optimizer_cfg["total_q_target"] = optimizer_cfg.pop("max_total_qty")
+    if "project_max_total_qty" in optimizer_cfg:
+        optimizer_cfg["project_total_q_target"] = bool(optimizer_cfg.pop("project_max_total_qty"))
+
+
 @dataclass(slots=True)
 class MpcControllerRunner:
     """Bridge StrategyInputFrame into the legacy MPC functionality.
@@ -228,8 +244,7 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
-    if "spread_depth" not in optimizer_cfg and "spread_target_lots" in optimizer_cfg:
-        optimizer_cfg["spread_depth"] = optimizer_cfg.pop("spread_target_lots")
+    normalize_mpc_optimizer_config(optimizer_cfg)
     grid = config.orderbook_grid
     # orderbook_grid is the single source of truth for model spread buckets.
     for grid_key in ("spread_max", "n_grid", "ob_levels", "price_step"):

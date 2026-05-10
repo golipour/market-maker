@@ -351,6 +351,19 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "(see MPC _action_spread_at_vwap_qty); not exchange lot size. "
             "Legacy key spread_target_lots is still accepted as an alias."
         ),
+        "optimizer_inventory_and_depth_targets": {
+            "target_inventory_level": (
+                "maps to MPC target_inv; desired inventory level for inv_coef penalty (base units)"
+            ),
+            "max_total_qty": (
+                "maps to MPC total_q_target; target cumulative quoted depth over [0, spread_max] "
+                "per side (base units); legacy JSON key total_q_target still accepted"
+            ),
+            "project_max_total_qty": (
+                "maps to MPC project_total_q_target; when true with positive max_total_qty, "
+                "rescales depth parameters toward that target; legacy key project_total_q_target still accepted"
+            ),
+        },
         "float_bridge": {
             "mid": "quote-per-base float",
             "relative_book_spread": "absolute quote-per-base distance from mid",

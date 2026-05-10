@@ -81,11 +81,12 @@
       "uniformity_coef": 0.0,
       "size_coef": 0.0,
       "spread_coef": 100.0,
-      "spread_depth": 50.0,
+      "spread_depth": 100000.0,
       "hedge_enabled": true,
       "hedge_coef": 0.0,
-      "total_q_target": 0.001,
-      "project_total_q_target": true
+      "target_inventory_level": 10.0,
+      "max_total_qty": 10.0,
+      "project_max_total_qty": false
     }
   }
 }
