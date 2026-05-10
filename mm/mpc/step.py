@@ -17,9 +17,9 @@ class Step(NamedTuple):
     private_trade_fee_tick_lot: float
     private_fills_bid: tuple[tuple[int, int], ...]
     private_fills_ask: tuple[tuple[int, int], ...]
-    main_buy_ref: float
-    main_sell_ref: float
-    hedge_buy_ref: float | None
-    hedge_sell_ref: float | None
+    main_buy_vwap: float
+    main_sell_vwap: float
+    hedge_buy_vwap: float | None
+    hedge_sell_vwap: float | None
     hedge_inventory: int
     hedge_cash: int | float

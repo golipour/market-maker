@@ -21,9 +21,7 @@ from mm.mpc.state_tensor import (
 from mm.mpc.reward_tensor import terminal_objective
 
 from mm_core.pricing import target_depth_lots_from_price_model
-from mm_core.pricing.simulated_rep_prices import (
-    representative_prices_batched as _representative_prices_batched,
-)
+from mm.mpc.vwap_prices import vwap_reference_prices_batched
 
 
 # -----------------------------------------------------------------------------
@@ -287,16 +285,18 @@ def _format_action_verbose(flat: np.ndarray, n_components: int) -> str:
 def _book_cumulative_from_ob_rel(
     ob_rel: OrderbookRelative,
     n_levels: int,
+    price_step: float,
     device: Any,
     dtype: Any,
 ) -> tuple[Any, Any]:
-    """Build (bid_cum, ask_cum) tensors of length n_levels: cumulative qty at spread 1..n_levels."""
+    """Build cumulative qty tensors on quote-price spread buckets."""
     torch_mod = _get_torch()
     bid_cum = torch_mod.zeros(n_levels, dtype=dtype, device=device)
     ask_cum = torch_mod.zeros(n_levels, dtype=dtype, device=device)
+    step = max(1e-12, float(price_step))
     b_sum = 0.0
-    for (spread_ticks, qty) in sorted(ob_rel.bids, key=lambda x: x[0]):
-        idx = int(round(spread_ticks)) - 1
+    for (spread, qty) in sorted(ob_rel.bids, key=lambda x: x[0]):
+        idx = _spread_bucket_index(float(spread), step, n_levels)
         if 0 <= idx < n_levels:
             b_sum += float(qty)
             bid_cum[idx] = b_sum
@@ -304,8 +304,8 @@ def _book_cumulative_from_ob_rel(
         if bid_cum[i].item() == 0:
             bid_cum[i] = bid_cum[i - 1]
     a_sum = 0.0
-    for (spread_ticks, qty) in sorted(ob_rel.asks, key=lambda x: x[0]):
-        idx = int(round(spread_ticks)) - 1
+    for (spread, qty) in sorted(ob_rel.asks, key=lambda x: x[0]):
+        idx = _spread_bucket_index(float(spread), step, n_levels)
         if 0 <= idx < n_levels:
             a_sum += float(qty)
             ask_cum[idx] = a_sum
@@ -313,6 +313,13 @@ def _book_cumulative_from_ob_rel(
         if ask_cum[i].item() == 0:
             ask_cum[i] = ask_cum[i - 1]
     return bid_cum, ask_cum
+
+
+def _spread_bucket_index(spread: float, price_step: float, n_levels: int) -> int:
+    if spread <= 0.0:
+        return 0
+    idx = int(math.ceil(spread / price_step)) - 1
+    return min(max(idx, 0), n_levels - 1)
 
 
 def _book_cumulative_from_arrays(
@@ -340,7 +347,7 @@ def _mid_from_book_best_levels_batched(
 ) -> torch.Tensor:
     """
     Mid implied by post-flow best bid/ask from level volumes.
-    center_mid sets the absolute price reference; spread_grid is 1..n_levels.
+    center_mid sets the absolute price reference; spread_grid is quote-price distance from mid.
     """
     big = float(spread_grid.max().item()) + 1000.0
     mask_b = (ob_bids > 0).to(center_mid.dtype)
@@ -362,8 +369,8 @@ def _mid_from_book_best_levels_batched(
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
-    sell_ref: torch.Tensor,
-    buy_ref: torch.Tensor,
+    sell_vwap: torch.Tensor,
+    buy_vwap: torch.Tensor,
     book_cum_bid: torch.Tensor,
     book_cum_ask: torch.Tensor,
     sell_vol: torch.Tensor,
@@ -454,8 +461,8 @@ def soft_fill_batched(
     consumed_ask_market = consumed_ask_level * (1.0 - ask_share_our)
     ob_bids_next = torch.clamp(book_bid_level - consumed_bid_market, min=0.0)
     ob_asks_next = torch.clamp(book_ask_level - consumed_ask_market, min=0.0)
-    sell_exp = sell_ref.expand(-1, spread_grid.shape[0])
-    buy_exp = buy_ref.expand(-1, spread_grid.shape[0])
+    sell_exp = sell_vwap.expand(-1, spread_grid.shape[0])
+    buy_exp = buy_vwap.expand(-1, spread_grid.shape[0])
     cash_bid = (fill_bid_level * (sell_exp - spread_grid.unsqueeze(0))).sum(dim=1)
     cash_ask = (fill_ask_level * (buy_exp + spread_grid.unsqueeze(0))).sum(dim=1)
     one_minus_f = 1.0 - maker_fee
@@ -545,24 +552,24 @@ def _action_size_penalty_qrange(
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
-def _action_spread_at_target_depth(
+def _action_spread_at_vwap_qty(
     params: torch.Tensor,
     n_components: int,
     spread_max: float,
-    target_lots: float,
+    vwap_qty: float,
     *,
     use_softplus: bool = True,
     grid_points: int = 128,
     softmin_temp: float = 40.0,
 ) -> torch.Tensor:
     """
-    Differentiable proxy for spread at which cumulative bid/ask depth reaches target_lots.
+    Differentiable proxy for spread at which cumulative bid/ask depth reaches vwap_qty.
 
     For each side, evaluate D(δ) on a dense spread grid in [0, spread_max], then use a
-    soft-argmin of |D(δ) - target_lots| to get an effective spread. Returns:
-      spread_bid(target_lots) + spread_ask(target_lots)
+    soft-argmin of |D(δ) - vwap_qty| to get an effective spread. Returns:
+      spread_bid(vwap_qty) + spread_ask(vwap_qty)
     """
-    if n_components <= 0 or float(target_lots) <= 0.0:
+    if n_components <= 0 or float(vwap_qty) <= 0.0:
         return params.sum() * 0.0
     torch_mod = _get_torch()
     s = torch_mod.linspace(
@@ -574,7 +581,7 @@ def _action_spread_at_target_depth(
     )
     bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
     ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
-    tgt = torch_mod.tensor(float(target_lots), dtype=params.dtype, device=params.device)
+    tgt = torch_mod.tensor(float(vwap_qty), dtype=params.dtype, device=params.device)
     bid_err = torch_mod.abs(bid_depth - tgt)
     ask_err = torch_mod.abs(ask_depth - tgt)
     temp = max(1e-6, float(softmin_temp))
@@ -586,16 +593,16 @@ def _action_spread_at_target_depth(
 
 
 def _delta_wealth_mtm_batched(
-    sell_ref: torch.Tensor,
+    sell_vwap: torch.Tensor,
     inv: torch.Tensor,
     cash: torch.Tensor,
-    sell_ref_next: torch.Tensor,
+    sell_vwap_next: torch.Tensor,
     inv_next: torch.Tensor,
     cash_next: torch.Tensor,
 ) -> torch.Tensor:
-    """Per-sample ΔW with inventory marked at sell-side ref: W = cash + inv * sell_ref."""
-    W = cash + inv * sell_ref
-    W_next = cash_next + inv_next * sell_ref_next
+    """Per-sample ΔW with inventory marked at sell-side VWAP: W = cash + inv * sell_vwap."""
+    W = cash + inv * sell_vwap
+    W_next = cash_next + inv_next * sell_vwap_next
     return (W_next - W).squeeze(1)
 
 
@@ -615,6 +622,7 @@ class MonteCarloMPCTensorBatched:
         n_samples: int = 32,
         horizon: int = 4,
         spread_max: float = 100.0,
+        price_step: float = 1.0,
         n_grid: int = 51,
         ob_levels: int = 100,
         soft_fill_temp: float = 1.0,
@@ -650,6 +658,7 @@ class MonteCarloMPCTensorBatched:
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
         self.spread_max = float(spread_max)
+        self.price_step = max(1e-12, float(price_step))
         self.n_grid = max(2, n_grid)
         self.ob_levels = max(1, ob_levels)
         self.soft_fill_temp = soft_fill_temp
@@ -717,9 +726,9 @@ class MonteCarloMPCTensorBatched:
         dtype = torch_mod.float64
 
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
-            state.ob_rel, self.n_grid, _device, dtype
+            state.ob_rel, self.n_grid, self.price_step, _device, dtype
         )
-        spread_grid = torch_mod.arange(1.0, self.n_grid + 1.0, dtype=dtype, device=_device)
+        spread_grid = torch_mod.arange(1.0, self.n_grid + 1.0, dtype=dtype, device=_device) * self.price_step
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
@@ -727,11 +736,11 @@ class MonteCarloMPCTensorBatched:
         ob_bids_0 = torch_mod.zeros(self.n_samples, self.ob_levels, dtype=dtype, device=_device)
         ob_asks_0 = torch_mod.zeros(self.n_samples, self.ob_levels, dtype=dtype, device=_device)
         for (s, q) in state.ob_rel.bids:
-            i = int(round(s)) - 1
+            i = _spread_bucket_index(float(s), self.price_step, self.ob_levels)
             if 0 <= i < self.ob_levels:
                 ob_bids_0[:, i] += float(q)
         for (s, q) in state.ob_rel.asks:
-            i = int(round(s)) - 1
+            i = _spread_bucket_index(float(s), self.price_step, self.ob_levels)
             if 0 <= i < self.ob_levels:
                 ob_asks_0[:, i] += float(q)
         n = self.n_components
@@ -779,8 +788,11 @@ class MonteCarloMPCTensorBatched:
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
         hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.hedge_fee)
         hedge_fee_rollout = max(0.0, min(1.0 - 1e-9, float(hedge_fee_rollout)))
-        spread_grid_rep = torch_mod.arange(1.0, float(self.ob_levels) + 1.0, dtype=dtype, device=_device)
-        target_depth = target_depth_lots_from_price_model(self.price_model)
+        spread_grid_rep = (
+            torch_mod.arange(1.0, float(self.ob_levels) + 1.0, dtype=dtype, device=_device)
+            * self.price_step
+        )
+        vwap_depth = target_depth_lots_from_price_model(self.price_model)
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
         # and hedge delta shocks (used when hedge dynamics are enabled).
@@ -877,15 +889,15 @@ class MonteCarloMPCTensorBatched:
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
                 mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
-                hedge_buy_ref_t = torch_mod.full(
+                hedge_buy_vwap_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.hedge_buy_ref if state.hedge_buy_ref is not None else state.buy_ref),
+                    float(state.hedge_buy_vwap if state.hedge_buy_vwap is not None else state.buy_vwap),
                     dtype=dtype,
                     device=_device,
                 )
-                hedge_sell_ref_t = torch_mod.full(
+                hedge_sell_vwap_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.hedge_sell_ref if state.hedge_sell_ref is not None else state.sell_ref),
+                    float(state.hedge_sell_vwap if state.hedge_sell_vwap is not None else state.sell_vwap),
                     dtype=dtype,
                     device=_device,
                 )
@@ -935,7 +947,7 @@ class MonteCarloMPCTensorBatched:
                         self.total_q_target,
                         use_softplus=True,
                     )
-                    action_spread_sum = action_spread_sum + _action_spread_at_target_depth(
+                    action_spread_sum = action_spread_sum + _action_spread_at_vwap_qty(
                         action_h,
                         n,
                         self.spread_max,
@@ -960,36 +972,36 @@ class MonteCarloMPCTensorBatched:
                         spread_grid_rep,
                     )
                     if h == 0:
-                        # Use the representative prices computed upstream (unique target depth),
+                        # Use upstream VWAP references (single vwap_depth policy),
                         # instead of recomputing from the book arrays.
                         buy_cmp_t = torch_mod.full(
                             (self.n_samples, 1),
-                            float(state.buy_ref),
+                            float(state.buy_vwap),
                             dtype=dtype,
                             device=_device,
                         )
                         sell_cmp_t = torch_mod.full(
                             (self.n_samples, 1),
-                            float(state.sell_ref),
+                            float(state.sell_vwap),
                             dtype=dtype,
                             device=_device,
                         )
                     else:
-                        buy_cmp_t, sell_cmp_t = _representative_prices_batched(
+                        buy_cmp_t, sell_cmp_t = vwap_reference_prices_batched(
                             ob_bids,
                             ob_asks,
                             mid_t,
                             spread_grid_rep,
-                            target_depth=target_depth,
+                            vwap_depth=vwap_depth,
                         )
-                    buy_ref_t = buy_cmp_t + eps_buy_h
-                    sell_ref_t = sell_cmp_t + eps_sell_h
+                    buy_vwap_t = buy_cmp_t + eps_buy_h
+                    sell_vwap_t = sell_cmp_t + eps_sell_h
 
                     ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
                         action_h,
                         n,
-                        sell_ref_t,
-                        buy_ref_t,
+                        sell_vwap_t,
+                        buy_vwap_t,
                         book_cum_bid_h,
                         book_cum_ask_h,
                         sell_h,
@@ -1004,23 +1016,23 @@ class MonteCarloMPCTensorBatched:
                     if self.hedge_enabled:
                         d_buy = d_hedge_buy[:, h : h + 1]
                         d_sell = d_hedge_sell[:, h : h + 1]
-                        hedge_buy_ref_next = hedge_buy_ref_t + d_buy
-                        hedge_sell_ref_next = hedge_sell_ref_t + d_sell
+                        hedge_buy_vwap_next = hedge_buy_vwap_t + d_buy
+                        hedge_sell_vwap_next = hedge_sell_vwap_t + d_sell
                         d_inv = inv_delta.unsqueeze(1)  # fee-adjusted executed inventory change
                         # Hedge trade at t+1 on hedge venue:
                         # - d_inv>0 (longer main) -> sell hedge inventory at hedge bid
                         # - d_inv<0 (shorter main) -> buy hedge inventory at hedge ask
                         trade_cash_hedge = torch_mod.where(
                             d_inv >= 0.0,
-                            d_inv * hedge_sell_ref_next,
-                            d_inv * hedge_buy_ref_next,
+                            d_inv * hedge_sell_vwap_next,
+                            d_inv * hedge_buy_vwap_next,
                         )
                         one_minus_hedge_fee = float(1.0 - hedge_fee_rollout)
                         hedge_cash_next = hedge_cash_t + trade_cash_hedge * one_minus_hedge_fee
                         hedge_inv_next = hedge_inv_t - d_inv
                     else:
-                        hedge_buy_ref_next = hedge_buy_ref_t
-                        hedge_sell_ref_next = hedge_sell_ref_t
+                        hedge_buy_vwap_next = hedge_buy_vwap_t
+                        hedge_sell_vwap_next = hedge_sell_vwap_t
                         hedge_cash_next = hedge_cash_t
                         hedge_inv_next = hedge_inv_t
                     mid_next = _mid_from_book_best_levels_batched(
@@ -1029,25 +1041,25 @@ class MonteCarloMPCTensorBatched:
                         mid_t,
                         spread_grid_rep,
                     )
-                    buy_cmp_h, sell_cmp_h = _representative_prices_batched(
+                    buy_cmp_h, sell_cmp_h = vwap_reference_prices_batched(
                         ob_bids_next,
                         ob_asks_next,
                         mid_next,
                         spread_grid_rep,
-                        target_depth=target_depth,
+                        vwap_depth=vwap_depth,
                     )
-                    buy_ref_next = buy_cmp_h + eps_buy_next
-                    sell_ref_next = sell_cmp_h + eps_sell_next
+                    buy_vwap_next = buy_cmp_h + eps_buy_next
+                    sell_vwap_next = sell_cmp_h + eps_sell_next
                     
                     ob_bids, ob_asks = ob_bids_next, ob_asks_next
 
                     step_reward_main = _delta_wealth_mtm_batched(
-                        sell_ref_t, inv_t, cash_t, sell_ref_next, inv_next, cash_next
+                        sell_vwap_t, inv_t, cash_t, sell_vwap_next, inv_next, cash_next
                     )
                     hedge_reward = torch_mod.zeros_like(step_reward_main)
                     if self.hedge_enabled:
-                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * hedge_sell_ref_t
-                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * hedge_sell_ref_next
+                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * hedge_sell_vwap_t
+                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * hedge_sell_vwap_next
                         hedge_reward = (hedge_wealth_next - hedge_wealth_t).squeeze(1)
                     step_reward = step_reward_main + float(self.hedge_reward_weight) * hedge_reward
                     if h == 0:
@@ -1059,8 +1071,8 @@ class MonteCarloMPCTensorBatched:
                     mid_fallback_t = mid_next
                     inv_t = inv_next
                     cash_t = cash_next
-                    hedge_buy_ref_t = hedge_buy_ref_next
-                    hedge_sell_ref_t = hedge_sell_ref_next
+                    hedge_buy_vwap_t = hedge_buy_vwap_next
+                    hedge_sell_vwap_t = hedge_sell_vwap_next
                     hedge_cash_t = hedge_cash_next
                     hedge_inv_t = hedge_inv_next
 

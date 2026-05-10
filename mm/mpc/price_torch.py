@@ -207,6 +207,7 @@ class TorchResidualPriceModel:
         sigma_min: float = 1e-6,
         device: str | None = None,
         representative_price_target_depth_lots: float = 1000.0,
+        vwap_depth: float | None = None,
     ):
         self._init_mu = float(residual_mu)
         self._init_sigma = max(1e-12, float(residual_sigma))
@@ -216,7 +217,8 @@ class TorchResidualPriceModel:
         self._mu_buy = float(residual_mu)
         self._mu_sell = float(residual_mu)
         self._last_residual: float | None = None
-        self._target_depth_lots = max(1.0, float(representative_price_target_depth_lots))
+        depth = float(vwap_depth) if vwap_depth is not None else float(representative_price_target_depth_lots)
+        self._target_depth_lots = max(1.0, depth)
         sigma0 = max(self._sigma_min, float(residual_sigma))
         self._sigma2_buy = float(sigma0 * sigma0)
         self._sigma2_sell = float(sigma0 * sigma0)

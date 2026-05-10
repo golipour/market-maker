@@ -1,7 +1,6 @@
-"""
-Differentiable PyTorch tensor equivalents of State and Action.
+"""Differentiable PyTorch tensor equivalents of State and Action.
 
-State: mid, fixed-length orderbook arrays (e.g. 100 ticks per side), buy_vol, sell_vol,
+State: mid, fixed-length orderbook arrays (configured price buckets per side), buy_vol, sell_vol,
        inventory, cash — all as tensors so gradients can flow.
 Action: flat tensor of sigmoid-mixture parameters (6 * n_components) with differentiable
         depth and depth_derivative for use in reward/optimization.
@@ -9,6 +8,7 @@ Action: flat tensor of sigmoid-mixture parameters (6 * n_components) with differ
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from torch import Tensor
     from mm.mpc.mpc_state import State, SigmoidMixtureAction
 
-# Default number of orderbook levels per side (ticks from mid).
+# Default number of orderbook buckets per side.
 DEFAULT_OB_LEVELS = 100
 
 
@@ -32,8 +32,8 @@ class StateTensor:
     Differentiable state as PyTorch tensors.
 
     - mid: scalar or (1,) — mid price.
-    - ob_bids: (n_levels,) — quantity at each tick below mid; ob_bids[i] = qty at spread i+1 ticks.
-    - ob_asks: (n_levels,) — quantity at each tick above mid; ob_asks[i] = qty at spread i+1 ticks.
+    - ob_bids: (n_levels,) — base qty in configured price bucket below mid.
+    - ob_asks: (n_levels,) — base qty in configured price bucket above mid.
     - buy_vol, sell_vol, inventory, cash: scalar or (1,) — flow and position.
     All tensors are float (inventory as float for gradient flow).
     """
@@ -107,14 +107,14 @@ def _softplus_positive(x: "Tensor") -> "Tensor":
 
 def depth_bid_tensor(
     params: "Tensor",
-    spread_ticks: "Tensor",
+    spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
 ) -> "Tensor":
     """
-    Cumulative bid depth at spread_ticks: D(δ) = sum_i L_i * sigmoid(k_i * (δ - x0_i)).
+    Cumulative bid depth at quote-price spread: D(δ) = sum_i L_i * sigmoid(k_i * (δ - x0_i)).
     L and k taken as softplus(params) when use_softplus=True so gradients flow.
-    spread_ticks: any shape; output has same shape.
+    spread: any shape; output has same shape.
     """
     torch = _get_torch()
     L = params[0 : 3 * n_components : 3]
@@ -123,9 +123,9 @@ def depth_bid_tensor(
     if use_softplus:
         L = _softplus_positive(L)
         k = _softplus_positive(k)
-    # spread_ticks: (...,); L, k, x0: (n_components,)
+    # spread: (...,); L, k, x0: (n_components,)
     # z_i = k_i * (spread - x0_i) -> (..., n_components)
-    z = (spread_ticks.unsqueeze(-1) - x0) * k
+    z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     depth = (L * s).sum(dim=-1)
     return depth
@@ -133,11 +133,11 @@ def depth_bid_tensor(
 
 def depth_ask_tensor(
     params: "Tensor",
-    spread_ticks: "Tensor",
+    spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
 ) -> "Tensor":
-    """Cumulative ask depth at spread_ticks (same formula as bid, ask-side params)."""
+    """Cumulative ask depth at quote-price spread (same formula as bid, ask-side params)."""
     torch = _get_torch()
     base = 3 * n_components
     L = params[base + 0 : base + 3 * n_components : 3]
@@ -146,7 +146,7 @@ def depth_ask_tensor(
     if use_softplus:
         L = _softplus_positive(L)
         k = _softplus_positive(k)
-    z = (spread_ticks.unsqueeze(-1) - x0) * k
+    z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     depth = (L * s).sum(dim=-1)
     return depth
@@ -154,11 +154,11 @@ def depth_ask_tensor(
 
 def depth_bid_derivative_tensor(
     params: "Tensor",
-    spread_ticks: "Tensor",
+    spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
 ) -> "Tensor":
-    """Marginal bid depth d/dδ D(δ) = sum_i L_i * k_i * s_i * (1 - s_i). Same shape as spread_ticks."""
+    """Marginal bid depth d/dδ D(δ) = sum_i L_i * k_i * s_i * (1 - s_i). Same shape as spread."""
     torch = _get_torch()
     L = params[0 : 3 * n_components : 3]
     k = params[1 : 3 * n_components : 3]
@@ -166,7 +166,7 @@ def depth_bid_derivative_tensor(
     if use_softplus:
         L = _softplus_positive(L)
         k = _softplus_positive(k)
-    z = (spread_ticks.unsqueeze(-1) - x0) * k
+    z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)
     return der
@@ -174,11 +174,11 @@ def depth_bid_derivative_tensor(
 
 def depth_ask_derivative_tensor(
     params: "Tensor",
-    spread_ticks: "Tensor",
+    spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
 ) -> "Tensor":
-    """Marginal ask depth d/dδ D(δ). Same shape as spread_ticks."""
+    """Marginal ask depth d/dδ D(δ). Same shape as spread."""
     torch = _get_torch()
     base = 3 * n_components
     L = params[base + 0 : base + 3 * n_components : 3]
@@ -187,7 +187,7 @@ def depth_ask_derivative_tensor(
     if use_softplus:
         L = _softplus_positive(L)
         k = _softplus_positive(k)
-    z = (spread_ticks.unsqueeze(-1) - x0) * k
+    z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)
     return der
@@ -201,6 +201,8 @@ def depth_ask_derivative_tensor(
 def slippage_penalty_tensor(
     params: "Tensor",
     n_components: int,
+    spread_bid: "Tensor | None" = None,
+    spread_ask: "Tensor | None" = None,
     spread_bid_ticks: "Tensor | None" = None,
     spread_ask_ticks: "Tensor | None" = None,
     use_softplus: bool = True,
@@ -212,12 +214,16 @@ def slippage_penalty_tensor(
     torch = _get_torch()
     device = params.device
     dtype = params.dtype
-    if spread_bid_ticks is None:
-        spread_bid_ticks = torch.arange(0.0, 51.0, dtype=dtype, device=device)
-    if spread_ask_ticks is None:
-        spread_ask_ticks = torch.arange(0.0, 51.0, dtype=dtype, device=device)
-    db = depth_bid_derivative_tensor(params, spread_bid_ticks, n_components, use_softplus)
-    da = depth_ask_derivative_tensor(params, spread_ask_ticks, n_components, use_softplus)
+    if spread_bid is None:
+        spread_bid = spread_bid_ticks
+    if spread_ask is None:
+        spread_ask = spread_ask_ticks
+    if spread_bid is None:
+        spread_bid = torch.arange(0.0, 51.0, dtype=dtype, device=device)
+    if spread_ask is None:
+        spread_ask = torch.arange(0.0, 51.0, dtype=dtype, device=device)
+    db = depth_bid_derivative_tensor(params, spread_bid, n_components, use_softplus)
+    da = depth_ask_derivative_tensor(params, spread_ask, n_components, use_softplus)
     sq = db.square().sum() + da.square().sum()
     return -sq
 
@@ -231,11 +237,12 @@ def state_to_tensor(
     state: State,
     device: "str | torch.device | None" = None,
     n_levels: int = DEFAULT_OB_LEVELS,
+    price_step: float = 1.0,
     dtype: "torch.dtype | None" = None,
 ) -> StateTensor:
     """
     Convert State to StateTensor. Orderbook is expanded to fixed-length arrays:
-    ob_bids[i] = total qty at spread (i+1) ticks (below mid), 0 if no level.
+    ob_bids[i] = base qty in quote-price bucket (i+1) * price_step below mid.
     """
     from mm.mpc.mpc_state import State, OrderbookRelative
 
@@ -253,12 +260,13 @@ def state_to_tensor(
 
     ob_bids = torch.zeros(n_levels, dtype=dtype, device=device)
     ob_asks = torch.zeros(n_levels, dtype=dtype, device=device)
-    for (spread_ticks, qty) in state.ob_rel.bids:
-        idx = int(round(spread_ticks)) - 1  # 1-based tick -> 0-based index
+    step = max(1e-12, float(price_step))
+    for (spread, qty) in state.ob_rel.bids:
+        idx = min(max(int(math.ceil(float(spread) / step)) - 1, 0), n_levels - 1)
         if 0 <= idx < n_levels:
             ob_bids[idx] = float(qty)
-    for (spread_ticks, qty) in state.ob_rel.asks:
-        idx = int(round(spread_ticks)) - 1
+    for (spread, qty) in state.ob_rel.asks:
+        idx = min(max(int(math.ceil(float(spread) / step)) - 1, 0), n_levels - 1)
         if 0 <= idx < n_levels:
             ob_asks[idx] = float(qty)
 
@@ -283,7 +291,7 @@ def state_tensor_to_state(state_t: StateTensor, ob_rel_from_bids_asks: bool = Fa
     mid = state_t.scalar_mid()
     buy_vol = float(state_t.buy_vol.view(-1)[0].detach().item())
     sell_vol = float(state_t.sell_vol.view(-1)[0].detach().item())
-    inventory = int(round(state_t.scalar_inventory()))
+    inventory = state_t.scalar_inventory()
     cash = state_t.scalar_cash()
 
     if ob_rel_from_bids_asks:
@@ -308,8 +316,8 @@ def state_tensor_to_state(state_t: StateTensor, ob_rel_from_bids_asks: bool = Fa
         sell_vol=sell_vol,
         inventory=inventory,
         cash=cash,
-        buy_ref=mid,
-        sell_ref=mid,
+        buy_vwap=mid,
+        sell_vwap=mid,
     )
 
 

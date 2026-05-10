@@ -66,7 +66,7 @@ class MpcControllerRunner:
     async def on_frame(self, frame: StrategyInputFrame) -> Action:
         t0 = time.monotonic_ns()
         try:
-            state = _state_from_frame(frame, self.binding, self.config.max_spread)
+            state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
             _update_market_flow_model(self._market_flow_model, frame)
             _update_float_price_model(self._price_model, self._previous_frame, frame)
             optimizer_stdout = io.StringIO()
@@ -77,7 +77,8 @@ class MpcControllerRunner:
                 event=frame.primary,
                 sigmoid_action=sigmoid_action,
                 min_spread=self.config.min_spread,
-                max_spread=self.config.max_spread,
+                max_spread=self.config.orderbook_grid.max_spread,
+                price_step=self.config.orderbook_grid.price_step,
                 qty_step=self.config.qty_step,
                 min_order_qty=self.config.min_order_qty,
                 max_orders_per_side=self.config.max_orders_per_side,
@@ -152,6 +153,7 @@ class MpcControllerRunner:
                 "last_components": getattr(self._controller, "_last_J_components", None),
                 "log": optimizer_log,
             },
+            "orderbook_grid": self.config.orderbook_grid.as_contract(),
             "latency_ms": latency_ms,
             "unit_policy": "prices=quote_per_base, quantities=base, cash/notional=quote",
         }
@@ -194,6 +196,10 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
     if price_kind != "residual":
         raise ValueError(f"unsupported price_model kind: {price_kind}")
+    nested_vwap = price_cfg.pop("vwap_depth", None)
+    vwap_depth = config.vwap_depth if config.vwap_depth is not None else nested_vwap
+    if vwap_depth is not None:
+        price_cfg["vwap_depth"] = float(vwap_depth)
     price_model = TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
 
     execution_cfg = dict(config.execution_model or {})
@@ -208,13 +214,18 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
+    grid = config.orderbook_grid
+    # orderbook_grid is the single source of truth for model spread buckets.
+    for grid_key in ("spread_max", "n_grid", "ob_levels", "price_step"):
+        optimizer_cfg.pop(grid_key, None)
     optimizer_defaults = {
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
-        "spread_max": config.max_spread,
-        "n_grid": max(2, int(round(config.max_spread))),
-        "ob_levels": max(2, int(round(config.max_spread))),
+        "spread_max": grid.max_spread,
+        "price_step": grid.price_step,
+        "n_grid": max(2, grid.levels),
+        "ob_levels": max(2, grid.levels),
         "total_q_min": config.min_order_qty,
         "total_q_target": None,
         "project_total_q_target": False,
@@ -244,12 +255,12 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
         if (spread := level.price - primary_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
     primary_inventory, primary_cash = _inventory_cash(frame.primary_private, binding.primary.base_asset, binding.primary.quote_asset)
-    hedge_buy_ref = hedge_sell_ref = None
+    hedge_buy_vwap = hedge_sell_vwap = None
     hedge_inventory = 0.0
     hedge_cash = 0.0
     if frame.hedge is not None:
-        hedge_buy_ref = frame.hedge.orderbook.asks[0].price if frame.hedge.orderbook.asks else _mid(frame.hedge.orderbook)
-        hedge_sell_ref = frame.hedge.orderbook.bids[0].price if frame.hedge.orderbook.bids else _mid(frame.hedge.orderbook)
+        hedge_buy_vwap = frame.hedge.orderbook.asks[0].price if frame.hedge.orderbook.asks else _mid(frame.hedge.orderbook)
+        hedge_sell_vwap = frame.hedge.orderbook.bids[0].price if frame.hedge.orderbook.bids else _mid(frame.hedge.orderbook)
     if frame.hedge_private is not None and binding.hedge is not None:
         hedge_inventory, hedge_cash = _inventory_cash(
             frame.hedge_private,
@@ -261,13 +272,13 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
         ob_rel=OrderbookRelative(bids=bids, asks=asks),
         buy_vol=frame.primary.buy_volume,
         sell_vol=frame.primary.sell_volume,
-        inventory=int(round(primary_inventory)),
+        inventory=primary_inventory,
         cash=primary_cash,
-        buy_ref=frame.primary.orderbook.asks[0].price if frame.primary.orderbook.asks else primary_mid,
-        sell_ref=frame.primary.orderbook.bids[0].price if frame.primary.orderbook.bids else primary_mid,
-        hedge_buy_ref=hedge_buy_ref,
-        hedge_sell_ref=hedge_sell_ref,
-        hedge_inventory=int(round(hedge_inventory)),
+        buy_vwap=frame.primary.orderbook.asks[0].price if frame.primary.orderbook.asks else primary_mid,
+        sell_vwap=frame.primary.orderbook.bids[0].price if frame.primary.orderbook.bids else primary_mid,
+        hedge_buy_vwap=hedge_buy_vwap,
+        hedge_sell_vwap=hedge_sell_vwap,
+        hedge_inventory=hedge_inventory,
         hedge_cash=hedge_cash,
     )
 
@@ -348,13 +359,14 @@ def _orders_from_sigmoid_action(
     sigmoid_action: Any,
     min_spread: float,
     max_spread: float,
+    price_step: float,
     qty_step: float,
     min_order_qty: float,
     max_orders_per_side: int,
 ) -> list[Order]:
     mid = _mid(event.orderbook)
     qty_step = max(0.0, float(qty_step))
-    levels = [float(i) for i in range(max(1, int(round(min_spread))), max(1, int(round(max_spread))) + 1)]
+    levels = _spread_levels(min_spread=min_spread, max_spread=max_spread, price_step=price_step)
     orders: list[Order] = []
     orders.extend(
         _side_orders(
@@ -383,6 +395,14 @@ def _orders_from_sigmoid_action(
         )
     )
     return orders
+
+
+def _spread_levels(*, min_spread: float, max_spread: float, price_step: float) -> list[float]:
+    step = max(1e-12, float(price_step))
+    start = max(step, math.ceil(max(0.0, float(min_spread)) / step) * step)
+    stop = max(start, float(max_spread))
+    count = max(1, int(math.floor((stop - start) / step)) + 1)
+    return [start + i * step for i in range(count)]
 
 
 def _side_orders(

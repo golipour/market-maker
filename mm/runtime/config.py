@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -64,6 +64,40 @@ class PrivateRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OrderbookGridConfig:
+    """Projection grid for MPC orderbook arrays.
+
+    ``price_step`` and ``max_spread`` are quote-per-base price distances from mid.
+    The model array index is only a bucket number; it is converted back to quote
+    spread via ``spread = index * price_step`` inside MPC/strategy bridging.
+    """
+
+    price_step: float = 1.0
+    max_spread: float = 100.0
+
+    def __post_init__(self) -> None:
+        if self.price_step <= 0:
+            raise ValueError("orderbook_grid.price_step must be positive")
+        if self.max_spread <= 0:
+            raise ValueError("orderbook_grid.max_spread must be positive")
+
+    @property
+    def levels(self) -> int:
+        import math
+
+        return max(1, int(math.ceil(self.max_spread / self.price_step)))
+
+    def as_contract(self) -> dict[str, Any]:
+        return {
+            "price_step": self.price_step,
+            "max_spread": self.max_spread,
+            "levels": self.levels,
+            "index_policy": "model index i represents quote spread (i + 1) * price_step from mid",
+            "qty_policy": "array values are base-asset quantities",
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ControllerRuntimeConfig:
     """Config for the optional MPC/controller bridge.
 
@@ -79,9 +113,11 @@ class ControllerRuntimeConfig:
     diagnostics_topic: str = "strategy:controller"
     min_spread: float = 1.0
     max_spread: float = 100.0
+    orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     qty_step: float = 1.0
     min_order_qty: float = 0.0
     max_orders_per_side: int = 5
+    vwap_depth: float | None = None
     price_model: dict[str, Any] | None = None
     market_flow_model: dict[str, Any] | None = None
     execution_model: dict[str, Any] | None = None
@@ -249,9 +285,15 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         diagnostics_topic=str(payload.get("diagnostics_topic", "strategy:controller")),
         min_spread=float(payload.get("min_spread", 1.0)),
         max_spread=float(payload.get("max_spread", 100.0)),
+        orderbook_grid=_orderbook_grid_from_mapping(payload),
         qty_step=float(payload.get("qty_step", 1.0)),
         min_order_qty=float(payload.get("min_order_qty", 0.0)),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
+        vwap_depth=(
+            float(payload["vwap_depth"])
+            if payload.get("vwap_depth") is not None
+            else None
+        ),
         price_model=_dict_or_none(payload.get("price_model")),
         market_flow_model=_dict_or_none(payload.get("market_flow_model")),
         execution_model=_dict_or_none(payload.get("execution_model")),
@@ -263,6 +305,19 @@ def _dict_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
+def _orderbook_grid_from_mapping(payload: dict[str, Any]) -> OrderbookGridConfig:
+    grid = payload.get("orderbook_grid")
+    if isinstance(grid, dict):
+        return OrderbookGridConfig(
+            price_step=float(grid.get("price_step", 1.0)),
+            max_spread=float(grid.get("max_spread", payload.get("max_spread", 100.0))),
+        )
+    return OrderbookGridConfig(
+        price_step=1.0,
+        max_spread=float(payload.get("max_spread", 100.0)),
+    )
+
+
 def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, Any]:
     if config is None:
         return {"enabled": False}
@@ -272,6 +327,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "observe_only": config.observe_only,
         "diagnostics_topic": config.normalized_diagnostics_topic,
         "action_topic": config.normalized_action_topic,
+        "orderbook_grid": config.orderbook_grid.as_contract(),
+        "vwap_depth": config.vwap_depth,
+        "vwap_depth_note": (
+            "cumulative base quantity cap for reference VWAP in MPC and residual price model; "
+            "overrides price_model.representative_price_target_depth_lots when set"
+        ),
         "model_inputs": {
             "price_model": config.price_model or {"kind": "gaussian"},
             "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},

@@ -9,9 +9,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class OrderbookRelative:
     """
-    Orderbook in relative terms: (spread_ticks, qty) per level.
-    Bids: spread_ticks = mid - price (positive = below mid).
-    Asks: spread_ticks = price - mid (positive = above mid).
+    Orderbook in relative terms: (quote-price spread, base qty) per level.
+    Bids: spread = mid - price (positive = below mid).
+    Asks: spread = price - mid (positive = above mid).
     """
 
     bids: tuple[tuple[float, float], ...]
@@ -27,7 +27,7 @@ class MarketState:
 
 @dataclass(frozen=True)
 class Action:
-    """Legacy single-level action (ticks + discrete size)."""
+    """Legacy single-level action kept for compatibility."""
 
     delta_b_ticks: float
     delta_a_ticks: float
@@ -131,34 +131,34 @@ class SigmoidMixtureAction:
             ask_x0=tuple(ask_x0),
         )
 
-    def depth_bid(self, spread_ticks: float) -> float:
+    def depth_bid(self, spread: float) -> float:
         out = 0.0
         for i in range(self.n_components):
-            z = self.bid_k[i] * (spread_ticks - self.bid_x0[i])
+            z = self.bid_k[i] * (spread - self.bid_x0[i])
             s = _sigmoid_stable(z)
             out += self.bid_L[i] * s
         return out
 
-    def depth_ask(self, spread_ticks: float) -> float:
+    def depth_ask(self, spread: float) -> float:
         out = 0.0
         for i in range(self.n_components):
-            z = self.ask_k[i] * (spread_ticks - self.ask_x0[i])
+            z = self.ask_k[i] * (spread - self.ask_x0[i])
             s = _sigmoid_stable(z)
             out += self.ask_L[i] * s
         return out
 
-    def depth_bid_derivative(self, spread_ticks: float) -> float:
+    def depth_bid_derivative(self, spread: float) -> float:
         out = 0.0
         for i in range(self.n_components):
-            z = self.bid_k[i] * (spread_ticks - self.bid_x0[i])
+            z = self.bid_k[i] * (spread - self.bid_x0[i])
             s = _sigmoid_stable(z)
             out += self.bid_L[i] * self.bid_k[i] * s * (1.0 - s)
         return out
 
-    def depth_ask_derivative(self, spread_ticks: float) -> float:
+    def depth_ask_derivative(self, spread: float) -> float:
         out = 0.0
         for i in range(self.n_components):
-            z = self.ask_k[i] * (spread_ticks - self.ask_x0[i])
+            z = self.ask_k[i] * (spread - self.ask_x0[i])
             s = _sigmoid_stable(z)
             out += self.ask_L[i] * self.ask_k[i] * s * (1.0 - s)
         return out
@@ -185,13 +185,13 @@ class State:
     ob_rel: OrderbookRelative
     buy_vol: float
     sell_vol: float
-    inventory: int
+    inventory: float
     cash: float = 0.0
-    buy_ref: float = 0.0
-    sell_ref: float = 0.0
-    hedge_buy_ref: float | None = None
-    hedge_sell_ref: float | None = None
-    hedge_inventory: int = 0
+    buy_vwap: float = 0.0
+    sell_vwap: float = 0.0
+    hedge_buy_vwap: float | None = None
+    hedge_sell_vwap: float | None = None
+    hedge_inventory: float = 0.0
     hedge_cash: float = 0.0
 
     @property

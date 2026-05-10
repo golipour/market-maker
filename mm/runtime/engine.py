@@ -19,6 +19,7 @@ from mm.exchanges.factory import (
 from mm.execution.order_manager import OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
+from mm.env_loader import load_mm_env
 from mm.private_state.reconciler import PrivateStateReconciler
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
 from mm.runtime.pipeline import build_symbol_engine
@@ -105,6 +106,7 @@ async def build_runtime_components(
     *,
     bus: AbstractEventBus | None = None,
 ) -> RuntimeComponents:
+    load_mm_env()
     runtime_bus = bus or InMemoryBus()
     scheduler = IntervalScheduler(WallClock())
     public_selections: dict[SourceRole, PublicMarketDataAdapterSelection] = {}
