@@ -1,5 +1,5 @@
 """
-Matplotlib figures that mirror ``order_flow_animation.draw_dynamic`` / ``fig_action``.
+Matplotlib figures that mirror ``mm.orderflow.animation.draw_dynamic`` / ``fig_action``.
 
 ``st.line_chart`` plots each series against row index, so spread-space step plots (depth,
 ladder) looked wrong. These functions use the same axes, step/post, colors, and limits
@@ -43,7 +43,7 @@ def _finite_series_ylim(
 
 def figure_action_depth_window(frame: dict[str, Any]) -> plt.Figure:
     """
-    Match ``fig_action`` in ``order_flow_animation.run_animation``:
+    Match ``fig_action`` in ``mm.orderflow.animation.run_animation``:
     5 rows — J components, main/hedge rewards, depth, action marginal, action cumulative.
     X-axis for rows 0–1 is decision index (same ordering as the runner histories).
     """

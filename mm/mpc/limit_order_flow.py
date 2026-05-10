@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from trade_stats import Orderbook
+from mm.integrations.trade_stats import Orderbook
 
 
 def limit_order_flow_observed(

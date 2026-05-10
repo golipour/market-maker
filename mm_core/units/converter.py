@@ -35,7 +35,7 @@ def instrument_spec_from_trade_stats(exchange: str, symbol: str) -> InstrumentSp
 
     Centralizes these calls so live execution doesn't scatter microstructure queries.
     """
-    from trade_stats import (
+    from mm.integrations.trade_stats import (
         get_lot_size,
         get_min_order_amount_tick_lot,
         get_min_order_qty_lots,

@@ -2,7 +2,7 @@
 Concrete market-data adapters: REST, buffered polling, and websocket-backed buffers.
 
 Implements ``mm_core.ports.market_data`` protocols; composed by ``MarketDataMux``.
-Venue-specific HTTP/WS handling stays in ``trade_stats`` / ``trade_stats_market_ws``.
+Venue-specific HTTP/WS handling lives in ``mm.integrations.trade_stats`` / ``mm.integrations.trade_stats_market_ws``.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ import threading
 import time
 from collections import deque
 
-from trade_stats import (
+from mm.integrations.trade_stats import (
     Orderbook,
     get_orderbook,
     get_trades_in_range,
     normalize_orderbook_from_raw,
     normalize_trade_to_tick_lot_units,
 )
-from trade_stats_market_ws import create_market_ws_session, kucoin_ping_pong_json
+from mm.integrations.trade_stats_market_ws import create_market_ws_session, kucoin_ping_pong_json
 
 __all__ = [
     "RestTradeDataProvider",
@@ -267,7 +267,7 @@ class BufferedPollingOrderbookDataProvider:
 class WebSocketBufferedMarketDataProvider:
     """
     Websocket buffer for order book and trades (same exchange push stream where supported).
-    Per-exchange URL, subscribe, and JSON parsing live in trade_stats_market_ws (uses trade_stats adapters).
+    Per-exchange URL, subscribe, and JSON parsing live in mm.integrations.trade_stats_market_ws.
     get_trades returns only trades ingested from the websocket (no REST fallback on trades).
     """
 

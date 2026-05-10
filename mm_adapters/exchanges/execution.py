@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from trade_stats import place_limit_order_lots
+from mm.integrations.trade_stats import place_limit_order_lots
 
 from mm_core.domain.orders import ExecutionReport, OrderIntent
 from mm_core.domain.types import InstrumentId, Side

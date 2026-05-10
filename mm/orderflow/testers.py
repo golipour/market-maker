@@ -8,7 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from trade_stats import Orderbook
+from mm.integrations.trade_stats import Orderbook
 
 from mm.mpc.market_order_flow_torch import (
     TorchDiscreteGammaModel,

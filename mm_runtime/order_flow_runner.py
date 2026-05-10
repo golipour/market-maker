@@ -15,8 +15,8 @@ import numpy as np
 
 from mm.mpc.step import Step
 from mm_runtime.order_flow_stepper import OrderFlowStepper
-from trade_stats import cancel_all_orders
-from order_flow_testers import MarketOrderFlowTester
+from mm.integrations.trade_stats import cancel_all_orders
+from mm.orderflow.testers import MarketOrderFlowTester
 
 if TYPE_CHECKING:
     from mm.core.orderflow_execution import ExecutionModel, ExecutionRule

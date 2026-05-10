@@ -2,7 +2,7 @@
 Pricing and valuation **policies** (defaults and enums).
 
 Reference VWAP uses a **target depth in lots** (see ``DEFAULT_REFERENCE_DEPTH_LOTS`` and
-``ob_reference_prices``). Inventory is marked using ``ValuationPolicy`` (project default:
+``mm.pricing`` reference VWAP helpers). Inventory is marked using ``ValuationPolicy`` (project default:
 **sell_ref** = mark-to-bid / sell-side representative price in ticks or quote).
 
 Override at runtime with env ``MM_VALUATION_POLICY`` (``sell_ref`` or ``mid``), or pass an

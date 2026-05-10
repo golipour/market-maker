@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 from typing import Protocol
 
-from trade_stats import Orderbook
+from mm.integrations.trade_stats import Orderbook
 
 
 @dataclass(frozen=True)

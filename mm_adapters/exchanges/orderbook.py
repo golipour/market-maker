@@ -4,7 +4,7 @@ from __future__ import annotations
 Normalize venue-native order books (tick/lot) to canonical float DTOs at the adapter edge.
 """
 
-from trade_stats import Orderbook
+from mm.integrations.trade_stats import Orderbook
 
 from mm_core.domain.orderbook import CanonicalLevel, CanonicalOrderbook
 from mm_core.units.converter import UnitConverter

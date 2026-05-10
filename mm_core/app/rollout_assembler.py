@@ -1,7 +1,7 @@
 """
 Phase 3 — bridge from runner runtime state to MPC / tensor batches.
 
-Today the optimizer lives inside ``market_making_controller`` and reads duck-typed
+The optimizer (``mm.mpc.mpc_tensor_batched``) reads duck-typed
 ``runner`` and tuple steps. This module defines a small **read-only feature bundle**
 we can grow into a real tensor assembler without changing trading behavior yet.
 """

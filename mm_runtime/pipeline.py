@@ -16,9 +16,9 @@ from mm.mpc.price_torch import TorchResidualPriceModel
 from mm.strategies.sigmoid_controller import SigmoidController
 from mm_runtime.wiring import create_stepper
 from mm_runtime.order_flow_runner import OrderFlowRunner
-from order_flow_testers import (
-    MarketOrderFlowTester,
+from mm.orderflow.testers import (
     GeneralOrderFlowLogLossTester,
+    MarketOrderFlowTester,
     PriceLogLossTester,
 )
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SKIP_PARTS = frozenset({"nobitex-docs-api", ".git", "__pycache__", "node_modules"})
 EXTS = {".py", ".js", ".md", ".html", ".yaml", ".yml"}
 

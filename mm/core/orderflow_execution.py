@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from trade_stats import Orderbook
+from mm.integrations.trade_stats import Orderbook
 
 from mm.mpc.step import Step
 from mm.core.orderflow_state import Action, OrderbookRelative, State, ob_to_ob_rel

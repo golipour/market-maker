@@ -1,8 +1,7 @@
 """
 Reference prices (ticks) from orderbook and market order flow (MOF-only).
 
-Vendored from ``market_making_controller.ob_reference_prices`` so ``mm.mpc`` does not depend
-on the legacy controller package.
+Tick VWAP helpers for MOF-only reference pricing (standalone; ``mm.mpc`` has no legacy imports).
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from trade_stats import Orderbook
+    from mm.integrations.trade_stats import Orderbook
 
 
 def _depth_by_price(ob: "Orderbook", side: str) -> dict[int, float]:

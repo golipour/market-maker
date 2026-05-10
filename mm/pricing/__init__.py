@@ -1,4 +1,4 @@
-"""Pricing helpers used by ``mm.mpc`` without importing ``mm_core`` or ``market_making_controller``."""
+"""Pricing helpers used by ``mm.mpc`` (tick VWAP refs and simulated reps)."""
 
 from __future__ import annotations
 

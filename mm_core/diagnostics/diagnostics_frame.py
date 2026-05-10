@@ -70,7 +70,7 @@ def _log_loss_subplots_data(
     market_flow_model: Any,
 ) -> list[dict[str, Any]]:
     """
-    Mirror of order_flow_animation._log_loss_subplots_data, but returns pure data.
+    Mirror of ``mm.orderflow.animation._log_loss_subplots_data``, but returns pure data.
     """
     subplots: list[dict[str, Any]] = []
     if tester is not None and hasattr(tester, "get_plot_data"):

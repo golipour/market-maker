@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from trade_stats import EXCHANGES
+from mm.integrations.trade_stats import EXCHANGES
 
 
 @dataclass

@@ -16,8 +16,9 @@ import numpy as np
 
 from mm_runtime.order_flow_stepper import Step
 from mm_runtime.order_flow_runner import OrderFlowRunner
-from order_flow_testers import MarketOrderFlowTester
-from order_flow_animation_layout import build_layout, section_ranges
+from mm.orderflow.testers import MarketOrderFlowTester
+
+from mm.orderflow.animation_layout import build_layout, section_ranges
 from mm.core.orderflow_execution import cumulative_depth_curves, depth_from_sigmoid_params
 from mm.core.orderflow_state import ob_to_ob_rel
 from mm.mpc.limit_order_flow import limit_order_flow_observed

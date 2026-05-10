@@ -2,8 +2,8 @@
 Standalone debug plot for bid/ask sigmoid-mixture depth curves.
 
 Usage:
-  python3 plot_sigmoid_debug.py
-  python3 plot_sigmoid_debug.py --spread-max 100 --num-points 1201
+  python3 -m mm.orderflow.plot_sigmoid_debug
+  python3 -m mm.orderflow.plot_sigmoid_debug --spread-max 100 --num-points 1201
 """
 
 from __future__ import annotations
