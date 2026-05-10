@@ -68,7 +68,7 @@ def build_pipeline(
         DefaultExecutionRule,
         ObservedStepExecutionModel,
     )
-    from order_flow_stepper import HedgeGaussianPriceModel
+    from mm_runtime.order_flow_stepper import HedgeGaussianPriceModel
 
     mpc_kw = config["mpc_kwargs"]
     spread_max = mpc_kw["spread_max"]

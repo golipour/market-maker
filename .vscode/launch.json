@@ -11,10 +11,10 @@
       "justMyCode": true
     },
     {
-      "name": "Run pipeline only (order_flow_pipeline.py)",
+      "name": "Run pipeline only (-m mm_runtime)",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/order_flow_pipeline.py",
+      "module": "mm_runtime",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": true

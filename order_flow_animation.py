@@ -14,8 +14,8 @@ import matplotlib.animation as animation
 import matplotlib.dates as mdates
 import numpy as np
 
-from order_flow_stepper import Step
-from order_flow_runner import OrderFlowRunner
+from mm_runtime.order_flow_stepper import Step
+from mm_runtime.order_flow_runner import OrderFlowRunner
 from order_flow_testers import MarketOrderFlowTester
 from order_flow_animation_layout import build_layout, section_ranges
 from market_making_controller.state import ob_to_ob_rel
