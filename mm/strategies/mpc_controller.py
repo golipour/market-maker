@@ -164,17 +164,16 @@ class MpcControllerRunner:
 
 
 def _build_controller(config: ControllerRuntimeConfig) -> Any:
-    from market_making_controller.models.market_order_flow_torch import (
+    from mm.core.models.real_execution import RealExecutionModel
+    from mm.mpc.market_order_flow_torch import (
         TorchDiscreteGammaModel,
         TorchHurdleGammaModel,
         TorchHurdleLogNormalModel,
         TorchHurdleWeibullModel,
         TorchWeibullModel,
     )
-    from market_making_controller.models.price_torch import TorchResidualPriceModel
-    from market_making_controller.mpc_tensor_batched import MonteCarloMPCTensorBatched
-
-    from mm.core.models.real_execution import RealExecutionModel
+    from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
+    from mm.mpc.price_torch import TorchResidualPriceModel
 
     flow_cfg = dict(config.market_flow_model or {})
     flow_kind = str(flow_cfg.pop("kind", "hurdle_lognormal")).lower()
@@ -231,7 +230,7 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
 
 
 def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_max: float):
-    from market_making_controller.state import OrderbookRelative, State
+    from mm.mpc.mpc_state import OrderbookRelative, State
 
     primary_mid = _mid(frame.primary.orderbook)
     bids = tuple(
@@ -262,13 +261,13 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
         ob_rel=OrderbookRelative(bids=bids, asks=asks),
         buy_vol=frame.primary.buy_volume,
         sell_vol=frame.primary.sell_volume,
-        inventory=primary_inventory,
+        inventory=int(round(primary_inventory)),
         cash=primary_cash,
         buy_ref=frame.primary.orderbook.asks[0].price if frame.primary.orderbook.asks else primary_mid,
         sell_ref=frame.primary.orderbook.bids[0].price if frame.primary.orderbook.bids else primary_mid,
         hedge_buy_ref=hedge_buy_ref,
         hedge_sell_ref=hedge_sell_ref,
-        hedge_inventory=hedge_inventory,
+        hedge_inventory=int(round(hedge_inventory)),
         hedge_cash=hedge_cash,
     )
 

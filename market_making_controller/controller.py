@@ -4,7 +4,7 @@ Controller: build State from OB + flow/position, call MPC -> optimal action. Mod
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -16,7 +16,9 @@ from .state import (
     ZERO_DISCRETIZED_ACTION,
     sigmoid_action_to_discretized_action,
 )
-from .mpc_tensor_batched import MPCOptimizer
+
+if TYPE_CHECKING:
+    from mm.mpc.mpc_tensor_batched import MPCOptimizer
 
 
 @runtime_checkable

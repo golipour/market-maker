@@ -150,7 +150,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
     def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
         if not isinstance(row, dict):
             return None
-        order_id = _first_text(row, "id", "orderId", "order_id")
+        order_id = _first_text(row, "clientOrderId", "client_order_id", "id", "orderId", "order_id")
         if not order_id:
             return None
         side = _normalize_side(_first_text(row, "side", "type"))

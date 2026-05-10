@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
+from mm.exchanges.wallex import private_rest
 
 
 class WallexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
@@ -21,11 +22,7 @@ class WallexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
         )
 
     async def fetch_balances(self) -> dict:
-        from trade_stats import get_balances
-
-        return await asyncio.to_thread(get_balances, self.exchange, self.api_token)
+        return await asyncio.to_thread(private_rest.get_balances, self.api_token)
 
     async def fetch_open_orders(self) -> list[dict]:
-        from trade_stats import list_open_orders
-
-        return await asyncio.to_thread(list_open_orders, self.symbol, self.exchange, self.api_token)
+        return await asyncio.to_thread(private_rest.list_open_orders, self.symbol, self.api_token)

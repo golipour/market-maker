@@ -13,8 +13,6 @@ from typing import Protocol
 
 from trade_stats import Orderbook
 
-from mm_core.pricing import reference_prices_from_orderbook_ticks
-
 
 @dataclass(frozen=True)
 class OrderbookRelative:
@@ -485,6 +483,8 @@ def state_from_orderbook(
     Build State from trade_stats Orderbook and flow/position.
     If spread_max is provided, only include orderbook levels with spread_ticks <= spread_max.
     """
+    from mm_core.pricing import reference_prices_from_orderbook_ticks
+
     mid = float(ob.mid)
     ob_rel = ob_to_ob_rel(ob, spread_max=spread_max)
     buy_ref, sell_ref = reference_prices_from_orderbook_ticks(ob, target_depth_lots=reference_depth_lots)

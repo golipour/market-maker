@@ -46,7 +46,6 @@ from .reward_tensor import (
     reward_delta_inventory_slippage_tensor,
     terminal_objective,
 )
-from .mpc_tensor_batched import MPCOptimizer, MonteCarloMPCTensorBatched
 from .controller import Controller, DefaultController, SigmoidController
 
 __all__ = [
@@ -90,3 +89,15 @@ __all__ = [
     "DefaultController",
     "SigmoidController",
 ]
+
+
+def __getattr__(name: str):
+    if name == "MPCOptimizer":
+        from mm.mpc.mpc_tensor_batched import MPCOptimizer as _MPCOptimizer
+
+        return _MPCOptimizer
+    if name == "MonteCarloMPCTensorBatched":
+        from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched as _MC
+
+        return _MC
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

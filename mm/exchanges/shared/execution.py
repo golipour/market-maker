@@ -7,12 +7,8 @@ from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
 
 
-class TradeStatsRestOrderCommandAdapter(AbstractOrderCommandAdapter):
-    """REST order-command adapter backed by the existing trade_stats exchange code.
-
-    It accepts float-domain prices and quantities. Exchange precision and payload
-    quirks stay below this boundary in trade_stats venue adapters.
-    """
+class RestOrderCommandAdapter(AbstractOrderCommandAdapter):
+    """REST order commands via native venue clients (Nobitex / Wallex)."""
 
     def __init__(self, exchange: str, symbol: str, *, api_token: str | None):
         self.exchange = exchange.lower().strip()
@@ -23,48 +19,72 @@ class TradeStatsRestOrderCommandAdapter(AbstractOrderCommandAdapter):
         order_ids: list[str] = []
         for order in orders:
             response = await asyncio.to_thread(self._place_one, order)
-            status = str(response.get("status", response.get("state", "")) or "").lower()
             order_id = _order_id_from_response(response)
-            if not order_id or status in {"failed", "error", "rejected"}:
-                message = response.get("message") or response.get("msg") or response
-                raise RuntimeError(f"place order failed on {self.exchange}: {message}")
+            if self.exchange == "wallex":
+                if not response.get("success", False) or not order_id:
+                    message = response.get("message") or response.get("msg") or response
+                    raise RuntimeError(f"place order failed on {self.exchange}: {message}")
+            else:
+                status = str(response.get("status", response.get("state", "")) or "").lower()
+                if not order_id or status in {"failed", "error", "rejected"}:
+                    message = response.get("message") or response.get("msg") or response
+                    raise RuntimeError(f"place order failed on {self.exchange}: {message}")
             order_ids.append(order_id)
         return order_ids
 
     async def cancel_orders(self, order_ids: list[str]) -> None:
         for order_id in order_ids:
             response = await asyncio.to_thread(self._cancel_one, order_id)
-            status = str(response.get("status", response.get("state", "")) or "").lower()
-            if status in {"failed", "error", "rejected"}:
-                message = response.get("message") or response.get("msg") or response
-                raise RuntimeError(f"cancel order failed on {self.exchange}: {message}")
+            if self.exchange == "wallex":
+                if not response.get("success", False):
+                    message = response.get("message") or response.get("msg") or response
+                    raise RuntimeError(f"cancel order failed on {self.exchange}: {message}")
+            else:
+                status = str(response.get("status", response.get("state", "")) or "").lower()
+                if status in {"failed", "error", "rejected"}:
+                    message = response.get("message") or response.get("msg") or response
+                    raise RuntimeError(f"cancel order failed on {self.exchange}: {message}")
 
     def _place_one(self, order: Order) -> dict[str, Any]:
-        import trade_stats
+        sym = order.symbol or self.symbol
+        if self.exchange == "nobitex":
+            from mm.exchanges.nobitex import private_rest
 
-        adapter = trade_stats._adapter(self.exchange)  # type: ignore[attr-defined]
-        if not hasattr(adapter, "place_limit_order"):
-            return {"status": "failed", "message": "place_limit_order not supported"}
-        return adapter.place_limit_order(
-            symbol=order.symbol or self.symbol,
-            side=order.side,
-            amount=str(order.qty),
-            price=str(order.price),
-            api_token=self.api_token,
-            client_order_id=order.client_order_id,
-        )
+            return private_rest.place_limit_order(
+                sym,
+                order.side,
+                str(order.qty),
+                str(order.price),
+                self.api_token,
+                client_order_id=order.client_order_id,
+            )
+        if self.exchange == "wallex":
+            from mm.exchanges.wallex import private_rest
+
+            return private_rest.place_limit_order(
+                sym,
+                order.side,
+                str(order.qty),
+                str(order.price),
+                self.api_token,
+                client_order_id=order.client_order_id,
+            )
+        return {"status": "failed", "message": f"unsupported exchange: {self.exchange}"}
 
     def _cancel_one(self, order_id: str) -> dict[str, Any]:
-        import trade_stats
+        if self.exchange == "nobitex":
+            from mm.exchanges.nobitex import private_rest
 
-        adapter = trade_stats._adapter(self.exchange)  # type: ignore[attr-defined]
-        if not hasattr(adapter, "cancel_order"):
-            return {"status": "failed", "message": "cancel_order not supported"}
-        try:
-            native_id: int | str = int(order_id)
-        except ValueError:
-            native_id = order_id
-        return adapter.cancel_order(native_id, api_token=self.api_token)
+            try:
+                oid = int(order_id)
+            except ValueError:
+                return {"status": "failed", "message": "invalid order id"}
+            return private_rest.cancel_order(oid, self.api_token)
+        if self.exchange == "wallex":
+            from mm.exchanges.wallex import private_rest
+
+            return private_rest.cancel_order(order_id, self.api_token)
+        return {"status": "failed", "message": f"unsupported exchange: {self.exchange}"}
 
 
 class DryRunOrderCommandAdapter(AbstractOrderCommandAdapter):
@@ -95,5 +115,15 @@ def _order_id_from_response(resp: dict[str, Any]) -> str:
             return str(value)
     inner = resp.get("order") if isinstance(resp.get("order"), dict) else resp.get("data")
     if isinstance(inner, dict):
-        return _order_id_from_response(inner)
+        nested = _order_id_from_response(inner)
+        if nested:
+            return nested
+    result = resp.get("result")
+    if isinstance(result, dict):
+        nested = _order_id_from_response(result)
+        if nested:
+            return nested
     return ""
+
+
+TradeStatsRestOrderCommandAdapter = RestOrderCommandAdapter
