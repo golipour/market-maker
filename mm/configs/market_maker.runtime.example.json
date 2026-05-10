@@ -18,6 +18,30 @@
   "interval_ms": 5000,
   "max_hedge_lag_ms": 2000,
   "hedge_grace_ms": 250,
+  "bus": {
+    "kind": "memory",
+    "redis_url": "redis://localhost:6379/0",
+    "stream_prefix": "mm",
+    "consumer_group": "mm-runtime",
+    "consumer_name": "runtime",
+    "max_stream_length": 100000,
+    "read_block_ms": 1000
+  },
+  "persistence": {
+    "enabled": false,
+    "database_url_env": "MM_DATABASE_URL",
+    "parquet_root_env": "MM_PARQUET_ROOT",
+    "batch_size": 100,
+    "flush_interval_ms": 1000
+  },
+  "observability": {
+    "service_name": "market-maker",
+    "run_id": "",
+    "metrics_enabled": true,
+    "json_logs": true,
+    "otel_enabled": false,
+    "otlp_endpoint": "http://localhost:4318"
+  },
   "primary_private": {
     "mode": "rest",
     "api_token_env": "NOBITEX_API_TOKEN",

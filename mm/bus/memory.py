@@ -14,8 +14,11 @@ class InMemoryBus(AbstractEventBus):
     def __init__(self, max_queue_size: int = 0):
         self._max_queue_size = max_queue_size
         self._subscribers: dict[str, list[asyncio.Queue[Any]]] = defaultdict(list)
+        self._closed = False
 
     async def publish(self, topic: str, event: Any) -> None:
+        if self._closed:
+            return
         subscribers = list(self._subscribers.get(topic, ()))
         for queue in subscribers:
             await queue.put(event)
@@ -43,7 +46,11 @@ class InMemoryBus(AbstractEventBus):
         queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=self._max_queue_size)
         self._subscribers[topic].append(queue)
         try:
-            while True:
+            while not self._closed:
                 yield await queue.get()
         finally:
             await self._unsubscribe(topic, queue)
+
+    async def close(self) -> None:
+        self._closed = True
+        self._subscribers.clear()

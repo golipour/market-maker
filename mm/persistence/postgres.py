@@ -1,0 +1,215 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+from datetime import datetime, timezone
+from typing import Any
+
+from mm.bus.base import AbstractEventBus
+from mm.core.events import EventEnvelope, envelope_event, to_jsonable
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS mm_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_id TEXT NOT NULL UNIQUE,
+    schema TEXT NOT NULL,
+    version INT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    exchange TEXT,
+    symbol TEXT,
+    actor_id TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    payload JSONB NOT NULL,
+    envelope JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mm_events_run_topic_ts_idx ON mm_events (run_id, topic, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_events_exchange_symbol_ts_idx ON mm_events (exchange, symbol, ts DESC);
+
+CREATE TABLE IF NOT EXISTS mm_latest_state (
+    state_key TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL,
+    payload JSONB NOT NULL,
+    envelope JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    ts TIMESTAMPTZ NOT NULL,
+    command_id TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload JSONB NOT NULL
+);
+"""
+
+
+class PostgresEventWriter:
+    """Best-effort async writer for durable runtime event envelopes."""
+
+    def __init__(
+        self,
+        *,
+        bus: AbstractEventBus,
+        topics: tuple[str, ...],
+        database_url: str,
+        batch_size: int = 100,
+        flush_interval_ms: int = 1000,
+        run_id: str = "",
+    ):
+        self.bus = bus
+        self.topics = topics
+        self.database_url = database_url
+        self.batch_size = max(1, int(batch_size))
+        self.flush_interval_ms = max(50, int(flush_interval_ms))
+        self.run_id = run_id
+        self._queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=self.batch_size * 10)
+        self._tasks: list[asyncio.Task] = []
+        self._stopped = asyncio.Event()
+        self._lock = threading.Lock()
+        self._ready = False
+
+    async def start(self) -> None:
+        self._stopped.clear()
+        self._tasks = [asyncio.create_task(self._consume(topic)) for topic in self.topics]
+        self._tasks.append(asyncio.create_task(self._write_loop()))
+
+    async def stop(self) -> None:
+        self._stopped.set()
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+    async def _consume(self, topic: str) -> None:
+        try:
+            async for event in self.bus.subscribe(topic):
+                envelope = envelope_event(topic, event, run_id=self.run_id, source="postgres-writer")
+                await self._queue.put(envelope)
+        except asyncio.CancelledError:
+            raise
+
+    async def _write_loop(self) -> None:
+        batch: list[EventEnvelope] = []
+        deadline = self.flush_interval_ms / 1000.0
+        try:
+            while not self._stopped.is_set():
+                try:
+                    item = await asyncio.wait_for(self._queue.get(), timeout=deadline)
+                    batch.append(item)
+                except asyncio.TimeoutError:
+                    pass
+                if batch and (len(batch) >= self.batch_size or self._queue.empty()):
+                    to_write = batch
+                    batch = []
+                    await asyncio.to_thread(self._write_batch, to_write)
+        except asyncio.CancelledError:
+            if batch:
+                await asyncio.to_thread(self._write_batch, batch)
+            raise
+
+    def _write_batch(self, batch: list[EventEnvelope]) -> None:
+        try:
+            import psycopg2
+            import psycopg2.extras
+        except ImportError:
+            return
+        with self._lock:
+            try:
+                conn = psycopg2.connect(self.database_url)
+                try:
+                    with conn.cursor() as cur:
+                        if not self._ready:
+                            cur.execute(_DDL)
+                            self._ready = True
+                        rows = [_event_row(envelope) for envelope in batch]
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_events (
+                                event_id, schema, version, run_id, source, topic, event_type,
+                                exchange, symbol, actor_id, timestamp_ms, ts, payload, envelope
+                            ) VALUES %s
+                            ON CONFLICT (event_id) DO NOTHING
+                            """,
+                            rows,
+                        )
+                        latest_rows = [
+                            (
+                                _latest_key(envelope),
+                                envelope.topic,
+                                envelope.event_id,
+                                envelope.run_id,
+                                _ts(envelope.timestamp_ms),
+                                psycopg2.extras.Json(to_jsonable(envelope.payload)),
+                                psycopg2.extras.Json(envelope.as_dict()),
+                            )
+                            for envelope in batch
+                            if _is_latest_state(envelope)
+                        ]
+                        if latest_rows:
+                            psycopg2.extras.execute_values(
+                                cur,
+                                """
+                                INSERT INTO mm_latest_state (
+                                    state_key, topic, event_id, run_id, updated_at, payload, envelope
+                                ) VALUES %s
+                                ON CONFLICT (state_key) DO UPDATE SET
+                                    topic = EXCLUDED.topic,
+                                    event_id = EXCLUDED.event_id,
+                                    run_id = EXCLUDED.run_id,
+                                    updated_at = EXCLUDED.updated_at,
+                                    payload = EXCLUDED.payload,
+                                    envelope = EXCLUDED.envelope
+                                """,
+                                latest_rows,
+                            )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception:
+                return
+
+
+def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
+    import psycopg2.extras
+
+    return (
+        envelope.event_id,
+        envelope.schema,
+        envelope.version,
+        envelope.run_id,
+        envelope.source,
+        envelope.topic,
+        envelope.event_type,
+        envelope.exchange,
+        envelope.symbol,
+        envelope.actor_id,
+        envelope.timestamp_ms,
+        _ts(envelope.timestamp_ms),
+        psycopg2.extras.Json(to_jsonable(envelope.payload)),
+        psycopg2.extras.Json(envelope.as_dict()),
+    )
+
+
+def _ts(timestamp_ms: int) -> datetime:
+    return datetime.fromtimestamp(int(timestamp_ms) / 1000.0, tz=timezone.utc)
+
+
+def _is_latest_state(envelope: EventEnvelope) -> bool:
+    return envelope.topic.startswith(("execution:state:", "private:state:")) or envelope.event_type.endswith("Snapshot")
+
+
+def _latest_key(envelope: EventEnvelope) -> str:
+    if envelope.exchange:
+        return f"{envelope.topic}:{envelope.exchange}"
+    if envelope.actor_id:
+        return f"{envelope.topic}:{envelope.actor_id}"
+    return envelope.topic

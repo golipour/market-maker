@@ -54,6 +54,44 @@ services:
       - ./docker/mimir.yaml:/etc/mimir/mimir.yaml
       - mimir_data:/data
 
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: "no"
+    command: -config.file=/etc/loki/loki.yaml
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./docker/loki.yaml:/etc/loki/loki.yaml
+      - loki_data:/loki
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    restart: "no"
+    command: -config.file=/etc/tempo/tempo.yaml
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./docker/tempo.yaml:/etc/tempo/tempo.yaml
+      - tempo_data:/tmp/tempo
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    restart: "no"
+    command: run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./docker/alloy.alloy:/etc/alloy/config.alloy
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+      - tempo
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -74,6 +112,8 @@ services:
       - db
       - prometheus
       - mimir
+      - loki
+      - tempo
       - redis
 
   # After changing mm_viz, rebuild: `docker compose build mm_viz --no-cache` then `docker compose up -d mm_viz`
@@ -113,3 +153,5 @@ volumes:
   prometheus_data:
   mimir_data:
   grafana_data:
+  loki_data:
+  tempo_data:

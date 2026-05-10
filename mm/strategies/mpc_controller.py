@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import io
+import json
 import math
 import time
 from dataclasses import dataclass, field
@@ -15,6 +17,8 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
+from mm.diagnostics_bridge import emit_controller_diagnostics
+from mm.observability import counter_inc, gauge, log_event, span
 from mm.runtime.config import ControllerRuntimeConfig
 
 
@@ -84,26 +88,32 @@ class MpcControllerRunner:
     async def on_frame(self, frame: StrategyInputFrame) -> Action:
         t0 = time.monotonic_ns()
         try:
-            self._frame_step += 1
-            # Match mm_core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
-            _update_hedge_rep_price_model(self._hedge_price_model, frame)
-            state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
-            _update_market_flow_model(self._market_flow_model, frame)
-            _update_float_price_model(self._price_model, self._previous_frame, frame)
-            optimizer_stdout = io.StringIO()
-            with contextlib.redirect_stdout(optimizer_stdout):
-                sigmoid_action = self._controller.optimize(state)
-            orders = _orders_from_sigmoid_action(
+            with span(
+                "mm.controller.on_frame",
                 actor_id=self.config.actor_id,
-                event=frame.primary,
-                sigmoid_action=sigmoid_action,
-                min_spread=self.config.min_spread,
-                max_spread=self.config.orderbook_grid.max_spread,
-                price_step=self.config.orderbook_grid.price_step,
-                qty_step=self.config.qty_step,
-                min_order_qty=self.config.min_order_qty,
-                max_orders_per_side=self.config.max_orders_per_side,
-            )
+                exchange=frame.primary.exchange,
+                symbol=frame.primary.symbol,
+            ):
+                self._frame_step += 1
+                # Match mm_core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
+                _update_hedge_rep_price_model(self._hedge_price_model, frame)
+                state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
+                _update_market_flow_model(self._market_flow_model, frame)
+                _update_float_price_model(self._price_model, self._previous_frame, frame)
+                optimizer_stdout = io.StringIO()
+                with contextlib.redirect_stdout(optimizer_stdout):
+                    sigmoid_action = self._controller.optimize(state)
+                orders = _orders_from_sigmoid_action(
+                    actor_id=self.config.actor_id,
+                    event=frame.primary,
+                    sigmoid_action=sigmoid_action,
+                    min_spread=self.config.min_spread,
+                    max_spread=self.config.orderbook_grid.max_spread,
+                    price_step=self.config.orderbook_grid.price_step,
+                    qty_step=self.config.qty_step,
+                    min_order_qty=self.config.min_order_qty,
+                    max_orders_per_side=self.config.max_orders_per_side,
+                )
             action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
             await self._publish_decision(
                 frame,
@@ -119,6 +129,11 @@ class MpcControllerRunner:
             self._previous_frame = frame
             return action
         except Exception as exc:
+            counter_inc(
+                "mm_controller_errors_total",
+                labels={"actor_id": self.config.actor_id, "error": type(exc).__name__},
+                help="Controller errors",
+            )
             await self._publish(
                 self.config.normalized_diagnostics_topic,
                 {
@@ -196,6 +211,28 @@ class MpcControllerRunner:
             "latency_ms": latency_ms,
             "unit_policy": "prices=quote_per_base, quantities=base, cash/notional=quote",
         }
+        payload["decision_hash"] = hashlib.sha256(
+            json.dumps(payload["orders"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        labels = {"actor_id": self.config.actor_id, "exchange": frame.primary.exchange, "symbol": frame.primary.symbol}
+        gauge("mm_controller_latency_ms", latency_ms, labels=labels, help="Controller decision latency")
+        gauge("mm_controller_order_count", len(action.orders_to_create), labels=labels, help="Controller order count")
+        gauge("mm_inventory", state.inventory, labels=labels, help="Actor inventory")
+        gauge("mm_cash", state.cash, labels=labels, help="Actor cash")
+        counter_inc("mm_controller_decisions_total", labels=labels, help="Controller decisions")
+        log_event(
+            "controller_decision",
+            {
+                "actor_id": self.config.actor_id,
+                "exchange": frame.primary.exchange,
+                "symbol": frame.primary.symbol,
+                "t_end_ms": frame.primary.t_end_ms,
+                "order_count": len(action.orders_to_create),
+                "latency_ms": latency_ms,
+                "observe_only": self.config.observe_only,
+            },
+        )
+        emit_controller_diagnostics(payload)
         await self._publish(self.config.normalized_diagnostics_topic, payload)
         await self._publish(self.config.normalized_action_topic, action)
 

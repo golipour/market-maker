@@ -23,6 +23,7 @@ class ExecutionStateReconciler:
             asyncio.create_task(self._listen_open_orders()),
             asyncio.create_task(self._listen_order_updates()),
             asyncio.create_task(self._listen_fills()),
+            asyncio.create_task(self._listen_cancel_all()),
         ]
         await asyncio.sleep(0)
         await self.manager.publish_snapshot()
@@ -56,3 +57,16 @@ class ExecutionStateReconciler:
             if isinstance(event, Fill):
                 snapshot = self.manager.apply_fill(event)
                 await self.bus.publish(f"execution:state:{self.exchange}", snapshot)
+
+    async def _listen_cancel_all(self) -> None:
+        topics = (f"execution:cancel_all:{self.exchange}", "execution:cancel_all:all")
+        queues = [self.bus.subscribe_queue(topic) for topic in topics]
+        while True:
+            tasks = [asyncio.create_task(queue.get()) for queue in queues]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                event = task.result()
+                if isinstance(event, dict):
+                    await self.manager.cancel_all(reason=str(event.get("reason", "")))

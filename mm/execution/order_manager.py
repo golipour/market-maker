@@ -10,6 +10,7 @@ from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Action, Fill, Order
 from mm.core.models.private import OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import now_ms
+from mm.observability import counter_inc, gauge, latency_metric, log_event, span
 
 
 TERMINAL_ORDER_STATUSES = {"done", "filled", "closed", "canceled", "cancelled", "rejected"}
@@ -54,24 +55,47 @@ class OrderManager(AbstractOrderManager):
         return dict(self._live_orders)
 
     async def sync(self, actions: list[Action]) -> None:
-        async with self._lock:
-            await self._publish(
-                "execution:orders",
-                {
-                    "type": "ExecutionSyncRequested",
-                    "exchange": self.exchange,
-                    "action_count": len(actions),
-                    "create_count": sum(len(action.orders_to_create) for action in actions),
-                    "cancel_count": sum(len(action.orders_to_cancel) for action in actions),
-                    "cancel_missing": self.cancel_missing,
-                    "timestamp_ms": self.clock_ms(),
-                },
-            )
-            await self._cancel_explicit(actions)
-            if self.cancel_missing:
-                await self._cancel_missing(actions)
-            await self._place_new(actions)
-            await self._publish_snapshot()
+        labels = {"exchange": self.exchange}
+        with span("mm.execution.sync", exchange=self.exchange), latency_metric(
+            "mm_order_sync_latency_ms",
+            labels=labels,
+            help="Order manager sync latency",
+        ):
+            async with self._lock:
+                create_count = sum(len(action.orders_to_create) for action in actions)
+                cancel_count = sum(len(action.orders_to_cancel) for action in actions)
+                counter_inc("mm_order_sync_total", labels=labels, help="Order manager sync calls")
+                gauge("mm_order_sync_create_count", create_count, labels=labels, help="Orders requested for create")
+                gauge("mm_order_sync_cancel_count", cancel_count, labels=labels, help="Orders requested for cancel")
+                log_event(
+                    "execution_sync_requested",
+                    {
+                        "exchange": self.exchange,
+                        "action_count": len(actions),
+                        "create_count": create_count,
+                        "cancel_count": cancel_count,
+                    },
+                )
+                await self._sync_locked(actions)
+
+    async def _sync_locked(self, actions: list[Action]) -> None:
+        await self._publish(
+            "execution:orders",
+            {
+                "type": "ExecutionSyncRequested",
+                "exchange": self.exchange,
+                "action_count": len(actions),
+                "create_count": sum(len(action.orders_to_create) for action in actions),
+                "cancel_count": sum(len(action.orders_to_cancel) for action in actions),
+                "cancel_missing": self.cancel_missing,
+                "timestamp_ms": self.clock_ms(),
+            },
+        )
+        await self._cancel_explicit(actions)
+        if self.cancel_missing:
+            await self._cancel_missing(actions)
+        await self._place_new(actions)
+        await self._publish_snapshot()
 
     def apply_private_snapshot(self, snapshot: PrivateStateSnapshot) -> ExecutionSnapshot:
         self._live_orders = {
@@ -134,6 +158,14 @@ class OrderManager(AbstractOrderManager):
         )
 
     async def publish_snapshot(self) -> None:
+        await self._publish_snapshot()
+
+    async def cancel_all(self, *, reason: str = "") -> None:
+        order_ids = list(self._live_orders)
+        if not order_ids:
+            return
+        log_event("execution_cancel_all_requested", {"exchange": self.exchange, "reason": reason, "count": len(order_ids)})
+        await self._cancel_explicit([Action(actor_id="admin", orders_to_cancel=tuple(order_ids))])
         await self._publish_snapshot()
 
     async def _cancel_explicit(self, actions: list[Action]) -> None:
@@ -231,6 +263,12 @@ class OrderManager(AbstractOrderManager):
         )
 
     async def _publish_snapshot(self) -> None:
+        gauge(
+            "mm_live_order_count",
+            len(self._live_orders),
+            labels={"exchange": self.exchange},
+            help="Live order count known to the order manager",
+        )
         await self._publish("execution:state", self.snapshot())
 
     async def _publish(self, topic_prefix: str, event) -> None:

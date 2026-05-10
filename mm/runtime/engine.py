@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from mm.aggregation.scheduler import IntervalScheduler
 from mm.actors.frame_assembler import StrategyInputFrameAssembler
 from mm.bus.base import AbstractEventBus
-from mm.bus.memory import InMemoryBus
+from mm.bus.factory import build_event_bus
 from mm.core.clock import WallClock
 from mm.exchanges.factory import (
     OrderCommandAdapterSelection,
@@ -19,9 +19,11 @@ from mm.exchanges.factory import (
 from mm.execution.order_manager import OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
+from mm.observability_setup import configure_observability
 from mm.env_loader import load_mm_env
 from mm.private_state.reconciler import PrivateStateReconciler
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
+from mm.runtime.control import RuntimeControlPlane
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -40,6 +42,8 @@ class RuntimeComponents:
     order_managers: dict[str, OrderManager] = field(default_factory=dict)
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = field(default_factory=dict)
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = field(default_factory=dict)
+    persistence_daemons: tuple[object, ...] = ()
+    control_plane: RuntimeControlPlane | None = None
     controller_runner: object | None = None
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
@@ -50,12 +54,18 @@ class RuntimeComponents:
         await self.frame_assembler.start()
         if self.controller_runner is not None:
             await self.controller_runner.start()
+        if self.control_plane is not None:
+            await self.control_plane.start()
         for engine in self.engines.values():
             await engine.start()
         for reconciler in self.execution_reconcilers.values():
             await reconciler.start()
         for reconciler in self.private_reconcilers.values():
             await reconciler.start()
+        for daemon in self.persistence_daemons:
+            start = getattr(daemon, "start", None)
+            if start is not None:
+                await start()
         self._scheduler_task = asyncio.create_task(self.scheduler.run())
         self._started = True
 
@@ -67,13 +77,20 @@ class RuntimeComponents:
             self._scheduler_task = None
         if self.controller_runner is not None:
             await self.controller_runner.stop()
+        if self.control_plane is not None:
+            await self.control_plane.stop()
         for reconciler in reversed(tuple(self.private_reconcilers.values())):
             await reconciler.stop()
         for reconciler in reversed(tuple(self.execution_reconcilers.values())):
             await reconciler.stop()
+        for daemon in reversed(self.persistence_daemons):
+            stop = getattr(daemon, "stop", None)
+            if stop is not None:
+                await stop()
         await self.frame_assembler.stop()
         for engine in reversed(tuple(self.engines.values())):
             await engine.stop()
+        await self.bus.close()
         self._started = False
 
     def market_event_topic(self, role: SourceRole) -> str:
@@ -107,7 +124,8 @@ async def build_runtime_components(
     bus: AbstractEventBus | None = None,
 ) -> RuntimeComponents:
     load_mm_env()
-    runtime_bus = bus or InMemoryBus()
+    configure_observability(config.observability)
+    runtime_bus = bus or build_event_bus(config.bus, run_id=config.observability.run_id)
     scheduler = IntervalScheduler(WallClock())
     public_selections: dict[SourceRole, PublicMarketDataAdapterSelection] = {}
     engines: dict[SourceRole, SymbolEngine] = {}
@@ -205,6 +223,9 @@ async def build_runtime_components(
             bus=runtime_bus,
         )
 
+    persistence_daemons = _build_persistence_daemons(config, runtime_bus)
+    control_plane = RuntimeControlPlane(bus=runtime_bus)
+
     return RuntimeComponents(
         config=config,
         bus=runtime_bus,
@@ -217,6 +238,8 @@ async def build_runtime_components(
         order_managers=order_managers,
         private_reconcilers=private_reconcilers,
         execution_reconcilers=execution_reconcilers,
+        persistence_daemons=persistence_daemons,
+        control_plane=control_plane,
         controller_runner=controller_runner,
     )
 
@@ -230,3 +253,63 @@ def _select_public_source(source: MarketDataSourceConfig) -> PublicMarketDataAda
         trades_limit=source.trades_limit,
         poll_interval_ms=source.poll_interval_ms,
     )
+
+
+def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
+    if not config.persistence.enabled:
+        return ()
+    topics = config.persistence.topics or _default_persistence_topics(config)
+    daemons: list[object] = []
+    database_url = config.persistence.resolved_database_url()
+    if database_url:
+        from mm.persistence.postgres import PostgresEventWriter
+
+        daemons.append(
+            PostgresEventWriter(
+                bus=bus,
+                topics=topics,
+                database_url=database_url,
+                batch_size=config.persistence.batch_size,
+                flush_interval_ms=config.persistence.flush_interval_ms,
+                run_id=config.observability.run_id,
+            )
+        )
+    parquet_root = config.persistence.resolved_parquet_root()
+    if parquet_root:
+        from mm.persistence.parquet_writer import ParquetEventWriter
+
+        daemons.append(
+            ParquetEventWriter(
+                bus=bus,
+                topics=topics,
+                root_path=parquet_root,
+                batch_size=config.persistence.batch_size,
+                flush_interval_ms=config.persistence.flush_interval_ms,
+                run_id=config.observability.run_id,
+            )
+        )
+    return tuple(daemons)
+
+
+def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, ...]:
+    topics = [
+        config.primary.market_event_topic(config.interval_ms),
+        config.frame_topic,
+        "strategy:actions",
+        "execution:orders:" + config.primary.normalized_exchange(),
+        "execution:state:" + config.primary.normalized_exchange(),
+        "private:state:" + config.primary.normalized_exchange() + ":snapshot",
+    ]
+    if config.controller is not None:
+        topics.append(config.controller.normalized_diagnostics_topic)
+    if config.hedge is not None:
+        hedge_exchange = config.hedge.normalized_exchange()
+        topics.extend(
+            [
+                config.hedge.market_event_topic(config.interval_ms),
+                "execution:orders:" + hedge_exchange,
+                "execution:state:" + hedge_exchange,
+                "private:state:" + hedge_exchange + ":snapshot",
+            ]
+        )
+    return tuple(dict.fromkeys(topics))

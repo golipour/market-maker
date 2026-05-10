@@ -10,6 +10,7 @@ from mm.core.interfaces.actor import AbstractOrderManager, AbstractRiskEngine, A
 from mm.core.models.execution import Action, ActorState, Fill
 from mm.core.models.market import MarketEvent
 from mm.core.models.strategy import StrategyInputFrame
+from mm.observability import counter_inc, gauge
 
 
 class Actor:
@@ -77,6 +78,21 @@ class Actor:
         )
         proposed = await self.strategy.on_strategy_frame(clean_frame, self.state)
         approved = self.risk_engine.validate_frame(proposed, self.state, clean_frame)
+        if len(approved) < len(proposed) and self.bus is not None:
+            await self.bus.publish(
+                "risk:events",
+                {
+                    "type": "RiskActionsFiltered",
+                    "actor_id": self.actor_id,
+                    "exchange": frame.primary.exchange,
+                    "symbol": frame.primary.symbol,
+                    "t_end_ms": frame.primary.t_end_ms,
+                    "proposed_actions": len(proposed),
+                    "approved_actions": len(approved),
+                },
+            )
+        counter_inc("mm_actor_frames_total", labels={"actor_id": self.actor_id})
+        gauge("mm_actor_latency_ms", (time.monotonic_ns() - t0) / 1_000_000, labels={"actor_id": self.actor_id})
         await self._route_actions(approved)
         if self.bus is not None:
             await self.bus.publish(

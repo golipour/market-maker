@@ -9,6 +9,7 @@ from typing import Any, Literal
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec
 
 SourceRole = Literal["primary", "hedge"]
+BusKind = Literal["memory", "redis_streams"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,64 @@ class PrivateRuntimeConfig:
         if exchange:
             return os.environ.get(f"{exchange.upper()}_API_TOKEN")
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class BusRuntimeConfig:
+    """Runtime bus selection.
+
+    ``memory`` preserves the current single-process behavior. ``redis_streams``
+    adds durable fan-out for persistence, replay, admin, and UI daemons.
+    """
+
+    kind: BusKind = "memory"
+    redis_url: str = "redis://localhost:6379/0"
+    stream_prefix: str = "mm"
+    consumer_group: str = "mm-runtime"
+    consumer_name: str = "runtime"
+    max_stream_length: int | None = 100_000
+    read_block_ms: int = 1_000
+    max_queue_size: int = 0
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("memory", "redis_streams"):
+            raise ValueError("bus.kind must be 'memory' or 'redis_streams'")
+        if self.max_queue_size < 0:
+            raise ValueError("bus.max_queue_size must be non-negative")
+        if self.max_stream_length is not None and self.max_stream_length <= 0:
+            raise ValueError("bus.max_stream_length must be positive or null")
+
+
+@dataclass(frozen=True, slots=True)
+class PersistenceRuntimeConfig:
+    enabled: bool = False
+    database_url: str | None = None
+    database_url_env: str = "MM_DATABASE_URL"
+    parquet_root: str | None = None
+    parquet_root_env: str = "MM_PARQUET_ROOT"
+    topics: tuple[str, ...] = ()
+    batch_size: int = 100
+    flush_interval_ms: int = 1000
+
+    def resolved_database_url(self) -> str | None:
+        if self.database_url:
+            return self.database_url
+        return os.environ.get(self.database_url_env, "").strip() or None
+
+    def resolved_parquet_root(self) -> str | None:
+        if self.parquet_root:
+            return self.parquet_root
+        return os.environ.get(self.parquet_root_env, "").strip() or None
+
+
+@dataclass(frozen=True, slots=True)
+class ObservabilityRuntimeConfig:
+    service_name: str = "market-maker"
+    run_id: str = ""
+    metrics_enabled: bool = True
+    json_logs: bool = True
+    otel_enabled: bool = False
+    otlp_endpoint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +215,9 @@ class MarketMakerRuntimeConfig:
     primary_private: PrivateRuntimeConfig | None = None
     hedge_private: PrivateRuntimeConfig | None = None
     controller: ControllerRuntimeConfig | None = None
+    bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
+    persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
+    observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
 
     def __post_init__(self) -> None:
         if self.primary.role != "primary":
@@ -209,6 +271,27 @@ class MarketMakerRuntimeConfig:
                 if self.controller is not None
                 else {"enabled": False}
             ),
+            "bus": {
+                "kind": self.bus.kind,
+                "stream_prefix": self.bus.stream_prefix,
+                "consumer_group": self.bus.consumer_group,
+                "consumer_name": self.bus.consumer_name,
+                "max_stream_length": self.bus.max_stream_length,
+            },
+            "persistence": {
+                "enabled": self.persistence.enabled,
+                "database_url_configured": bool(self.persistence.resolved_database_url()),
+                "parquet_root_configured": bool(self.persistence.resolved_parquet_root()),
+                "topics": self.persistence.topics,
+                "batch_size": self.persistence.batch_size,
+            },
+            "observability": {
+                "service_name": self.observability.service_name,
+                "run_id": self.observability.run_id,
+                "metrics_enabled": self.observability.metrics_enabled,
+                "json_logs": self.observability.json_logs,
+                "otel_enabled": self.observability.otel_enabled,
+            },
         }
 
 
@@ -254,6 +337,9 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         primary_private=_private_from_mapping(payload.get("primary_private")),
         hedge_private=_private_from_mapping(payload.get("hedge_private")),
         controller=_controller_from_mapping(payload.get("controller")),
+        bus=_bus_from_mapping(payload.get("bus")),
+        persistence=_persistence_from_mapping(payload.get("persistence")),
+        observability=_observability_from_mapping(payload.get("observability")),
     )
 
 
@@ -278,6 +364,57 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         api_token_env=payload.get("api_token_env"),
         poll_interval_ms=int(payload.get("poll_interval_ms", 5000)),
         enable_execution=bool(payload.get("enable_execution", True)),
+    )
+
+
+def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
+    if not isinstance(payload, dict):
+        return BusRuntimeConfig()
+    max_stream_length = payload.get("max_stream_length", 100_000)
+    return BusRuntimeConfig(
+        kind=str(payload.get("kind", "memory")),  # type: ignore[arg-type]
+        redis_url=str(payload.get("redis_url", "redis://localhost:6379/0")),
+        stream_prefix=str(payload.get("stream_prefix", "mm")),
+        consumer_group=str(payload.get("consumer_group", "mm-runtime")),
+        consumer_name=str(payload.get("consumer_name", "runtime")),
+        max_stream_length=int(max_stream_length) if max_stream_length is not None else None,
+        read_block_ms=int(payload.get("read_block_ms", 1000)),
+        max_queue_size=int(payload.get("max_queue_size", 0)),
+    )
+
+
+def _persistence_from_mapping(payload: Any) -> PersistenceRuntimeConfig:
+    if not isinstance(payload, dict):
+        return PersistenceRuntimeConfig()
+    topics = payload.get("topics", ())
+    if isinstance(topics, str):
+        topics_tuple = (topics,)
+    elif isinstance(topics, (list, tuple)):
+        topics_tuple = tuple(str(topic) for topic in topics)
+    else:
+        topics_tuple = ()
+    return PersistenceRuntimeConfig(
+        enabled=bool(payload.get("enabled", False)),
+        database_url=payload.get("database_url"),
+        database_url_env=str(payload.get("database_url_env", "MM_DATABASE_URL")),
+        parquet_root=payload.get("parquet_root"),
+        parquet_root_env=str(payload.get("parquet_root_env", "MM_PARQUET_ROOT")),
+        topics=topics_tuple,
+        batch_size=max(1, int(payload.get("batch_size", 100))),
+        flush_interval_ms=max(50, int(payload.get("flush_interval_ms", 1000))),
+    )
+
+
+def _observability_from_mapping(payload: Any) -> ObservabilityRuntimeConfig:
+    if not isinstance(payload, dict):
+        return ObservabilityRuntimeConfig()
+    return ObservabilityRuntimeConfig(
+        service_name=str(payload.get("service_name", "market-maker")),
+        run_id=str(payload.get("run_id", "")),
+        metrics_enabled=bool(payload.get("metrics_enabled", True)),
+        json_logs=bool(payload.get("json_logs", True)),
+        otel_enabled=bool(payload.get("otel_enabled", False)),
+        otlp_endpoint=payload.get("otlp_endpoint"),
     )
 
 
