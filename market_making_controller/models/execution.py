@@ -178,11 +178,18 @@ class ObservedStepExecutionModel:
     """
     Live / replay: inventory, cash, and refs come from the ``Step`` (exchange path).
     PnL decomposition is chosen so components sum to ``wealth_pnl``.
+
+    ``maker_fee`` and ``hedge_fee`` are not applied inside ``state_after_step`` (observed
+    fees come from the step). They are read by MPC rollouts (e.g.
+    ``MonteCarloMPCTensorBatched``) like ``maker_fee`` for main-venue simulation and
+    ``hedge_fee`` for proportional fee on simulated hedge-venue trades.
     """
 
-    def __init__(self, maker_fee: float = 0.0):
-        # Kept for compatibility: MPC reads execution_model.maker_fee.
+    def __init__(self, maker_fee: float = 0.0, hedge_fee: float | None = None):
+        # Kept for compatibility: MPC reads execution_model.maker_fee / hedge_fee.
         self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
+        if hedge_fee is not None:
+            self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
 
     def state_after_step(
         self,

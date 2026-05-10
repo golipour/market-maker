@@ -55,7 +55,8 @@
     },
     "execution_model": {
       "kind": "real",
-      "maker_fee": 0.00015
+      "maker_fee": 0.00015,
+      "hedge_fee": 0.0000025
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",

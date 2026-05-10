@@ -87,8 +87,18 @@ def build_pipeline(
 
     exec_kw = config["execution_model_kwargs"]
     # Simplified: keep only observed execution model (live/replay balances from stepper).
-    # maker_fee is retained for MPC compatibility (it reads execution_model.maker_fee).
-    execution_model = ObservedStepExecutionModel(maker_fee=float(exec_kw.get("maker_fee", 0.0)))
+    # maker_fee / hedge_fee are read by MPC from the execution model when present;
+    # hedge_fee also remains on MonteCarloMPCTensorBatched ctor for backward compatibility.
+    if "hedge_fee" in exec_kw:
+        em_hedge_fee = float(exec_kw["hedge_fee"])
+    elif "hedge_fee" in mpc_kw:
+        em_hedge_fee = float(mpc_kw["hedge_fee"])
+    else:
+        em_hedge_fee = None
+    execution_model = ObservedStepExecutionModel(
+        maker_fee=float(exec_kw.get("maker_fee", 0.0)),
+        hedge_fee=em_hedge_fee,
+    )
     runner_execution_model = execution_model
     hedge_price_model = HedgeGaussianRepPriceModel(
         decay=float(config.get("hedge_price_model_decay", 0.97) or 0.97),

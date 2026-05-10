@@ -672,6 +672,8 @@ class MonteCarloMPCTensorBatched:
         self.spread_target_lots = max(0.0, float(spread_target_lots))
         # Legacy ``hedge_coef != 0`` enables hedge dynamics in rollouts (inventory coupling).
         self.hedge_enabled = bool(float(hedge_coef) != 0.0)
+        # Rollout hedge fee: prefer ``execution_model.hedge_fee`` inside ``optimize()`` when set;
+        # otherwise this constructor value is used (backward compatible).
         self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
         self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
         self.total_q_target = float(total_q_target) if total_q_target is not None else None
@@ -775,6 +777,8 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
+        hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.hedge_fee)
+        hedge_fee_rollout = max(0.0, min(1.0 - 1e-9, float(hedge_fee_rollout)))
         spread_grid_rep = torch_mod.arange(1.0, float(self.ob_levels) + 1.0, dtype=dtype, device=_device)
         target_depth = target_depth_lots_from_price_model(self.price_model)
 
@@ -1011,7 +1015,7 @@ class MonteCarloMPCTensorBatched:
                             d_inv * hedge_sell_ref_next,
                             d_inv * hedge_buy_ref_next,
                         )
-                        one_minus_hedge_fee = float(1.0 - self.hedge_fee)
+                        one_minus_hedge_fee = float(1.0 - hedge_fee_rollout)
                         hedge_cash_next = hedge_cash_t + trade_cash_hedge * one_minus_hedge_fee
                         hedge_inv_next = hedge_inv_t - d_inv
                     else:
