@@ -1,7 +1,7 @@
 """
 Pricing: observed refs (ticks), simulated reps (torch), depth policy, valuation.
 
-Observed reference math is implemented in ``market_making_controller.ob_reference_prices``;
+Observed reference math is implemented in ``mm.pricing``;
 **import through this package** (e.g. ``reference_prices_from_orderbook_ticks``) so call sites
 do not depend on the controller module path. Valuation and depth live under ``policies`` /
 ``valuation`` / ``depth``.

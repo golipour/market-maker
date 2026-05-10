@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from market_making_controller.models.execution import ObservedStepExecutionModel
+from mm.core.orderflow_execution import ObservedStepExecutionModel
 
 
 def test_maker_fee_always_set():

@@ -2,7 +2,7 @@
 Order-flow stepper with pluggable market-data providers.
 advance(t_end_ms) can be called on an exact schedule independent from animation timing.
 
-Canonical implementation (root ``order_flow_stepper.py`` re-exports via PEP 562 ``__getattr__``).
+Canonical implementation for the legacy order-flow loop (import ``OrderFlowStepper`` from this module).
 WS/REST/polling selection for market data is composed via ``mm_runtime.market_data_mux``; venue glue remains in ``trade_stats`` / ``trade_stats_market_ws`` for now.
 """
 
@@ -31,7 +31,7 @@ from trade_stats import (
 from trade_stats_market_ws import create_market_ws_session, kucoin_ping_pong_json
 from mm_core.pricing import reference_prices_from_orderbook_ticks as reference_prices_ticks_from_orderbook
 
-from market_making_controller.models.flow_implied import Step
+from mm.mpc.step import Step
 
 # Step fields — see flow_implied.Step:
 # - buy_lots/sell_lots/inventory/private_* fill quantities are in integer lots.

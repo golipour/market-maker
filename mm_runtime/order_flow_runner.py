@@ -2,7 +2,7 @@
 Order-flow iteration: one place for the main simulation loop.
 Advances stepper, applies fills via ExecutionModel (or ExecutionRule), updates estimators/testers, computes actions.
 
-Canonical location for ``OrderFlowRunner`` (root ``order_flow_runner.py`` re-exports for compatibility).
+Canonical location for ``OrderFlowRunner`` in this repo.
 """
 
 from __future__ import annotations
@@ -13,16 +13,17 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from mm_runtime.order_flow_stepper import OrderFlowStepper, Step
+from mm.mpc.step import Step
+from mm_runtime.order_flow_stepper import OrderFlowStepper
 from trade_stats import cancel_all_orders
 from order_flow_testers import MarketOrderFlowTester
 
 if TYPE_CHECKING:
-    from market_making_controller import Controller
-    from market_making_controller.models import ExecutionRule, ExecutionModel
+    from mm.core.orderflow_execution import ExecutionModel, ExecutionRule
+    from mm.strategies.sigmoid_controller import Controller
     from mm_core.domain.types import ValuationPolicy
 
-from market_making_controller.state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
+from mm.core.orderflow_state import DiscretizedOrderAction, State, ZERO_DISCRETIZED_ACTION, state_from_step
 from mm_core.pricing import (
     mid_after_market_order_flow_ticks as mid_ticks_after_market_order_flow,
     resolve_valuation_policy,
@@ -105,7 +106,7 @@ class OrderFlowRunner:
         self._live_exec_warned_no_token = False
         self._step_counter = 0
         if execution_model is None and controller is not None and execution_rule is None:
-            from market_making_controller.models import DefaultExecutionRule
+            from mm.core.orderflow_execution import DefaultExecutionRule
             execution_rule = DefaultExecutionRule()
         self.execution_rule = execution_rule
 

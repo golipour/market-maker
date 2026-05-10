@@ -10,12 +10,9 @@ import numpy as np
 
 from trade_stats import Orderbook
 
-from market_making_controller.models import (
-    Step,
+from mm.mpc.market_order_flow_torch import (
     TorchDiscreteGammaModel,
     TorchHurdleLogNormalModel,
-)
-from market_making_controller.models.market_order_flow_torch import (
     _discrete_gamma_pmf,
     _discrete_weibull_pmf,
     _hurdle_gamma_pmf,
@@ -24,6 +21,7 @@ from market_making_controller.models.market_order_flow_torch import (
     _hurdle_logt_pmf,
     _hurdle_generalized_pareto_pmf,
 )
+from mm.mpc.step import Step
 
 
 @runtime_checkable

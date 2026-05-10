@@ -16,7 +16,7 @@ from mm_core.domain.types import InstrumentId
 from mm_core.units.spec import InstrumentSpec
 
 if TYPE_CHECKING:
-    from market_making_controller.state import State
+    from mm.core.orderflow_state import State
 
 
 class StateAssembler:
@@ -33,6 +33,6 @@ class StateAssembler:
 
     @staticmethod
     def controller_state(step: tuple, *, spread_max: float | None = None) -> State:
-        from market_making_controller.state import state_from_step
+        from mm.core.orderflow_state import state_from_step
 
         return state_from_step(step, spread_max=spread_max)

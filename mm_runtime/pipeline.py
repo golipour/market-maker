@@ -1,8 +1,7 @@
 """
 Order-flow pipeline: build models, testers, MPC controller, and run headless.
 
-Uses models from market_making_controller.models: TorchHurdleWeibullModel, TorchResidualPriceModel (MOF + two-sided residual),
-MonteCarloMPCTensorBatched, SigmoidController.
+Torch MOF/residual models and MPC live under ``mm.*``; runner/stepper remain in ``mm_runtime``.
 """
 
 from __future__ import annotations
@@ -11,11 +10,11 @@ from typing import TYPE_CHECKING
 
 from mm_core.domain.types import InstrumentId, ValuationPolicy
 from mm_core.hedge.policy import HedgePolicy
+from mm.mpc.market_order_flow_torch import TorchHurdleWeibullModel
+from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
+from mm.mpc.price_torch import TorchResidualPriceModel
+from mm.strategies.sigmoid_controller import SigmoidController
 from mm_runtime.wiring import create_stepper
-from market_making_controller.models import (
-    TorchHurdleWeibullModel,
-    TorchResidualPriceModel,
-)
 from mm_runtime.order_flow_runner import OrderFlowRunner
 from order_flow_testers import (
     MarketOrderFlowTester,
@@ -24,8 +23,8 @@ from order_flow_testers import (
 )
 
 if TYPE_CHECKING:
-    from market_making_controller import Controller
-    from market_making_controller.models import ExecutionRule, ExecutionModel
+    from mm.core.orderflow_execution import ExecutionModel, ExecutionRule
+    from mm.strategies.sigmoid_controller import Controller
 
 PipelineConfig = dict
 
@@ -62,12 +61,7 @@ def build_pipeline(
     Build pipeline: TorchHurdleWeibullModel, TorchResidualPriceModel (flow-implied + residual),
     testers, MonteCarloMPCTensorBatched + SigmoidController.
     """
-    from market_making_controller import (
-        SigmoidController,
-        MonteCarloMPCTensorBatched,
-        DefaultExecutionRule,
-        ObservedStepExecutionModel,
-    )
+    from mm.core.orderflow_execution import DefaultExecutionRule, ObservedStepExecutionModel
     from mm_runtime.order_flow_stepper import HedgeGaussianPriceModel
 
     mpc_kw = config["mpc_kwargs"]
