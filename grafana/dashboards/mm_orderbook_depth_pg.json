@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Charts:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base). Levels outside the window are dropped; axis min/max use the same bounds.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
+        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Row 1 — order book:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base).\n\n**Row 2 — continuous action:** Latest `ControllerDecision` on **Controller topic** (default `strategy:controller`). **Cumulative** base depth from `continuous_action_depth` (optimizer output **before** ladder discretization).\n\n**Row 3 — executable orders:** Same `ControllerDecision` payload field **`orders`**: each bar is **marginal base `qty`** at that **limit price** (not cumulative). These are the orders after discretization plus runtime constraints (`qty_step`, `min_order_qty`, `max_orders_per_side`, spread grid, etc.). The same batch is published on the bus as **`Action`** on **`strategy:actions`** (see runtime `action_topic`); Postgres stores that on topic `strategy:actions` if persistence lists it—this dashboard reads `orders` from the controller row so it stays aligned with rows 2–3.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -226,6 +226,218 @@
       ],
       "title": "Ask depth (cumulative qty vs price)",
       "type": "barchart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 65,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_min}" },
+              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 22 },
+      "id": 12,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Bid — continuous depth (pre-discretization)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 65,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 22 },
+      "id": 13,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Ask — continuous depth (pre-discretization)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 80,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_min}" },
+              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 36 },
+      "id": 14,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Bid — executable orders (marginal qty)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 80,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 36 },
+      "id": 15,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Ask — executable orders (marginal qty)",
+      "type": "barchart"
     }
   ],
   "refresh": "5s",
@@ -262,6 +474,15 @@
         "label": "Interval ms",
         "name": "interval_ms",
         "query": "10000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": { "text": "strategy:controller", "value": "strategy:controller" },
+        "hide": 0,
+        "label": "Controller topic",
+        "name": "controller_topic",
+        "query": "strategy:controller",
         "skipUrlSync": false,
         "type": "textbox"
       },
@@ -332,6 +553,6 @@
   "timezone": "browser",
   "title": "MM order book depth (PostgreSQL)",
   "uid": "mm-orderbook-depth-pg",
-  "version": 5,
+  "version": 7,
   "weekStart": ""
 }

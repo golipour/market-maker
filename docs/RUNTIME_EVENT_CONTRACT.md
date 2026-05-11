@@ -68,7 +68,7 @@ Postgres stores envelopes in `mm_events` and snapshot-like events in `mm_latest_
 `strategy:controller`
 
 - Payload: dict with `type=ControllerDecision` or `type=ControllerError`
-- Decision fields: `actor_id`, `exchange`, `symbol`, `t_end_ms`, `observe_only`, `frame_step`, `action_start_after_steps`, `hedge_status`, `has_hedge`, `mid`, `inventory`, `cash`, volumes, `orders`, model summaries, `optimizer`, `orderbook_grid`, `latency_ms`, `unit_policy`, `decision_hash`
+- Decision fields: `actor_id`, `exchange`, `symbol`, `t_end_ms`, `observe_only`, `frame_step`, `action_start_after_steps`, `hedge_status`, `has_hedge`, `mid`, `inventory`, `cash`, volumes, `orders` (marginal executable limit orders after discretization and controller constraints—same batch as `Action.orders_to_create` on `strategy:actions`), `continuous_action_depth` (pre-discretization cumulative depth on the controller spread grid: `bid` / `ask` arrays of `{spread_quote, price, cumulative_qty}`), model summaries, `optimizer`, `orderbook_grid`, `latency_ms`, `unit_policy`, `decision_hash`
 - Error fields: `type`, `actor_id`, `exchange`, `symbol`, `t_end_ms`, `error`, `message`
 - Meaning: MPC decision diagnostics or controller failure.
 - Producer: `mm.strategies.mpc_controller.MpcControllerRunner`

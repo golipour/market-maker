@@ -120,6 +120,7 @@ class MpcControllerRunner:
                 frame,
                 state,
                 action,
+                sigmoid_action,
                 latency_ms=(time.monotonic_ns() - t0) / 1_000_000,
                 optimizer_log=optimizer_stdout.getvalue().strip(),
             )
@@ -154,6 +155,7 @@ class MpcControllerRunner:
         frame: StrategyInputFrame,
         state: Any,
         action: Action,
+        sigmoid_action: Any,
         *,
         latency_ms: float,
         optimizer_log: str,
@@ -188,6 +190,13 @@ class MpcControllerRunner:
             "sell_volume": state.sell_vol,
             "order_count": len(action.orders_to_create),
             "orders": [_order_summary(order) for order in action.orders_to_create],
+            "continuous_action_depth": _continuous_action_depth_series(
+                sigmoid_action,
+                mid=float(state.mid),
+                min_spread=float(self.config.min_spread),
+                max_spread=float(self.config.orderbook_grid.max_spread),
+                price_step=float(self.config.orderbook_grid.price_step),
+            ),
             "price_model": {
                 "kind": (self.config.price_model or {}).get("kind", "residual"),
                 "params": price_params,
@@ -519,6 +528,41 @@ def _spread_levels(*, min_spread: float, max_spread: float, price_step: float) -
     stop = max(start, float(max_spread))
     count = max(1, int(math.floor((stop - start) / step)) + 1)
     return [start + i * step for i in range(count)]
+
+
+def _continuous_action_depth_series(
+    sigmoid_action: Any,
+    *,
+    mid: float,
+    min_spread: float,
+    max_spread: float,
+    price_step: float,
+) -> dict[str, Any]:
+    """Cumulative depth from the optimizer (pre-discretization) on the same spread grid as ladder orders."""
+
+    depth_bid = getattr(sigmoid_action, "depth_bid", None)
+    depth_ask = getattr(sigmoid_action, "depth_ask", None)
+    if not callable(depth_bid) or not callable(depth_ask):
+        return {"kind": "unknown", "mid": float(mid), "bid": [], "ask": []}
+    levels = _spread_levels(min_spread=min_spread, max_spread=max_spread, price_step=price_step)
+    mid_f = float(mid)
+    bid: list[dict[str, float]] = []
+    ask: list[dict[str, float]] = []
+    for spread in levels:
+        s = float(spread)
+        try:
+            db = float(depth_bid(s))
+        except Exception:
+            db = float("nan")
+        try:
+            da = float(depth_ask(s))
+        except Exception:
+            da = float("nan")
+        if math.isfinite(db):
+            bid.append({"spread_quote": s, "price": mid_f - s, "cumulative_qty": db})
+        if math.isfinite(da):
+            ask.append({"spread_quote": s, "price": mid_f + s, "cumulative_qty": da})
+    return {"kind": "sigmoid_mixture", "mid": mid_f, "bid": bid, "ask": ask}
 
 
 def _side_orders(

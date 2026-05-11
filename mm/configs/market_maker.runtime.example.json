@@ -77,9 +77,9 @@
   },
   "controller": {
     "enabled": true,
-    "actor_id": "mpc-controller",
-    "observe_only": true,
+    "observe_only": false,
     "action_start_after_steps": 10,
+    "actor_id": "mpc-controller",
     "diagnostics_topic": "strategy:controller",
     "action_topic": "strategy:actions",
     "min_spread": 1000.0,
