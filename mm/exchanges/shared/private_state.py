@@ -10,6 +10,10 @@ from mm.exchanges.shared.provider_adapter import AsyncRateLimiter, now_ms
 
 # Drop dust and API rows where both legs are zero so snapshots and strategy frames stay small.
 _BALANCE_TOTAL_EPS = 1e-10
+_ASSET_ALIASES = {
+    "RLS": "IRT",
+    "TMN": "IRT",
+}
 
 
 class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
@@ -136,7 +140,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         for asset, bucket in raw.items():
             if not isinstance(bucket, dict):
                 continue
-            asset_key = str(asset or "").upper().strip()
+            asset_key = _normalize_asset_code(asset)
             if not asset_key:
                 continue
             free = _safe_float(bucket.get("free", 0.0))
@@ -253,3 +257,10 @@ def _normalize_side(raw: str) -> str:
     if side.startswith("sell"):
         return "sell"
     return side
+
+
+def _normalize_asset_code(raw: object) -> str:
+    asset = str(raw or "").upper().strip()
+    if not asset:
+        return ""
+    return _ASSET_ALIASES.get(asset, asset)

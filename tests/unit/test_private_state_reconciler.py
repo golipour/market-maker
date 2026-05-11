@@ -161,6 +161,25 @@ def test_rest_private_state_normalize_balances_skips_zero_rows() -> None:
     assert out["BTC"].free == pytest.approx(0.01)
 
 
+def test_rest_private_state_normalize_balances_normalizes_irt_aliases() -> None:
+    adapter = RestPollingPrivateStateAdapter(
+        "nobitex",
+        "BTC_IRT",
+        api_token="token",
+    )
+    out = adapter.normalize_balances(
+        {
+            "RLS": {"free": 10.0, "locked": 1.0},
+            "TMN": {"free": 3.0, "locked": 2.0},
+            "IRT": {"free": 1.0, "locked": 4.0},
+        },
+        timestamp_ms=1,
+    )
+    assert set(out) == {"IRT"}
+    assert out["IRT"].free == pytest.approx(1.0)
+    assert out["IRT"].locked == pytest.approx(4.0)
+
+
 def test_private_state_store_apply_balance_pops_zero() -> None:
     store = PrivateStateStore("wallex")
     store.apply_balance(Balance("wallex", "BTC", 1.0, 0.0, 1))

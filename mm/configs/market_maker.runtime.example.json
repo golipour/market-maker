@@ -1,7 +1,7 @@
 {
   "primary": {
     "exchange": "nobitex",
-    "symbol": "BTC_IRT",
+    "symbol": "USDT_IRT",
     "mode": "rest",
     "depth_limit": 100,
     "trades_limit": 200,
@@ -9,7 +9,7 @@
   },
   "hedge": {
     "exchange": "wallex",
-    "symbol": "BTC_IRT",
+    "symbol": "USDT_IRT",
     "mode": "rest",
     "depth_limit": 100,
     "trades_limit": 200,
@@ -31,6 +31,25 @@
     "enabled": true,
     "database_url_env": "MM_DATABASE_URL",
     "parquet_root_env": "MM_PARQUET_ROOT",
+    "topics": [
+      "market:events:nobitex:USDT_IRT:10000",
+      "market:events:wallex:USDT_IRT:10000",
+      "strategy:frames:nobitex:USDT_IRT:10000",
+      "strategy:actions",
+      "strategy:controller",
+      "execution:orders:nobitex",
+      "execution:orders:wallex",
+      "execution:state:nobitex",
+      "execution:state:wallex",
+      "private:state:nobitex:snapshot",
+      "private:state:wallex:snapshot",
+      "private:state:nobitex:balances",
+      "private:state:wallex:balances",
+      "private:state:nobitex:open_orders",
+      "private:state:wallex:open_orders",
+      "private:state:nobitex:fills",
+      "private:state:wallex:fills"
+    ],
     "batch_size": 100,
     "flush_interval_ms": 1000
   },
@@ -63,10 +82,10 @@
     "action_start_after_steps": 10,
     "diagnostics_topic": "strategy:controller",
     "action_topic": "strategy:actions",
-    "min_spread": 100.0,
+    "min_spread": 1000.0,
     "orderbook_grid": {
-      "price_step": 100.0,
-      "max_spread": 10000.0
+      "price_step": 1000.0,
+      "max_spread": 100000.0
     },
     "qty_step": 0.0001,
     "min_order_qty": 0.0001,
@@ -111,7 +130,7 @@
       "size_coef": 0.0,
       "spread_coef": 100.0,
       "spread_depth": 100000.0,
-      "hedge_enabled": true,
+      "hedge_enabled": false,
       "hedge_coef": 0.0,
       "target_inventory_level": 10.0,
       "max_total_qty": 10.0,
