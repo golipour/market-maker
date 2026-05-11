@@ -1172,6 +1172,12 @@ def _exchange_info(symbol: str, exchange: str) -> dict[str, Any]:
     return _exchange_info_cache[key]
 
 
+def get_exchange_info(symbol: str, exchange: str) -> dict[str, Any]:
+    """Public read of cached ``exchange_info`` (filters, tick/lot metadata) for a symbol."""
+
+    return dict(_exchange_info(symbol, exchange))
+
+
 # -----------------------------------------------------------------------------
 # Orderbook (X)
 # -----------------------------------------------------------------------------

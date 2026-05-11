@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
+from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource
 from mm.core.interfaces.market_data import PublicMarketDataAdapter
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.exchanges.capabilities import (
@@ -12,7 +13,9 @@ from mm.exchanges.capabilities import (
 )
 from mm.exchanges.nobitex import NobitexMarketDataAdapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
+from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.exchanges.nobitex.order_adapter import NobitexRestOrderCommandAdapter
+from mm.exchanges.shared.venue_limits_trade_stats import TradeStatsVenueOrderLimitSource
 from mm.exchanges.wallex.order_adapter import WallexRestOrderCommandAdapter
 from mm.exchanges.shared.provider_adapter import TransportMode
 from mm.exchanges.wallex import WallexMarketDataAdapter
@@ -192,6 +195,18 @@ def select_order_command_adapter(
         transport=capabilities,
         adapter=adapter,
     )
+
+
+_TRADE_STATS_LIMIT_EXCHANGES = frozenset({"nobitex", "wallex", "bitpin", "kucoin", "binance", "tabdeal"})
+
+
+def select_venue_order_limit_source(exchange: str) -> AbstractVenueOrderLimitSource:
+    """Venue min base / min notional for float ``Order`` validation before REST (see ``trade_stats``)."""
+
+    exchange_key = exchange.lower().strip()
+    if exchange_key in _TRADE_STATS_LIMIT_EXCHANGES:
+        return TradeStatsVenueOrderLimitSource(exchange_key)
+    return NoOpVenueOrderLimitSource()
 
 
 def resolve_order_command_transport(exchange: str) -> str:

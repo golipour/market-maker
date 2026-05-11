@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.actor import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
+from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource, order_passes_limits
 from mm.core.models.execution import Action, Fill, Order
+from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.core.models.private import OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import now_ms
 from mm.observability import counter_inc, gauge, latency_metric, log_event, span
@@ -41,12 +43,14 @@ class OrderManager(AbstractOrderManager):
         bus: AbstractEventBus | None = None,
         clock_ms: Callable[[], int] = now_ms,
         cancel_missing: bool = False,
+        limit_source: AbstractVenueOrderLimitSource | None = None,
     ):
         self.exchange = exchange.lower().strip()
         self.command_adapter = command_adapter
         self.bus = bus
         self.clock_ms = clock_ms
         self.cancel_missing = bool(cancel_missing)
+        self._limit_source: AbstractVenueOrderLimitSource = limit_source or NoOpVenueOrderLimitSource()
         self._live_orders: dict[str, OpenOrder] = {}
         self._lock = asyncio.Lock()
 
@@ -227,6 +231,35 @@ class OrderManager(AbstractOrderManager):
                     continue
                 to_place.append((action.actor_id, order))
                 current_keys.add(key)
+        if not to_place:
+            return
+
+        filtered: list[tuple[str, Order]] = []
+        for actor_id, order in to_place:
+            limits = self._limit_source.limits_for(order.symbol)
+            ok, reason = order_passes_limits(order, limits)
+            if ok:
+                filtered.append((actor_id, order))
+            else:
+                counter_inc(
+                    "mm_order_validation_rejected_total",
+                    labels={"exchange": self.exchange, "reason": reason},
+                    help="Orders dropped before REST due to venue limits",
+                )
+                log_event(
+                    "order_validation_rejected",
+                    {
+                        "exchange": self.exchange,
+                        "symbol": order.symbol,
+                        "reason": reason,
+                        "side": order.side,
+                        "price": float(order.price),
+                        "qty": float(order.qty),
+                        "min_base_qty": float(limits.min_base_qty),
+                        "min_notional_quote": float(limits.min_notional_quote),
+                    },
+                )
+        to_place = filtered
         if not to_place:
             return
 

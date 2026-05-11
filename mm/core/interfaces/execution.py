@@ -8,9 +8,9 @@ from mm.core.models.execution import Order
 class AbstractOrderCommandAdapter(ABC):
     """Private, authenticated write-side adapter for exchange order commands.
 
-    Domain orders use float price/qty in base/quote units. Tick-size, lot-size,
-    precision, min-notional checks, and exchange-native payloads belong inside
-    implementations of this adapter or helpers they call.
+    Domain orders use float price/qty in base/quote units. Exchange-native payloads
+    and wire quirks belong here. Pre-flight min base / min notional checks use
+    ``AbstractVenueOrderLimitSource`` in ``OrderManager`` before adapters run.
     """
 
     @abstractmethod

@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import requests
 
 BASE_URL = "https://apiv2.nobitex.ir"
+
+
+def _nobitex_client_order_id(value: str | None, *, max_len: int = 32) -> str | None:
+    """Map arbitrary runtime ids to Nobitex-safe ``clientOrderId``.
+
+    Nobitex documents examples like ``order1`` (alphanumeric). Hyphens (``mpc-controller``),
+    colons, etc. trigger ``ParseError``. Per `apidocs.nobitex.ir`, the field is up to 32 chars
+    and must be unique per user among open/active/inactive orders — a truncated SHA-256 hex
+    of the full client key satisfies both.
+    """
+
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return digest[:max_len]
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -125,8 +144,9 @@ def place_limit_order(
         "amount": str(amount),
         "price": str(price),
     }
-    if client_order_id:
-        payload["clientOrderId"] = str(client_order_id)[:32]
+    cid = _nobitex_client_order_id(client_order_id)
+    if cid:
+        payload["clientOrderId"] = cid
     try:
         out = _post_auth("/market/orders/add", api_token, data=payload)
     except Exception as e:

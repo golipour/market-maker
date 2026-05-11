@@ -13,6 +13,7 @@ from mm.exchanges.factory import (
     PrivateStateAdapterSelection,
     PublicMarketDataAdapterSelection,
     select_order_command_adapter,
+    select_venue_order_limit_source,
     select_private_state_adapter,
     select_public_market_data_adapter,
 )
@@ -191,6 +192,7 @@ async def build_runtime_components(
                     command_adapter=order_selection.adapter,
                     bus=runtime_bus,
                     cancel_missing=False,
+                    limit_source=select_venue_order_limit_source(source.normalized_exchange()),
                 )
                 order_managers[source.normalized_exchange()] = manager
             execution_reconcilers[source.role] = ExecutionStateReconciler(
