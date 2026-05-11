@@ -418,6 +418,25 @@ class State:
         """Market part for backward compatibility (e.g. reward, price_dynamics)."""
         return MarketState(mid=self.mid)
 
+    @property
+    def buy_vwap(self) -> float:
+        """Alias for ``MonteCarloMPCTensorBatched`` (same units as ``buy_ref``)."""
+        return float(self.buy_ref)
+
+    @property
+    def sell_vwap(self) -> float:
+        """Alias for ``MonteCarloMPCTensorBatched`` (same units as ``sell_ref``)."""
+        return float(self.sell_ref)
+
+    @property
+    def hedge_buy_vwap(self) -> float | None:
+        return self.hedge_buy_ref
+
+    @property
+    def hedge_sell_vwap(self) -> float | None:
+        return self.hedge_sell_ref
+
+
 def state_from_ob_and_flow(
     mid: float,
     ob_bids: list[tuple[float, int]],

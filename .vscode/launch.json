@@ -2,6 +2,24 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Print events + full runtime (-m mm.runtime.print_events)",
+      "type": "python",
+      "request": "launch",
+      "module": "mm.runtime.print_events",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--config",
+        "mm/configs/market_maker.runtime.example.json",
+        "--events",
+        "30000",
+        "--timeout-s",
+        "12000"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
       "name": "Run mm.layers.runtime (-m mm.layers.runtime)",
       "type": "python",
       "request": "launch",

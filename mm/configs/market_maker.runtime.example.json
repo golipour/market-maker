@@ -78,7 +78,7 @@
   "controller": {
     "enabled": true,
     "observe_only": false,
-    "action_start_after_steps": 10,
+    "action_start_after_steps": 3,
     "actor_id": "mpc-controller",
     "diagnostics_topic": "strategy:controller",
     "action_topic": "strategy:actions",

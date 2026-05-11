@@ -12,7 +12,8 @@ from mm.exchanges.capabilities import (
 )
 from mm.exchanges.nobitex import NobitexMarketDataAdapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
-from mm.exchanges.shared.execution import TradeStatsRestOrderCommandAdapter
+from mm.exchanges.nobitex.order_adapter import NobitexRestOrderCommandAdapter
+from mm.exchanges.wallex.order_adapter import WallexRestOrderCommandAdapter
 from mm.exchanges.shared.provider_adapter import TransportMode
 from mm.exchanges.wallex import WallexMarketDataAdapter
 from mm.exchanges.wallex.private_state import WallexRestPrivateStateAdapter
@@ -179,7 +180,12 @@ def select_order_command_adapter(
 ) -> OrderCommandAdapterSelection:
     exchange_key = exchange.lower().strip()
     capabilities = resolve_order_command_transport(exchange_key)
-    adapter = TradeStatsRestOrderCommandAdapter(exchange_key, symbol, api_token=api_token)
+    if exchange_key == "nobitex":
+        adapter = NobitexRestOrderCommandAdapter(symbol, api_token=api_token)
+    elif exchange_key == "wallex":
+        adapter = WallexRestOrderCommandAdapter(symbol, api_token=api_token)
+    else:
+        raise ValueError(f"unsupported exchange for REST order commands: {exchange_key!r}")
     return OrderCommandAdapterSelection(
         exchange=exchange_key,
         symbol=symbol,

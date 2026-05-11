@@ -45,7 +45,13 @@ def _post_json_auth(path: str, api_token: str, payload: dict[str, Any]) -> Any:
         "Content-Type": "application/json",
     }
     r = requests.post(f"{BASE_URL}{path}", headers=headers, json=payload, timeout=15)
-    r.raise_for_status()
+    if not r.ok:
+        detail: Any
+        try:
+            detail = r.json()
+        except Exception:
+            detail = (r.text or "")[:4000]
+        raise RuntimeError(f"Wallex HTTP {r.status_code} {path}: {detail}")
     return r.json()
 
 

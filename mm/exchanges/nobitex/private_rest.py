@@ -36,7 +36,13 @@ def _get_auth(path: str, api_token: str, params: dict[str, Any] | None = None) -
 def _post_auth(path: str, api_token: str, data: dict[str, Any] | None = None) -> Any:
     headers = {"Authorization": f"Token {api_token}"}
     r = requests.post(f"{BASE_URL}{path}", headers=headers, data=data or {}, timeout=15)
-    r.raise_for_status()
+    if not r.ok:
+        detail: Any
+        try:
+            detail = r.json()
+        except Exception:
+            detail = (r.text or "")[:4000]
+        raise RuntimeError(f"Nobitex HTTP {r.status_code} {path}: {detail}")
     return r.json()
 
 
