@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from mm.core.asset_aliases import canonical_asset_code
 from mm.core.models.execution import Fill
+from mm.core.models.instrument import split_symbol
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 
 # Match `mm.exchanges.shared.private_state._BALANCE_TOTAL_EPS` so zero rows drop out of snapshots.
@@ -10,26 +12,69 @@ _BALANCE_TOTAL_EPS = 1e-10
 class PrivateStateStore:
     """Current private exchange state in normalized float domain values."""
 
-    def __init__(self, exchange: str):
+    def __init__(self, exchange: str, *, trading_symbol: str | None = None):
         self.exchange = exchange.lower().strip()
+        self._trading_symbol = (trading_symbol or "").strip() or None
+        self._economy_assets = self._economy_canonical_assets()
         self._timestamp_ms = 0
         self._balances: dict[str, Balance] = {}
         self._open_orders: dict[str, OpenOrder] = {}
         self._fills: dict[str, Fill] = {}
 
+    def _economy_canonical_assets(self) -> frozenset[str]:
+        if not self._trading_symbol:
+            return frozenset()
+        try:
+            base, quote = split_symbol(self._trading_symbol)
+        except ValueError:
+            return frozenset()
+        b = canonical_asset_code(base)
+        q = canonical_asset_code(quote)
+        if not b or not q:
+            return frozenset()
+        return frozenset({b, q})
+
+    def _ensure_economy_balances(self, balances: dict[str, Balance], *, timestamp_ms: int) -> None:
+        for asset in self._economy_assets:
+            if asset not in balances:
+                balances[asset] = Balance(
+                    exchange=self.exchange,
+                    asset=asset,
+                    free=0.0,
+                    locked=0.0,
+                    timestamp_ms=timestamp_ms,
+                )
+
     def apply_snapshot(self, snapshot: PrivateStateSnapshot) -> PrivateStateSnapshot:
         self._timestamp_ms = max(self._timestamp_ms, int(snapshot.timestamp_ms))
         self._balances = dict(snapshot.balances)
+        self._ensure_economy_balances(self._balances, timestamp_ms=self._timestamp_ms)
         self._open_orders = dict(snapshot.open_orders)
         return self.snapshot()
 
     def apply_balance(self, balance: Balance) -> PrivateStateSnapshot:
         self._timestamp_ms = max(self._timestamp_ms, int(balance.timestamp_ms))
-        key = balance.asset.upper()
+        key = canonical_asset_code(balance.asset)
         if abs(float(balance.free)) + abs(float(balance.locked)) <= _BALANCE_TOTAL_EPS:
-            self._balances.pop(key, None)
+            if key in self._economy_assets:
+                self._balances[key] = Balance(
+                    exchange=self.exchange,
+                    asset=key,
+                    free=0.0,
+                    locked=0.0,
+                    timestamp_ms=int(balance.timestamp_ms),
+                )
+            else:
+                self._balances.pop(key, None)
         else:
-            self._balances[key] = balance
+            self._balances[key] = Balance(
+                exchange=self.exchange,
+                asset=key,
+                free=float(balance.free),
+                locked=float(balance.locked),
+                timestamp_ms=int(balance.timestamp_ms),
+            )
+        self._ensure_economy_balances(self._balances, timestamp_ms=self._timestamp_ms)
         return self.snapshot()
 
     def apply_open_order(self, open_order: OpenOrder) -> PrivateStateSnapshot:
@@ -84,9 +129,11 @@ class PrivateStateStore:
         return self.snapshot()
 
     def snapshot(self) -> PrivateStateSnapshot:
+        balances = dict(self._balances)
+        self._ensure_economy_balances(balances, timestamp_ms=self._timestamp_ms)
         return PrivateStateSnapshot(
             exchange=self.exchange,
             timestamp_ms=self._timestamp_ms,
-            balances=dict(self._balances),
+            balances=balances,
             open_orders=dict(self._open_orders),
         )

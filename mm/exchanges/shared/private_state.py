@@ -3,17 +3,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
+from mm.core.asset_aliases import canonical_asset_code
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
+from mm.core.models.instrument import split_symbol
 from mm.core.models.execution import Fill, Order
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import AsyncRateLimiter, now_ms
 
 # Drop dust and API rows where both legs are zero so snapshots and strategy frames stay small.
 _BALANCE_TOTAL_EPS = 1e-10
-_ASSET_ALIASES = {
-    "RLS": "IRT",
-    "TMN": "IRT",
-}
 
 
 class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
@@ -71,10 +69,12 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
                 for asset, balance in balances.items():
                     if self._last_balances.get(asset) != balance:
                         yield balance
+                economy = _economy_canonical_assets(self.symbol)
                 for asset in list(self._last_balances.keys()):
                     if asset not in balances:
                         prev = self._last_balances[asset]
-                        if abs(float(prev.free)) + abs(float(prev.locked)) > _BALANCE_TOTAL_EPS:
+                        prev_total = abs(float(prev.free)) + abs(float(prev.locked))
+                        if prev_total > _BALANCE_TOTAL_EPS or asset in economy:
                             yield Balance(
                                 exchange=self.exchange,
                                 asset=asset,
@@ -137,10 +137,11 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         balances: dict[str, Balance] = {}
         if not isinstance(raw, dict):
             return balances
+        economy = _economy_canonical_assets(self.symbol)
         for asset, bucket in raw.items():
             if not isinstance(bucket, dict):
                 continue
-            asset_key = _normalize_asset_code(asset)
+            asset_key = canonical_asset_code(asset)
             if not asset_key:
                 continue
             free = _safe_float(bucket.get("free", 0.0))
@@ -148,7 +149,8 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             total = _safe_float(bucket.get("total", free + locked))
             locked = max(0.0, locked)
             if abs(free) + abs(locked) <= _BALANCE_TOTAL_EPS:
-                continue
+                if asset_key not in economy:
+                    continue
             balances[asset_key] = Balance(
                 exchange=self.exchange,
                 asset=asset_key,
@@ -157,6 +159,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
                 timestamp_ms=timestamp_ms,
             )
             _ = total
+        _inject_missing_economy_balances(self.exchange, balances, economy, timestamp_ms)
         return balances
 
     def normalize_open_orders(self, rows: list[dict], *, timestamp_ms: int) -> dict[str, OpenOrder]:
@@ -259,8 +262,32 @@ def _normalize_side(raw: str) -> str:
     return side
 
 
-def _normalize_asset_code(raw: object) -> str:
-    asset = str(raw or "").upper().strip()
-    if not asset:
-        return ""
-    return _ASSET_ALIASES.get(asset, asset)
+def _economy_canonical_assets(symbol: str) -> frozenset[str]:
+    """Base and quote for the traded pair (canonical), used for explicit-zero balance policy."""
+    try:
+        base, quote = split_symbol(symbol)
+    except ValueError:
+        return frozenset()
+    b = canonical_asset_code(base)
+    q = canonical_asset_code(quote)
+    if not b or not q:
+        return frozenset()
+    return frozenset({b, q})
+
+
+def _inject_missing_economy_balances(
+    exchange: str,
+    balances: dict[str, Balance],
+    economy: frozenset[str],
+    timestamp_ms: int,
+) -> None:
+    for asset in economy:
+        if asset not in balances:
+            balances[asset] = Balance(
+                exchange=exchange,
+                asset=asset,
+                free=0.0,
+                locked=0.0,
+                timestamp_ms=timestamp_ms,
+            )
+

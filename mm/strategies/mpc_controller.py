@@ -577,6 +577,7 @@ def _mid(book: RawOrderbook) -> float:
 
 
 def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
+    """Inventory/cash from wallet balances. Missing keys still mean zero; ``PrivateStateStore`` pads economy pair."""
     if snapshot is None:
         return 0.0, 0.0
     base = snapshot.balances.get(base_asset)

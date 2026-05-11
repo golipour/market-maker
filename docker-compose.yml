@@ -122,6 +122,7 @@ services:
     ports:
       - "3000:3000"
     environment:
+      # For SQL/datasource debugging in container logs, temporarily set: GF_LOG_LEVEL: debug
       GF_LOG_LEVEL: warn
       # Quiet offline / restricted-network installs (no grafana.com calls for updates/plugins news).
       GF_CHECK_FOR_UPDATES: "false"

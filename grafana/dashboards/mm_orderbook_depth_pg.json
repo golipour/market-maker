@@ -1,0 +1,337 @@
+{
+  "annotations": { "list": [] },
+  "description": "Latest order book depth from persisted market events (mm_events). Set dashboard variables to match your runtime topic market:events:{exchange}:{symbol}:{interval_ms}. Redis Streams mirror the bus but are not provisioned as a Grafana datasource; use RedisInsight or a Redis plugin if you want live stream charts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Charts:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base). Levels outside the window are dropped; axis min/max use the same bounds.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 2,
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 4 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) AS best_bid\nFROM latest;",
+          "refId": "A"
+        }
+      ],
+      "title": "Best bid (latest)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 2,
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 4 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0) AS best_ask\nFROM latest;",
+          "refId": "A"
+        }
+      ],
+      "title": "Best ask (latest)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "decimals": 4,
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 4 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT EXTRACT(EPOCH FROM ts) * 1000 AS event_ts_ms\nFROM latest;",
+          "refId": "A"
+        }
+      ],
+      "title": "Event time (ms epoch)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 80,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_min}" },
+              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 8 },
+      "id": 10,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n),\nmm AS (\n  SELECT COALESCE((SELECT m FROM mid), 0) AS m\n),\nbounds AS (\n  SELECT m, m - ${spread_max}::double precision AS lo, m + ${spread_max}::double precision AS hi\n  FROM mm\n),\nlevels AS (\n  SELECT (b->>'price')::double precision AS price, (b->>'qty')::double precision AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nstep AS (\n  SELECT l.price, SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty\n  FROM levels l\n  CROSS JOIN bounds b\n  WHERE l.qty IS NOT NULL AND l.price IS NOT NULL\n    AND l.price >= b.lo AND l.price <= b.m\n)\nSELECT price, cum_qty\nFROM step\nORDER BY price ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Bid depth (cumulative qty vs price)",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": {
+            "fillOpacity": 80,
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1
+          },
+          "mappings": [],
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "price" },
+            "properties": [
+              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
+              { "id": "decimals", "value": 2 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 8 },
+      "id": 11,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "xField": "price",
+        "xTickLabelMaxLength": 24,
+        "xTickLabelRotation": -50,
+        "xTickLabelSpacing": 100
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n),\nmm AS (\n  SELECT COALESCE((SELECT m FROM mid), 0) AS m\n),\nbounds AS (\n  SELECT m, m - ${spread_max}::double precision AS lo, m + ${spread_max}::double precision AS hi\n  FROM mm\n),\nlevels AS (\n  SELECT (a->>'price')::double precision AS price, (a->>'qty')::double precision AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nstep AS (\n  SELECT l.price, SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty\n  FROM levels l\n  CROSS JOIN bounds b\n  WHERE l.qty IS NOT NULL AND l.price IS NOT NULL\n    AND l.price >= b.m AND l.price <= b.hi\n)\nSELECT price, cum_qty\nFROM step\nORDER BY price ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Ask depth (cumulative qty vs price)",
+      "type": "barchart"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["market-maker", "postgres", "orderbook"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "nobitex", "value": "nobitex" },
+        "hide": 0,
+        "label": "Exchange",
+        "name": "exchange",
+        "options": [
+          { "selected": true, "text": "nobitex", "value": "nobitex" },
+          { "selected": false, "text": "wallex", "value": "wallex" }
+        ],
+        "query": "nobitex,wallex",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": { "text": "BTC_IRT", "value": "BTC_IRT" },
+        "hide": 0,
+        "label": "Symbol",
+        "name": "symbol",
+        "query": "BTC_IRT",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": { "text": "10000", "value": "10000" },
+        "hide": 0,
+        "label": "Interval ms",
+        "name": "interval_ms",
+        "query": "10000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": { "text": "10000", "value": "10000" },
+        "hide": 0,
+        "label": "Spread max (orderbook_grid.max_spread)",
+        "name": "spread_max",
+        "query": "10000",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "datasource": { "type": "postgres", "uid": "postgres-mm" },
+        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) - ${spread_max}::double precision",
+        "hide": 2,
+        "includeAll": false,
+        "label": "",
+        "multi": false,
+        "name": "bid_x_min",
+        "options": [],
+        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) - ${spread_max}::double precision",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": true,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "datasource": { "type": "postgres", "uid": "postgres-mm" },
+        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "",
+        "multi": false,
+        "name": "bid_x_max",
+        "options": [],
+        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": true,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "datasource": { "type": "postgres", "uid": "postgres-mm" },
+        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) + ${spread_max}::double precision",
+        "hide": 2,
+        "includeAll": false,
+        "label": "",
+        "multi": false,
+        "name": "ask_x_max",
+        "options": [],
+        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) + ${spread_max}::double precision",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": true,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM order book depth (PostgreSQL)",
+  "uid": "mm-orderbook-depth-pg",
+  "version": 5,
+  "weekStart": ""
+}

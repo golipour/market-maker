@@ -22,7 +22,10 @@ class PrivateStateReconciler:
         self.exchange = exchange.lower().strip()
         self.adapter = adapter
         self.bus = bus
-        self.store = store or PrivateStateStore(self.exchange)
+        self.store = store or PrivateStateStore(
+            self.exchange,
+            trading_symbol=getattr(adapter, "symbol", None),
+        )
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:

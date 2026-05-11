@@ -18,6 +18,7 @@ from mm.private_state.store import PrivateStateStore
 
 class FakePrivateStateAdapter(AbstractPrivateStateAdapter):
     def __init__(self):
+        self.symbol = "BTC_IRT"
         self._connected = False
         self.balances: asyncio.Queue[Balance | None] = asyncio.Queue()
         self.open_orders: asyncio.Queue[OpenOrder | None] = asyncio.Queue()
@@ -86,6 +87,9 @@ async def test_private_state_reconciler_publishes_snapshot_and_open_orders() -> 
         await reconciler.start()
         initial = await asyncio.wait_for(snapshots.get(), timeout=1.0)
         assert initial.balances["BTC"].free == 1.0
+        assert "IRT" in initial.balances
+        assert initial.balances["IRT"].free == 0.0
+        assert initial.balances["IRT"].locked == 0.0
 
         order = OpenOrder(
             exchange_order_id="o1",
@@ -157,8 +161,9 @@ def test_rest_private_state_normalize_balances_skips_zero_rows() -> None:
         },
         timestamp_ms=1,
     )
-    assert set(out) == {"BTC"}
+    assert set(out) == {"BTC", "IRT"}
     assert out["BTC"].free == pytest.approx(0.01)
+    assert out["IRT"].free == pytest.approx(0.0)
 
 
 def test_rest_private_state_normalize_balances_normalizes_irt_aliases() -> None:
@@ -175,9 +180,11 @@ def test_rest_private_state_normalize_balances_normalizes_irt_aliases() -> None:
         },
         timestamp_ms=1,
     )
-    assert set(out) == {"IRT"}
+    assert set(out) == {"IRT", "BTC"}
     assert out["IRT"].free == pytest.approx(1.0)
     assert out["IRT"].locked == pytest.approx(4.0)
+    assert out["BTC"].free == pytest.approx(0.0)
+    assert out["BTC"].locked == pytest.approx(0.0)
 
 
 def test_private_state_store_apply_balance_pops_zero() -> None:
@@ -186,3 +193,27 @@ def test_private_state_store_apply_balance_pops_zero() -> None:
     assert "BTC" in store.snapshot().balances
     store.apply_balance(Balance("wallex", "BTC", 0.0, 0.0, 2))
     assert "BTC" not in store.snapshot().balances
+
+
+def test_private_state_store_keeps_economy_assets_explicit_zero() -> None:
+    store = PrivateStateStore("nobitex", trading_symbol="BTC_IRT")
+    store.apply_balance(Balance("nobitex", "BTC", 1.0, 0.0, 1))
+    snap = store.snapshot()
+    assert snap.balances["BTC"].free == pytest.approx(1.0)
+    assert snap.balances["IRT"].free == pytest.approx(0.0)
+    store.apply_balance(Balance("nobitex", "IRT", 0.0, 0.0, 2))
+    snap2 = store.snapshot()
+    assert "IRT" in snap2.balances
+    assert snap2.balances["IRT"].free == pytest.approx(0.0)
+
+
+def test_rest_private_state_normalize_injects_missing_economy_balances() -> None:
+    adapter = RestPollingPrivateStateAdapter(
+        "nobitex",
+        "BTC_IRT",
+        api_token="token",
+    )
+    out = adapter.normalize_balances({"BTC": {"free": 0.01, "locked": 0.0}}, timestamp_ms=1)
+    assert set(out) == {"BTC", "IRT"}
+    assert out["IRT"].free == pytest.approx(0.0)
+    assert out["IRT"].locked == pytest.approx(0.0)

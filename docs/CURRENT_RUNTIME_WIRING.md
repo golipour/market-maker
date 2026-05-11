@@ -231,3 +231,7 @@ Topics are the same; only transport changes.
   3) `strategy:controller`
   4) `strategy:actions`
   5) `execution:orders:*` / `execution:state:*` (if live execution path enabled).
+
+## 7) Grafana: order book depth from Postgres
+
+With persistence writing `MarketEvent` rows to `mm_events`, Grafana can plot cumulative bid/ask depth (price on X) using the provisioned dashboard [grafana/dashboards/mm_orderbook_depth_pg.json](../grafana/dashboards/mm_orderbook_depth_pg.json) (folder **Market Maker**). Set dashboard variables `exchange`, `symbol`, and `interval_ms` to match `market:events:{exchange}:{symbol}:{interval_ms}`. Redis Streams are not configured as a Grafana datasource in this repo; use RedisInsight or add a Redis data source plugin for stream-based charts.

@@ -98,6 +98,7 @@ Postgres stores envelopes in `mm_events` and snapshot-like events in `mm_latest_
 - Payload: `Balance`
 - Fields: `exchange`, `asset`, `free`, `locked`, `timestamp_ms`
 - Meaning: single balance update.
+- **Economy pair:** for the configured trading symbol (e.g. `USDT_IRT`), base and quote assets (`USDT`, `IRT`) are always present in normalized snapshots even at zero, so “missing key” is never ambiguous vs “zero cash”. Venue aliases (`RLS`, `TMN`) fold to canonical `IRT` before filtering.
 - Persisted by default: no
 
 `private:state:{exchange}:open_orders`

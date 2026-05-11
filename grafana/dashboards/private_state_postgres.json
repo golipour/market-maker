@@ -50,7 +50,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE(SUM(jsonb_object_length(payload->'open_orders')), 0)::bigint AS value\nFROM mm_events\nWHERE topic LIKE 'private:state:%:snapshot'\n  AND exchange IN (${exchange:sqlstring})\n  AND $__timeFilter(ts)",
+          "rawSql": "SELECT COALESCE(SUM(open_order_count), 0)::bigint AS value\nFROM mm_events m\nCROSS JOIN LATERAL (\n  SELECT count(*)::bigint AS open_order_count\n  FROM jsonb_object_keys(COALESCE(m.payload->'open_orders', '{}'::jsonb))\n) oc\nWHERE m.topic LIKE 'private:state:%:snapshot'\n  AND m.exchange IN (${exchange:sqlstring})\n  AND $__timeFilter(m.ts)",
           "refId": "A"
         }
       ],
@@ -162,7 +162,7 @@
       },
       "id": 4,
       "options": {
-        "content": "This dashboard reads `mm_events` (Postgres). To populate balance/open-order/fill panels, persist private granular topics (`private:state:*:balances`, `open_orders`, `fills`) in runtime config.",
+        "content": "**USDT** and **IRT** balance charts below are fixed (not driven by the Asset variable). Use **Exchange** to pick nobitex / wallex. Persist `private:state:*:balances` in runtime `persistence.topics` for rows in `mm_events`.",
         "mode": "markdown"
       },
       "title": "",
@@ -205,7 +205,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG(jsonb_object_length(payload->'open_orders'))::double precision AS value,\n  exchange AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:snapshot'\n  AND exchange IN (${exchange:sqlstring})\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
+          "rawSql": "SELECT\n  $__timeGroupAlias(m.ts, $__interval),\n  AVG(oc.open_order_count)::double precision AS value,\n  m.exchange AS metric\nFROM mm_events m\nCROSS JOIN LATERAL (\n  SELECT count(*)::double precision AS open_order_count\n  FROM jsonb_object_keys(COALESCE(m.payload->'open_orders', '{}'::jsonb))\n) oc\nWHERE m.topic LIKE 'private:state:%:snapshot'\n  AND m.exchange IN (${exchange:sqlstring})\n  AND $__timeFilter(m.ts)\nGROUP BY 1, m.exchange\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -291,11 +291,97 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  exchange AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'USDT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "USDT balance (free + locked) — stable / inventory leg",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  exchange AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'IRT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "IRT balance (free + locked) — quote / cash leg",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
           "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  (exchange || ' ' || (payload->>'asset')) AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' IN (${asset:sqlstring})\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange, (payload->>'asset')\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Balance (Free + Locked) For Asset",
+      "title": "Balances: assets selected in variable (USDT / IRT / …)",
       "type": "timeseries"
     },
     {
@@ -316,9 +402,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 12
+        "w": 24,
+        "x": 0,
+        "y": 27
       },
       "id": 8,
       "options": {
@@ -408,7 +494,7 @@
         "definition": "SELECT asset FROM (VALUES ('USDT'), ('IRT')) AS fixed_assets(asset)",
         "hide": 0,
         "includeAll": false,
-        "label": "Asset",
+        "label": "Asset (extra panel only)",
         "multi": true,
         "name": "asset",
         "options": [],
@@ -428,6 +514,6 @@
   "timezone": "browser",
   "title": "Private State (PostgreSQL)",
   "uid": "mm-private-state-pg",
-  "version": 1,
+  "version": 3,
   "weekStart": ""
 }
