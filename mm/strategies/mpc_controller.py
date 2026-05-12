@@ -16,10 +16,9 @@ from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
-from mm.core.models.strategy import StrategyInputFrame
-from mm.diagnostics_bridge import emit_controller_diagnostics
-from mm.observability import counter_inc, gauge, log_event, span
+from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
 from mm.runtime.config import ControllerRuntimeConfig
+from mm.strategies.mpc_legacy_adapter import market_flow_step_from_frame
 
 
 def normalize_mpc_optimizer_config(optimizer_cfg: dict[str, Any]) -> None:
@@ -39,33 +38,137 @@ def normalize_mpc_optimizer_config(optimizer_cfg: dict[str, Any]) -> None:
 
 
 @dataclass(slots=True)
-class MpcControllerRunner:
-    """Bridge StrategyInputFrame into the legacy MPC functionality.
+class MpcStrategyEngine:
+    """Synchronous strategy decision engine for legacy MPC internals.
 
     The bridge keeps the new runtime float-first: mid/prices are quote-per-base,
-    quantities are base units, and order commands stay float until the exchange
-    command adapter boundary.
+    quantities are base units, and order commands stay float until execution.
     """
 
     config: ControllerRuntimeConfig
     binding: SymbolBinding
-    frame_queue: asyncio.Queue[StrategyInputFrame]
-    order_managers: dict[str, AbstractOrderManager]
-    bus: AbstractEventBus | None = None
     _controller: Any = field(init=False, repr=False)
     _market_flow_model: Any = field(init=False, repr=False)
     _price_model: Any = field(init=False, repr=False)
     _hedge_price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
-    _frame_step: int = field(default=0, init=False, repr=False)
-    _task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._controller = _build_controller(self.config)
         self._market_flow_model = getattr(self._controller, "market_flow_model", None)
         self._price_model = getattr(self._controller, "price_model", None)
         self._hedge_price_model = getattr(self._controller, "hedge_price_model", None)
+
+    def decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        t0 = time.monotonic_ns()
+        _update_hedge_rep_price_model(self._hedge_price_model, frame)
+        state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
+        _update_market_flow_model(self._market_flow_model, frame)
+        _update_float_price_model(self._price_model, self._previous_frame, frame)
+        optimizer_stdout = io.StringIO()
+        with contextlib.redirect_stdout(optimizer_stdout):
+            sigmoid_action = self._controller.optimize(state)
+        orders = _orders_from_sigmoid_action(
+            actor_id=self.config.actor_id,
+            event=frame.primary,
+            sigmoid_action=sigmoid_action,
+            min_spread=self.config.min_spread,
+            max_spread=self.config.orderbook_grid.max_spread,
+            price_step=self.config.orderbook_grid.price_step,
+            qty_step=self.config.qty_step,
+            min_order_qty=self.config.min_order_qty,
+            max_orders_per_side=self.config.max_orders_per_side,
+        )
+        action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
+        order_summaries = tuple(_order_summary(order) for order in action.orders_to_create)
+        decision_hash = hashlib.sha256(
+            json.dumps(order_summaries, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        latency_ms = (time.monotonic_ns() - t0) / 1_000_000
+        optimizer_log = optimizer_stdout.getvalue().strip()
+        optimizer = {
+            "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
+            "last_expected_delta_wealth": getattr(self._controller, "_last_E_dW", None),
+            "last_components": getattr(self._controller, "_last_J_components", None),
+            "log": optimizer_log,
+        }
+        decision = StrategyDecision(
+            actor_id=self.config.actor_id,
+            exchange=frame.primary.exchange,
+            symbol=frame.primary.symbol,
+            t_end_ms=frame.primary.t_end_ms,
+            frame_step=frame_step,
+            action=action,
+            observe_only=self.config.observe_only,
+            action_start_after_steps=self.config.action_start_after_steps,
+            live_execution_skipped_warmup=(
+                not self.config.observe_only and frame_step <= self.config.action_start_after_steps
+            ),
+            hedge_status=frame.hedge_status,
+            has_hedge=frame.has_hedge,
+            mid=float(state.mid),
+            inventory=float(state.inventory),
+            cash=float(state.cash),
+            buy_volume=float(state.buy_vol),
+            sell_volume=float(state.sell_vol),
+            latency_ms=float(latency_ms),
+            decision_hash=decision_hash,
+            orders=order_summaries,
+            model_updates=self._model_update_report(),
+            diagnostics=DecisionDiagnostics(
+                optimizer=optimizer,
+                continuous_action_depth=_continuous_action_depth_series(
+                    sigmoid_action,
+                    mid=float(state.mid),
+                    min_spread=float(self.config.min_spread),
+                    max_spread=float(self.config.orderbook_grid.max_spread),
+                    price_step=float(self.config.orderbook_grid.price_step),
+                ),
+                orderbook_grid=self.config.orderbook_grid.as_contract(),
+            ),
+        )
+        self._previous_frame = frame
+        return decision
+
+    def _model_update_report(self) -> ModelUpdateReport:
+        return ModelUpdateReport(
+            market_flow={
+                "kind": (self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"),
+                "params": self._market_flow_model.get_params() if hasattr(self._market_flow_model, "get_params") else {},
+            },
+            price={
+                "kind": (self.config.price_model or {}).get("kind", "residual"),
+                "params": self._price_model.get_params() if hasattr(self._price_model, "get_params") else {},
+            },
+            hedge_price={
+                "kind": (self.config.hedge_price_model or {}).get("kind", "legacy"),
+                "params": (
+                    self._hedge_price_model.get_params()
+                    if self._hedge_price_model is not None and hasattr(self._hedge_price_model, "get_params")
+                    else {}
+                ),
+                "active_in_mpc": self._hedge_price_model is not None
+                and float(getattr(self._controller, "hedge_coef", 0.0) or 0.0) != 0.0,
+            },
+        )
+
+
+@dataclass(slots=True)
+class MpcControllerRunner:
+    """Async bus worker around ``MpcStrategyEngine``."""
+
+    config: ControllerRuntimeConfig
+    binding: SymbolBinding
+    frame_queue: asyncio.Queue[StrategyInputFrame]
+    order_managers: dict[str, AbstractOrderManager]
+    bus: AbstractEventBus | None = None
+    _engine: MpcStrategyEngine = field(init=False, repr=False)
+    _frame_step: int = field(default=0, init=False, repr=False)
+    _task: asyncio.Task | None = field(default=None, init=False, repr=False)
+    _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._engine = MpcStrategyEngine(config=self.config, binding=self.binding)
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -87,55 +190,16 @@ class MpcControllerRunner:
             raise
 
     async def on_frame(self, frame: StrategyInputFrame) -> Action:
-        t0 = time.monotonic_ns()
         try:
-            with span(
-                "mm.controller.on_frame",
-                actor_id=self.config.actor_id,
-                exchange=frame.primary.exchange,
-                symbol=frame.primary.symbol,
-            ):
-                self._frame_step += 1
-                # Match mm.layers.core/app/engine.py: refresh hedge rep-price EWMA before other estimators / MPC.
-                _update_hedge_rep_price_model(self._hedge_price_model, frame)
-                state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
-                _update_market_flow_model(self._market_flow_model, frame)
-                _update_float_price_model(self._price_model, self._previous_frame, frame)
-                optimizer_stdout = io.StringIO()
-                with contextlib.redirect_stdout(optimizer_stdout):
-                    sigmoid_action = self._controller.optimize(state)
-                orders = _orders_from_sigmoid_action(
-                    actor_id=self.config.actor_id,
-                    event=frame.primary,
-                    sigmoid_action=sigmoid_action,
-                    min_spread=self.config.min_spread,
-                    max_spread=self.config.orderbook_grid.max_spread,
-                    price_step=self.config.orderbook_grid.price_step,
-                    qty_step=self.config.qty_step,
-                    min_order_qty=self.config.min_order_qty,
-                    max_orders_per_side=self.config.max_orders_per_side,
-                )
-            action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
-            await self._publish_decision(
-                frame,
-                state,
-                action,
-                sigmoid_action,
-                latency_ms=(time.monotonic_ns() - t0) / 1_000_000,
-                optimizer_log=optimizer_stdout.getvalue().strip(),
-            )
+            self._frame_step += 1
+            decision = self._engine.decide(frame, frame_step=self._frame_step)
+            await self._publish_decision(decision)
             if not self.config.observe_only:
                 manager = self.order_managers.get(frame.primary.exchange.lower().strip())
                 if manager is not None and self._frame_step > self.config.action_start_after_steps:
-                    await manager.sync([action])
-            self._previous_frame = frame
-            return action
+                    await manager.sync([decision.action])
+            return decision.action
         except Exception as exc:
-            counter_inc(
-                "mm_controller_errors_total",
-                labels={"actor_id": self.config.actor_id, "error": type(exc).__name__},
-                help="Controller errors",
-            )
             await self._publish(
                 self.config.normalized_diagnostics_topic,
                 {
@@ -150,101 +214,9 @@ class MpcControllerRunner:
             )
             return Action(actor_id=self.config.actor_id)
 
-    async def _publish_decision(
-        self,
-        frame: StrategyInputFrame,
-        state: Any,
-        action: Action,
-        sigmoid_action: Any,
-        *,
-        latency_ms: float,
-        optimizer_log: str,
-    ) -> None:
-        price_params = self._price_model.get_params() if hasattr(self._price_model, "get_params") else {}
-        flow_params = self._market_flow_model.get_params() if hasattr(self._market_flow_model, "get_params") else {}
-        hedge_price_params = (
-            self._hedge_price_model.get_params()
-            if self._hedge_price_model is not None and hasattr(self._hedge_price_model, "get_params")
-            else {}
-        )
-        warmup_skip = (
-            not self.config.observe_only
-            and self._frame_step <= self.config.action_start_after_steps
-        )
-        payload = {
-            "type": "ControllerDecision",
-            "actor_id": self.config.actor_id,
-            "exchange": frame.primary.exchange,
-            "symbol": frame.primary.symbol,
-            "t_end_ms": frame.primary.t_end_ms,
-            "observe_only": self.config.observe_only,
-            "frame_step": self._frame_step,
-            "action_start_after_steps": self.config.action_start_after_steps,
-            "live_execution_skipped_warmup": warmup_skip,
-            "hedge_status": frame.hedge_status,
-            "has_hedge": frame.has_hedge,
-            "mid": state.mid,
-            "inventory": state.inventory,
-            "cash": state.cash,
-            "buy_volume": state.buy_vol,
-            "sell_volume": state.sell_vol,
-            "order_count": len(action.orders_to_create),
-            "orders": [_order_summary(order) for order in action.orders_to_create],
-            "continuous_action_depth": _continuous_action_depth_series(
-                sigmoid_action,
-                mid=float(state.mid),
-                min_spread=float(self.config.min_spread),
-                max_spread=float(self.config.orderbook_grid.max_spread),
-                price_step=float(self.config.orderbook_grid.price_step),
-            ),
-            "price_model": {
-                "kind": (self.config.price_model or {}).get("kind", "residual"),
-                "params": price_params,
-            },
-            "market_flow_model": {
-                "kind": (self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"),
-                "params": flow_params,
-            },
-            "hedge_price_model": {
-                "kind": (self.config.hedge_price_model or {}).get("kind", "legacy"),
-                "params": hedge_price_params,
-                "active_in_mpc": self._hedge_price_model is not None
-                and float(getattr(self._controller, "hedge_coef", 0.0) or 0.0) != 0.0,
-            },
-            "optimizer": {
-                "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
-                "last_expected_delta_wealth": getattr(self._controller, "_last_E_dW", None),
-                "last_components": getattr(self._controller, "_last_J_components", None),
-                "log": optimizer_log,
-            },
-            "orderbook_grid": self.config.orderbook_grid.as_contract(),
-            "latency_ms": latency_ms,
-            "unit_policy": "prices=quote_per_base, quantities=base, cash/notional=quote",
-        }
-        payload["decision_hash"] = hashlib.sha256(
-            json.dumps(payload["orders"], sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        labels = {"actor_id": self.config.actor_id, "exchange": frame.primary.exchange, "symbol": frame.primary.symbol}
-        gauge("mm_controller_latency_ms", latency_ms, labels=labels, help="Controller decision latency")
-        gauge("mm_controller_order_count", len(action.orders_to_create), labels=labels, help="Controller order count")
-        gauge("mm_inventory", state.inventory, labels=labels, help="Actor inventory")
-        gauge("mm_cash", state.cash, labels=labels, help="Actor cash")
-        counter_inc("mm_controller_decisions_total", labels=labels, help="Controller decisions")
-        log_event(
-            "controller_decision",
-            {
-                "actor_id": self.config.actor_id,
-                "exchange": frame.primary.exchange,
-                "symbol": frame.primary.symbol,
-                "t_end_ms": frame.primary.t_end_ms,
-                "order_count": len(action.orders_to_create),
-                "latency_ms": latency_ms,
-                "observe_only": self.config.observe_only,
-            },
-        )
-        emit_controller_diagnostics(payload)
-        await self._publish(self.config.normalized_diagnostics_topic, payload)
-        await self._publish(self.config.normalized_action_topic, action)
+    async def _publish_decision(self, decision: StrategyDecision) -> None:
+        await self._publish(self.config.normalized_diagnostics_topic, decision.as_payload())
+        await self._publish(self.config.normalized_action_topic, decision.action)
 
     async def _publish(self, topic: str, event: Any) -> None:
         if self.bus is not None:
@@ -411,25 +383,7 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
 def _update_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
     if not hasattr(model, "update"):
         return
-    # The old market-flow estimators only read t_end/buy/sell volume from Step.
-    curr_step = (
-        frame.primary.t_end_ms,
-        None,
-        frame.primary.buy_volume,
-        frame.primary.sell_volume,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        None,
-        None,
-        None,
-        None,
-        0.0,
-        0.0,
-    )
-    model.update(None, curr_step)
+    model.update(None, market_flow_step_from_frame(frame))
 
 
 def _update_float_price_model(model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame) -> None:

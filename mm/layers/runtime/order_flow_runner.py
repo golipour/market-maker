@@ -15,7 +15,6 @@ import numpy as np
 
 from mm.mpc.step import Step
 from mm.layers.runtime.order_flow_stepper import OrderFlowStepper
-from mm.integrations.trade_stats import cancel_all_orders
 from mm.orderflow.testers import MarketOrderFlowTester
 
 if TYPE_CHECKING:
@@ -31,14 +30,8 @@ from mm.layers.core.pricing import (
 )
 
 from mm.layers.core.app.engine import advance_order_flow_runner
-from mm.layers.core.domain.orders import ExecutionReport
 from mm.layers.core.domain.types import InstrumentId
-from mm.layers.core.units.converter import (
-    UnitConverter,
-    instrument_spec_from_trade_stats,
-)
 from mm.layers.adapters.diagnostics.emitter import emit as _default_diagnostics_emit
-from mm.layers.adapters.exchanges.execution import execution_report_for_json, place_limit_order_lots_with_report
 from mm.layers.adapters.observability.context import metric_labels
 from mm.layers.adapters.observability.jsonlog import emit as _default_structured_log_emit
 from mm.layers.adapters.observability.metrics import REGISTRY as METRICS
@@ -104,6 +97,7 @@ class OrderFlowRunner:
         self._instrument_id = None
         self._instrument_spec = None
         self._live_exec_warned_no_token = False
+        self._live_exec_deprecated_warned = False
         self._step_counter = 0
         if execution_model is None and controller is not None and execution_rule is None:
             from mm.core.orderflow_execution import DefaultExecutionRule
@@ -366,254 +360,26 @@ class OrderFlowRunner:
         action: DiscretizedOrderAction,
         state: State,
     ) -> None:
-        """For real execution mode: cancel existing active orders, then place current ladder."""
-        ex = str(getattr(self.stepper, "exchange", "") or "").strip()
-        sym = str(getattr(self.stepper, "symbol", "") or "").strip()
-        api_token = getattr(self.stepper, "private_api_token", None)
-        if not (ex and sym):
+        """Deprecated: legacy runner no longer performs REST execution.
+
+        Production paths use ``mm.runtime`` with ``OrderManager`` / exchange adapters.
+        Simulation and inventory updates still run via the execution model in
+        ``advance_order_flow_runner``.
+        """
+        _ = (action, state)
+        if self._live_exec_deprecated_warned:
             return
-        if not api_token:
-            if not self._live_exec_warned_no_token:
-                print("[live_execution] skipped: missing private_api_token")
-                self._live_exec_warned_no_token = True
-            try:
-                METRICS.counter_inc(
-                    "mm_live_execution_skipped_total",
-                    labels=metric_labels(
-                        extra={"exchange": ex, "symbol": sym, "reason": "missing_private_api_token"}
-                    ),
-                    help="Live execution skips by reason",
-                )
-            except Exception:
-                pass
-            return
-        print(
-            f"[live_execution] cancel_all request exchange={ex} symbol={sym} execution=limit"
-        )
-        t0_cancel = time.perf_counter()
-        cancel_resp = cancel_all_orders(sym, ex, api_token=api_token, execution="limit")
-        cancel_elapsed_ms = (time.perf_counter() - t0_cancel) * 1000.0
-        print(
-            f"[live_execution] cancel_all response elapsed_ms={cancel_elapsed_ms:.1f} "
-            f"response={cancel_resp}"
-        )
-        if str(cancel_resp.get("status", "")).lower() != "ok":
-            print("[live_execution] skipped placements: cancel_all not ok")
-            try:
-                METRICS.counter_inc(
-                    "mm_live_execution_skipped_total",
-                    labels=metric_labels(
-                        extra={"exchange": ex, "symbol": sym, "reason": "cancel_all_not_ok"}
-                    ),
-                    help="Live execution skips by reason",
-                )
-            except Exception:
-                pass
-            return
-
-        base_asset, quote_asset = self._symbol_assets(sym)
-        _inst, spec = self._get_instrument_id_and_spec()
-        if spec is None:
-            spec = instrument_spec_from_trade_stats(exchange=ex, symbol=sym)
-        place_instrument = _inst if _inst is not None else InstrumentId(exchange=ex, symbol=sym)
-        uc = UnitConverter(spec)
-        tick_size = float(spec.tick_size)
-        lot_size = float(spec.lot_size)
-        min_qty_lots = float(spec.min_qty_lots)
-        min_notional_tick_lot = float(spec.min_notional_tick_lot)
-        # Use current state totals (already synchronized by stepper in real mode) for
-        # feasibility checks to avoid an extra balances REST request per step.
-        avail_base = max(0.0, float(state.inventory) * lot_size)
-        avail_quote = max(0.0, float(state.cash) * tick_size * lot_size)
-        print(
-            f"[live_execution] balances derived_from_state base_asset={base_asset} avail_base={avail_base:.12f} "
-            f"quote_asset={quote_asset} avail_quote={avail_quote:.12f} "
-            f"lot_size={lot_size:.12f} tick_size={tick_size:.12f} "
-            f"min_qty_lots={min_qty_lots:.6f} min_notional_tick_lot={min_notional_tick_lot:.6f}"
-        )
-        print(
-            f"[live_execution] units base_qty={base_asset} quote={quote_asset} "
-            f"min_qty_base={uc.qty_from_lots(int(round(min_qty_lots))):.12f} "
-            f"min_notional_quote={uc.notional_from_tick_lot(min_notional_tick_lot):.12f}"
-        )
-
-        mid_ticks = float(state.mid)
-        mid_quote = uc.price_from_ticks(int(round(mid_ticks)))
-        for spread, qty in action.bids:
-            o = uc.ladder_to_venue_order(
-                side="buy",
-                mid_ticks=mid_ticks,
-                spread_ticks=float(spread),
-                qty_lots=int(qty),
-            )
-            if o is None:
-                continue
-            q = int(o.qty_lots)
-            px = int(o.price_ticks)
-            amount_base = uc.qty_from_lots(q)
-            price_quote = uc.price_from_ticks(px)
-            notional_quote = amount_base * price_quote
-            if min_qty_lots > 0.0 and float(q) < min_qty_lots:
-                print(
-                    f"[live_execution] skip buy below min qty symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} min_qty_lots={min_qty_lots:.6f}"
-                )
-                continue
-            if min_notional_tick_lot > 0.0 and float(q) * float(px) < min_notional_tick_lot:
-                print(
-                    f"[live_execution] skip buy below min notional symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} notional_tick_lot={float(q) * float(px):.6f} "
-                    f"min_notional_tick_lot={min_notional_tick_lot:.6f}"
-                )
-                continue
-            if notional_quote > avail_quote + 1e-12:
-                print(
-                    f"[live_execution] skip buy insufficient quote symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} "
-                    f"price_quote={price_quote:.12f} need_quote={notional_quote:.12f} avail_quote={avail_quote:.12f}"
-                )
-                continue
-            print(
-                f"[live_execution] place request side=buy symbol={sym} "
-                f"mid_ticks={mid_ticks:.6f} spread_ticks={float(spread):.6f} "
-                f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} "
-                f"price_quote={price_quote:.12f} notional_quote={notional_quote:.12f}"
-            )
-            print(
-                f"[live_execution] place (human) side=buy symbol={sym} "
-                f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
-            )
-            t0_place = time.perf_counter()
-            resp, report = place_limit_order_lots_with_report(
-                symbol=sym,
-                exchange=ex,
-                side="buy",
-                price_ticks=px,
-                qty_lots=q,
-                api_token=api_token,
-                instrument=place_instrument,
-            )
-            self._emit_execution_log(
-                instrument=place_instrument,
-                report=report,
-                resp=resp,
-                intent_side="buy",
-                price_quote=price_quote,
-                qty_base=amount_base,
-            )
-            place_elapsed_ms = (time.perf_counter() - t0_place) * 1000.0
-            print(
-                f"[live_execution] place response side=buy elapsed_ms={place_elapsed_ms:.1f} "
-                f"response={resp}"
-            )
-            if str(resp.get("status", "")).lower() == "ok":
-                avail_quote = max(0.0, avail_quote - notional_quote)
-                try:
-                    METRICS.counter_inc(
-                        "mm_orders_placed_total",
-                        labels=metric_labels(extra={"exchange": ex, "symbol": sym, "side": "buy"}),
-                        help="Orders placed",
-                    )
-                except Exception:
-                    pass
-
-        for spread, qty in action.asks:
-            o = uc.ladder_to_venue_order(
-                side="sell",
-                mid_ticks=mid_ticks,
-                spread_ticks=float(spread),
-                qty_lots=int(qty),
-            )
-            if o is None:
-                continue
-            q = int(o.qty_lots)
-            px = int(o.price_ticks)
-            amount_base = uc.qty_from_lots(q)
-            price_quote = uc.price_from_ticks(px)
-            notional_quote = amount_base * price_quote
-            if min_qty_lots > 0.0 and float(q) < min_qty_lots:
-                print(
-                    f"[live_execution] skip sell below min qty symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} min_qty_lots={min_qty_lots:.6f}"
-                )
-                continue
-            if min_notional_tick_lot > 0.0 and float(q) * float(px) < min_notional_tick_lot:
-                print(
-                    f"[live_execution] skip sell below min notional symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} notional_tick_lot={float(q) * float(px):.6f} "
-                    f"min_notional_tick_lot={min_notional_tick_lot:.6f}"
-                )
-                continue
-            if amount_base > avail_base + 1e-12:
-                print(
-                    f"[live_execution] skip sell insufficient base symbol={sym} "
-                    f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} avail_base={avail_base:.12f}"
-                )
-                continue
-            print(
-                f"[live_execution] place request side=sell symbol={sym} "
-                f"mid_ticks={mid_ticks:.6f} spread_ticks={float(spread):.6f} "
-                f"price_ticks={px} qty_lots={q} amount_base={amount_base:.12f} "
-                f"price_quote={price_quote:.12f} notional_quote={notional_quote:.12f}"
-            )
-            print(
-                f"[live_execution] place (human) side=sell symbol={sym} "
-                f"mid_quote={mid_quote:.12f} price_quote={price_quote:.12f} qty_base={amount_base:.12f}"
-            )
-            t0_place = time.perf_counter()
-            resp, report = place_limit_order_lots_with_report(
-                symbol=sym,
-                exchange=ex,
-                side="sell",
-                price_ticks=px,
-                qty_lots=q,
-                api_token=api_token,
-                instrument=place_instrument,
-            )
-            self._emit_execution_log(
-                instrument=place_instrument,
-                report=report,
-                resp=resp,
-                intent_side="sell",
-                price_quote=price_quote,
-                qty_base=amount_base,
-            )
-            place_elapsed_ms = (time.perf_counter() - t0_place) * 1000.0
-            print(
-                f"[live_execution] place response side=sell elapsed_ms={place_elapsed_ms:.1f} "
-                f"response={resp}"
-            )
-            if str(resp.get("status", "")).lower() == "ok":
-                avail_base = max(0.0, avail_base - amount_base)
-                try:
-                    METRICS.counter_inc(
-                        "mm_orders_placed_total",
-                        labels=metric_labels(extra={"exchange": ex, "symbol": sym, "side": "sell"}),
-                        help="Orders placed",
-                    )
-                except Exception:
-                    pass
-
-    def _emit_execution_log(
-        self,
-        *,
-        instrument: InstrumentId,
-        report: ExecutionReport,
-        resp: dict,
-        intent_side: str,
-        price_quote: float,
-        qty_base: float,
-    ) -> None:
-        """Structured JSON log for Grafana/Loki when ``MM_JSON_LOG=1`` (best-effort)."""
+        self._live_exec_deprecated_warned = True
+        ex = str(getattr(self.stepper, "exchange", "") or "").strip() or "unknown"
+        sym = str(getattr(self.stepper, "symbol", "") or "").strip() or "unknown"
         try:
-            from mm.layers.adapters.observability.jsonlog import emit as log_emit
-
-            payload = execution_report_for_json(report)
-            payload["intent_side"] = intent_side
-            payload["intent_price_quote"] = float(price_quote)
-            payload["intent_qty_base"] = float(qty_base)
-            payload["raw_status"] = resp.get("status")
-            log_emit("mm.execution", payload)
+            METRICS.counter_inc(
+                "mm_live_execution_skipped_total",
+                labels=metric_labels(
+                    extra={"exchange": ex, "symbol": sym, "reason": "legacy_runner_disabled"}
+                ),
+                help="Live execution skips by reason",
+            )
         except Exception:
             pass
 

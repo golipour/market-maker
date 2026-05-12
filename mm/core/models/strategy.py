@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
+from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 
@@ -34,3 +35,88 @@ class StrategyInputFrame:
     @property
     def t_end_ms(self) -> int:
         return self.primary.t_end_ms
+
+
+@dataclass(frozen=True, slots=True)
+class ModelUpdateReport:
+    """Model state summary produced while evaluating one strategy frame."""
+
+    market_flow: dict[str, Any] = field(default_factory=dict)
+    price: dict[str, Any] = field(default_factory=dict)
+    hedge_price: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionDiagnostics:
+    """Exporter-neutral diagnostics facts for one strategy decision."""
+
+    optimizer: dict[str, Any] = field(default_factory=dict)
+    continuous_action_depth: dict[str, Any] = field(default_factory=dict)
+    orderbook_grid: dict[str, Any] = field(default_factory=dict)
+    unit_policy: str = "prices=quote_per_base, quantities=base, cash/notional=quote"
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyDecision:
+    """Canonical strategy output consumed by execution, observability, and persistence."""
+
+    actor_id: str
+    exchange: str
+    symbol: str
+    t_end_ms: int
+    frame_step: int
+    action: Action
+    observe_only: bool = True
+    action_start_after_steps: int = 0
+    live_execution_skipped_warmup: bool = False
+    hedge_status: HedgeStatus = "disabled"
+    has_hedge: bool = False
+    mid: float = 0.0
+    inventory: float = 0.0
+    cash: float = 0.0
+    buy_volume: float = 0.0
+    sell_volume: float = 0.0
+    latency_ms: float = 0.0
+    decision_hash: str = ""
+    orders: tuple[dict[str, Any], ...] = ()
+    model_updates: ModelUpdateReport = field(default_factory=ModelUpdateReport)
+    diagnostics: DecisionDiagnostics = field(default_factory=DecisionDiagnostics)
+    economics: dict[str, Any] | None = None
+
+    @property
+    def order_count(self) -> int:
+        return len(self.action.orders_to_create)
+
+    def as_payload(self) -> dict[str, Any]:
+        """JSON-friendly event payload for the runtime bus and persistence."""
+
+        return {
+            "type": "StrategyDecision",
+            "actor_id": self.actor_id,
+            "exchange": self.exchange,
+            "symbol": self.symbol,
+            "t_end_ms": self.t_end_ms,
+            "observe_only": self.observe_only,
+            "frame_step": self.frame_step,
+            "action_start_after_steps": self.action_start_after_steps,
+            "live_execution_skipped_warmup": self.live_execution_skipped_warmup,
+            "hedge_status": self.hedge_status,
+            "has_hedge": self.has_hedge,
+            "mid": self.mid,
+            "inventory": self.inventory,
+            "cash": self.cash,
+            "buy_volume": self.buy_volume,
+            "sell_volume": self.sell_volume,
+            "order_count": self.order_count,
+            "orders": list(self.orders),
+            "price_model": self.model_updates.price,
+            "market_flow_model": self.model_updates.market_flow,
+            "hedge_price_model": self.model_updates.hedge_price,
+            "optimizer": self.diagnostics.optimizer,
+            "continuous_action_depth": self.diagnostics.continuous_action_depth,
+            "orderbook_grid": self.diagnostics.orderbook_grid,
+            "latency_ms": self.latency_ms,
+            "unit_policy": self.diagnostics.unit_policy,
+            "decision_hash": self.decision_hash,
+            **({"economics": dict(self.economics)} if self.economics else {}),
+        }

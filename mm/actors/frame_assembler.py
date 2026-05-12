@@ -9,7 +9,6 @@ from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import HedgeStatus, StrategyInputFrame
 from mm.exchanges.shared.provider_adapter import now_ms
-from mm.observability import counter_inc, gauge, log_event, span
 
 
 class StrategyInputFrameAssembler:
@@ -66,36 +65,21 @@ class StrategyInputFrameAssembler:
         return await self.build_frame(primary)
 
     async def build_frame(self, primary: MarketEvent) -> StrategyInputFrame:
-        with span("mm.frame_assembler.build", exchange=primary.exchange, symbol=primary.symbol):
-            self._drain_latest_inputs()
-            if self.hedge_queue is not None:
-                await self._wait_for_matching_hedge(primary.t_end_ms)
-            self._drain_latest_inputs()
-            hedge, hedge_status, hedge_lag_ms = self._select_hedge(primary)
-            labels = {"exchange": primary.exchange, "symbol": primary.symbol, "hedge_status": hedge_status}
-            counter_inc("mm_strategy_frames_total", labels=labels, help="Strategy frames assembled")
-            if hedge_lag_ms is not None:
-                gauge("mm_hedge_lag_ms", hedge_lag_ms, labels=labels, help="Selected hedge event lag")
-            log_event(
-                "strategy_frame",
-                {
-                    "exchange": primary.exchange,
-                    "symbol": primary.symbol,
-                    "t_end_ms": primary.t_end_ms,
-                    "hedge_status": hedge_status,
-                    "hedge_lag_ms": hedge_lag_ms,
-                },
-            )
-            return StrategyInputFrame(
-                primary=primary,
-                hedge=hedge,
-                primary_private=self._primary_private,
-                hedge_private=self._hedge_private,
-                hedge_status=hedge_status,
-                hedge_lag_ms=hedge_lag_ms,
-                max_hedge_lag_ms=self.max_hedge_lag_ms,
-                created_at_ms=self.clock_ms(),
-            )
+        self._drain_latest_inputs()
+        if self.hedge_queue is not None:
+            await self._wait_for_matching_hedge(primary.t_end_ms)
+        self._drain_latest_inputs()
+        hedge, hedge_status, hedge_lag_ms = self._select_hedge(primary)
+        return StrategyInputFrame(
+            primary=primary,
+            hedge=hedge,
+            primary_private=self._primary_private,
+            hedge_private=self._hedge_private,
+            hedge_status=hedge_status,
+            hedge_lag_ms=hedge_lag_ms,
+            max_hedge_lag_ms=self.max_hedge_lag_ms,
+            created_at_ms=self.clock_ms(),
+        )
 
     async def _run_primary(self) -> None:
         try:

@@ -5,21 +5,12 @@ from typing import Sequence
 
 def main(argv: Sequence[str] | None = None) -> int:
     """
-    Load environment, optional Prometheus /metrics, then the default trading loop
-    (``mm.layers.runtime.pipeline.main``).
+    Deprecated legacy entrypoint.
+
+    Production runtime is now ``mm.runtime`` / ``mm.runtime.print_events``.
     """
-    from mm.layers.runtime.local_env import load_local_env
-
-    load_local_env()
-
-    # Import lazily so module import stays lightweight.
-    # Start optional local /metrics endpoint (enable with MM_METRICS_PORT=8000).
-    from mm.layers.adapters.observability.metrics import start_server
-
-    start_server()
-
-    from mm.layers.runtime.run import run_order_flow_pipeline
-
-    run_order_flow_pipeline()
-    return 0
+    raise SystemExit(
+        "mm.layers.runtime is deprecated and no longer a production entrypoint. "
+        "Use the config-driven mm.runtime path, for example `python -m mm.runtime.print_events --config <path>`."
+    )
 

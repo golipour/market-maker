@@ -18,7 +18,7 @@ from mm.layers.core.app.observability_defaults import (
 from mm.layers.core.domain.types import InstrumentId
 from mm.layers.core.units.converter import instrument_spec_from_trade_stats
 from mm.layers.core.app.model_updates import update_flow_models_after_step
-from mm.layers.core.app.step_economics_pg import keep_runner_pnl_series_memory, persist_step_economics_row
+from mm.persistence.step_economics_pg import keep_runner_pnl_series_memory, persist_step_economics_row
 from mm.layers.core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm.layers.core.pricing import main_inventory_value_ticks, portfolio_wealth_quote, portfolio_wealth_ticks
 

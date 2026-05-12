@@ -4,8 +4,13 @@ import pytest
 
 from mm.bus.factory import build_event_bus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
+from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent, RawOrderbook
+from mm.core.models.strategy import StrategyDecision
+from mm.layers.runtime.cli import main as legacy_layers_main
+from mm.layers.runtime.pipeline import main as legacy_pipeline_main
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
+from mm.strategies.mpc_legacy_adapter import market_flow_step_from_frame
 
 
 def _event() -> MarketEvent:
@@ -71,3 +76,81 @@ def test_runtime_config_parses_bus_persistence_and_observability() -> None:
     assert config.persistence.topics == ("strategy:controller",)
     assert config.observability.run_id == "run-1"
     assert config.observability.otel_enabled is True
+
+
+def test_strategy_decision_payload_is_canonical_controller_event() -> None:
+    decision = StrategyDecision(
+        actor_id="mpc-controller",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        t_end_ms=1001,
+        frame_step=1,
+        action=Action(actor_id="mpc-controller"),
+        latency_ms=2.5,
+        decision_hash="abc",
+    )
+
+    payload = decision.as_payload()
+
+    assert payload["type"] == "StrategyDecision"
+    assert payload["actor_id"] == "mpc-controller"
+    assert payload["order_count"] == 0
+    assert payload["unit_policy"] == "prices=quote_per_base, quantities=base, cash/notional=quote"
+    assert "economics" not in payload
+
+
+def test_legacy_mpc_step_tuple_is_quarantined_to_adapter() -> None:
+    step = market_flow_step_from_frame(_event_frame())
+
+    assert len(step) == 15
+    assert step[0] == 1001
+    assert step[2] == 0.0
+    assert step[3] == 0.0
+
+
+def test_legacy_layers_runtime_entrypoint_fails_fast() -> None:
+    with pytest.raises(SystemExit, match="mm.layers.runtime is deprecated"):
+        legacy_layers_main([])
+
+
+def test_legacy_pipeline_main_fails_fast() -> None:
+    with pytest.raises(SystemExit, match="mm.layers.runtime.pipeline.main is deprecated"):
+        legacy_pipeline_main()
+
+
+def test_layers_domain_events_market_event_shim_matches_canonical() -> None:
+    from mm.core.models.market import MarketEvent as CanonicalMarketEvent
+    from mm.layers.core.domain.events import MarketEvent as LayersMarketEvent
+
+    assert LayersMarketEvent is CanonicalMarketEvent
+
+
+def test_strategy_decision_payload_includes_economics_when_set() -> None:
+    decision = StrategyDecision(
+        actor_id="mpc-controller",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        t_end_ms=1001,
+        frame_step=1,
+        action=Action(actor_id="mpc-controller"),
+        economics={
+            "t_end_ms": 1001,
+            "step_counter": 7,
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "d_w": 1.0,
+            "spread_pnl": 0.1,
+            "inventory_pnl": 0.2,
+            "cross_pnl": 0.0,
+            "fee_pnl": -0.05,
+            "wealth_pnl": 0.25,
+        },
+    )
+    payload = decision.as_payload()
+    assert payload["economics"]["d_w"] == 1.0
+
+
+def _event_frame():
+    from mm.core.models.strategy import StrategyInputFrame
+
+    return StrategyInputFrame(primary=_event())

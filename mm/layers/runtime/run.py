@@ -9,8 +9,9 @@ The operational entrypoint is ``python -m mm.layers.runtime``. Pipeline composit
 
 
 def run_order_flow_pipeline() -> None:
-    """Run the default headless pipeline (same as ``mm.layers.runtime.pipeline.main``)."""
-    from mm.layers.runtime.pipeline import main
+    """Deprecated legacy runtime shim."""
 
-    main()
+    raise RuntimeError(
+        "mm.layers.runtime is deprecated. Use the config-driven mm.runtime path instead."
+    )
 

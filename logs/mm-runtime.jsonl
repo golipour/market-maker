@@ -4811,3 +4811,7 @@
 {"ts_ms":1778510060586,"event":"order_validation_rejected","exchange":"nobitex","symbol":"USDT_IRT","reason":"below_min_notional_quote","side":"sell","price":1864080.0,"qty":0.033800000000000004,"min_base_qty":0.01,"min_notional_quote":500000.0}
 {"ts_ms":1778510060586,"event":"order_validation_rejected","exchange":"nobitex","symbol":"USDT_IRT","reason":"below_min_notional_quote","side":"sell","price":1865080.0,"qty":0.0956,"min_base_qty":0.01,"min_notional_quote":500000.0}
 {"ts_ms":1778510060586,"event":"order_validation_rejected","exchange":"nobitex","symbol":"USDT_IRT","reason":"below_min_notional_quote","side":"sell","price":1866080.0,"qty":0.2637,"min_base_qty":0.01,"min_notional_quote":500000.0}
+{"ts_ms":1778571835586,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778571835587,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778571835591,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778571835605,"event":"persistence_disabled","reason":"config"}

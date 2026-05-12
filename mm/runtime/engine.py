@@ -8,6 +8,7 @@ from mm.actors.frame_assembler import StrategyInputFrameAssembler
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.core.clock import WallClock
+from mm.core.topics import RuntimeTopics
 from mm.exchanges.factory import (
     OrderCommandAdapterSelection,
     PrivateStateAdapterSelection,
@@ -21,6 +22,7 @@ from mm.execution.order_manager import OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import log_event
+from mm.observability_subscribers import RuntimeObservabilitySubscriber
 from mm.observability_setup import configure_observability
 from mm.env_loader import load_mm_env
 from mm.private_state.reconciler import PrivateStateReconciler
@@ -45,6 +47,7 @@ class RuntimeComponents:
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = field(default_factory=dict)
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = field(default_factory=dict)
     persistence_daemons: tuple[object, ...] = ()
+    observability_daemons: tuple[object, ...] = ()
     control_plane: RuntimeControlPlane | None = None
     controller_runner: object | None = None
     _scheduler_task: asyncio.Task | None = None
@@ -54,6 +57,10 @@ class RuntimeComponents:
         if self._started:
             return
         for daemon in self.persistence_daemons:
+            start = getattr(daemon, "start", None)
+            if start is not None:
+                await start()
+        for daemon in self.observability_daemons:
             start = getattr(daemon, "start", None)
             if start is not None:
                 await start()
@@ -86,6 +93,10 @@ class RuntimeComponents:
         for reconciler in reversed(tuple(self.execution_reconcilers.values())):
             await reconciler.stop()
         for daemon in reversed(self.persistence_daemons):
+            stop = getattr(daemon, "stop", None)
+            if stop is not None:
+                await stop()
+        for daemon in reversed(self.observability_daemons):
             stop = getattr(daemon, "stop", None)
             if stop is not None:
                 await stop()
@@ -201,8 +212,9 @@ async def build_runtime_components(
                 runtime_bus,
             )
 
-    primary_topic = config.primary.market_event_topic(config.interval_ms)
-    hedge_topic = config.hedge.market_event_topic(config.interval_ms) if config.hedge is not None else None
+    topics = _runtime_topics(config)
+    primary_topic = topics.primary_market_events
+    hedge_topic = topics.hedge_market_events
     frame_assembler = StrategyInputFrameAssembler(
         primary_queue=runtime_bus.subscribe_queue(primary_topic),
         hedge_queue=runtime_bus.subscribe_queue(hedge_topic) if hedge_topic is not None else None,
@@ -227,6 +239,7 @@ async def build_runtime_components(
         )
 
     persistence_daemons = _build_persistence_daemons(config, runtime_bus)
+    observability_daemons = _build_observability_daemons(config, runtime_bus)
     control_plane = RuntimeControlPlane(bus=runtime_bus)
 
     return RuntimeComponents(
@@ -242,6 +255,7 @@ async def build_runtime_components(
         private_reconcilers=private_reconcilers,
         execution_reconcilers=execution_reconcilers,
         persistence_daemons=persistence_daemons,
+        observability_daemons=observability_daemons,
         control_plane=control_plane,
         controller_runner=controller_runner,
     )
@@ -321,25 +335,62 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
     return tuple(daemons)
 
 
+def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
+    topics = _runtime_topics(config)
+    observed_topics = [
+        topics.strategy_frame,
+        topics.strategy_decisions,
+        topics.strategy_actions,
+        RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
+        RuntimeTopics.execution_state(config.primary.normalized_exchange()),
+        config.primary.market_error_topic(),
+    ]
+    if config.hedge is not None:
+        observed_topics.extend(
+            [
+                RuntimeTopics.execution_orders(config.hedge.normalized_exchange()),
+                RuntimeTopics.execution_state(config.hedge.normalized_exchange()),
+                config.hedge.market_error_topic(),
+            ]
+        )
+    return (RuntimeObservabilitySubscriber(bus=bus, topics=tuple(observed_topics)),)
+
+
 def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, ...]:
+    runtime_topics = _runtime_topics(config)
     topics = [
-        config.primary.market_event_topic(config.interval_ms),
-        config.frame_topic,
-        "strategy:actions",
-        "execution:orders:" + config.primary.normalized_exchange(),
-        "execution:state:" + config.primary.normalized_exchange(),
-        "private:state:" + config.primary.normalized_exchange() + ":snapshot",
+        runtime_topics.primary_market_events,
+        runtime_topics.strategy_frame,
+        runtime_topics.strategy_actions,
+        RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
+        RuntimeTopics.execution_state(config.primary.normalized_exchange()),
+        RuntimeTopics.private_snapshot(config.primary.normalized_exchange()),
     ]
     if config.controller is not None:
-        topics.append(config.controller.normalized_diagnostics_topic)
+        topics.append(runtime_topics.strategy_decisions)
     if config.hedge is not None:
         hedge_exchange = config.hedge.normalized_exchange()
         topics.extend(
             [
                 config.hedge.market_event_topic(config.interval_ms),
-                "execution:orders:" + hedge_exchange,
-                "execution:state:" + hedge_exchange,
-                "private:state:" + hedge_exchange + ":snapshot",
+                RuntimeTopics.execution_orders(hedge_exchange),
+                RuntimeTopics.execution_state(hedge_exchange),
+                RuntimeTopics.private_snapshot(hedge_exchange),
             ]
         )
     return tuple(dict.fromkeys(topics))
+
+
+def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:
+    return RuntimeTopics(
+        primary=config.primary,
+        hedge=config.hedge,
+        interval_ms=config.interval_ms,
+        frame_topic=config.frame_topic,
+        action_topic=config.controller.normalized_action_topic if config.controller is not None else "strategy:actions",
+        diagnostics_topic=(
+            config.controller.normalized_diagnostics_topic
+            if config.controller is not None
+            else "strategy:controller"
+        ),
+    )

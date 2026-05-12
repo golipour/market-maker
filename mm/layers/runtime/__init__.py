@@ -1,7 +1,7 @@
 """
-Runtime wiring/entrypoints.
+Deprecated legacy runtime package.
 
-Owns integrated modules (e.g. ``mm.layers.runtime.order_flow_runner``) and composes
-``mm.layers.core`` with ``mm.layers.adapters``. See ``docs/ARCHITECTURE_RFC.md``.
+Production runtime wiring lives under ``mm.runtime``. This package remains only
+for temporary compatibility while tuple-based MPC adapters are retired.
 """
 
