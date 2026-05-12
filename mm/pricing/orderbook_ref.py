@@ -1,4 +1,4 @@
-"""Reference buy/sell VWAPs from a live ``RawOrderbook`` (float quote-per-base, base qty)."""
+"""VWAP from a live ``RawOrderbook`` (float quote-per-base, base qty)."""
 
 from __future__ import annotations
 
@@ -19,14 +19,15 @@ def mid_raw_orderbook(book: RawOrderbook) -> float:
     raise ValueError("cannot compute mid from empty orderbook")
 
 
-def reference_vwaps_raw_orderbook(book: RawOrderbook, *, target_depth: float) -> tuple[float, float]:
-    """Return ``(buy_vwap, sell_vwap)`` consistent with ``representative_prices_batched``.
+def vwap_from_raw_orderbook(book: RawOrderbook, *, target_depth: float) -> tuple[float, float]:
+    """Return ``(buy_vwap, sell_vwap)`` from native bid/ask levels.
 
-    Walk **asks** (buy / lift-offer) and **bids** (sell / hit-bid) from the respective
-    best levels. Use a common cumulative depth
-    ``depth_used = min(target_depth, total_bid_qty, total_ask_qty)`` (base units), then
-    VWAP each side up to ``depth_used``. When ``depth_used`` is negligible, fall back to
-    ``mid_raw_orderbook``.
+    Walk **asks** (buy) and **bids** (sell) from best prices. Uses
+    ``depth_used = min(target_depth, total_bid_qty, total_ask_qty)`` (base units),
+    matching the depth cap in ``vwap_prices_batched`` — which applies the same
+    cap to **grid-aligned** qty tensors inside MPC, not to raw level prices here.
+
+    When ``depth_used`` is negligible, returns ``(mid, mid)`` from ``mid_raw_orderbook``.
     """
 
     eps = 1e-12

@@ -1,5 +1,5 @@
-"""Defaults shared by MPC reference VWAP depth."""
+"""Defaults shared by MPC VWAP depth (base quantity cap)."""
 
 from __future__ import annotations
 
-DEFAULT_REFERENCE_DEPTH_LOTS: float = 1000.0
+DEFAULT_VWAP_DEPTH_LOTS: float = 1000.0

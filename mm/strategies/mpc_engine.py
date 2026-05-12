@@ -17,14 +17,14 @@ from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
 from mm.mpc.mpc_state import State
-from mm.pricing import DEFAULT_REFERENCE_DEPTH_LOTS, reference_vwaps_raw_orderbook
+from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig
 
 
 def _vwap_target_depth(price_model: Any | None) -> float:
     """Depth cap (base units) aligned with ``TorchResidualPriceModel._target_depth_lots``."""
 
-    return float(getattr(price_model, "_target_depth_lots", DEFAULT_REFERENCE_DEPTH_LOTS))
+    return float(getattr(price_model, "_target_depth_lots", DEFAULT_VWAP_DEPTH_LOTS))
 
 
 def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
@@ -316,15 +316,13 @@ def _state_from_frame(
         if (spread := level.price - primary_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
     primary_inventory, primary_cash = _inventory_cash(frame.primary_private, binding.primary.base_asset, binding.primary.quote_asset)
-    buy_vwap, sell_vwap = reference_vwaps_raw_orderbook(
-        frame.primary.orderbook, target_depth=vwap_depth
-    )
+    buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.primary.orderbook, target_depth=vwap_depth)
     hedge_buy_vwap = hedge_sell_vwap = None
     hedge_inventory = 0.0
     hedge_cash = 0.0
     if frame.hedge is not None:
         try:
-            hedge_buy_vwap, hedge_sell_vwap = reference_vwaps_raw_orderbook(
+            hedge_buy_vwap, hedge_sell_vwap = vwap_from_raw_orderbook(
                 frame.hedge.orderbook, target_depth=vwap_depth
             )
         except ValueError:

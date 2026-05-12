@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mm.core.models.market import PriceLevel, RawOrderbook
-from mm.pricing.orderbook_ref import mid_raw_orderbook, reference_vwaps_raw_orderbook
+from mm.pricing.orderbook_ref import mid_raw_orderbook, vwap_from_raw_orderbook
 
 
 def _book() -> RawOrderbook:
@@ -22,17 +22,17 @@ def _book() -> RawOrderbook:
     )
 
 
-def test_reference_vwaps_depth_min_of_sides_and_cap() -> None:
+def test_vwap_from_raw_orderbook_depth_min_of_sides_and_cap() -> None:
     book = _book()
     # total_bid=40, total_ask=20 -> depth_used = min(15, 40, 20) = 15
-    buy_vwap, sell_vwap = reference_vwaps_raw_orderbook(book, target_depth=15.0)
+    buy_vwap, sell_vwap = vwap_from_raw_orderbook(book, target_depth=15.0)
     # Buy: 10 @ 101 + 5 @ 102
     assert buy_vwap == pytest.approx((10 * 101 + 5 * 102) / 15.0)
     # Sell: 15 @ 99
     assert sell_vwap == pytest.approx(99.0)
 
 
-def test_reference_vwaps_falls_back_to_mid_when_thin() -> None:
+def test_vwap_from_raw_orderbook_falls_back_to_mid_when_thin() -> None:
     book = RawOrderbook(
         exchange="x",
         symbol="y",
@@ -42,6 +42,6 @@ def test_reference_vwaps_falls_back_to_mid_when_thin() -> None:
         is_snapshot=True,
     )
     mid = mid_raw_orderbook(book)
-    b, s = reference_vwaps_raw_orderbook(book, target_depth=100.0)
+    b, s = vwap_from_raw_orderbook(book, target_depth=100.0)
     assert b == pytest.approx(mid)
     assert s == pytest.approx(mid)

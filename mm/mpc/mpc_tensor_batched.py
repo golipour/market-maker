@@ -20,8 +20,7 @@ from mm.mpc.state_tensor import (
 )
 from mm.mpc.reward_tensor import terminal_objective
 
-from mm.pricing import target_depth_lots_from_price_model
-from mm.mpc.vwap_prices import vwap_reference_prices_batched
+from mm.pricing import target_depth_lots_from_price_model, vwap_prices_batched
 
 
 # -----------------------------------------------------------------------------
@@ -982,7 +981,7 @@ class MonteCarloMPCTensorBatched:
                         spread_grid_rep,
                     )
                     if h == 0:
-                        # Use upstream VWAP references (single vwap_depth policy),
+                        # Use upstream VWAPs (single vwap_depth policy),
                         # instead of recomputing from the book arrays.
                         buy_cmp_t = torch_mod.full(
                             (self.n_samples, 1),
@@ -997,12 +996,12 @@ class MonteCarloMPCTensorBatched:
                             device=_device,
                         )
                     else:
-                        buy_cmp_t, sell_cmp_t = vwap_reference_prices_batched(
+                        buy_cmp_t, sell_cmp_t = vwap_prices_batched(
                             ob_bids,
                             ob_asks,
                             mid_t,
                             spread_grid_rep,
-                            vwap_depth=vwap_depth,
+                            target_depth=vwap_depth,
                         )
                     buy_vwap_t = buy_cmp_t + eps_buy_h
                     sell_vwap_t = sell_cmp_t + eps_sell_h
@@ -1051,12 +1050,12 @@ class MonteCarloMPCTensorBatched:
                         mid_t,
                         spread_grid_rep,
                     )
-                    buy_cmp_h, sell_cmp_h = vwap_reference_prices_batched(
+                    buy_cmp_h, sell_cmp_h = vwap_prices_batched(
                         ob_bids_next,
                         ob_asks_next,
                         mid_next,
                         spread_grid_rep,
-                        vwap_depth=vwap_depth,
+                        target_depth=vwap_depth,
                     )
                     buy_vwap_next = buy_cmp_h + eps_buy_next
                     sell_vwap_next = sell_cmp_h + eps_sell_next

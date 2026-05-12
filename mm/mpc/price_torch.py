@@ -1,6 +1,6 @@
 """
 Torch-based price models: Gaussian Δmid (GaussianPriceModel) and two-sided residual
-noise around MOF-only representative VWAPs (TorchResidualPriceModel).
+noise around MOF-only VWAPs (TorchResidualPriceModel).
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ def _expected_buy_sell_vol_from_params(params: dict) -> tuple[float, float]:
 
 class TorchResidualPriceModel:
     """
-    Two-sided residual noise on representative VWAPs (MOF-only book evolution).
+    Two-sided residual noise on VWAPs (MOF-only book evolution).
 
     Each step compares instantaneous realized buy/sell VWAP on the current book to the
     VWAP on the book obtained by consuming market flow on the previous book. Residuals
@@ -322,7 +322,7 @@ class TorchResidualPriceModel:
         device: str | None = None,
         dtype: "np.dtype | None" = None,
     ):
-        """Sample independent Gaussian residuals for buy/sell representative prices."""
+        """Sample independent Gaussian residuals for buy/sell VWAPs."""
         import torch
         import torch.distributions as dist
         p = self.get_params()

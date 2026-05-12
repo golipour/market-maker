@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Primary and hedge reference buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``primary_buy_vwap`` / ``primary_sell_vwap`` / ``hedge_buy_vwap`` / ``hedge_sell_vwap`` on decisions.",
+  "description": "Primary and hedge buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``primary_buy_vwap`` / ``primary_sell_vwap`` / ``hedge_buy_vwap`` / ``hedge_sell_vwap`` on decisions.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``reference_vwaps_raw_orderbook`` / MPC state). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -108,7 +108,7 @@
   "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "MM reference VWAPs (PostgreSQL)",
+  "title": "MM VWAP (PostgreSQL)",
   "uid": "mm-reference-vwaps-pg",
   "version": 1,
   "weekStart": ""

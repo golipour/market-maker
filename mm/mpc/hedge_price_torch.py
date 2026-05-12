@@ -1,7 +1,7 @@
-"""Hedge-venue reference price dynamics for MPC rollouts.
+"""Hedge-venue VWAP dynamics for MPC rollouts.
 
-Gaussian EWMA-style hedge reference model (used when hedge leg participates in MPC):
-EWMA on (buy, sell) representative-price *deltas*, then Gaussian ``sample_deltas``
+Gaussian EWMA-style hedge VWAP model (used when hedge leg participates in MPC):
+EWMA on (buy, sell) VWAP *deltas*, then Gaussian ``sample_deltas``
 for the optimiser. Observations and deltas use the same numeric units as the
 runtime (quote-per-base floats in the new stack; historically ticks in the old).
 """
@@ -16,7 +16,7 @@ import numpy as np
 
 class HedgeGaussianPriceModel:
     """
-    Gaussian model for hedge representative-price deltas (buy/sell), updated via
+    Gaussian model for hedge VWAP deltas (buy/sell), updated via
     EWMA sufficient statistics (exponentially weighted moments).
     """
 
@@ -95,7 +95,7 @@ class HedgeGaussianPriceModel:
         dtype: Any = None,
         torch_mod: Any = None,
     ) -> tuple[Any, Any]:
-        """Sample Gaussian delta shocks for (buy, sell) representative prices."""
+        """Sample Gaussian delta shocks for (buy, sell) hedge VWAPs."""
         n_samples, horizon = int(shape[0]), int(shape[1])
         p = self.get_params()
         mu_db = float(p.get("mu_delta_buy", 0.0) or 0.0)
