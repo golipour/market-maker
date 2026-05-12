@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Time series of online model state from persisted StrategyDecision rows (price_model, market_flow_model, hedge_price_model). Requires Postgres persistence including the decisions topic.",
+  "description": "Time series of online model state from persisted StrategyDecision rows. Params split into μ-, σ-, and other series per model.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` where `event_type = 'StrategyDecision'` and `topic` = **Decisions topic** (default `strategy:decisions`).\n\n**Panels:** Numeric keys under `payload.price_model.params`, `payload.market_flow_model.params`, and `payload.hedge_price_model.params` are unpivoted automatically (new keys appear as new series when you change model kinds). **Hedge** also plots `active_in_mpc` (0/1).\n\n**Empty charts:** widen the time range, confirm persistence lists the decisions topic, and match **Exchange / Symbol** to the primary instrument. The **Model kinds** table shows the latest row’s `kind` field for each block.",
+        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **price**, **market flow**, and **hedge** models, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). **Hedge — other** also includes **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -41,7 +41,7 @@
     {
       "datasource": { "type": "postgres", "uid": "postgres-mm" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
       "id": 10,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
@@ -53,17 +53,17 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Price model params",
+      "title": "Price model — μ",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "postgres", "uid": "postgres-mm" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
       "id": 11,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
@@ -75,17 +75,17 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Market order flow model params",
+      "title": "Price model — σ",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "postgres", "uid": "postgres-mm" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
       "id": 12,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
@@ -97,11 +97,143 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts AS \"time\", metric, value FROM (\n  SELECT e.ts AS ts,\n         ('hedge_price_model.' || kv.key) AS metric,\n         (kv.value #>> '{}')::double precision AS value\n  FROM mm_events e,\n  LATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND jsonb_typeof(kv.value) = 'number'\n  UNION ALL\n  SELECT e.ts,\n         'hedge_price_model.active_in_mpc' AS metric,\n         CASE WHEN e.payload->'hedge_price_model'->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND e.payload->'hedge_price_model' ? 'active_in_mpc'\n) u\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Hedge price model params (+ active_in_mpc)",
+      "title": "Price model — other params",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "id": 20,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Market flow — μ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "id": 21,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Market flow — σ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "id": 22,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Market flow — other params (p₀, shape/scale, wb_*, xi/beta/u, …)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 56 },
+      "id": 30,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('hedge_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Hedge price — μ (deltas)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 64 },
+      "id": 31,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('hedge_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Hedge price — σ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 72 },
+      "id": 32,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", metric, value FROM (\n  SELECT e.ts AS ts,\n         ('hedge_price_model.' || kv.key) AS metric,\n         (kv.value #>> '{}')::double precision AS value\n  FROM mm_events e,\n  LATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND jsonb_typeof(kv.value) = 'number'\n    AND kv.key !~ '^mu_'\n    AND kv.key !~ '^sigma_'\n  UNION ALL\n  SELECT e.ts,\n         'hedge_price_model.active_in_mpc' AS metric,\n         CASE WHEN e.payload->'hedge_price_model'->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND e.payload->'hedge_price_model' ? 'active_in_mpc'\n) u\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Hedge price — other (decay, …) + active_in_mpc",
       "type": "timeseries"
     }
   ],
@@ -149,6 +281,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
