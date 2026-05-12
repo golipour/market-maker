@@ -6,11 +6,18 @@ from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.execution import Fill
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
+from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 from mm.private_state.store import PrivateStateStore
 
 
 class PrivateStateReconciler:
-    """Keeps private REST snapshots and private event streams in one state view."""
+    """Keeps private exchange state in one view.
+
+    For ``RestPollingPrivateStateAdapter`` (Nobitex/Wallex REST), a **single** poll
+    loop applies one full ``PrivateStateSnapshot`` per interval (balances + open
+    orders from the same ``snapshot()`` call). Other adapters use incremental
+    balance and open-order streams.
+    """
 
     def __init__(
         self,
@@ -32,12 +39,22 @@ class PrivateStateReconciler:
         await self.adapter.connect()
         snapshot = await self.adapter.snapshot()
         await self._publish_snapshot(self.store.apply_snapshot(snapshot))
-        self._tasks = [
-            asyncio.create_task(self._listen_balances()),
-            asyncio.create_task(self._listen_open_orders()),
-            asyncio.create_task(self._listen_order_updates()),
-            asyncio.create_task(self._listen_fills()),
-        ]
+        if isinstance(self.adapter, RestPollingPrivateStateAdapter):
+            # One authoritative snapshot per poll: balances + open orders from the same fetch.
+            # Avoids incremental diff streams that inferred synthetic zeros when an asset vanished
+            # from a partial or flaky REST response.
+            self._tasks = [
+                asyncio.create_task(self._listen_rest_polling_unified()),
+                asyncio.create_task(self._listen_order_updates()),
+                asyncio.create_task(self._listen_fills()),
+            ]
+        else:
+            self._tasks = [
+                asyncio.create_task(self._listen_balances()),
+                asyncio.create_task(self._listen_open_orders()),
+                asyncio.create_task(self._listen_order_updates()),
+                asyncio.create_task(self._listen_fills()),
+            ]
         if hasattr(self.adapter, "error_stream"):
             self._tasks.append(asyncio.create_task(self._listen_errors()))
 
@@ -50,6 +67,28 @@ class PrivateStateReconciler:
 
     def snapshot(self) -> PrivateStateSnapshot:
         return self.store.snapshot()
+
+    async def _listen_rest_polling_unified(self) -> None:
+        poll_ms = max(500, int(getattr(self.adapter, "poll_interval_ms", 5000)))
+        publish_errors = getattr(self.adapter, "_publish_error", None)
+        try:
+            while True:
+                await asyncio.sleep(poll_ms / 1000.0)
+                try:
+                    snap_in = await self.adapter.snapshot()
+                    merged = self.store.apply_snapshot(snap_in)
+                    await self._publish_snapshot(merged)
+                    for balance in snap_in.balances.values():
+                        await self._publish(f"private:state:{self.exchange}:balances", balance)
+                    for open_order in snap_in.open_orders.values():
+                        await self._publish(f"private:state:{self.exchange}:open_orders", open_order)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if callable(publish_errors):
+                        await publish_errors("unified_rest_poll", exc)  # type: ignore[misc]
+        except asyncio.CancelledError:
+            raise
 
     async def _listen_balances(self) -> None:
         try:

@@ -35,8 +35,6 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         self.poll_interval_ms = max(500, int(poll_interval_ms))
         self._rate_limiter = AsyncRateLimiter(self.poll_interval_ms)
         self._connected = False
-        self._last_balances: dict[str, Balance] = {}
-        self._last_open_orders: dict[str, OpenOrder] = {}
         self._error_queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
 
     async def connect(self) -> None:
@@ -62,58 +60,28 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         )
 
     async def balance_stream(self) -> AsyncIterator[Balance]:
-        while self._connected:
-            try:
-                snapshot = await self.snapshot()
-                balances = snapshot.balances
-                for asset, balance in balances.items():
-                    if self._last_balances.get(asset) != balance:
-                        yield balance
-                economy = _economy_canonical_assets(self.symbol)
-                for asset in list(self._last_balances.keys()):
-                    if asset not in balances:
-                        prev = self._last_balances[asset]
-                        prev_total = abs(float(prev.free)) + abs(float(prev.locked))
-                        if prev_total > _BALANCE_TOTAL_EPS or asset in economy:
-                            yield Balance(
-                                exchange=self.exchange,
-                                asset=asset,
-                                free=0.0,
-                                locked=0.0,
-                                timestamp_ms=snapshot.timestamp_ms,
-                            )
-                self._last_balances = dict(balances)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                await self._publish_error("balance_stream", exc)
-            await asyncio.sleep(self.poll_interval_ms / 1000.0)
+        """Not used for REST polling: ``PrivateStateReconciler`` applies full snapshots on a single timer."""
+        if False:  # pragma: no cover
+            yield Balance(self.exchange, "_", 0.0, 0.0, 0)
 
     async def open_order_stream(self) -> AsyncIterator[OpenOrder]:
-        while self._connected:
-            try:
-                snapshot = await self.snapshot()
-                seen = set(snapshot.open_orders)
-                for order_id, order in snapshot.open_orders.items():
-                    if self._last_open_orders.get(order_id) != order:
-                        yield order
-                for missing_id, missing in self._last_open_orders.items():
-                    if missing_id not in seen:
-                        yield OpenOrder(
-                            exchange_order_id=missing.exchange_order_id,
-                            actor_id=missing.actor_id,
-                            order=missing.order,
-                            remaining_qty=0.0,
-                            filled_qty=missing.filled_qty,
-                            status="closed",
-                            timestamp_ms=snapshot.timestamp_ms,
-                        )
-                self._last_open_orders = dict(snapshot.open_orders)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                await self._publish_error("open_order_stream", exc)
-            await asyncio.sleep(self.poll_interval_ms / 1000.0)
+        """Not used for REST polling: ``PrivateStateReconciler`` applies full snapshots on a single timer."""
+        if False:  # pragma: no cover
+            yield OpenOrder(
+                exchange_order_id="_",
+                actor_id=None,
+                order=Order(
+                    exchange=self.exchange,
+                    symbol=self.symbol,
+                    side="buy",
+                    price=1.0,
+                    qty=1.0,
+                ),
+                remaining_qty=1.0,
+                filled_qty=0.0,
+                status="open",
+                timestamp_ms=0,
+            )
 
     async def order_update_stream(self) -> AsyncIterator[OrderUpdate]:
         async for _ in self._empty_stream():

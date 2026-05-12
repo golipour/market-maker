@@ -195,6 +195,42 @@ def test_private_state_store_apply_balance_pops_zero() -> None:
     assert "BTC" not in store.snapshot().balances
 
 
+class _StubRestPolling(RestPollingPrivateStateAdapter):
+    """Minimal REST adapter to exercise unified reconciler polling."""
+
+    def __init__(self) -> None:
+        super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
+        self.snapshot_calls = 0
+
+    async def fetch_balances(self) -> dict:
+        return {"BTC": {"free": "0.25", "locked": "0.0"}}
+
+    async def fetch_open_orders(self) -> list[dict]:
+        return []
+
+    async def snapshot(self) -> PrivateStateSnapshot:
+        self.snapshot_calls += 1
+        return await super().snapshot()
+
+
+@pytest.mark.asyncio
+async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
+    adapter = _StubRestPolling()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    snapshots = bus.subscribe_queue("private:state:nobitex:snapshot")
+
+    try:
+        await reconciler.start()
+        first = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        assert first.balances["BTC"].free == pytest.approx(0.25)
+        second = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        assert second.balances["BTC"].free == pytest.approx(0.25)
+        assert adapter.snapshot_calls >= 2
+    finally:
+        await reconciler.stop()
+
+
 def test_private_state_store_keeps_economy_assets_explicit_zero() -> None:
     store = PrivateStateStore("nobitex", trading_symbol="BTC_IRT")
     store.apply_balance(Balance("nobitex", "BTC", 1.0, 0.0, 1))
