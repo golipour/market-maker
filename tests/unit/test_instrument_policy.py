@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, split_symbol
 from mm.core.models.market import PriceLevel, RawOrderbook
-from mm.runtime.print_events import summarize_event
+from mm.tools.print_events import summarize_event
 
 
 def test_symbol_split_supports_domain_and_compact_symbols() -> None:

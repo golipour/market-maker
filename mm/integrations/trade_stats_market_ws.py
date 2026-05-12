@@ -2,7 +2,7 @@
 Live market websocket: URLs, subscribe payloads, and JSON parsing per exchange.
 
 Stateful pieces (Binance merged book, KuCoin classic vs legacy) live in session objects.
-Used by ``mm.layers.runtime.market_data_providers.WebSocketBufferedMarketDataProvider``.
+WebSocket trade stream normalization for exchange adapters.
 """
 
 from __future__ import annotations

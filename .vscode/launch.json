@@ -20,22 +20,18 @@
       "envFile": "${workspaceFolder}/.env"
     },
     {
-      "name": "Run mm.layers.runtime (-m mm.layers.runtime)",
+      "name": "Runtime CLI (-m mm.runtime)",
       "type": "python",
       "request": "launch",
-      "module": "mm.layers.runtime",
+      "module": "mm.runtime",
       "cwd": "${workspaceFolder}",
+      "args": [
+        "--config",
+        "mm/configs/market_maker.runtime.example.json"
+      ],
       "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "Run pipeline only (-m mm.layers.runtime)",
-      "type": "python",
-      "request": "launch",
-      "module": "mm.layers.runtime",
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal",
-      "justMyCode": true
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env"
     }
   ]
 }

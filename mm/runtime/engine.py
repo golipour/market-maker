@@ -383,9 +383,9 @@ def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:
         interval_ms=config.interval_ms,
         frame_topic=config.frame_topic,
         action_topic=config.controller.normalized_action_topic if config.controller is not None else "strategy:actions",
-        diagnostics_topic=(
-            config.controller.normalized_diagnostics_topic
+        decisions_topic=(
+            config.controller.normalized_decisions_topic
             if config.controller is not None
-            else "strategy:controller"
+            else "strategy:decisions"
         ),
     )

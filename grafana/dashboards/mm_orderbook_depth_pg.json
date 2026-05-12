@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Row 1 — order book:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base).\n\n**Row 2 — continuous action:** Latest `ControllerDecision` on **Controller topic** (default `strategy:controller`). **Cumulative** base depth from `continuous_action_depth` (optimizer output **before** ladder discretization).\n\n**Row 3 — executable orders:** Same `ControllerDecision` payload field **`orders`**: each bar is **marginal base `qty`** at that **limit price** (not cumulative). These are the orders after discretization plus runtime constraints (`qty_step`, `min_order_qty`, `max_orders_per_side`, spread grid, etc.). The same batch is published on the bus as **`Action`** on **`strategy:actions`** (see runtime `action_topic`); Postgres stores that on topic `strategy:actions` if persistence lists it—this dashboard reads `orders` from the controller row so it stays aligned with rows 2–3.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
+        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Row 1 — order book:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base).\n\n**Row 2 — continuous action:** Latest `StrategyDecision` on **Decisions topic** (default `strategy:decisions`). **Cumulative** base depth from `continuous_action_depth` (optimizer output **before** ladder discretization).\n\n**Row 3 — executable orders:** Same `StrategyDecision` payload field **`orders`**: each bar is **marginal base `qty`** at that **limit price** (not cumulative). These are the orders after discretization plus runtime constraints (`qty_step`, `min_order_qty`, `max_orders_per_side`, spread grid, etc.). The same batch is published on the bus as **`Action`** on **`strategy:actions`** (see runtime `action_topic`); Postgres stores that on topic `strategy:actions` if persistence lists it—this dashboard reads `orders` from the controller row so it stays aligned with rows 2–3.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -273,7 +273,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -326,7 +326,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -379,7 +379,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -432,7 +432,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'ControllerDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -478,11 +478,11 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "strategy:controller", "value": "strategy:controller" },
+        "current": { "text": "strategy:decisions", "value": "strategy:decisions" },
         "hide": 0,
-        "label": "Controller topic",
+        "label": "Decisions topic",
         "name": "controller_topic",
-        "query": "strategy:controller",
+        "query": "strategy:decisions",
         "skipUrlSync": false,
         "type": "textbox"
       },

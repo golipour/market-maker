@@ -65,7 +65,7 @@ class MpcControllerRunner:
             return decision.action
         except Exception as exc:
             await self._publish(
-                self.config.normalized_diagnostics_topic,
+                self.config.normalized_decisions_topic,
                 {
                     "type": "ControllerError",
                     "actor_id": self.config.actor_id,
@@ -79,7 +79,7 @@ class MpcControllerRunner:
             return Action(actor_id=self.config.actor_id)
 
     async def _publish_decision(self, decision: StrategyDecision) -> None:
-        await self._publish(self.config.normalized_diagnostics_topic, decision.as_payload())
+        await self._publish(self.config.normalized_decisions_topic, decision.as_payload())
         await self._publish(self.config.normalized_action_topic, decision.action)
 
     async def _publish(self, topic: str, event: Any) -> None:

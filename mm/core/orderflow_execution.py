@@ -19,7 +19,7 @@ from mm.core.orderflow_state import Action, OrderbookRelative, State, ob_to_ob_r
 
 
 # -----------------------------------------------------------------------------
-# Cumulative depth vs spread; depth from sigmoid params (for animation)
+# Cumulative depth vs spread; depth from sigmoid params (MPC visualization helpers)
 # -----------------------------------------------------------------------------
 
 

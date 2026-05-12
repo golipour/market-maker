@@ -13,7 +13,7 @@ from mm.runtime.config import (
 )
 from mm.env_loader import load_mm_env
 from mm.runtime.engine import build_runtime_components
-from mm.runtime.print_events import build_print_queues
+from mm.tools.print_events import build_print_queues
 
 
 def test_runtime_config_uses_hedge_as_only_secondary_source() -> None:

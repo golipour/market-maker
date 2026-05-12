@@ -1,6 +1,6 @@
 """Hedge-venue reference price dynamics for MPC rollouts.
 
-Legacy behaviour matches ``mm.layers.runtime.order_flow_stepper.HedgeGaussianPriceModel``:
+Gaussian EWMA-style hedge reference model (used when hedge leg participates in MPC):
 EWMA on (buy, sell) representative-price *deltas*, then Gaussian ``sample_deltas``
 for the optimiser. Observations and deltas use the same numeric units as the
 runtime (quote-per-base floats in the new stack; historically ticks in the old).

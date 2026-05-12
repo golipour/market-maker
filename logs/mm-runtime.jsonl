@@ -4827,3 +4827,14 @@
 {"ts_ms":1778572852458,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
 {"ts_ms":1778572852463,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
 {"ts_ms":1778572852477,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778573259700,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778573259701,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778573259704,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778573259716,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778573307817,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778573307818,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778573307822,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778573307838,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778573413720,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":17}
+{"ts_ms":1778573413817,"event":"postgres_event_writer_ready","database_url_configured":true}
+{"ts_ms":1778573413819,"event":"postgres_event_writer_started","topics":["market:events:nobitex:USDT_IRT:10000","market:events:wallex:USDT_IRT:10000","strategy:frames:nobitex:USDT_IRT:10000","strategy:actions","strategy:decisions","execution:orders:nobitex","execution:orders:wallex","execution:state:nobitex","execution:state:wallex","private:state:nobitex:snapshot","private:state:wallex:snapshot","private:state:nobitex:balances","private:state:wallex:balances","private:state:nobitex:open_orders","private:state:wallex:open_orders","private:state:nobitex:fills","private:state:wallex:fills"],"batch_size":100,"ready":true}

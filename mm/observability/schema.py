@@ -21,6 +21,6 @@ MM_STRATEGY_ACTION_ORDER_COUNT = "mm_strategy_action_order_count"
 
 # Log event keys (mm.observability.log_event)
 EVENT_STRATEGY_FRAME = "strategy_frame"
-EVENT_CONTROLLER_DECISION = "controller_decision"
+EVENT_STRATEGY_DECISION = "strategy_decision"
 EVENT_ORDER_VALIDATION_REJECTED = "order_validation_rejected"
 EVENT_RUNTIME_ERROR = "runtime_error"

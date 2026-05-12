@@ -160,14 +160,12 @@ class OrderbookGridConfig:
 
 @dataclass(frozen=True, slots=True)
 class ControllerRuntimeConfig:
-    """Config for the optional MPC/controller bridge.
+    """Config for the optional MPC controller on the event bus.
 
-    The controller consumes StrategyInputFrame objects and publishes controller
-    diagnostics/actions. It is observe-only by default so live ``mm.tools.print_events`` runs
-    never place or cancel orders unless config explicitly enables execution.
+    Consumes ``StrategyInputFrame`` and publishes ``StrategyDecision`` payloads and ``Action``.
+    Observe-only by default: enable execution in config when placing live orders is intended.
 
-    ``action_start_after_steps`` mirrors ``OrderFlowRunner.action_start_after_steps``:
-    MPC still runs every frame, but live ``OrderManager.sync`` is deferred until
+    ``action_start_after_steps``: MPC runs every frame, but ``OrderManager.sync`` waits until
     ``frame_step > action_start_after_steps``.
     """
 
@@ -177,7 +175,7 @@ class ControllerRuntimeConfig:
     # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
     action_start_after_steps: int = 0
     action_topic: str = "strategy:actions"
-    diagnostics_topic: str = "strategy:controller"
+    decisions_topic: str = "strategy:decisions"
     min_spread: float = 1.0
     max_spread: float = 100.0
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
@@ -196,8 +194,8 @@ class ControllerRuntimeConfig:
         return self.action_topic.strip() or "strategy:actions"
 
     @property
-    def normalized_diagnostics_topic(self) -> str:
-        return self.diagnostics_topic.strip() or "strategy:controller"
+    def normalized_decisions_topic(self) -> str:
+        return self.decisions_topic.strip() or "strategy:decisions"
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,7 +433,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         observe_only=bool(payload.get("observe_only", True)),
         action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
-        diagnostics_topic=str(payload.get("diagnostics_topic", "strategy:controller")),
+        decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
         min_spread=float(payload.get("min_spread", 1.0)),
         max_spread=float(payload.get("max_spread", 100.0)),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
@@ -480,7 +478,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "actor_id": config.actor_id,
         "observe_only": config.observe_only,
         "action_start_after_steps": config.action_start_after_steps,
-        "diagnostics_topic": config.normalized_diagnostics_topic,
+        "decisions_topic": config.normalized_decisions_topic,
         "action_topic": config.normalized_action_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
         "vwap_depth": config.vwap_depth,

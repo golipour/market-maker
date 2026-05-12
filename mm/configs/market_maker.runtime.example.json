@@ -36,7 +36,7 @@
       "market:events:wallex:USDT_IRT:10000",
       "strategy:frames:nobitex:USDT_IRT:10000",
       "strategy:actions",
-      "strategy:controller",
+      "strategy:decisions",
       "execution:orders:nobitex",
       "execution:orders:wallex",
       "execution:state:nobitex",
@@ -80,7 +80,7 @@
     "observe_only": false,
     "action_start_after_steps": 3,
     "actor_id": "mpc-controller",
-    "diagnostics_topic": "strategy:controller",
+    "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
     "min_spread": 1000.0,
     "orderbook_grid": {

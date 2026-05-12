@@ -8,7 +8,6 @@ from mm.core.models.execution import Action
 from mm.core.models.strategy import StrategyInputFrame
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability import schema as obs_schema
-from mm.observability.diagnostics import emit_controller_diagnostics
 from mm.observability.metrics import counter_inc, gauge, histogram_observe
 from mm.observability.logs import log_event
 from mm.observability.traces import span
@@ -193,7 +192,7 @@ class RuntimeObservabilitySubscriber:
             )
             counter_inc(obs_schema.MM_CONTROLLER_DECISIONS_TOTAL, labels=labels, help="Controller decisions")
             log_event(
-                obs_schema.EVENT_CONTROLLER_DECISION,
+                obs_schema.EVENT_STRATEGY_DECISION,
                 {
                     "actor_id": labels["actor_id"],
                     "exchange": labels["exchange"],
@@ -205,10 +204,6 @@ class RuntimeObservabilitySubscriber:
                     "decision_hash": payload.get("decision_hash"),
                 },
             )
-            try:
-                emit_controller_diagnostics(payload)
-            except Exception:
-                return
 
     def _maybe_persist_step_economics(self, payload: dict[str, Any], econ: dict[str, Any]) -> None:
         try:

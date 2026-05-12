@@ -1,6 +1,6 @@
 """Live bus event tap for debugging (canonical implementation).
 
-Run: ``python -m mm.tools.print_events`` (or legacy ``python -m mm.runtime.print_events``).
+Run: ``python -m mm.tools.print_events --config <path>`` (see ``--help``).
 """
 
 from __future__ import annotations
@@ -545,8 +545,8 @@ def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list
         queues.extend(
             [
                 (
-                    config.controller.normalized_diagnostics_topic,
-                    bus.subscribe_queue(config.controller.normalized_diagnostics_topic),
+                    config.controller.normalized_decisions_topic,
+                    bus.subscribe_queue(config.controller.normalized_decisions_topic),
                 ),
                 (
                     config.controller.normalized_action_topic,

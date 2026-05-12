@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 STRATEGY_ACTIONS_TOPIC = "strategy:actions"
-DEFAULT_CONTROLLER_DIAGNOSTICS_TOPIC = "strategy:controller"
+DEFAULT_STRATEGY_DECISIONS_TOPIC = "strategy:decisions"
 
 
 class MarketDataSourceLike(Protocol):
@@ -21,7 +21,7 @@ class RuntimeTopics:
     hedge: MarketDataSourceLike | None = None
     frame_topic: str | None = None
     action_topic: str = STRATEGY_ACTIONS_TOPIC
-    diagnostics_topic: str = DEFAULT_CONTROLLER_DIAGNOSTICS_TOPIC
+    decisions_topic: str = DEFAULT_STRATEGY_DECISIONS_TOPIC
 
     @property
     def strategy_frame(self) -> str:
@@ -35,7 +35,7 @@ class RuntimeTopics:
 
     @property
     def strategy_decisions(self) -> str:
-        return self.diagnostics_topic
+        return self.decisions_topic
 
     @property
     def primary_market_events(self) -> str:

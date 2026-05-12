@@ -100,14 +100,7 @@ def persist_step_economics_row(
 
 
 def keep_runner_pnl_series_memory() -> bool:
-    """
-    Keep ``dW_*`` / ``delta_*pnl`` lists on the runner for diagnostics and matplotlib.
+    """Whether to retain PnL step lists in memory (``MM_RUNNER_PNL_HISTORY``, default on)."""
 
-    - Always on when ``MM_DIAGNOSTICS`` is set (``build_diagnostics_frame`` needs series).
-    - Otherwise driven by ``MM_RUNNER_PNL_HISTORY`` (default ``1``); set ``0`` to disable when
-      persisting to Postgres only.
-    """
-    if str(os.environ.get("MM_DIAGNOSTICS", "")).strip():
-        return True
     v = str(os.environ.get("MM_RUNNER_PNL_HISTORY", "1")).strip().lower()
     return v not in ("0", "false", "no", "off")

@@ -17,7 +17,28 @@ from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
 from mm.runtime.config import ControllerRuntimeConfig
-from mm.strategies.mpc_legacy_adapter import market_flow_step_from_frame
+
+
+def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
+    """Tuple shape expected by ``mm.mpc`` market-flow ``update`` (stats-only path)."""
+
+    return (
+        frame.primary.t_end_ms,
+        None,
+        frame.primary.buy_volume,
+        frame.primary.sell_volume,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        None,
+        None,
+        None,
+        None,
+        0.0,
+        0.0,
+    )
 
 
 def normalize_mpc_optimizer_config(optimizer_cfg: dict[str, Any]) -> None:
@@ -311,7 +332,7 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
 def _update_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
     if not hasattr(model, "update"):
         return
-    model.update(None, market_flow_step_from_frame(frame))
+    model.update(None, _market_flow_step_tuple(frame))
 
 
 def _update_float_price_model(model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame) -> None:
