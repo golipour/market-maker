@@ -1,0 +1,115 @@
+{
+  "annotations": { "list": [] },
+  "description": "Primary and hedge reference buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``primary_buy_vwap`` / ``primary_sell_vwap`` / ``hedge_buy_vwap`` / ``hedge_sell_vwap`` on decisions.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``reference_vwaps_raw_orderbook`` / MPC state). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       'primary_buy_vwap' AS metric,\n       (e.payload->>'primary_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'primary_buy_vwap'\nORDER BY 1",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       'primary_sell_vwap' AS metric,\n       (e.payload->>'primary_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'primary_sell_vwap'\nORDER BY 1",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       'hedge_buy_vwap' AS metric,\n       (e.payload->>'hedge_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'hedge_buy_vwap') = 'number'\nORDER BY 1",
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       'hedge_sell_vwap' AS metric,\n       (e.payload->>'hedge_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'hedge_sell_vwap') = 'number'\nORDER BY 1",
+          "refId": "D"
+        }
+      ],
+      "title": "Reference VWAPs (primary + hedge)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["market-maker", "postgres", "strategy", "vwap"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "nobitex", "value": "nobitex" },
+        "hide": 0,
+        "label": "Exchange",
+        "name": "exchange",
+        "options": [
+          { "selected": true, "text": "nobitex", "value": "nobitex" },
+          { "selected": false, "text": "wallex", "value": "wallex" }
+        ],
+        "query": "nobitex,wallex",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": { "text": "USDT_IRT", "value": "USDT_IRT" },
+        "hide": 0,
+        "label": "Symbol",
+        "name": "symbol",
+        "query": "USDT_IRT",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": { "text": "strategy:decisions", "value": "strategy:decisions" },
+        "hide": 0,
+        "label": "Decisions topic",
+        "name": "decisions_topic",
+        "query": "strategy:decisions",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM reference VWAPs (PostgreSQL)",
+  "uid": "mm-reference-vwaps-pg",
+  "version": 1,
+  "weekStart": ""
+}

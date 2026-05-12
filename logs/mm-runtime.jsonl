@@ -7504,3 +7504,7 @@
 {"ts_ms":1778595460628,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1778595460000,"order_count":20,"latency_ms":615.179279,"observe_only":false,"decision_hash":"47c255efd9a33dcf7061298e94e4f7f311468e50e344226bbb9bce7a84888320"}
 {"ts_ms":1778595470664,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1778595470000,"hedge_status":"ready","hedge_lag_ms":0}
 {"ts_ms":1778595470666,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1778595470000,"order_count":20,"latency_ms":649.195438,"observe_only":false,"decision_hash":"9d61abd5adcb8653180a6edf64e60dd5b0e6852435359f12b0e21ff43e8fb1e5"}
+{"ts_ms":1778597333791,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778597333791,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778597333795,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778597333804,"event":"persistence_disabled","reason":"config"}

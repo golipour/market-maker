@@ -16,8 +16,15 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
+from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_REFERENCE_DEPTH_LOTS, reference_vwaps_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig
+
+
+def _vwap_target_depth(price_model: Any | None) -> float:
+    """Depth cap (base units) aligned with ``TorchResidualPriceModel._target_depth_lots``."""
+
+    return float(getattr(price_model, "_target_depth_lots", DEFAULT_REFERENCE_DEPTH_LOTS))
 
 
 def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
@@ -82,15 +89,15 @@ class MpcStrategyEngine:
 
     def decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         t0 = time.monotonic_ns()
-        vwap_depth = float(
-            getattr(self._price_model, "_target_depth_lots", DEFAULT_REFERENCE_DEPTH_LOTS)
-        )
-        _update_hedge_rep_price_model(self._hedge_price_model, frame, vwap_depth=vwap_depth)
         state = _state_from_frame(
-            frame, self.binding, self.config.orderbook_grid.max_spread, vwap_depth=vwap_depth
+            frame,
+            self.binding,
+            self.config.orderbook_grid.max_spread,
+            price_model=self._price_model,
         )
+        _update_hedge_vwap_price_model(self._hedge_price_model, state)
         _update_market_flow_model(self._market_flow_model, frame)
-        _update_float_price_model(self._price_model, self._previous_frame, frame)
+        _update_residual_mid_price_model(self._price_model, self._previous_frame, frame)
         optimizer_stdout = io.StringIO()
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
@@ -133,6 +140,10 @@ class MpcStrategyEngine:
             hedge_status=frame.hedge_status,
             has_hedge=frame.has_hedge,
             mid=float(state.mid),
+            primary_buy_vwap=float(state.buy_vwap),
+            primary_sell_vwap=float(state.sell_vwap),
+            hedge_buy_vwap=state.hedge_buy_vwap,
+            hedge_sell_vwap=state.hedge_sell_vwap,
             inventory=float(state.inventory),
             cash=float(state.cash),
             buy_volume=float(state.buy_vol),
@@ -273,20 +284,14 @@ def _build_hedge_price_model(cfg: dict[str, Any] | None) -> Any:
     raise ValueError(f"unsupported hedge_price_model kind: {kind}")
 
 
-def _update_hedge_rep_price_model(
-    model: Any, frame: StrategyInputFrame, *, vwap_depth: float
-) -> None:
+def _update_hedge_vwap_price_model(model: Any, state: State) -> None:
+    """Feed hedge Gaussian / delta models with VWAP refs already on ``State``."""
+
     if model is None or not hasattr(model, "update"):
         return
-    if frame.hedge is None:
+    if state.hedge_buy_vwap is None or state.hedge_sell_vwap is None:
         return
-    try:
-        buy_ref, sell_ref = reference_vwaps_raw_orderbook(
-            frame.hedge.orderbook, target_depth=vwap_depth
-        )
-    except ValueError:
-        return
-    model.update(buy_ref, sell_ref)
+    model.update(float(state.hedge_buy_vwap), float(state.hedge_sell_vwap))
 
 
 def _state_from_frame(
@@ -294,10 +299,11 @@ def _state_from_frame(
     binding: SymbolBinding,
     spread_max: float,
     *,
-    vwap_depth: float,
-):
-    from mm.mpc.mpc_state import OrderbookRelative, State
+    price_model: Any | None,
+) -> State:
+    from mm.mpc.mpc_state import OrderbookRelative
 
+    vwap_depth = _vwap_target_depth(price_model)
     primary_mid = _mid(frame.primary.orderbook)
     bids = tuple(
         (spread, level.qty)
@@ -351,8 +357,10 @@ def _update_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
     model.update(None, _market_flow_step_tuple(frame))
 
 
-def _update_float_price_model(model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame) -> None:
-    """Update the residual price sampler from float-domain mid changes."""
+def _update_residual_mid_price_model(
+    model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame
+) -> None:
+    """EWMA on primary **mid** changes (``TorchResidualPriceModel`` side state); not orderbook VWAP."""
 
     if model is None or previous is None:
         return

@@ -72,6 +72,10 @@ class StrategyDecision:
     hedge_status: HedgeStatus = "disabled"
     has_hedge: bool = False
     mid: float = 0.0
+    primary_buy_vwap: float = 0.0
+    primary_sell_vwap: float = 0.0
+    hedge_buy_vwap: float | None = None
+    hedge_sell_vwap: float | None = None
     inventory: float = 0.0
     cash: float = 0.0
     buy_volume: float = 0.0
@@ -103,6 +107,10 @@ class StrategyDecision:
             "hedge_status": self.hedge_status,
             "has_hedge": self.has_hedge,
             "mid": self.mid,
+            "primary_buy_vwap": self.primary_buy_vwap,
+            "primary_sell_vwap": self.primary_sell_vwap,
+            "hedge_buy_vwap": self.hedge_buy_vwap,
+            "hedge_sell_vwap": self.hedge_sell_vwap,
             "inventory": self.inventory,
             "cash": self.cash,
             "buy_volume": self.buy_volume,

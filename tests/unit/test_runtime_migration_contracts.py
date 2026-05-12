@@ -94,6 +94,10 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
     assert payload["actor_id"] == "mpc-controller"
     assert payload["order_count"] == 0
     assert payload["unit_policy"] == "prices=quote_per_base, quantities=base, cash/notional=quote"
+    assert payload["primary_buy_vwap"] == 0.0
+    assert payload["primary_sell_vwap"] == 0.0
+    assert payload["hedge_buy_vwap"] is None
+    assert payload["hedge_sell_vwap"] is None
     assert "economics" not in payload
 
 
