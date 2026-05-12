@@ -460,11 +460,11 @@
         "type": "custom"
       },
       {
-        "current": { "text": "BTC_IRT", "value": "BTC_IRT" },
+        "current": { "text": "USDT_IRT", "value": "USDT_IRT" },
         "hide": 0,
         "label": "Symbol",
         "name": "symbol",
-        "query": "BTC_IRT",
+        "query": "USDT_IRT",
         "skipUrlSync": false,
         "type": "textbox"
       },
@@ -487,11 +487,11 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "10000", "value": "10000" },
+        "current": { "text": "100000", "value": "100000" },
         "hide": 0,
         "label": "Spread max (orderbook_grid.max_spread)",
         "name": "spread_max",
-        "query": "10000",
+        "query": "100000",
         "skipUrlSync": false,
         "type": "textbox"
       },
@@ -553,6 +553,6 @@
   "timezone": "browser",
   "title": "MM order book depth (PostgreSQL)",
   "uid": "mm-orderbook-depth-pg",
-  "version": 7,
+  "version": 8,
   "weekStart": ""
 }
