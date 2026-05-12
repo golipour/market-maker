@@ -22,9 +22,8 @@ from mm.exchanges.factory import (
 from mm.application.execution_service import OrderManager
 from mm.application.reconciliation_service import ExecutionStateReconciler, PrivateStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
-from mm.observability import log_event
+from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
-from mm.observability_setup import configure_observability
 from mm.env_loader import load_mm_env
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
 from mm.runtime.control import RuntimeControlPlane

@@ -6,7 +6,7 @@ import socket
 import time
 from typing import Any
 
-from mm.observability_context import get_context
+from mm.observability.context import get_context
 
 
 def _is_enabled() -> bool:
@@ -15,7 +15,7 @@ def _is_enabled() -> bool:
 
 
 def emit(event: str, fields: dict[str, Any] | None = None) -> None:
-    """Emit one structured JSON log line to stdout when `MM_JSON_LOG` is truthy."""
+    """Emit one structured JSON log line to stdout when ``MM_JSON_LOG`` is truthy."""
 
     if not _is_enabled():
         return

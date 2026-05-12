@@ -50,7 +50,7 @@ def create_admin_app(bus: AbstractEventBus | None = None) -> FastAPI:
 
     @app.get("/metrics")
     async def metrics() -> Response:
-        from mm.observability_metrics import REGISTRY
+        from mm.observability.registry import REGISTRY
 
         return Response(REGISTRY.render(), media_type="text/plain; version=0.0.4; charset=utf-8")
 

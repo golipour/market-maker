@@ -26,10 +26,8 @@ def get_context() -> ObsContext:
 def metric_labels(*, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Default low-cardinality labels for Prometheus metrics.
 
-    ``run_id`` is omitted unless ``MM_METRICS_LABEL_RUN_ID`` is set to a truthy
-    value (``1``/``true``/``yes``/``on``) and ``MM_RUN_ID`` is non-empty.
-    High-cardinality IDs (``trace_id``, etc.) must not appear on Prometheus labels;
-    use logs, spans, and event envelopes instead.
+    ``run_id`` only when ``MM_METRICS_LABEL_RUN_ID`` is truthy and ``MM_RUN_ID`` is set.
+    Never put ``trace_id`` on metric labels; use logs/spans/envelopes.
     """
 
     ctx = get_context()

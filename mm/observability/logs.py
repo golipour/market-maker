@@ -13,7 +13,7 @@ def log_event(event: str, fields: dict[str, Any] | None = None) -> None:
         payload.update(fields)
     _append_log(payload)
     try:
-        from mm.observability_jsonlog import emit
+        from mm.observability.jsonlog import emit
 
         emit(event, fields)
     except Exception:

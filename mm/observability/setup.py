@@ -6,7 +6,7 @@ from mm.runtime.config import ObservabilityRuntimeConfig
 
 
 def configure_observability(config: ObservabilityRuntimeConfig) -> None:
-    """Configure optional logs/metrics/traces for the async runtime."""
+    """Apply observability-related environment and optional OTLP / metrics HTTP server."""
 
     if config.json_logs:
         os.environ.setdefault("MM_JSON_LOG", "1")
@@ -15,7 +15,7 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
     if config.metrics_enabled:
         os.environ.setdefault("MM_METRICS_PORT", str(config.metrics_port))
         try:
-            from mm.observability_metrics import start_server
+            from mm.observability.registry import start_server
 
             start_server(port=config.metrics_port)
         except Exception:

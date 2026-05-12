@@ -110,7 +110,7 @@ def test_mpc_market_flow_step_tuple_from_frame() -> None:
 
 
 def test_histogram_registry_emits_prometheus_histogram() -> None:
-    from mm.observability_metrics import MetricsRegistry
+    from mm.observability.registry import MetricsRegistry
 
     r = MetricsRegistry()
     r.histogram_observe("test_latency_ms", 42.0, labels={"pool": "a"}, help="unit test histogram")

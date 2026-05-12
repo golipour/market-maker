@@ -1,10 +1,4 @@
-"""Load local secrets from repo and package ``.env`` files (optional).
-
-Copy ``.env.example`` to ``.env`` or ``mm/.env.example`` to ``mm/.env`` and set
-values. Variables are not overwritten if already set in the process environment
-(``override=False``). The package file is loaded after the repo file so it can
-provide mm-specific defaults when ``override=True`` is used.
-"""
+"""Load local secrets from the repository root ``.env`` (optional, via python-dotenv)."""
 
 from __future__ import annotations
 
@@ -20,18 +14,14 @@ def repo_root() -> Path:
 
 
 def load_mm_env(*, override: bool = False) -> bool:
-    """Load repo ``.env`` and ``mm/.env`` if present.
-
-    Returns True if python-dotenv loaded at least one file, else False.
-    """
+    """Load ``<repo>/.env`` if present. Returns True if a file was loaded."""
 
     try:
         from dotenv import load_dotenv
     except ImportError:
         return False
-    loaded = False
-    for env_path in (repo_root() / ".env", mm_package_root() / ".env"):
-        if env_path.is_file():
-            load_dotenv(env_path, override=override)
-            loaded = True
-    return loaded
+    env_path = repo_root() / ".env"
+    if not env_path.is_file():
+        return False
+    load_dotenv(env_path, override=override)
+    return True

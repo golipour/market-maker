@@ -40,19 +40,19 @@ def test_runtime_config_auto_enables_persistence_from_env(monkeypatch) -> None:
     assert config.persistence.enabled is True
 
 
-def test_load_mm_env_reads_repo_and_package_env(tmp_path, monkeypatch) -> None:
-    package_root = tmp_path / "mm"
-    package_root.mkdir()
-    (tmp_path / ".env").write_text("MM_DATABASE_URL=postgresql://repo\n", encoding="utf-8")
-    (package_root / ".env").write_text("NOBITEX_API_TOKEN=package-token\n", encoding="utf-8")
+def test_load_mm_env_reads_repo_root_env(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text(
+        "MM_DATABASE_URL=postgresql://repo\nNOBITEX_API_TOKEN=repo-token\n",
+        encoding="utf-8",
+    )
     monkeypatch.delenv("MM_DATABASE_URL", raising=False)
     monkeypatch.delenv("NOBITEX_API_TOKEN", raising=False)
-    monkeypatch.setattr("mm.env_loader.mm_package_root", lambda: package_root)
+    monkeypatch.setattr("mm.env_loader.repo_root", lambda: tmp_path)
 
     assert load_mm_env() is True
 
     assert os.environ["MM_DATABASE_URL"] == "postgresql://repo"
-    assert os.environ["NOBITEX_API_TOKEN"] == "package-token"
+    assert os.environ["NOBITEX_API_TOKEN"] == "repo-token"
 
 
 @pytest.mark.asyncio

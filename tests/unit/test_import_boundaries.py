@@ -40,7 +40,7 @@ def test_metric_labels_run_id_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -
 
     import importlib
 
-    import mm.observability_context as ctx
+    import mm.observability.context as ctx
 
     importlib.reload(ctx)
     try:
