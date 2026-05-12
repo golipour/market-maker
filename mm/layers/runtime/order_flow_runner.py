@@ -31,10 +31,6 @@ from mm.layers.core.pricing import (
 
 from mm.layers.core.app.engine import advance_order_flow_runner
 from mm.layers.core.domain.types import InstrumentId
-from mm.diagnostics_emitter import emit as _default_diagnostics_emit
-from mm.observability_context import metric_labels
-from mm.observability_jsonlog import emit as _default_structured_log_emit
-from mm.observability_metrics import REGISTRY as METRICS
 
 class OrderFlowRunner:
     """
@@ -182,12 +178,6 @@ class OrderFlowRunner:
         self.wealth_from_dw_hist: list[float] = []
         self._wealth_from_dw_baseline: float | None = None
         self._wealth_from_dw_running: float | None = None
-
-        # Observability ports (duck-typed): defaults point at canonical mm.* implementations.
-        self.structured_log_emit = _default_structured_log_emit
-        self.metrics_registry = METRICS
-        self.metric_labels = metric_labels
-        self.diagnostics_emit = _default_diagnostics_emit
 
     def _get_instrument_id_and_spec(self) -> tuple[object | None, object | None]:
         """
@@ -370,18 +360,6 @@ class OrderFlowRunner:
         if self._live_exec_deprecated_warned:
             return
         self._live_exec_deprecated_warned = True
-        ex = str(getattr(self.stepper, "exchange", "") or "").strip() or "unknown"
-        sym = str(getattr(self.stepper, "symbol", "") or "").strip() or "unknown"
-        try:
-            METRICS.counter_inc(
-                "mm_live_execution_skipped_total",
-                labels=metric_labels(
-                    extra={"exchange": ex, "symbol": sym, "reason": "legacy_runner_disabled"}
-                ),
-                help="Live execution skips by reason",
-            )
-        except Exception:
-            pass
 
     def advance(self, t_end_ms: int | None = None) -> bool:
         """

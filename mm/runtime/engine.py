@@ -4,7 +4,8 @@ import asyncio
 from dataclasses import dataclass, field
 
 from mm.aggregation.scheduler import IntervalScheduler
-from mm.actors.frame_assembler import StrategyInputFrameAssembler
+from mm.application.frame_service import StrategyInputFrameAssembler
+from mm.application.decision_service import build_controller_runner
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.core.clock import WallClock
@@ -18,14 +19,13 @@ from mm.exchanges.factory import (
     select_private_state_adapter,
     select_public_market_data_adapter,
 )
-from mm.execution.order_manager import OrderManager
-from mm.execution.reconciler import ExecutionStateReconciler
+from mm.application.execution_service import OrderManager
+from mm.application.reconciliation_service import ExecutionStateReconciler, PrivateStateReconciler
 from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import log_event
-from mm.observability_subscribers import RuntimeObservabilitySubscriber
+from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.observability_setup import configure_observability
 from mm.env_loader import load_mm_env
-from mm.private_state.reconciler import PrivateStateReconciler
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
 from mm.runtime.control import RuntimeControlPlane
 from mm.runtime.pipeline import build_symbol_engine
@@ -226,17 +226,12 @@ async def build_runtime_components(
         hedge_grace_ms=config.hedge_grace_ms,
     )
 
-    controller_runner = None
-    if config.controller is not None and config.controller.enabled:
-        from mm.strategies.mpc_controller import MpcControllerRunner
-
-        controller_runner = MpcControllerRunner(
-            config=config.controller,
-            binding=config.binding,
-            frame_queue=runtime_bus.subscribe_queue(config.frame_topic),
-            order_managers=order_managers,
-            bus=runtime_bus,
-        )
+    controller_runner = build_controller_runner(
+        config,
+        bus=runtime_bus,
+        frame_topic=config.frame_topic,
+        order_managers=order_managers,
+    )
 
     persistence_daemons = _build_persistence_daemons(config, runtime_bus)
     observability_daemons = _build_observability_daemons(config, runtime_bus)

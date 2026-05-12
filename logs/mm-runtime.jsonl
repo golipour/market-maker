@@ -4819,3 +4819,11 @@
 {"ts_ms":1778572085211,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
 {"ts_ms":1778572085213,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
 {"ts_ms":1778572085224,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778572457293,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778572457295,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778572457298,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778572457311,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1778572852456,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1778572852458,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1778572852463,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1778572852477,"event":"persistence_disabled","reason":"config"}

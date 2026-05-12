@@ -9,17 +9,10 @@ from mm.mpc.step import Step
 
 from mm.layers.core.app.parsed_step import parse_step
 from mm.layers.core.app.state_assembler import StateAssembler
-from mm.layers.core.app.observability_defaults import (
-    resolve_diagnostics_emit,
-    resolve_metric_labels,
-    resolve_metrics_registry,
-    resolve_structured_log,
-)
 from mm.layers.core.domain.types import InstrumentId
 from mm.layers.core.units.converter import instrument_spec_from_trade_stats
 from mm.layers.core.app.model_updates import update_flow_models_after_step
 from mm.persistence.step_economics_pg import keep_runner_pnl_series_memory, persist_step_economics_row
-from mm.layers.core.diagnostics.diagnostics_frame import build_diagnostics_frame
 from mm.layers.core.pricing import main_inventory_value_ticks, portfolio_wealth_quote, portfolio_wealth_ticks
 
 
@@ -34,10 +27,6 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     step = runner.stepper.advance(t_end_ms=t_end_ms)
     if step is None:
         return False
-    log_emit = resolve_structured_log(runner)
-    METRICS = resolve_metrics_registry(runner)
-    metric_labels = resolve_metric_labels(runner)
-    emit_diagnostics = resolve_diagnostics_emit(runner)
     if not runner.hedge_enabled and len(step) >= 15:
         seq = list(step)
         step = Step(*(seq[:-2] + [0, 0]))
@@ -70,75 +59,6 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
     except Exception:
         runner._last_step_snapshot = None
 
-    # Optional structured log (off by default; enable with MM_JSON_LOG=1).
-    snap = getattr(runner, "_last_step_snapshot", None)
-    if snap is not None and isinstance(getattr(snap, "data", None), dict):
-        try:
-            mi = getattr(snap, "main_instrument", None)
-            if mi is not None:
-                mid_q = float(mi.mid)
-                buy_ref_q = float(mi.buy_ref)
-                sell_ref_q = float(mi.sell_ref)
-                inv_b = float(mi.inventory)
-                cash_q = float(mi.cash)
-            else:
-                main = snap.data.get("main") or {}
-                mid_q = float(main.get("mid", 0.0))
-                buy_ref_q = float(main.get("buy_ref", 0.0))
-                sell_ref_q = float(main.get("sell_ref", 0.0))
-                inv_b = float(main.get("inventory", 0.0))
-                cash_q = float(main.get("cash", 0.0))
-            hedge_snap = snap.data.get("hedge") or {}
-            log_emit(
-                "mm.step",
-                {
-                    "exchange": getattr(getattr(snap, "instrument", None), "exchange", None),
-                    "symbol": getattr(getattr(snap, "instrument", None), "symbol", None),
-                    "t_end_ms": int(s.t_end_ms),
-                    "step_counter": int(getattr(runner, "_step_counter", 0)),
-                    # Canonical floats (quote/base):
-                    "mid_quote": mid_q,
-                    "buy_ref_quote": buy_ref_q,
-                    "sell_ref_quote": sell_ref_q,
-                    "inventory_base": inv_b,
-                    "cash_quote": cash_q,
-                    "hedge_sell_ref_quote": hedge_snap.get("sell_ref_quote"),
-                    "hedge_inventory_base": hedge_snap.get("inventory_base"),
-                    "hedge_cash_quote": hedge_snap.get("cash_quote"),
-                },
-            )
-        except Exception:
-            pass
-
-        # Optional metrics (enable by setting MM_METRICS_PORT).
-        try:
-            labels = metric_labels(
-                extra={
-                    "exchange": getattr(getattr(snap, "instrument", None), "exchange", ""),
-                    "symbol": getattr(getattr(snap, "instrument", None), "symbol", ""),
-                }
-            )
-            mi = getattr(snap, "main_instrument", None)
-            if mi is not None:
-                mid_q = float(mi.mid)
-                sell_ref_q = float(mi.sell_ref)
-                inv_b = float(mi.inventory)
-                cash_q = float(mi.cash)
-            else:
-                main = snap.data.get("main") or {}
-                mid_q = float(main.get("mid", 0.0))
-                sell_ref_q = float(main.get("sell_ref", 0.0))
-                inv_b = float(main.get("inventory", 0.0))
-                cash_q = float(main.get("cash", 0.0))
-            METRICS.gauge("mm_step_counter", float(getattr(runner, "_step_counter", 0)), labels=labels, help="Step counter")
-            METRICS.gauge("mm_mid_quote", mid_q, labels=labels, help="Mid price in quote/base")
-            METRICS.gauge("mm_sell_ref_quote", sell_ref_q, labels=labels, help="Sell-side representative price in quote/base")
-            METRICS.gauge("mm_inventory_base", inv_b, labels=labels, help="Inventory in base units")
-            METRICS.gauge("mm_cash_quote", cash_q, labels=labels, help="Cash in quote units")
-            if runner.wealth_quote_hist:
-                METRICS.gauge("mm_wealth_quote", float(runner.wealth_quote_hist[-1]), labels=labels, help="Total wealth in quote units")
-        except Exception:
-            pass
     bucket_ms = runner.stepper.T_ms
     mid_now_ticks = float(s.ob.mid)
     hedge_inventory = int(s.hedge_inventory)
@@ -422,26 +342,6 @@ def advance_order_flow_runner(runner: Any, t_end_ms: int | None = None) -> bool:
         runner.delta_a_hist.append(delta_a)
         runner.q_b_hist.append(q_b)
         runner.q_a_hist.append(q_a)
-
-    # Emit a single diagnostics frame for stdout / Redis consumers.
-    try:
-        ex = str(getattr(runner.stepper, "exchange", "") or "").strip()
-    except Exception:
-        ex = ""
-    try:
-        sym = str(getattr(runner.stepper, "symbol", "") or "").strip()
-    except Exception:
-        sym = ""
-    try:
-        frame = build_diagnostics_frame(
-            runner=runner,
-            exchange=ex,
-            symbol=sym,
-            spread_max=float(getattr(runner, "spread_max", 0.0) or 0.0) or None,
-        )
-        emit_diagnostics(frame)
-    except Exception:
-        pass
 
     return True
 

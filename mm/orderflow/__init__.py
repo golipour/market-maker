@@ -1,1 +1,1 @@
-"""Legacy matplotlib order-flow animation and online log-loss testers (used by ``mm.layers.runtime``)."""
+"""Order-flow testers; matplotlib animation lives under ``mm.tools.diagnostics_ui``."""
