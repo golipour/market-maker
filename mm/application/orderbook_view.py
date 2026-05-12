@@ -26,4 +26,3 @@ def subtract_own_orders(book: RawOrderbook, open_orders: dict[str, Order]) -> Ra
         asks=clean_asks,
         is_snapshot=True,
     )
-

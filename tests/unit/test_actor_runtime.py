@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from mm.actors.actor import Actor
-from mm.actors.frame_assembler import StrategyInputFrameAssembler
-from mm.actors.orderbook_view import subtract_own_orders
+from mm.application.actor import Actor
+from mm.application.frame_assembler import StrategyInputFrameAssembler
+from mm.application.orderbook_view import subtract_own_orders
 from mm.bus.memory import InMemoryBus
 from mm.core.interfaces.actor import AbstractRiskEngine, AbstractStrategy
 from mm.core.models.execution import Action, ActorState, Fill, Order
@@ -243,4 +243,3 @@ def _event_for(exchange: str, symbol: str, *, t_start_ms: int, t_end_ms: int) ->
         imbalance=0.0,
         microprice=100.5,
     )
-

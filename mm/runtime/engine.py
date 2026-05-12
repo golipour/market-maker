@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 
 from mm.aggregation.scheduler import IntervalScheduler
-from mm.application.frame_service import StrategyInputFrameAssembler
+from mm.application.frame_assembler import StrategyInputFrameAssembler
 from mm.application.decision_service import build_controller_runner
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus

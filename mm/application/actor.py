@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections import defaultdict
 
-from mm.actors.orderbook_view import subtract_own_orders
+from mm.application.orderbook_view import subtract_own_orders
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.actor import AbstractOrderManager, AbstractRiskEngine, AbstractStrategy
 from mm.core.models.execution import Action, ActorState, Fill
@@ -162,4 +162,3 @@ def _replace_event_orderbook(event: MarketEvent, orderbook) -> MarketEvent:
         imbalance=event.imbalance,
         microprice=event.microprice,
     )
-
