@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
+from mm.core.models.execution import Order
+from mm.core.models.private import OpenOrder
 from mm.exchanges.nobitex import private_rest
+from mm.exchanges.nobitex.quote_unit import nobitex_irt_quoted_pair, scale_public_quote_price_from_api
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 
 
@@ -26,3 +29,27 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
 
     async def fetch_open_orders(self) -> list[dict]:
         return await asyncio.to_thread(private_rest.list_open_orders, self.symbol, self.api_token)
+
+    def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
+        o = super().normalize_open_order(row, timestamp_ms=timestamp_ms)
+        if o is None or not nobitex_irt_quoted_pair(self.symbol):
+            return o
+        internal_price = scale_public_quote_price_from_api(self.symbol, float(o.order.price))
+        order = Order(
+            exchange=o.order.exchange,
+            symbol=o.order.symbol,
+            side=o.order.side,
+            price=internal_price,
+            qty=float(o.order.qty),
+            order_type=o.order.order_type,
+            client_order_id=o.order.client_order_id,
+        )
+        return OpenOrder(
+            exchange_order_id=o.exchange_order_id,
+            actor_id=o.actor_id,
+            order=order,
+            remaining_qty=o.remaining_qty,
+            filled_qty=o.filled_qty,
+            status=o.status,
+            timestamp_ms=o.timestamp_ms,
+        )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.exchanges.nobitex.quote_unit import scale_nobitex_orderbook_quotes, scale_nobitex_trade_quote
 from mm.exchanges.shared.provider_adapter import (
     RestClient,
     RestPollingMarketDataAdapter,
@@ -34,7 +35,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
             return []
         trades = []
         for item in (payload.get("trades") or [])[: self.trades_limit]:
-            trades.append(self._trade_from_item(item))
+            trades.append(scale_nobitex_trade_quote(self.symbol, self._trade_from_item(item)))
         trades.sort(key=lambda trade: trade.timestamp_ms)
         return trades
 
@@ -42,7 +43,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         payload = await self._client.get_json(f"/v3/orderbook/{self._api_symbol()}")
         if payload.get("status") != "ok":
             raise ValueError(payload.get("message", "nobitex orderbook error"))
-        return RawOrderbook(
+        book = RawOrderbook(
             exchange=self.exchange,
             symbol=self.symbol,
             timestamp_ms=now_ms(),
@@ -50,6 +51,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
             asks=rows_to_levels(payload.get("asks"), limit=self.depth_limit),
             is_snapshot=True,
         )
+        return scale_nobitex_orderbook_quotes(self.symbol, book)
 
     def _api_symbol(self) -> str:
         return self.symbol.replace("_", "").upper()
@@ -65,4 +67,3 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
             exchange=self.exchange,
             symbol=self.symbol,
         )
-

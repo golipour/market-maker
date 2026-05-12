@@ -45,6 +45,61 @@ def split_symbol_pair(symbol: str) -> tuple[str, str]:
     return base.lower(), quote.lower()
 
 
+def merge_nobitex_wallet_balances_to_internal_toman(result: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    """Fold Nobitex ``RLS`` / ``IRT`` wallet rows (Rial) into canonical ``IRT`` (Toman); leave other assets unchanged."""
+
+    if not result:
+        return {}
+    from mm.core.asset_aliases import canonical_asset_code
+
+    from mm.exchanges.nobitex.quote_unit import NOBITEX_RIAL_PER_TOMAN
+
+    rial_style_quote = frozenset({"RLS", "IRT"})
+    merged: dict[str, dict[str, float]] = {}
+    irt_free = 0.0
+    irt_locked = 0.0
+
+    for asset, bucket in result.items():
+        if not isinstance(bucket, dict):
+            continue
+        a = str(asset).upper()
+        free = _safe_float(bucket.get("free", 0.0))
+        locked = _safe_float(bucket.get("locked", 0.0))
+        total = _safe_float(bucket.get("total", free + locked))
+        if a in rial_style_quote:
+            irt_free += free / NOBITEX_RIAL_PER_TOMAN
+            irt_locked += locked / NOBITEX_RIAL_PER_TOMAN
+            continue
+        key = canonical_asset_code(a)
+        if not key:
+            continue
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = {"free": free, "locked": locked, "total": total}
+        else:
+            merged[key] = {
+                "free": prev["free"] + free,
+                "locked": prev["locked"] + locked,
+                "total": prev["total"] + total,
+            }
+
+    if irt_free != 0.0 or irt_locked != 0.0:
+        prev = merged.get("IRT")
+        if prev is None:
+            merged["IRT"] = {
+                "free": irt_free,
+                "locked": irt_locked,
+                "total": irt_free + irt_locked,
+            }
+        else:
+            merged["IRT"] = {
+                "free": prev["free"] + irt_free,
+                "locked": prev["locked"] + irt_locked,
+                "total": prev["total"] + irt_free + irt_locked,
+            }
+    return merged
+
+
 def _get_auth(path: str, api_token: str, params: dict[str, Any] | None = None) -> Any:
     headers = {"Authorization": f"Token {api_token}"}
     r = requests.get(f"{BASE_URL}{path}", headers=headers, params=params or {}, timeout=15)
@@ -87,7 +142,7 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
     except Exception:
         pass
     if result:
-        return result
+        return merge_nobitex_wallet_balances_to_internal_toman(result)
     try:
         out = _get_auth("/v2/wallets", api_token)
         if out.get("status") != "ok":
@@ -104,7 +159,7 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
             result[str(asset).upper()] = {"free": free, "locked": locked, "total": total}
     except Exception:
         return {}
-    return result
+    return merge_nobitex_wallet_balances_to_internal_toman(result) if result else {}
 
 
 def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
@@ -135,14 +190,17 @@ def place_limit_order(
 ) -> dict[str, Any]:
     if not api_token:
         return {"status": "failed", "message": "missing api token"}
+    from mm.exchanges.nobitex.quote_unit import scale_limit_price_to_nobitex_api
+
     src, dst = split_symbol_pair(symbol)
+    api_price = scale_limit_price_to_nobitex_api(symbol, _safe_float(price, 0.0))
     payload: dict[str, Any] = {
         "type": str(side).lower(),
         "execution": "limit",
         "srcCurrency": src,
         "dstCurrency": dst,
         "amount": str(amount),
-        "price": str(price),
+        "price": str(api_price),
     }
     cid = _nobitex_client_order_id(client_order_id)
     if cid:

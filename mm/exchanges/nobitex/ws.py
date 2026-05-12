@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.exchanges.nobitex.quote_unit import scale_nobitex_orderbook_quotes, scale_nobitex_trade_quote
 from mm.exchanges.shared.provider_adapter import (
     WebSocketMarketDataAdapter,
     parse_timestamp_ms,
@@ -36,29 +37,27 @@ class NobitexWsMarketDataAdapter(WebSocketMarketDataAdapter):
         if not isinstance(data, dict):
             return
         if channel.startswith("public:orderbook-"):
-            await self.emit_orderbook(
-                RawOrderbook(
-                    exchange=self.exchange,
-                    symbol=self.symbol,
-                    timestamp_ms=parse_timestamp_ms(data.get("lastUpdate")),
-                    bids=rows_to_levels(data.get("bids"), limit=self.depth_limit, reverse=True),
-                    asks=rows_to_levels(data.get("asks"), limit=self.depth_limit),
-                    is_snapshot=True,
-                )
+            book = RawOrderbook(
+                exchange=self.exchange,
+                symbol=self.symbol,
+                timestamp_ms=parse_timestamp_ms(data.get("lastUpdate")),
+                bids=rows_to_levels(data.get("bids"), limit=self.depth_limit, reverse=True),
+                asks=rows_to_levels(data.get("asks"), limit=self.depth_limit),
+                is_snapshot=True,
             )
+            await self.emit_orderbook(scale_nobitex_orderbook_quotes(self.symbol, book))
         elif channel.startswith("public:trades-"):
             taker_side = str(data.get("type", "")).lower()
-            await self.emit_trade(
-                RawTrade(
-                    trade_id=str(data.get("id")) if data.get("id") is not None else None,
-                    timestamp_ms=parse_timestamp_ms(data.get("time")),
-                    price=float(data.get("price", 0) or 0),
-                    qty=float(data.get("volume", 0) or 0),
-                    side="buy" if taker_side == "buy" else "sell",
-                    exchange=self.exchange,
-                    symbol=self.symbol,
-                )
+            trade = RawTrade(
+                trade_id=str(data.get("id")) if data.get("id") is not None else None,
+                timestamp_ms=parse_timestamp_ms(data.get("time")),
+                price=float(data.get("price", 0) or 0),
+                qty=float(data.get("volume", 0) or 0),
+                side="buy" if taker_side == "buy" else "sell",
+                exchange=self.exchange,
+                symbol=self.symbol,
             )
+            await self.emit_trade(scale_nobitex_trade_quote(self.symbol, trade))
 
     @staticmethod
     def _extract_data(push: dict[str, Any]) -> Any:

@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Charts:** **Primary** (top) vs **hedge** (bottom) reference VWAPs.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -44,7 +44,21 @@
           "rawQuery": true,
           "rawSql": "SELECT e.ts AS \"time\",\n       'primary_sell_vwap' AS metric,\n       (e.payload->>'primary_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'primary_sell_vwap'\nORDER BY 1",
           "refId": "B"
-        },
+        }
+      ],
+      "title": "Primary reference VWAPs",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
         {
           "datasource": { "type": "postgres", "uid": "postgres-mm" },
           "editorMode": "code",
@@ -62,7 +76,7 @@
           "refId": "D"
         }
       ],
-      "title": "Reference VWAPs (primary + hedge)",
+      "title": "Hedge reference VWAPs",
       "type": "timeseries"
     }
   ],
@@ -110,6 +124,6 @@
   "timezone": "browser",
   "title": "MM VWAP (PostgreSQL)",
   "uid": "mm-reference-vwaps-pg",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

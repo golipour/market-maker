@@ -42,10 +42,12 @@ async def test_nobitex_rest_payloads_normalize_to_raw_events():
 
     assert book.exchange == "nobitex"
     assert book.symbol == "BTC_IRT"
-    assert [level.price for level in book.bids] == [1000000.0, 999000.0]
+    assert [level.price for level in book.bids] == [100000.0, 99900.0]
     assert [level.qty for level in book.asks] == [0.4, 2.0]
     assert [trade.trade_id for trade in trades] == ["n1", "n2"]
     assert [trade.side for trade in trades] == ["sell", "buy"]
+    assert trades[0].price == 100000.0
+    assert trades[1].price == 100100.0
 
 
 @pytest.mark.asyncio
@@ -79,10 +81,11 @@ async def test_nobitex_websocket_payloads_normalize_to_raw_events():
     book = await adapter._book_queue.get()
     trade = await adapter._trade_queue.get()
 
-    assert book.bids[0].price == 1000000.0
+    assert book.bids[0].price == 100000.0
     assert book.asks[0].qty == 0.4
     assert trade.trade_id == "nw1"
     assert trade.side == "buy"
+    assert trade.price == 100100.0
 
 
 @pytest.mark.asyncio
