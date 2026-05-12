@@ -31,10 +31,10 @@ from mm.layers.core.pricing import (
 
 from mm.layers.core.app.engine import advance_order_flow_runner
 from mm.layers.core.domain.types import InstrumentId
-from mm.layers.adapters.diagnostics.emitter import emit as _default_diagnostics_emit
-from mm.layers.adapters.observability.context import metric_labels
-from mm.layers.adapters.observability.jsonlog import emit as _default_structured_log_emit
-from mm.layers.adapters.observability.metrics import REGISTRY as METRICS
+from mm.diagnostics_emitter import emit as _default_diagnostics_emit
+from mm.observability_context import metric_labels
+from mm.observability_jsonlog import emit as _default_structured_log_emit
+from mm.observability_metrics import REGISTRY as METRICS
 
 class OrderFlowRunner:
     """
@@ -183,7 +183,7 @@ class OrderFlowRunner:
         self._wealth_from_dw_baseline: float | None = None
         self._wealth_from_dw_running: float | None = None
 
-        # Observability ports: defaults use mm.layers.adapters; core reads these via duck-typing (no mm.layers.core→adapter import).
+        # Observability ports (duck-typed): defaults point at canonical mm.* implementations.
         self.structured_log_emit = _default_structured_log_emit
         self.metrics_registry = METRICS
         self.metric_labels = metric_labels

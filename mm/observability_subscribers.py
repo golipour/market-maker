@@ -7,7 +7,7 @@ from mm.bus.base import AbstractEventBus
 from mm.core.models.execution import Action
 from mm.core.models.strategy import StrategyInputFrame
 from mm.execution.order_manager import ExecutionSnapshot
-from mm.observability import counter_inc, gauge, log_event, span
+from mm.observability import counter_inc, gauge, histogram_observe, log_event, span
 
 
 class RuntimeObservabilitySubscriber:
@@ -146,7 +146,7 @@ class RuntimeObservabilitySubscriber:
         if pending is None:
             return
         latency_ms = max(0.0, float(snapshot_ts_ms - pending))
-        gauge(
+        histogram_observe(
             "mm_order_sync_latency_ms",
             latency_ms,
             labels={"exchange": exchange},

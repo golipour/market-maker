@@ -302,11 +302,11 @@ def main() -> None:
     """
     Deprecated legacy headless entrypoint.
 
-    Production runtime is ``mm.runtime`` / ``python -m mm.runtime.print_events``.
+    Production runtime is ``mm.runtime`` / ``python -m mm.tools.print_events``.
     """
     raise SystemExit(
         "mm.layers.runtime.pipeline.main is deprecated. "
-        "Use `python -m mm.runtime.print_events --config <path>`."
+        "Use `python -m mm.tools.print_events --config <path>`."
     )
 
 

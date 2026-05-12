@@ -7,10 +7,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     Deprecated legacy entrypoint.
 
-    Production runtime is now ``mm.runtime`` / ``mm.runtime.print_events``.
+    Production runtime is ``mm.runtime`` / ``python -m mm.tools.print_events``.
     """
     raise SystemExit(
         "mm.layers.runtime is deprecated and no longer a production entrypoint. "
-        "Use the config-driven mm.runtime path, for example `python -m mm.runtime.print_events --config <path>`."
+        "Use the config-driven runtime path, for example `python -m mm.tools.print_events --config <path>`."
     )
 

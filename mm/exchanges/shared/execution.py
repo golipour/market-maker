@@ -7,7 +7,7 @@ from mm.core.models.execution import Order
 
 
 class DryRunOrderCommandAdapter(AbstractOrderCommandAdapter):
-    """Non-mutating command adapter for local tests and print_events demos."""
+    """Non-mutating command adapter for local tests and ``mm.tools.print_events`` demos."""
 
     def __init__(self, exchange: str):
         self.exchange = exchange.lower().strip()

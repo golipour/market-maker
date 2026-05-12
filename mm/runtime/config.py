@@ -163,7 +163,7 @@ class ControllerRuntimeConfig:
     """Config for the optional MPC/controller bridge.
 
     The controller consumes StrategyInputFrame objects and publishes controller
-    diagnostics/actions. It is observe-only by default so live print_events runs
+    diagnostics/actions. It is observe-only by default so live ``mm.tools.print_events`` runs
     never place or cancel orders unless config explicitly enables execution.
 
     ``action_start_after_steps`` mirrors ``OrderFlowRunner.action_start_after_steps``:

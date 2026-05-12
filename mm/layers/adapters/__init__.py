@@ -1,6 +1,6 @@
 """
-Adapters for external systems (exchanges, persistence, telemetry).
+Deprecated compatibility namespace.
 
-This package may depend on third-party SDKs and network IO.
+Telemetry shims lived here during the ``mm.layers`` migration; production code should import
+``mm.observability*``, ``mm.diagnostics_emitter``, and exchange adapters under ``mm.exchanges``.
 """
-

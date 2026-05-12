@@ -2,10 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Print events + full runtime (-m mm.runtime.print_events)",
+      "name": "Print events + full runtime (-m mm.tools.print_events)",
       "type": "python",
       "request": "launch",
-      "module": "mm.runtime.print_events",
+      "module": "mm.tools.print_events",
       "cwd": "${workspaceFolder}",
       "args": [
         "--config",

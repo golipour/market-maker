@@ -26,6 +26,22 @@ def counter_inc(name: str, inc: float = 1.0, *, labels: dict[str, Any] | None = 
         return
 
 
+def histogram_observe(
+    name: str,
+    value: float,
+    *,
+    labels: dict[str, Any] | None = None,
+    help: str = "",
+    buckets: tuple[float, ...] | None = None,
+) -> None:
+    try:
+        from mm.observability_metrics import REGISTRY
+
+        REGISTRY.histogram_observe(name, value, labels=labels, help=help, buckets=buckets)
+    except Exception:
+        return
+
+
 def log_event(event: str, fields: dict[str, Any] | None = None) -> None:
     payload = {"ts_ms": int(time.time() * 1000), "event": event}
     if fields:

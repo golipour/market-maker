@@ -118,6 +118,26 @@ def test_legacy_pipeline_main_fails_fast() -> None:
         legacy_pipeline_main()
 
 
+def test_histogram_registry_emits_prometheus_histogram() -> None:
+    from mm.observability_metrics import MetricsRegistry
+
+    r = MetricsRegistry()
+    r.histogram_observe("test_latency_ms", 42.0, labels={"pool": "a"}, help="unit test histogram")
+    text = r.render()
+    assert "test_latency_ms_bucket" in text
+    assert "test_latency_ms_sum" in text
+    assert "test_latency_ms_count" in text
+    assert "histogram" in text
+
+
+def test_runtime_print_events_reexports_tools_implementation() -> None:
+    import mm.runtime.print_events as shim
+    import mm.tools.print_events as canonical
+
+    assert shim.main is canonical.main
+    assert shim.build_print_queues is canonical.build_print_queues
+
+
 def test_layers_domain_events_market_event_shim_matches_canonical() -> None:
     from mm.core.models.market import MarketEvent as CanonicalMarketEvent
     from mm.layers.core.domain.events import MarketEvent as LayersMarketEvent
