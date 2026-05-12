@@ -1,0 +1,17 @@
+{
+  "quote_wire": {
+    "IRT": {
+      "private_dst_override": "rls",
+      "public_price_scale_from_api": 0.1
+    }
+  },
+  "wallet_merge": {
+    "bucket_folds": [
+      {
+        "source_tickers": ["RLS", "IRT"],
+        "target_canonical": "IRT",
+        "amount_scale": 0.1
+      }
+    ]
+  }
+}

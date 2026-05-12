@@ -4,8 +4,8 @@ import asyncio
 
 from mm.core.models.execution import Order
 from mm.core.models.private import OpenOrder
+from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.nobitex import private_rest
-from mm.exchanges.nobitex.quote_unit import nobitex_irt_quoted_pair, scale_public_quote_price_from_api
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 
 
@@ -23,6 +23,7 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
             api_token=api_token,
             poll_interval_ms=poll_interval_ms,
         )
+        self._wire = build_instrument_wire("nobitex", symbol)
 
     async def fetch_balances(self) -> dict:
         return await asyncio.to_thread(private_rest.get_balances, self.api_token)
@@ -32,9 +33,9 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
 
     def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
         o = super().normalize_open_order(row, timestamp_ms=timestamp_ms)
-        if o is None or not nobitex_irt_quoted_pair(self.symbol):
+        if o is None or self._wire.quote_asset != "IRT":
             return o
-        internal_price = scale_public_quote_price_from_api(self.symbol, float(o.order.price))
+        internal_price = self._wire.scale_public_price_from_api(float(o.order.price))
         order = Order(
             exchange=o.order.exchange,
             symbol=o.order.symbol,

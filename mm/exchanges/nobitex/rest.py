@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
-from mm.exchanges.nobitex.quote_unit import scale_nobitex_orderbook_quotes, scale_nobitex_trade_quote
+from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.shared.provider_adapter import (
     RestClient,
     RestPollingMarketDataAdapter,
@@ -28,6 +28,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         self.trades_limit = max(1, int(trades_limit))
         self.depth_limit = max(1, int(depth_limit))
         self._client = RestClient(self.BASE_URL)
+        self._wire = build_instrument_wire("nobitex", symbol)
 
     async def fetch_trades(self) -> list[RawTrade]:
         payload = await self._client.get_json(f"/v2/trades/{self._api_symbol()}")
@@ -35,7 +36,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
             return []
         trades = []
         for item in (payload.get("trades") or [])[: self.trades_limit]:
-            trades.append(scale_nobitex_trade_quote(self.symbol, self._trade_from_item(item)))
+            trades.append(self._wire.scale_trade_from_api(self._trade_from_item(item)))
         trades.sort(key=lambda trade: trade.timestamp_ms)
         return trades
 
@@ -51,10 +52,10 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
             asks=rows_to_levels(payload.get("asks"), limit=self.depth_limit),
             is_snapshot=True,
         )
-        return scale_nobitex_orderbook_quotes(self.symbol, book)
+        return self._wire.scale_orderbook_from_api(book)
 
     def _api_symbol(self) -> str:
-        return self.symbol.replace("_", "").upper()
+        return self._wire.api_market_symbol
 
     def _trade_from_item(self, item: dict[str, Any]) -> RawTrade:
         taker_side = str(item.get("type", "")).lower()

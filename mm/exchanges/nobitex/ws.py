@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
-from mm.exchanges.nobitex.quote_unit import scale_nobitex_orderbook_quotes, scale_nobitex_trade_quote
+from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.shared.provider_adapter import (
     WebSocketMarketDataAdapter,
     parse_timestamp_ms,
@@ -16,12 +16,13 @@ class NobitexWsMarketDataAdapter(WebSocketMarketDataAdapter):
     def __init__(self, symbol: str, *, depth_limit: int = 50):
         super().__init__("nobitex", symbol)
         self.depth_limit = max(1, int(depth_limit))
+        self._wire = build_instrument_wire("nobitex", symbol)
 
     def websocket_url(self) -> str:
         return "wss://ws.nobitex.ir/connection/websocket"
 
     async def subscribe(self, ws: Any) -> None:
-        symbol = self.symbol.replace("_", "").upper()
+        symbol = self._wire.api_market_symbol
         await ws.send(json.dumps({"connect": {}, "id": 1}))
         await ws.send(json.dumps({"id": 2, "subscribe": {"channel": f"public:orderbook-{symbol}"}}))
         await ws.send(json.dumps({"id": 3, "subscribe": {"channel": f"public:trades-{symbol}"}}))
@@ -45,7 +46,7 @@ class NobitexWsMarketDataAdapter(WebSocketMarketDataAdapter):
                 asks=rows_to_levels(data.get("asks"), limit=self.depth_limit),
                 is_snapshot=True,
             )
-            await self.emit_orderbook(scale_nobitex_orderbook_quotes(self.symbol, book))
+            await self.emit_orderbook(self._wire.scale_orderbook_from_api(book))
         elif channel.startswith("public:trades-"):
             taker_side = str(data.get("type", "")).lower()
             trade = RawTrade(
@@ -57,7 +58,7 @@ class NobitexWsMarketDataAdapter(WebSocketMarketDataAdapter):
                 exchange=self.exchange,
                 symbol=self.symbol,
             )
-            await self.emit_trade(scale_nobitex_trade_quote(self.symbol, trade))
+            await self.emit_trade(self._wire.scale_trade_from_api(trade))
 
     @staticmethod
     def _extract_data(push: dict[str, Any]) -> Any:
@@ -71,4 +72,3 @@ class NobitexWsMarketDataAdapter(WebSocketMarketDataAdapter):
         if isinstance(data, dict):
             return data
         return push.get("data")
-

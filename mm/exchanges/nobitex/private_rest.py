@@ -36,68 +36,17 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
 
 
 def split_symbol_pair(symbol: str) -> tuple[str, str]:
-    s = str(symbol or "").strip().upper()
-    if "_" in s:
-        base, quote = s.split("_", 1)
-    else:
-        base, quote = s[:-3], s[-3:]
-    quote = "RLS" if quote == "IRT" else quote
-    return base.lower(), quote.lower()
+    """Lowercase ``(src, dst)`` currencies for Nobitex private order APIs (IRT pairs use ``rls`` dst)."""
+
+    from mm.exchanges.instrument_wire import build_instrument_wire
+
+    return build_instrument_wire("nobitex", symbol).private_order_currencies()
 
 
 def merge_nobitex_wallet_balances_to_internal_toman(result: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
-    """Fold Nobitex ``RLS`` / ``IRT`` wallet rows (Rial) into canonical ``IRT`` (Toman); leave other assets unchanged."""
+    from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 
-    if not result:
-        return {}
-    from mm.core.asset_aliases import canonical_asset_code
-
-    from mm.exchanges.nobitex.quote_unit import NOBITEX_RIAL_PER_TOMAN
-
-    rial_style_quote = frozenset({"RLS", "IRT"})
-    merged: dict[str, dict[str, float]] = {}
-    irt_free = 0.0
-    irt_locked = 0.0
-
-    for asset, bucket in result.items():
-        if not isinstance(bucket, dict):
-            continue
-        a = str(asset).upper()
-        free = _safe_float(bucket.get("free", 0.0))
-        locked = _safe_float(bucket.get("locked", 0.0))
-        total = _safe_float(bucket.get("total", free + locked))
-        if a in rial_style_quote:
-            irt_free += free / NOBITEX_RIAL_PER_TOMAN
-            irt_locked += locked / NOBITEX_RIAL_PER_TOMAN
-            continue
-        key = canonical_asset_code(a)
-        if not key:
-            continue
-        prev = merged.get(key)
-        if prev is None:
-            merged[key] = {"free": free, "locked": locked, "total": total}
-        else:
-            merged[key] = {
-                "free": prev["free"] + free,
-                "locked": prev["locked"] + locked,
-                "total": prev["total"] + total,
-            }
-
-    if irt_free != 0.0 or irt_locked != 0.0:
-        prev = merged.get("IRT")
-        if prev is None:
-            merged["IRT"] = {
-                "free": irt_free,
-                "locked": irt_locked,
-                "total": irt_free + irt_locked,
-            }
-        else:
-            merged["IRT"] = {
-                "free": prev["free"] + irt_free,
-                "locked": prev["locked"] + irt_locked,
-                "total": prev["total"] + irt_free + irt_locked,
-            }
-    return merged
+    return merge_wallet_balances_raw("nobitex", result)
 
 
 def _get_auth(path: str, api_token: str, params: dict[str, Any] | None = None) -> Any:
@@ -190,10 +139,11 @@ def place_limit_order(
 ) -> dict[str, Any]:
     if not api_token:
         return {"status": "failed", "message": "missing api token"}
-    from mm.exchanges.nobitex.quote_unit import scale_limit_price_to_nobitex_api
+    from mm.exchanges.instrument_wire import build_instrument_wire
 
-    src, dst = split_symbol_pair(symbol)
-    api_price = scale_limit_price_to_nobitex_api(symbol, _safe_float(price, 0.0))
+    wire = build_instrument_wire("nobitex", symbol)
+    src, dst = wire.private_order_currencies()
+    api_price = wire.scale_limit_price_to_api(_safe_float(price, 0.0))
     payload: dict[str, Any] = {
         "type": str(side).lower(),
         "execution": "limit",

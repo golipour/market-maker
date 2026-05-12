@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.shared.provider_adapter import (
     RestClient,
     RestPollingMarketDataAdapter,
@@ -27,9 +28,10 @@ class WallexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         self.trades_limit = max(1, int(trades_limit))
         self.depth_limit = max(1, int(depth_limit))
         self._client = RestClient(self.BASE_URL)
+        self._wire = build_instrument_wire("wallex", symbol)
 
     async def fetch_trades(self) -> list[RawTrade]:
-        payload = await self._client.get_json("/v1/trades", {"symbol": self._api_symbol()})
+        payload = await self._client.get_json("/v1/trades", {"symbol": self._wire.api_market_symbol})
         if not payload.get("success"):
             return []
         result = payload.get("result") or {}
@@ -41,7 +43,7 @@ class WallexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         return trades
 
     async def fetch_orderbook(self) -> RawOrderbook:
-        payload = await self._client.get_json("/v1/depth", {"symbol": self._api_symbol()})
+        payload = await self._client.get_json("/v1/depth", {"symbol": self._wire.api_market_symbol})
         if not payload.get("success"):
             raise ValueError(payload.get("message", "wallex orderbook error"))
         result = payload.get("result") or {}
@@ -55,10 +57,7 @@ class WallexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         )
 
     def _api_symbol(self) -> str:
-        symbol = self.symbol.replace("_", "").upper()
-        if symbol.endswith("IRT"):
-            return f"{symbol[:-3]}TMN"
-        return symbol
+        return self._wire.api_market_symbol
 
     @staticmethod
     def _depth_rows(rows: Any) -> list[list[str]]:

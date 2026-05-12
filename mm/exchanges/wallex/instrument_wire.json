@@ -1,0 +1,5 @@
+{
+  "api_market_symbol": {
+    "compact_suffix_replace": { "from": "IRT", "to": "TMN" }
+  }
+}

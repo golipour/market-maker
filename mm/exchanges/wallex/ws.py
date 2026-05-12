@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.shared.provider_adapter import (
     WebSocketMarketDataAdapter,
     now_ms,
@@ -19,12 +20,13 @@ class WallexWsMarketDataAdapter(WebSocketMarketDataAdapter):
         self.depth_limit = max(1, int(depth_limit))
         self._buy_depth: list[list[str]] = []
         self._sell_depth: list[list[str]] = []
+        self._wire = build_instrument_wire("wallex", symbol)
 
     def websocket_url(self) -> str:
         return "wss://api.wallex.ir/ws"
 
     async def subscribe(self, ws: Any) -> None:
-        market = self._api_symbol()
+        market = self._wire.api_market_symbol
         await ws.send(json.dumps(["subscribe", {"channel": f"{market}@buyDepth"}]))
         await ws.send(json.dumps(["subscribe", {"channel": f"{market}@sellDepth"}]))
         await ws.send(json.dumps(["subscribe", {"channel": f"{market}@trade"}]))
@@ -78,10 +80,7 @@ class WallexWsMarketDataAdapter(WebSocketMarketDataAdapter):
             )
 
     def _api_symbol(self) -> str:
-        symbol = self.symbol.replace("_", "").upper()
-        if symbol.endswith("IRT"):
-            return f"{symbol[:-3]}TMN"
-        return symbol
+        return self._wire.api_market_symbol
 
     @staticmethod
     def _wallex_depth_row(row: Any) -> tuple[str, str] | None:

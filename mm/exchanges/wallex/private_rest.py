@@ -10,10 +10,11 @@ BASE_URL = "https://api.wallex.ir"
 
 
 def api_symbol(symbol: str) -> str:
-    s = symbol.replace("_", "").upper()
-    if s.endswith("IRT"):
-        return f"{s[:-3]}TMN"
-    return s
+    """Wallex REST/WS market symbol (``USDT_IRT`` in config → ``USDTTMN`` on the wire)."""
+
+    from mm.exchanges.instrument_wire import build_instrument_wire
+
+    return build_instrument_wire("wallex", symbol).api_market_symbol
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -146,7 +147,9 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
             total = _safe_float(row.get("total", free + locked))
             result[asset] = {"free": free, "locked": locked, "total": total}
         if result:
-            return result
+            from mm.exchanges.instrument_wire import merge_wallet_balances_raw
+
+            return merge_wallet_balances_raw("wallex", result)
     return {}
 
 

@@ -23,6 +23,11 @@ from mm.exchanges.factory import (
     select_private_state_adapter,
     select_public_market_data_adapter,
 )
+from mm.exchanges.instrument_wire import (
+    InstrumentWireProfile,
+    build_instrument_wire,
+    merge_wallet_balances_raw,
+)
 
 __all__ = [
     "EXCHANGE_CAPABILITIES",
@@ -38,7 +43,10 @@ __all__ = [
     "build_order_command_adapter",
     "build_private_state_adapter",
     "build_public_market_data_adapter",
+    "build_instrument_wire",
     "get_exchange_capabilities",
+    "InstrumentWireProfile",
+    "merge_wallet_balances_raw",
     "resolve_private_state_mode",
     "resolve_public_market_transport",
     "select_order_command_adapter",
