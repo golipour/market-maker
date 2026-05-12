@@ -16,6 +16,7 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
+from mm.pricing import DEFAULT_REFERENCE_DEPTH_LOTS, reference_vwaps_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig
 
 
@@ -81,8 +82,13 @@ class MpcStrategyEngine:
 
     def decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         t0 = time.monotonic_ns()
-        _update_hedge_rep_price_model(self._hedge_price_model, frame)
-        state = _state_from_frame(frame, self.binding, self.config.orderbook_grid.max_spread)
+        vwap_depth = float(
+            getattr(self._price_model, "_target_depth_lots", DEFAULT_REFERENCE_DEPTH_LOTS)
+        )
+        _update_hedge_rep_price_model(self._hedge_price_model, frame, vwap_depth=vwap_depth)
+        state = _state_from_frame(
+            frame, self.binding, self.config.orderbook_grid.max_spread, vwap_depth=vwap_depth
+        )
         _update_market_flow_model(self._market_flow_model, frame)
         _update_float_price_model(self._price_model, self._previous_frame, frame)
         optimizer_stdout = io.StringIO()
@@ -267,26 +273,29 @@ def _build_hedge_price_model(cfg: dict[str, Any] | None) -> Any:
     raise ValueError(f"unsupported hedge_price_model kind: {kind}")
 
 
-def _hedge_reference_prices(book: RawOrderbook) -> tuple[float, float]:
-    """Hedge buy (ask) and sell (bid) reference prices in quote-per-base."""
-    buy_ref = book.asks[0].price if book.asks else _mid(book)
-    sell_ref = book.bids[0].price if book.bids else _mid(book)
-    return float(buy_ref), float(sell_ref)
-
-
-def _update_hedge_rep_price_model(model: Any, frame: StrategyInputFrame) -> None:
+def _update_hedge_rep_price_model(
+    model: Any, frame: StrategyInputFrame, *, vwap_depth: float
+) -> None:
     if model is None or not hasattr(model, "update"):
         return
     if frame.hedge is None:
         return
     try:
-        buy_ref, sell_ref = _hedge_reference_prices(frame.hedge.orderbook)
+        buy_ref, sell_ref = reference_vwaps_raw_orderbook(
+            frame.hedge.orderbook, target_depth=vwap_depth
+        )
     except ValueError:
         return
     model.update(buy_ref, sell_ref)
 
 
-def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_max: float):
+def _state_from_frame(
+    frame: StrategyInputFrame,
+    binding: SymbolBinding,
+    spread_max: float,
+    *,
+    vwap_depth: float,
+):
     from mm.mpc.mpc_state import OrderbookRelative, State
 
     primary_mid = _mid(frame.primary.orderbook)
@@ -301,12 +310,19 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
         if (spread := level.price - primary_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
     primary_inventory, primary_cash = _inventory_cash(frame.primary_private, binding.primary.base_asset, binding.primary.quote_asset)
+    buy_vwap, sell_vwap = reference_vwaps_raw_orderbook(
+        frame.primary.orderbook, target_depth=vwap_depth
+    )
     hedge_buy_vwap = hedge_sell_vwap = None
     hedge_inventory = 0.0
     hedge_cash = 0.0
     if frame.hedge is not None:
-        hedge_buy_vwap = frame.hedge.orderbook.asks[0].price if frame.hedge.orderbook.asks else _mid(frame.hedge.orderbook)
-        hedge_sell_vwap = frame.hedge.orderbook.bids[0].price if frame.hedge.orderbook.bids else _mid(frame.hedge.orderbook)
+        try:
+            hedge_buy_vwap, hedge_sell_vwap = reference_vwaps_raw_orderbook(
+                frame.hedge.orderbook, target_depth=vwap_depth
+            )
+        except ValueError:
+            hedge_buy_vwap = hedge_sell_vwap = None
     if frame.hedge_private is not None and binding.hedge is not None:
         hedge_inventory, hedge_cash = _inventory_cash(
             frame.hedge_private,
@@ -320,8 +336,8 @@ def _state_from_frame(frame: StrategyInputFrame, binding: SymbolBinding, spread_
         sell_vol=frame.primary.sell_volume,
         inventory=primary_inventory,
         cash=primary_cash,
-        buy_vwap=frame.primary.orderbook.asks[0].price if frame.primary.orderbook.asks else primary_mid,
-        sell_vwap=frame.primary.orderbook.bids[0].price if frame.primary.orderbook.bids else primary_mid,
+        buy_vwap=buy_vwap,
+        sell_vwap=sell_vwap,
         hedge_buy_vwap=hedge_buy_vwap,
         hedge_sell_vwap=hedge_sell_vwap,
         hedge_inventory=hedge_inventory,
