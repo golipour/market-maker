@@ -1,0 +1,347 @@
+{
+  "annotations": { "list": [] },
+  "description": "Prometheus metrics from mm runtime: frames, controller, order execution, latencies. Requires runtime metrics on host:8000 scraped by Prometheus (see docker/prometheus.yml).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "**Source:** `mm/observability/subscribers.py` + in-process `/metrics` (`mm/observability/registry.py`).\n\n**Rates:** `rate(...[$__rate_interval])` — frames, decisions, sync rounds, venue place/cancel accept counts.\n\n**Latencies (histograms):** `mm_frame_to_exec_sync_latency_ms` = wall ms from `StrategyInputFrame.created_at_ms` to `ExecutionSyncRequested`; `mm_market_window_end_to_exec_sync_latency_ms` = `ExecutionSyncRequested.timestamp_ms` − primary `t_end_ms`; `mm_order_sync_latency_ms` = sync request timestamp → next `execution:state` snapshot timestamp.\n\n**Gauges (last scrape):** `mm_order_sync_create_count` / `mm_order_sync_cancel_count` (per sync batch), controller latency gauge, live orders.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_strategy_frames_total[$__rate_interval]))",
+          "legendFormat": "frames/s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_controller_decisions_total[$__rate_interval]))",
+          "legendFormat": "decisions/s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Frames & controller decisions (rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "id": 3,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_order_sync_total[$__rate_interval]))",
+          "legendFormat": "sync rounds/s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_order_place_accepted_total[$__rate_interval]))",
+          "legendFormat": "orders placed (accepted)/s",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_order_cancel_accepted_total[$__rate_interval]))",
+          "legendFormat": "orders cancelled (accepted)/s",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Order sync & venue accept (rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_frame_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50 frame→sync start",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_frame_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95 frame→sync start",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_market_window_end_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50 t_end→sync start",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_market_window_end_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95 t_end→sync start",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Market / frame → execution sync start (latency)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 13 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50 sync→snapshot",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95 sync→snapshot",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Order manager: sync request → state snapshot (latency)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "id": 6,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "avg by (exchange, symbol, actor_id) (mm_controller_latency_ms)",
+          "legendFormat": "{{exchange}}/{{symbol}} {{actor_id}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Controller decision latency (gauge, last scrape)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "mm_execution_live_orders",
+          "legendFormat": "{{exchange}} live",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "mm_order_sync_create_count",
+          "legendFormat": "{{exchange}} create batch",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "mm_order_sync_cancel_count",
+          "legendFormat": "{{exchange}} cancel batch",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Live orders & last sync batch sizes (gauges)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 30 },
+      "id": 8,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_runtime_errors_total[$__rate_interval]))",
+          "legendFormat": "runtime errors/s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "sum(rate(mm_order_validation_rejected_total[$__rate_interval]))",
+          "legendFormat": "validation rejected/s",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Errors & order validation rejects (rate)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 30 },
+      "id": 9,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "editorMode": "code",
+          "expr": "topk(12, sum by (event_type) (rate(mm_execution_events_total[$__rate_interval])))",
+          "legendFormat": "{{event_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Execution bus events by type (top rates)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["market-maker", "prometheus", "runtime"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM runtime metrics (Prometheus)",
+  "uid": "mm-runtime-metrics",
+  "version": 1,
+  "weekStart": ""
+}

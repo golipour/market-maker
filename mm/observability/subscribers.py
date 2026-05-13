@@ -22,6 +22,8 @@ class RuntimeObservabilitySubscriber:
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
         self._sync_pending_ts_ms: dict[str, int] = {}
+        # Latest primary frame per exchange: (t_end_ms, created_at_ms wall) for latency vs execution sync.
+        self._last_primary_frame_by_exchange: dict[str, tuple[int, int]] = {}
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -86,6 +88,10 @@ class RuntimeObservabilitySubscriber:
         _ = topic
         with span("mm.frame_assembler.build", exchange=primary.exchange, symbol=primary.symbol):
             counter_inc(obs_schema.MM_STRATEGY_FRAMES_TOTAL, labels=labels, help="Strategy frames assembled")
+            self._last_primary_frame_by_exchange[primary.exchange.lower().strip()] = (
+                int(primary.t_end_ms),
+                int(frame.created_at_ms),
+            )
             if frame.hedge_lag_ms is not None:
                 gauge(
                     "mm_hedge_lag_ms",
@@ -108,7 +114,23 @@ class RuntimeObservabilitySubscriber:
         ex = str(payload.get("exchange", "")).strip()
         ts = payload.get("timestamp_ms")
         if ex and ts is not None:
-            self._sync_pending_ts_ms[ex] = int(ts)
+            sync_ts = int(ts)
+            self._sync_pending_ts_ms[ex] = sync_ts
+            last = self._last_primary_frame_by_exchange.get(ex.lower().strip())
+            if last is not None:
+                t_end_ms, created_at_ms = last
+                histogram_observe(
+                    obs_schema.MM_FRAME_TO_EXEC_SYNC_LATENCY_MS,
+                    max(0.0, float(sync_ts - created_at_ms)),
+                    labels={"exchange": ex},
+                    help="Wall ms from StrategyInputFrame.created_at_ms to ExecutionSyncRequested",
+                )
+                histogram_observe(
+                    obs_schema.MM_MARKET_WINDOW_END_TO_EXEC_SYNC_LATENCY_MS,
+                    max(0.0, float(sync_ts - t_end_ms)),
+                    labels={"exchange": ex},
+                    help="Ms from primary MarketEvent.t_end_ms to ExecutionSyncRequested (runtime wall clock)",
+                )
 
     def _observe_execution_snapshot(self, snap: ExecutionSnapshot) -> None:
         self._finish_sync_latency(str(snap.exchange), snap.timestamp_ms)
@@ -244,12 +266,33 @@ class RuntimeObservabilitySubscriber:
             "event_type": str(payload.get("type", "")),
         }
         counter_inc(obs_schema.MM_EXECUTION_EVENTS_TOTAL, labels=labels, help="Execution events observed")
-        if payload.get("type") == "ExecutionSyncRequested":
+        etype = str(payload.get("type", ""))
+        if etype == "ExecutionSyncRequested":
             counter_inc(
                 obs_schema.MM_ORDER_SYNC_TOTAL,
                 labels={"exchange": labels["exchange"]},
                 help="Order manager sync rounds observed",
             )
+        if etype == "PlaceOrdersAccepted":
+            oids = payload.get("order_ids") or ()
+            n = len(oids) if isinstance(oids, (list, tuple)) else 0
+            if n:
+                counter_inc(
+                    obs_schema.MM_ORDER_PLACE_ACCEPTED_TOTAL,
+                    float(n),
+                    labels={"exchange": labels["exchange"]},
+                    help="Venue-accepted new orders (len order_ids)",
+                )
+        if etype == "CancelOrdersAccepted":
+            oids = payload.get("order_ids") or ()
+            n = len(oids) if isinstance(oids, (list, tuple)) else 0
+            if n:
+                counter_inc(
+                    obs_schema.MM_ORDER_CANCEL_ACCEPTED_TOTAL,
+                    float(n),
+                    labels={"exchange": labels["exchange"]},
+                    help="Venue-accepted cancels (len order_ids)",
+                )
         if "create_count" in payload:
             gauge(
                 "mm_order_sync_create_count",
