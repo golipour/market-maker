@@ -1,0 +1,15 @@
+# Reset datasources created in the UI with random UIDs so file provisioning can
+# apply stable uids (loki-mm, prometheus-mm, tempo-mm, postgres-mm) used by dashboards.
+apiVersion: 1
+
+deleteDatasources:
+  - name: Mimir
+    orgId: 1
+  - name: Loki
+    orgId: 1
+  - name: Tempo
+    orgId: 1
+  - name: Prometheus
+    orgId: 1
+  - name: PostgreSQL
+    orgId: 1

@@ -1,8 +1,24 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
+from mm.env_loader import repo_root
 from mm.runtime.config import ObservabilityRuntimeConfig
+
+
+def _resolve_log_path_for_process(path: str) -> str:
+    """Resolve relative log paths against the git repo root.
+
+    Docker Compose mounts ``./logs`` at the repository root for Alloy. If the
+    runtime is started from another working directory, a relative ``log_path``
+    would write outside that mount and Loki would stay empty.
+    """
+
+    p = Path(path.strip())
+    if p.is_absolute():
+        return str(p)
+    return str((repo_root() / p).resolve())
 
 
 def configure_observability(config: ObservabilityRuntimeConfig) -> None:
@@ -11,7 +27,7 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
     if config.json_logs:
         os.environ.setdefault("MM_JSON_LOG", "1")
     if config.log_path:
-        os.environ.setdefault("MM_LOG_PATH", config.log_path)
+        os.environ.setdefault("MM_LOG_PATH", _resolve_log_path_for_process(str(config.log_path)))
     if config.metrics_enabled:
         os.environ.setdefault("MM_METRICS_PORT", str(config.metrics_port))
         try:

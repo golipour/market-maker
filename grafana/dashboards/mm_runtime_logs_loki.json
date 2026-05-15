@@ -1,0 +1,162 @@
+{
+  "annotations": { "list": [] },
+  "description": "Runtime logs in Loki (Alloy file tail + optional docker). Primary path: repo logs/mm-runtime.jsonl → Alloy job market-maker-runtime.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "content": "**Loki datasource** `uid: loki-mm`.\n\n**Empty logs?**\n1. **Job `market-maker-runtime`:** Runtime must append JSON lines under **`<repo>/logs/`** (relative `log_path` in config is resolved to the repo root — see `mm/observability/setup.py`). Alloy mounts **`./logs` → `/var/log/market_maker`** (compose from repo root).\n2. **Job `docker`:** Raw Docker json-file lines; inner app JSON may be wrapped — use **Line regex** or Explore.\n3. **Runtime must be running** and emitting `log_event` / file logs.\n\n**Structured filter:** second panel uses `| json | event=~…` (drops non-JSON lines).",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki-mm" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "drawStyle": "bars",
+            "fillOpacity": 50,
+            "lineWidth": 1
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 6 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "hidden", "showLegend": false },
+        "tooltip": { "mode": "single", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki-mm" },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({job=~\"$job\"} |~ \"$line_regex\" [$__interval]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Log line volume (any text)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki-mm" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 13 },
+      "id": 3,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki-mm" },
+          "editorMode": "code",
+          "expr": "{job=~\"$job\"} |~ \"$line_regex\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "All log lines (raw)",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki-mm" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 23 },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki-mm" },
+          "editorMode": "code",
+          "expr": "{job=~\"$job\"} |~ \"$line_regex\" | json | event=~\"$event\" | __error__=\"\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Structured JSON (event field)",
+      "type": "logs"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["market-maker", "loki", "logs"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "market-maker-runtime", "value": "market-maker-runtime" },
+        "hide": 0,
+        "label": "Loki job",
+        "name": "job",
+        "options": [
+          { "selected": true, "text": "market-maker-runtime", "value": "market-maker-runtime" },
+          { "selected": false, "text": "docker", "value": "docker" },
+          { "selected": false, "text": "both", "value": "market-maker-runtime|docker" }
+        ],
+        "query": "market-maker-runtime,docker,market-maker-runtime|docker",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": ".*" },
+        "hide": 0,
+        "label": "Event (regex)",
+        "name": "event",
+        "options": [
+          { "selected": true, "text": "All", "value": ".*" },
+          { "selected": false, "text": "strategy_frame", "value": "strategy_frame" },
+          { "selected": false, "text": "strategy_decision", "value": "strategy_decision" },
+          { "selected": false, "text": "runtime_error", "value": "runtime_error" },
+          { "selected": false, "text": "order_validation_rejected", "value": "order_validation_rejected" },
+          { "selected": false, "text": "admin_command_applied", "value": "admin_command_applied" }
+        ],
+        "query": ".*,strategy_frame,strategy_decision,runtime_error,order_validation_rejected,admin_command_applied",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": { "text": ".*", "value": ".*" },
+        "hide": 0,
+        "label": "Line regex",
+        "name": "line_regex",
+        "query": ".*",
+        "skipUrlSync": false,
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM runtime logs (Loki)",
+  "uid": "mm-runtime-logs-loki",
+  "version": 1,
+  "weekStart": ""
+}

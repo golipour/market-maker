@@ -29,17 +29,28 @@ otelcol.exporter.otlp "tempo" {
   }
 }
 
-loki.source.file "docker_logs" {
-  targets = [
-    {__path__ = "/var/lib/docker/containers/*/*.log", job = "docker"},
-  ]
-  forward_to = [loki.write.default.receiver]
+// Expand globs (loki.source.file does not stat paths with *).
+local.file_match "runtime_logs" {
+  path_targets = [{
+    __path__ = "/var/log/market_maker/*.jsonl",
+    job        = "market-maker-runtime",
+  }]
 }
 
 loki.source.file "runtime_logs" {
-  targets = [
-    {__path__ = "/var/log/market_maker/*.jsonl", job = "market-maker-runtime"},
-  ]
+  targets    = local.file_match.runtime_logs.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+local.file_match "docker_logs" {
+  path_targets = [{
+    __path__ = "/var/lib/docker/containers/*/*-json.log",
+    job        = "docker",
+  }]
+}
+
+loki.source.file "docker_logs" {
+  targets    = local.file_match.docker_logs.targets
   forward_to = [loki.write.default.receiver]
 }
 

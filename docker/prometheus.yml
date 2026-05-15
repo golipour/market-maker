@@ -2,6 +2,10 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+# Scrape the market-maker process on the host (default metrics port 8000).
+# Requires: runtime running on the same machine as Docker, with MM_METRICS_PORT
+# set (see configure_observability). Prometheus has extra_hosts host.docker.internal
+# for Linux. If UP=0, open http://localhost:9090/targets and fix reachability.
 scrape_configs:
   - job_name: market_maker
     metrics_path: /metrics
