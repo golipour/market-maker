@@ -11,8 +11,9 @@ sequenceDiagram
   participant SCH as IntervalScheduler
   participant BUS as Event bus
   participant FA as Frame assembler
-  participant MPC as MpcControllerRunner
+  participant SR as StrategyRunner
   participant ENG as MpcStrategyEngine
+  participant RISK as RiskEngine
   participant OM as OrderManager
   participant OBS as Observability
   participant PG as Postgres writer
@@ -24,12 +25,15 @@ sequenceDiagram
   BUS->>FA: primary queue (+ hedge queue)
   FA->>FA: align hedge, attach private snapshots
   FA->>BUS: StrategyInputFrame on strategy:frames:…
-  BUS->>MPC: frame_queue
-  MPC->>ENG: decide(frame)
-  ENG-->>MPC: StrategyDecision + Action
-  MPC->>BUS: strategy:decisions, strategy:actions
+  BUS->>SR: frame_queue
+  SR->>SR: subtract own orders from books
+  SR->>ENG: decide(clean_frame)
+  ENG-->>SR: StrategyDecision + Action
+  SR->>RISK: validate_frame
+  RISK-->>SR: approved actions
+  SR->>BUS: strategy:decisions, strategy:actions
   alt not observe_only and past warmup
-    MPC->>OM: sync([action])
+    SR->>OM: route_actions(approved)
     OM->>EX: place_orders / cancel_orders
     OM->>BUS: execution:orders / execution:state
   end
@@ -76,7 +80,7 @@ Runs a background task on the **primary** market-event queue:
 3. **`bus.publish(frame_topic, StrategyInputFrame)`** where  
    `frame_topic = strategy:frames:{primary_exchange}:{primary_symbol}:{interval_ms}`.
 
-**Note:** The MPC path does **not** subtract the bot’s own orders from the book here. That only happens in the unused `Actor` path (`subtract_own_orders`).
+Own-order subtraction happens later in **`StrategyRunner`** (`clean_strategy_frame`), not in the assembler.
 
 ### Frame contents
 
@@ -88,25 +92,9 @@ Runs a background task on the **primary** market-event queue:
 | `hedge_status`, `hedge_lag_ms` | Assembler logic |
 | `created_at_ms` | Wall clock when frame was built |
 
-## Phase 3 — MPC controller
+## Phase 3 — Strategy runner
 
-### MpcControllerRunner (`mm.strategies.mpc_controller`)
-
-Subscribes to `config.frame_topic` (same as assembler output).
-
-Per frame:
-
-1. **`_frame_step += 1`**
-2. **`MpcStrategyEngine.decide(frame, frame_step=…)`** → `StrategyDecision`
-3. **`_publish_decision`** — payload dict on `strategy:decisions`, `Action` on `strategy:actions`
-4. **Execution gate** (all must pass):
-   - `not config.observe_only`
-   - `OrderManager` exists for primary exchange (requires API token + `enable_execution`)
-   - `_frame_step > config.action_start_after_steps`
-
-Then **`await manager.sync([decision.action])`**.
-
-See [Controller & execution](controller-and-execution.md) for constraints inside `decide` and `OrderManager`.
+See [Controller & execution](controller-and-execution.md) for the full pipeline (`StrategyRunner`: clean book → MPC → risk → gates → `OrderManager`).
 
 ## Phase 4 — Execution sync
 
@@ -132,7 +120,7 @@ Private reconcilers continuously refresh snapshots from exchange REST; execution
 | `RuntimeObservabilitySubscriber` | frames, decisions, actions, execution, errors | Prometheus metrics, JSON logs, optional spans |
 | `PostgresEventWriter` | configured `persistence.topics` | `mm_events` table |
 | `ParquetEventWriter` | same | files under `MM_PARQUET_ROOT` |
-| `RuntimeControlPlane` | `admin:commands` | `admin:events`, gauge updates (not wired to MPC gates today) |
+| `RuntimeControlPlane` | `admin:commands` | `admin:events`; kill_switch → risk; observe_only blocks live sync |
 
 Persistence uses `envelope_event()` so Postgres stores both `payload` JSONB and full `envelope` JSONB.
 
@@ -150,7 +138,9 @@ When `hedge` is configured:
 | Goal | Location |
 |------|----------|
 | Frame assembled | `frame_assembler.build_frame` return or `bus.publish` in `_run_primary` |
-| Frame consumed by strategy | `mpc_controller.on_frame` entry |
+| Frame consumed by strategy | `strategy_runner.on_frame` entry |
+| Own-order subtraction | `clean_strategy_frame` |
+| Risk | `risk_engine.validate_frame` |
 | MPC math / orders | `mpc_engine.decide` |
 | Pre-exchange validation | `order_manager._place_new` → `order_passes_limits` |
 | Bus-only inspection | `python -m mm.tools.print_events --config …` |

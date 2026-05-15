@@ -90,6 +90,11 @@
     "qty_step": 0.0001,
     "min_order_qty": 0.0001,
     "max_orders_per_side": 10,
+    "risk": {
+      "enabled": true,
+      "max_inventory": 1000.0,
+      "max_data_age_ms": 60000
+    },
     "vwap_depth": 100.0,
     "price_model": {
       "kind": "residual",

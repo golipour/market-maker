@@ -1,19 +1,49 @@
-"""MPC strategy decision path (engine + async bus runner)."""
+"""Strategy runner wiring for the market-maker runtime."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mm.application.strategy_runner import StrategyRunner
 from mm.bus.base import AbstractEventBus
 from mm.core.models.instrument import SymbolBinding
+from mm.exchanges.shared.provider_adapter import now_ms
+from mm.risk.factory import build_risk_engine
 from mm.runtime.config import ControllerRuntimeConfig, MarketMakerRuntimeConfig
-from mm.strategies.mpc_controller import MpcControllerRunner
+from mm.runtime.control import RuntimeControlPlane
 from mm.strategies.mpc_engine import MpcStrategyEngine
 
 if TYPE_CHECKING:
     from mm.core.interfaces.actor import AbstractOrderManager
 
-__all__ = ["MpcControllerRunner", "MpcStrategyEngine", "build_controller_runner"]
+__all__ = ["MpcStrategyEngine", "StrategyRunner", "build_strategy_runner"]
+
+# Back-compat alias removed in favor of StrategyRunner; keep name for importers updating gradually.
+MpcControllerRunner = StrategyRunner
+
+
+def build_strategy_runner(
+    config: MarketMakerRuntimeConfig,
+    *,
+    bus: AbstractEventBus,
+    frame_topic: str,
+    order_managers: dict[str, AbstractOrderManager],
+    control_plane: RuntimeControlPlane | None = None,
+) -> StrategyRunner | None:
+    """Instantiate ``StrategyRunner`` when controller config is present and enabled."""
+
+    ctrl = config.controller
+    if ctrl is None or not ctrl.enabled:
+        return None
+    return StrategyRunner(
+        config=ctrl,
+        binding=config.binding,
+        frame_queue=bus.subscribe_queue(frame_topic),
+        order_managers=order_managers,
+        risk_engine=build_risk_engine(ctrl.risk, clock_ms=now_ms),
+        bus=bus,
+        control_plane=control_plane,
+    )
 
 
 def build_controller_runner(
@@ -22,16 +52,14 @@ def build_controller_runner(
     bus: AbstractEventBus,
     frame_topic: str,
     order_managers: dict[str, AbstractOrderManager],
-) -> MpcControllerRunner | None:
-    """Instantiate ``MpcControllerRunner`` when controller config is present and enabled."""
+    control_plane: RuntimeControlPlane | None = None,
+) -> StrategyRunner | None:
+    """Alias for ``build_strategy_runner`` (legacy name)."""
 
-    ctrl = config.controller
-    if ctrl is None or not ctrl.enabled:
-        return None
-    return MpcControllerRunner(
-        config=ctrl,
-        binding=config.binding,
-        frame_queue=bus.subscribe_queue(frame_topic),
-        order_managers=order_managers,
+    return build_strategy_runner(
+        config,
         bus=bus,
+        frame_topic=frame_topic,
+        order_managers=order_managers,
+        control_plane=control_plane,
     )

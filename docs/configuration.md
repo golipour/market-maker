@@ -132,6 +132,11 @@ Without token, private reconciler is skipped and **no live orders** on that exch
   "qty_step": 0.0001,
   "min_order_qty": 0.0001,
   "max_orders_per_side": 10,
+  "risk": {
+    "enabled": true,
+    "max_inventory": 1000.0,
+    "max_data_age_ms": 60000
+  },
   "vwap_depth": 100.0,
   "price_model": { "kind": "residual", ... },
   "market_flow_model": { "kind": "hurdle_lognormal", ... },
@@ -145,7 +150,9 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 |-------|--------|
 | `observe_only: true` | Decisions published; **no** `OrderManager.sync` |
 | `action_start_after_steps` | MPC runs from frame 1; sync only after N frames |
-| `enabled: false` | No controller worker |
+| `enabled: false` | No strategy runner |
+| `risk.enabled: false` | Pass-through risk (no inventory/staleness checks) |
+| `risk.max_inventory` | Per-order cap vs wallet inventory from private snapshot |
 
 Optimizer keys map to `mm.mpc.mpc_tensor_batched` (samples, horizon, coefs, inventory targets, device, etc.).
 

@@ -1,4 +1,4 @@
-"""Synchronous MPC strategy engine; accessed by ``MpcControllerRunner`` and tests only."""
+"""Synchronous MPC strategy engine; used by ``StrategyRunner`` and unit tests."""
 
 from __future__ import annotations
 

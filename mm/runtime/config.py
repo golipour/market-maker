@@ -159,6 +159,15 @@ class OrderbookGridConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RiskRuntimeConfig:
+    """Pre-execution risk gate (inventory, staleness, kill switch)."""
+
+    enabled: bool = True
+    max_inventory: float = float("inf")
+    max_data_age_ms: int = 10_000
+
+
+@dataclass(frozen=True, slots=True)
 class ControllerRuntimeConfig:
     """Config for the optional MPC controller on the event bus.
 
@@ -188,6 +197,7 @@ class ControllerRuntimeConfig:
     hedge_price_model: dict[str, Any] | None = None
     execution_model: dict[str, Any] | None = None
     optimizer: dict[str, Any] | None = None
+    risk: RiskRuntimeConfig = field(default_factory=RiskRuntimeConfig)
 
     @property
     def normalized_action_topic(self) -> str:
@@ -450,6 +460,17 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         hedge_price_model=_dict_or_none(payload.get("hedge_price_model")),
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
+        risk=_risk_from_mapping(payload.get("risk")),
+    )
+
+
+def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
+    if not isinstance(payload, dict):
+        return RiskRuntimeConfig()
+    return RiskRuntimeConfig(
+        enabled=bool(payload.get("enabled", True)),
+        max_inventory=float(payload.get("max_inventory", float("inf"))),
+        max_data_age_ms=int(payload.get("max_data_age_ms", 10_000)),
     )
 
 

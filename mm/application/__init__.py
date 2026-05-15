@@ -1,20 +1,16 @@
-"""Application layer: frame assembly, generic actor, execution and reconciliation facades."""
+"""Application orchestration: frames, strategy runner, execution routing."""
 
-from mm.application.actor import Actor
-from mm.application.decision_service import MpcControllerRunner, MpcStrategyEngine, build_controller_runner
+from mm.application.decision_service import MpcStrategyEngine, StrategyRunner, build_strategy_runner
 from mm.application.execution_service import OrderManager
 from mm.application.frame_assembler import StrategyInputFrameAssembler
+from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.orderbook_view import subtract_own_orders
-from mm.application.reconciliation_service import ExecutionStateReconciler, PrivateStateReconciler
-
 __all__ = [
-    "Actor",
-    "ExecutionStateReconciler",
-    "MpcControllerRunner",
     "MpcStrategyEngine",
     "OrderManager",
-    "PrivateStateReconciler",
     "StrategyInputFrameAssembler",
-    "build_controller_runner",
+    "StrategyRunner",
+    "build_strategy_runner",
+    "clean_strategy_frame",
     "subtract_own_orders",
 ]

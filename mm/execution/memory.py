@@ -8,6 +8,10 @@ class RecordingOrderManager(AbstractOrderManager):
     def __init__(self):
         self.synced: list[list[Action]] = []
 
+    @property
+    def live_orders(self) -> dict:
+        return {}
+
     async def sync(self, actions: list[Action]) -> None:
         self.synced.append(actions)
 

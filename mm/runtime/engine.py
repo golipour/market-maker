@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from mm.aggregation.scheduler import IntervalScheduler
 from mm.application.frame_assembler import StrategyInputFrameAssembler
-from mm.application.decision_service import build_controller_runner
+from mm.application.decision_service import build_strategy_runner
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.core.clock import WallClock
@@ -48,7 +48,7 @@ class RuntimeComponents:
     persistence_daemons: tuple[object, ...] = ()
     observability_daemons: tuple[object, ...] = ()
     control_plane: RuntimeControlPlane | None = None
-    controller_runner: object | None = None
+    strategy_runner: object | None = None
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
 
@@ -64,8 +64,8 @@ class RuntimeComponents:
             if start is not None:
                 await start()
         await self.frame_assembler.start()
-        if self.controller_runner is not None:
-            await self.controller_runner.start()
+        if self.strategy_runner is not None:
+            await self.strategy_runner.start()
         if self.control_plane is not None:
             await self.control_plane.start()
         for engine in self.engines.values():
@@ -83,8 +83,8 @@ class RuntimeComponents:
             self._scheduler_task.cancel()
             await asyncio.gather(self._scheduler_task, return_exceptions=True)
             self._scheduler_task = None
-        if self.controller_runner is not None:
-            await self.controller_runner.stop()
+        if self.strategy_runner is not None:
+            await self.strategy_runner.stop()
         if self.control_plane is not None:
             await self.control_plane.stop()
         for reconciler in reversed(tuple(self.private_reconcilers.values())):
@@ -225,16 +225,18 @@ async def build_runtime_components(
         hedge_grace_ms=config.hedge_grace_ms,
     )
 
-    controller_runner = build_controller_runner(
+    control_plane = RuntimeControlPlane(bus=runtime_bus)
+
+    strategy_runner = build_strategy_runner(
         config,
         bus=runtime_bus,
         frame_topic=config.frame_topic,
         order_managers=order_managers,
+        control_plane=control_plane,
     )
 
     persistence_daemons = _build_persistence_daemons(config, runtime_bus)
     observability_daemons = _build_observability_daemons(config, runtime_bus)
-    control_plane = RuntimeControlPlane(bus=runtime_bus)
 
     return RuntimeComponents(
         config=config,
@@ -251,7 +253,7 @@ async def build_runtime_components(
         persistence_daemons=persistence_daemons,
         observability_daemons=observability_daemons,
         control_plane=control_plane,
-        controller_runner=controller_runner,
+        strategy_runner=strategy_runner,
     )
 
 

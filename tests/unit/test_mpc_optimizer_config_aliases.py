@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mm.strategies.mpc_controller import normalize_mpc_optimizer_config
+from mm.strategies.mpc_engine import normalize_mpc_optimizer_config
 
 
 def test_normalize_target_inventory_level_and_max_total_qty() -> None:

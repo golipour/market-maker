@@ -32,7 +32,8 @@ market_maker/
 ├── mm/                    # Application code
 │   ├── runtime/           # Single production entry: build + start RuntimeComponents
 │   ├── application/       # Frame assembler, execution service re-exports
-│   ├── strategies/        # MpcStrategyEngine + MpcControllerRunner
+│   ├── strategies/        # MpcStrategyEngine
+│   ├── application/     # StrategyRunner, frame prep, execution routing
 │   ├── ingestion/         # SymbolEngine, replay
 │   ├── bus/               # In-memory or Redis Streams event bus
 │   ├── execution/         # OrderManager, reconcilers

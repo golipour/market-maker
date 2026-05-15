@@ -338,7 +338,7 @@ async def run(args: argparse.Namespace) -> None:
             role: selection.mode
             for role, selection in runtime.private_state_selections.items()
         }
-        contract["controller_runner_enabled"] = runtime.controller_runner is not None
+        contract["strategy_runner_enabled"] = runtime.strategy_runner is not None
         print(json.dumps(contract, ensure_ascii=False))
         await run_print_loop(runtime, args)
         return
