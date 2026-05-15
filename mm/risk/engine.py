@@ -3,14 +3,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from mm.core.interfaces.actor import AbstractRiskEngine
-from mm.core.models.execution import Action, ActorState
+from mm.core.interfaces.risk import AbstractRiskEngine
+from mm.core.models.execution import Action, TradingState
 from mm.core.models.market import MarketEvent
 from mm.observability import counter_inc, gauge
 
 
 class PassThroughRiskEngine(AbstractRiskEngine):
-    def validate(self, actions: list[Action], state: ActorState, event: MarketEvent) -> list[Action]:
+    def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         return actions
 
 
@@ -33,7 +33,7 @@ class RuntimeRiskEngine(AbstractRiskEngine):
         self.kill_switch = bool(enabled)
         gauge("mm_kill_switch_state", 1.0 if self.kill_switch else 0.0)
 
-    def validate(self, actions: list[Action], state: ActorState, event: MarketEvent) -> list[Action]:
+    def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         if self.kill_switch:
             counter_inc("mm_risk_reject_total", labels={"reason": "kill_switch"})
             return []

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from mm.core.interfaces.actor import AbstractOrderManager
-from mm.core.models.execution import ActorState, Order
+from mm.core.interfaces.order_manager import AbstractOrderManager
+from mm.core.models.execution import Order, TradingState
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
@@ -27,7 +27,7 @@ def trading_state_from_frame(
     *,
     actor_id: str,
     open_orders: Mapping[str, Order],
-) -> ActorState:
+) -> TradingState:
     """Build risk state from the latest frame private snapshot and live orders."""
 
     inventory, cash = _inventory_cash(
@@ -35,7 +35,7 @@ def trading_state_from_frame(
         binding.primary.base_asset,
         binding.primary.quote_asset,
     )
-    return ActorState(
+    return TradingState(
         actor_id=actor_id,
         cash=cash,
         inventory=inventory,

@@ -11,7 +11,8 @@ from mm.application.action_routing import route_actions_to_managers
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
 from mm.bus.base import AbstractEventBus
-from mm.core.interfaces.actor import AbstractOrderManager, AbstractRiskEngine
+from mm.core.interfaces.order_manager import AbstractOrderManager
+from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame

@@ -9,8 +9,8 @@ from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.orderbook_view import subtract_own_orders
 from mm.application.strategy_runner import StrategyRunner
 from mm.bus.memory import InMemoryBus
-from mm.core.interfaces.actor import AbstractRiskEngine
-from mm.core.models.execution import Action, ActorState, Order
+from mm.core.interfaces.risk import AbstractRiskEngine
+from mm.core.models.execution import Action, Order, TradingState
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.core.models.private import OpenOrder
@@ -81,7 +81,7 @@ class _FakeOrderManager:
 
 
 class RejectAllRisk(AbstractRiskEngine):
-    def validate(self, actions: list[Action], state: ActorState, event: MarketEvent) -> list[Action]:
+    def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         return []
 
 

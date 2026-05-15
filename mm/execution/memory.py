@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mm.core.interfaces.actor import AbstractOrderManager
+from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Action
 
 

@@ -69,7 +69,9 @@ else:
 
 
 @dataclass(slots=True)
-class ActorState:
+class TradingState:
+    """Wallet and live-order snapshot passed to the risk engine each frame."""
+
     actor_id: str
     cash: float = 0.0
     inventory: float = 0.0

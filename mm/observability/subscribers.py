@@ -204,13 +204,13 @@ class RuntimeObservabilitySubscriber:
                 obs_schema.MM_INVENTORY,
                 float(payload.get("inventory", 0.0) or 0.0),
                 labels=labels,
-                help="Actor inventory",
+                help="Strategy inventory",
             )
             gauge(
                 obs_schema.MM_CASH,
                 float(payload.get("cash", 0.0) or 0.0),
                 labels=labels,
-                help="Actor cash",
+                help="Strategy cash",
             )
             counter_inc(obs_schema.MM_CONTROLLER_DECISIONS_TOTAL, labels=labels, help="Controller decisions")
             log_event(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mm.core.models.execution import Action, ActorState, Order
+from mm.core.models.execution import Action, Order, TradingState
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
 
@@ -35,7 +35,7 @@ def test_runtime_risk_rejects_when_kill_switch_enabled() -> None:
 
     approved = risk.validate(
         [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
-        ActorState(actor_id="a1"),
+        TradingState(actor_id="a1"),
         _event(),
     )
 
@@ -47,7 +47,7 @@ def test_runtime_risk_filters_inventory_breach() -> None:
 
     approved = risk.validate(
         [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 2.0),))],
-        ActorState(actor_id="a1"),
+        TradingState(actor_id="a1"),
         _event(),
     )
 
@@ -59,7 +59,7 @@ def test_runtime_risk_rejects_stale_data() -> None:
 
     approved = risk.validate(
         [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
-        ActorState(actor_id="a1"),
+        TradingState(actor_id="a1"),
         _event(1000),
     )
 

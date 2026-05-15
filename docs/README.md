@@ -8,7 +8,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 |----------|----------|
 | [Architecture overview](architecture.md) | Layers, packages, event bus, envelopes, design principles |
 | [Data flow](data-flow.md) | Ingestion → frames → strategy → execution → persistence (with diagrams) |
-| [Controller & execution](controller-and-execution.md) | MPC engine, gates before live orders, `OrderManager`, risk/`Actor` path |
+| [Controller & execution](controller-and-execution.md) | `StrategyRunner`, MPC, risk, `OrderManager` |
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana, local stack |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics, example deploy |
 

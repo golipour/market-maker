@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from mm.bus.base import AbstractEventBus
-from mm.core.interfaces.actor import AbstractOrderManager
+from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource, order_passes_limits
 from mm.core.models.execution import Action, Fill, Order

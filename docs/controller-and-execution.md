@@ -2,7 +2,7 @@
 
 ## Single production path
 
-All strategy frames flow through **`StrategyRunner`** (`mm.application.strategy_runner`). There is no separate `Actor` loop.
+All strategy frames flow through **`StrategyRunner`** (`mm.application.strategy_runner`).
 
 ```mermaid
 flowchart TD
@@ -33,7 +33,7 @@ StrategyInputFrame
 | Layer | Module | Role |
 |-------|--------|------|
 | Frame prep | `frame_preparation.clean_strategy_frame` | Remove bot orders from primary/hedge books |
-| Trading context | `trading_context` | Live orders from managers; inventory/cash for risk |
+| Trading context | `trading_context` | Live orders from managers; `TradingState` for risk |
 | Strategy | `MpcStrategyEngine.decide` | MPC optimize + ladder discretization |
 | Risk | `RuntimeRiskEngine` / `PassThroughRiskEngine` | Kill switch, staleness, max inventory |
 | Execution gates | `StrategyRunner._should_execute_live` | observe_only, warmup, control plane, manager present |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from mm.core.interfaces.actor import AbstractRiskEngine
+from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.risk.engine import PassThroughRiskEngine, RiskLimits, RuntimeRiskEngine
 from mm.runtime.config import RiskRuntimeConfig
 
