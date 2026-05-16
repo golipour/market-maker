@@ -205,7 +205,7 @@ class TorchResidualPriceModel:
         learn_residual: bool = True,
         sigma_min: float = 1e-6,
         device: str | None = None,
-        representative_price_target_depth_lots: float = 1000.0,
+        default_vwap_depth_lots: float = 1000.0,
         vwap_depth: float | None = None,
     ):
         self._init_mu = float(residual_mu)
@@ -216,7 +216,7 @@ class TorchResidualPriceModel:
         self._mu_buy = float(residual_mu)
         self._mu_sell = float(residual_mu)
         self._last_residual: float | None = None
-        depth = float(vwap_depth) if vwap_depth is not None else float(representative_price_target_depth_lots)
+        depth = float(vwap_depth) if vwap_depth is not None else float(default_vwap_depth_lots)
         self._target_depth_lots = max(1.0, depth)
         sigma0 = max(self._sigma_min, float(residual_sigma))
         self._sigma2_buy = float(sigma0 * sigma0)
@@ -243,7 +243,7 @@ class TorchResidualPriceModel:
 
         _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
         _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
-        buy_real, sell_real, buy_cmp, sell_cmp = reference_prices_from_transition_ticks(
+        buy_real, sell_real, buy_vwap_mof, sell_vwap_mof = reference_prices_from_transition_ticks(
             prev_ob,
             cur_ob,
             float(buy_vol),
@@ -251,12 +251,12 @@ class TorchResidualPriceModel:
             self._target_depth_lots,
         )
         self.realized_buy_price_hist.append(float(buy_real))
-        self.computed_buy_price_hist.append(float(buy_cmp))
+        self.computed_buy_price_hist.append(float(buy_vwap_mof))
         self.realized_sell_price_hist.append(float(sell_real))
-        self.computed_sell_price_hist.append(float(sell_cmp))
+        self.computed_sell_price_hist.append(float(sell_vwap_mof))
 
-        e_buy = float(buy_real - buy_cmp)
-        e_sell = float(sell_real - sell_cmp)
+        e_buy = float(buy_real - buy_vwap_mof)
+        e_sell = float(sell_real - sell_vwap_mof)
         self._last_residual = 0.5 * (e_buy + e_sell)
         alpha = 1.0 - self._gamma
         if self._learn_residual:

@@ -12,7 +12,7 @@
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "id": 1,
       "options": {
-        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**Row 1 — order book:** X-axis is **numeric price** over a **fixed half-window** per side: bids `[mid − spread_max, mid]`, asks `[mid, mid + spread_max]`, where **mid** comes from the latest book (microprice fallback). Set **Spread max** to match runtime `orderbook_grid.max_spread` (quote-per-base).\n\n**Row 2 — continuous action:** Latest `StrategyDecision` on **Decisions topic** (default `strategy:decisions`). **Cumulative** base depth from `continuous_action_depth` (optimizer output **before** ladder discretization).\n\n**Row 3 — executable orders:** Same `StrategyDecision` payload field **`orders`**: each bar is **marginal base `qty`** at that **limit price** (not cumulative). These are the orders after discretization plus runtime constraints (`qty_step`, `min_order_qty`, `max_orders_per_side`, spread grid, etc.). The same batch is published on the bus as **`Action`** on **`strategy:actions`** (see runtime `action_topic`); Postgres stores that on topic `strategy:actions` if persistence lists it—this dashboard reads `orders` from the controller row so it stays aligned with rows 2–3.\n\n**Inspect errors:** Panel → **Inspect** → **Query**.\n\n**Redis:** Not a provisioned datasource here; RedisInsight :5540 if needed.",
+        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**X-axis (all depth rows):** Shared numeric **price** scale `[mid − spread_max, mid + spread_max]` on every panel so rows 1–3 align vertically. Set **Spread max** to runtime `orderbook_grid.spread_max` (quote-per-base, e.g. IRT per USDT).\n\n**Row 1 — order book:** Cumulative market depth (bid left of mid, ask right).\n\n**Row 2 — continuous action:** Latest `StrategyDecision` — cumulative depth from `continuous_action_depth` (pre-discretization).\n\n**Row 3 — executable orders:** Marginal `qty` per limit price from `orders` (post-discretization).\n\n**Inspect errors:** Panel → **Inspect** → **Query**.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -139,7 +139,7 @@
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
               { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
           }
@@ -191,7 +191,7 @@
           {
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
-              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "min", "value": "${bid_x_min}" },
               { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
@@ -245,7 +245,7 @@
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
               { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
           }
@@ -273,7 +273,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\n  AND (p->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (p->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -297,7 +297,7 @@
           {
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
-              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "min", "value": "${bid_x_min}" },
               { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
@@ -326,7 +326,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\n  AND (p->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (p->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -351,7 +351,7 @@
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
               { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${bid_x_max}" },
+              { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
           }
@@ -379,7 +379,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\n  AND (o->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (o->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -403,7 +403,7 @@
           {
             "matcher": { "id": "byName", "options": "price" },
             "properties": [
-              { "id": "min", "value": "${bid_x_max}" },
+              { "id": "min", "value": "${bid_x_min}" },
               { "id": "max", "value": "${ask_x_max}" },
               { "id": "decimals", "value": 2 }
             ]
@@ -432,7 +432,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\n  AND (o->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (o->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
           "refId": "A"
         }
       ],
@@ -487,11 +487,11 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "100000", "value": "100000" },
+        "current": { "text": "2000", "value": "2000" },
         "hide": 0,
-        "label": "Spread max (orderbook_grid.max_spread)",
+        "label": "Spread max (orderbook_grid.spread_max)",
         "name": "spread_max",
-        "query": "100000",
+        "query": "2000",
         "skipUrlSync": false,
         "type": "textbox"
       },
@@ -553,6 +553,6 @@
   "timezone": "browser",
   "title": "MM order book depth (PostgreSQL)",
   "uid": "mm-orderbook-depth-pg",
-  "version": 8,
+  "version": 10,
   "weekStart": ""
 }

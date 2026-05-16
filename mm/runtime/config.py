@@ -511,7 +511,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "vwap_depth": config.vwap_depth,
         "vwap_depth_note": (
             "cumulative base quantity cap for reference VWAP in MPC and residual price model; "
-            "overrides price_model.representative_price_target_depth_lots when set"
+            "overrides price_model.default_vwap_depth_lots when set"
         ),
         "model_inputs": {
             "price_model": config.price_model or {"kind": "gaussian"},
@@ -526,7 +526,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         },
         "spread_depth_semantics": (
             "optimizer.spread_depth is cumulative base-asset quantity for the spread penalty "
-            "(see MPC _action_spread_at_vwap_qty); not exchange lot size."
+            "(see MPC _action_spread_at_depth); not exchange lot size."
         ),
         "optimizer_inventory_and_depth_targets": {
             "target_inv": "desired inventory level for inv_coef penalty (base units)",

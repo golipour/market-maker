@@ -10,7 +10,7 @@ from mm.pricing.reference_prices_ticks import (
     reference_prices_from_transition_ticks,
     reference_prices_ticks_from_orderbook,
 )
-from mm.pricing.simulated_rep_prices import vwap_prices_batched
+from mm.pricing.vwap_batched import vwap_prices_batched
 
 # Tick/lot VWAP helpers (integer ``Orderbook``) shared with ``mm.mpc``.
 mid_after_market_order_flow_ticks = mid_ticks_after_market_order_flow

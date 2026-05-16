@@ -553,24 +553,24 @@ def _action_size_penalty_qrange(
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
-def _action_spread_at_vwap_qty(
+def _action_spread_at_depth(
     params: torch.Tensor,
     n_components: int,
     spread_max: float,
-    vwap_qty: float,
+    target_cumulative_qty: float,
     *,
     use_softplus: bool = True,
-    grid_points: int = 128,
+    grid_points: int = 100,
     softmin_temp: float = 40.0,
 ) -> torch.Tensor:
     """
-    Differentiable proxy for spread at which cumulative bid/ask depth reaches vwap_qty.
+    Differentiable proxy for spread at which cumulative bid/ask depth reaches target_cumulative_qty.
 
     For each side, evaluate D(δ) on a dense spread grid in [0, spread_max], then use a
-    soft-argmin of |D(δ) - vwap_qty| to get an effective spread. Returns:
-      spread_bid(vwap_qty) + spread_ask(vwap_qty)
+    soft-argmin of |D(δ) - target| to get an effective spread. Returns:
+      spread_bid(target) + spread_ask(target)
     """
-    if n_components <= 0 or float(vwap_qty) <= 0.0:
+    if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
         return params.sum() * 0.0
     torch_mod = _get_torch()
     s = torch_mod.linspace(
@@ -582,7 +582,7 @@ def _action_spread_at_vwap_qty(
     )
     bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
     ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
-    tgt = torch_mod.tensor(float(vwap_qty), dtype=params.dtype, device=params.device)
+    tgt = torch_mod.tensor(float(target_cumulative_qty), dtype=params.dtype, device=params.device)
     bid_err = torch_mod.abs(bid_depth - tgt)
     ask_err = torch_mod.abs(ask_depth - tgt)
     temp = max(1e-6, float(softmin_temp))
@@ -790,9 +790,6 @@ class MonteCarloMPCTensorBatched:
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
         hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.hedge_fee)
         hedge_fee_rollout = max(0.0, min(1.0 - 1e-9, float(hedge_fee_rollout)))
-        spread_grid_rep = _spread_grid_tensor(
-            torch_mod, self.grid_levels, self.spread_step, _device, dtype
-        )
         vwap_depth = target_depth_lots_from_price_model(self.price_model)
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
@@ -948,7 +945,7 @@ class MonteCarloMPCTensorBatched:
                         self.total_q_target,
                         use_softplus=True,
                     )
-                    action_spread_sum = action_spread_sum + _action_spread_at_vwap_qty(
+                    action_spread_sum = action_spread_sum + _action_spread_at_depth(
                         action_h,
                         n,
                         self.spread_max,
@@ -970,33 +967,33 @@ class MonteCarloMPCTensorBatched:
                         ob_bids,
                         ob_asks,
                         mid_fallback_t,
-                        spread_grid_rep,
+                        spread_grid,
                     )
                     if h == 0:
                         # Use upstream VWAPs (single vwap_depth policy),
                         # instead of recomputing from the book arrays.
-                        buy_cmp_t = torch_mod.full(
+                        buy_vwap_book_t = torch_mod.full(
                             (self.n_samples, 1),
                             float(state.buy_vwap),
                             dtype=dtype,
                             device=_device,
                         )
-                        sell_cmp_t = torch_mod.full(
+                        sell_vwap_book_t = torch_mod.full(
                             (self.n_samples, 1),
                             float(state.sell_vwap),
                             dtype=dtype,
                             device=_device,
                         )
                     else:
-                        buy_cmp_t, sell_cmp_t = vwap_prices_batched(
+                        buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
                             ob_bids,
                             ob_asks,
                             mid_t,
-                            spread_grid_rep,
+                            spread_grid,
                             target_depth=vwap_depth,
                         )
-                    buy_vwap_t = buy_cmp_t + eps_buy_h
-                    sell_vwap_t = sell_cmp_t + eps_sell_h
+                    buy_vwap_t = buy_vwap_book_t + eps_buy_h
+                    sell_vwap_t = sell_vwap_book_t + eps_sell_h
 
                     ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
                         action_h,
@@ -1040,17 +1037,17 @@ class MonteCarloMPCTensorBatched:
                         ob_bids_next,
                         ob_asks_next,
                         mid_t,
-                        spread_grid_rep,
+                        spread_grid,
                     )
-                    buy_cmp_h, sell_cmp_h = vwap_prices_batched(
+                    buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
                         ob_bids_next,
                         ob_asks_next,
                         mid_next,
-                        spread_grid_rep,
+                        spread_grid,
                         target_depth=vwap_depth,
                     )
-                    buy_vwap_next = buy_cmp_h + eps_buy_next
-                    sell_vwap_next = sell_cmp_h + eps_sell_next
+                    buy_vwap_next = buy_vwap_book_next + eps_buy_next
+                    sell_vwap_next = sell_vwap_book_next + eps_sell_next
                     
                     ob_bids, ob_asks = ob_bids_next, ob_asks_next
 

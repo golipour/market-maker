@@ -97,7 +97,7 @@ def reference_prices_from_transition(
 ) -> tuple[float, float, float, float]:
     """
     Instantaneous VWAPs: realized on ``cur_ob`` vs MOF-only post-flow book from ``prev_ob``.
-    Returns (buy_real, sell_real, buy_cmp, sell_cmp) in ticks.
+    Returns (buy_real, sell_real, buy_vwap_mof, sell_vwap_mof) in ticks.
     """
     bid_prev = _depth_by_price(prev_ob, "bid")
     ask_prev = _depth_by_price(prev_ob, "ask")
@@ -114,13 +114,13 @@ def reference_prices_from_transition(
         return mid, mid, mid, mid
     buy_real = _vwap_to_depth(ask_cur, depth_used, best_first_asc=True)
     sell_real = _vwap_to_depth(bid_cur, depth_used, best_first_asc=False)
-    buy_cmp = _vwap_to_depth(ask_after, depth_used, best_first_asc=True)
-    sell_cmp = _vwap_to_depth(bid_after, depth_used, best_first_asc=False)
+    buy_vwap_mof = _vwap_to_depth(ask_after, depth_used, best_first_asc=True)
+    sell_vwap_mof = _vwap_to_depth(bid_after, depth_used, best_first_asc=False)
     br = float(buy_real) if math.isfinite(buy_real) else mid
     sr = float(sell_real) if math.isfinite(sell_real) else mid
-    bc = float(buy_cmp) if math.isfinite(buy_cmp) else mid
-    sc = float(sell_cmp) if math.isfinite(sell_cmp) else mid
-    return br, sr, bc, sc
+    bv = float(buy_vwap_mof) if math.isfinite(buy_vwap_mof) else mid
+    sv = float(sell_vwap_mof) if math.isfinite(sell_vwap_mof) else mid
+    return br, sr, bv, sv
 
 
 # Alias for ``mm.mpc.price_torch`` call sites.
