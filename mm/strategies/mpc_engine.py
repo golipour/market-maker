@@ -49,22 +49,6 @@ def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
     )
 
 
-def normalize_mpc_optimizer_config(optimizer_cfg: dict[str, Any]) -> None:
-    """Map JSON-friendly optimizer keys to ``MonteCarloMPCTensorBatched`` kwargs (in place).
-
-    Accepts legacy names alongside the new config names.
-    """
-
-    if "spread_depth" not in optimizer_cfg and "spread_target_lots" in optimizer_cfg:
-        optimizer_cfg["spread_depth"] = optimizer_cfg.pop("spread_target_lots")
-    if "target_inventory_level" in optimizer_cfg:
-        optimizer_cfg["target_inv"] = optimizer_cfg.pop("target_inventory_level")
-    if "max_total_qty" in optimizer_cfg:
-        optimizer_cfg["total_q_target"] = optimizer_cfg.pop("max_total_qty")
-    if "project_max_total_qty" in optimizer_cfg:
-        optimizer_cfg["project_total_q_target"] = bool(optimizer_cfg.pop("project_max_total_qty"))
-
-
 @dataclass(slots=True)
 class MpcStrategyEngine:
     """Synchronous strategy decision engine for legacy MPC internals.
@@ -92,7 +76,7 @@ class MpcStrategyEngine:
         state = _state_from_frame(
             frame,
             self.binding,
-            self.config.orderbook_grid.max_spread,
+            self.config.orderbook_grid.spread_max,
             price_model=self._price_model,
         )
         _update_hedge_vwap_price_model(self._hedge_price_model, state)
@@ -105,9 +89,7 @@ class MpcStrategyEngine:
             actor_id=self.config.actor_id,
             event=frame.primary,
             sigmoid_action=sigmoid_action,
-            min_spread=self.config.min_spread,
-            max_spread=self.config.orderbook_grid.max_spread,
-            price_step=self.config.orderbook_grid.price_step,
+            orderbook_grid=self.config.orderbook_grid,
             qty_step=self.config.qty_step,
             min_order_qty=self.config.min_order_qty,
             max_orders_per_side=self.config.max_orders_per_side,
@@ -157,9 +139,7 @@ class MpcStrategyEngine:
                 continuous_action_depth=_continuous_action_depth_series(
                     sigmoid_action,
                     mid=float(state.mid),
-                    min_spread=float(self.config.min_spread),
-                    max_spread=float(self.config.orderbook_grid.max_spread),
-                    price_step=float(self.config.orderbook_grid.price_step),
+                    orderbook_grid=self.config.orderbook_grid,
                 ),
                 orderbook_grid=self.config.orderbook_grid.as_contract(),
             ),
@@ -239,18 +219,15 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
-    normalize_mpc_optimizer_config(optimizer_cfg)
     grid = config.orderbook_grid
-    for grid_key in ("spread_max", "n_grid", "ob_levels", "price_step"):
-        optimizer_cfg.pop(grid_key, None)
+    optimizer_cfg.pop("spread_max", None)
+    optimizer_cfg.pop("spread_step", None)
     optimizer_defaults = {
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
-        "spread_max": grid.max_spread,
-        "price_step": grid.price_step,
-        "n_grid": max(2, grid.levels),
-        "ob_levels": max(2, grid.levels),
+        "spread_max": grid.spread_max,
+        "spread_step": grid.spread_step,
         "total_q_min": config.min_order_qty,
         "total_q_target": None,
         "project_total_q_target": False,
@@ -402,16 +379,14 @@ def _orders_from_sigmoid_action(
     actor_id: str,
     event: MarketEvent,
     sigmoid_action: Any,
-    min_spread: float,
-    max_spread: float,
-    price_step: float,
+    orderbook_grid: Any,
     qty_step: float,
     min_order_qty: float,
     max_orders_per_side: int,
 ) -> list[Order]:
     mid = _mid(event.orderbook)
     qty_step = max(0.0, float(qty_step))
-    levels = _spread_levels(min_spread=min_spread, max_spread=max_spread, price_step=price_step)
+    levels = list(orderbook_grid.spread_ladder())
     orders: list[Order] = []
     orders.extend(
         _side_orders(
@@ -442,21 +417,11 @@ def _orders_from_sigmoid_action(
     return orders
 
 
-def _spread_levels(*, min_spread: float, max_spread: float, price_step: float) -> list[float]:
-    step = max(1e-12, float(price_step))
-    start = max(step, math.ceil(max(0.0, float(min_spread)) / step) * step)
-    stop = max(start, float(max_spread))
-    count = max(1, int(math.floor((stop - start) / step)) + 1)
-    return [start + i * step for i in range(count)]
-
-
 def _continuous_action_depth_series(
     sigmoid_action: Any,
     *,
     mid: float,
-    min_spread: float,
-    max_spread: float,
-    price_step: float,
+    orderbook_grid: Any,
 ) -> dict[str, Any]:
     """Cumulative depth from the optimizer (pre-discretization) on the same spread grid as ladder orders."""
 
@@ -464,7 +429,7 @@ def _continuous_action_depth_series(
     depth_ask = getattr(sigmoid_action, "depth_ask", None)
     if not callable(depth_bid) or not callable(depth_ask):
         return {"kind": "unknown", "mid": float(mid), "bid": [], "ask": []}
-    levels = _spread_levels(min_spread=min_spread, max_spread=max_spread, price_step=price_step)
+    levels = list(orderbook_grid.spread_ladder())
     mid_f = float(mid)
     bid: list[dict[str, float]] = []
     ask: list[dict[str, float]] = []

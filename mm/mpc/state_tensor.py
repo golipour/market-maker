@@ -237,12 +237,12 @@ def state_to_tensor(
     state: State,
     device: "str | torch.device | None" = None,
     n_levels: int = DEFAULT_OB_LEVELS,
-    price_step: float = 1.0,
+    spread_step: float = 1.0,
     dtype: "torch.dtype | None" = None,
 ) -> StateTensor:
     """
     Convert State to StateTensor. Orderbook is expanded to fixed-length arrays:
-    ob_bids[i] = base qty in quote-price bucket (i+1) * price_step below mid.
+    ob_bids[i] = base qty in spread bucket with upper edge (i+1) * spread_step from mid.
     """
     from mm.mpc.mpc_state import State, OrderbookRelative
 
@@ -260,7 +260,7 @@ def state_to_tensor(
 
     ob_bids = torch.zeros(n_levels, dtype=dtype, device=device)
     ob_asks = torch.zeros(n_levels, dtype=dtype, device=device)
-    step = max(1e-12, float(price_step))
+    step = max(1e-12, float(spread_step))
     for (spread, qty) in state.ob_rel.bids:
         idx = min(max(int(math.ceil(float(spread) / step)) - 1, 0), n_levels - 1)
         if 0 <= idx < n_levels:

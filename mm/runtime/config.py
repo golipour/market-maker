@@ -126,34 +126,42 @@ class ObservabilityRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class OrderbookGridConfig:
-    """Projection grid for MPC orderbook arrays.
+    """Spread grid for relative orderbook projection and MPC optimization.
 
-    ``price_step`` and ``max_spread`` are quote-per-base price distances from mid.
-    The model array index is only a bucket number; it is converted back to quote
-    spread via ``spread = index * price_step`` inside MPC/strategy bridging.
+    Quote-per-base distances from mid are bucketed from 0 to ``spread_max`` in steps
+    of ``spread_step``. Bucket index ``i`` covers spreads in
+    ``((i) * spread_step, (i + 1) * spread_step]``; cumulative depth is evaluated at
+    the upper edge ``(i + 1) * spread_step``.
     """
 
-    price_step: float = 1.0
-    max_spread: float = 100.0
+    spread_max: float = 100.0
+    spread_step: float = 1.0
 
     def __post_init__(self) -> None:
-        if self.price_step <= 0:
-            raise ValueError("orderbook_grid.price_step must be positive")
-        if self.max_spread <= 0:
-            raise ValueError("orderbook_grid.max_spread must be positive")
+        if self.spread_step <= 0:
+            raise ValueError("orderbook_grid.spread_step must be positive")
+        if self.spread_max <= 0:
+            raise ValueError("orderbook_grid.spread_max must be positive")
 
     @property
     def levels(self) -> int:
         import math
 
-        return max(1, int(math.ceil(self.max_spread / self.price_step)))
+        return max(1, int(math.ceil(self.spread_max / self.spread_step)))
+
+    def spread_ladder(self) -> tuple[float, ...]:
+        """Discrete quote spreads for limit orders: step, 2*step, …, up to spread_max."""
+        return tuple(self.spread_step * float(i + 1) for i in range(self.levels))
 
     def as_contract(self) -> dict[str, Any]:
         return {
-            "price_step": self.price_step,
-            "max_spread": self.max_spread,
+            "spread_max": self.spread_max,
+            "spread_step": self.spread_step,
             "levels": self.levels,
-            "index_policy": "model index i represents quote spread (i + 1) * price_step from mid",
+            "spread_ladder": list(self.spread_ladder()),
+            "index_policy": (
+                "bucket i is cumulative depth through quote spread (i + 1) * spread_step from mid"
+            ),
             "qty_policy": "array values are base-asset quantities",
         }
 
@@ -185,8 +193,6 @@ class ControllerRuntimeConfig:
     action_start_after_steps: int = 0
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
-    min_spread: float = 1.0
-    max_spread: float = 100.0
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     qty_step: float = 1.0
     min_order_qty: float = 0.0
@@ -444,8 +450,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
-        min_spread=float(payload.get("min_spread", 1.0)),
-        max_spread=float(payload.get("max_spread", 100.0)),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
         qty_step=float(payload.get("qty_step", 1.0)),
         min_order_qty=float(payload.get("min_order_qty", 0.0)),
@@ -480,14 +484,16 @@ def _dict_or_none(value: Any) -> dict[str, Any] | None:
 
 def _orderbook_grid_from_mapping(payload: dict[str, Any]) -> OrderbookGridConfig:
     grid = payload.get("orderbook_grid")
-    if isinstance(grid, dict):
-        return OrderbookGridConfig(
-            price_step=float(grid.get("price_step", 1.0)),
-            max_spread=float(grid.get("max_spread", payload.get("max_spread", 100.0))),
-        )
+    if grid is None:
+        return OrderbookGridConfig()
+    if not isinstance(grid, dict):
+        raise ValueError("orderbook_grid must be an object")
+    missing = [k for k in ("spread_max", "spread_step") if k not in grid]
+    if missing:
+        raise ValueError(f"orderbook_grid missing required keys: {', '.join(missing)}")
     return OrderbookGridConfig(
-        price_step=1.0,
-        max_spread=float(payload.get("max_spread", 100.0)),
+        spread_max=float(grid["spread_max"]),
+        spread_step=float(grid["spread_step"]),
     )
 
 
@@ -520,20 +526,15 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         },
         "spread_depth_semantics": (
             "optimizer.spread_depth is cumulative base-asset quantity for the spread penalty "
-            "(see MPC _action_spread_at_vwap_qty); not exchange lot size. "
-            "Legacy key spread_target_lots is still accepted as an alias."
+            "(see MPC _action_spread_at_vwap_qty); not exchange lot size."
         ),
         "optimizer_inventory_and_depth_targets": {
-            "target_inventory_level": (
-                "maps to MPC target_inv; desired inventory level for inv_coef penalty (base units)"
+            "target_inv": "desired inventory level for inv_coef penalty (base units)",
+            "total_q_target": (
+                "target cumulative quoted depth over [0, spread_max] per side (base units)"
             ),
-            "max_total_qty": (
-                "maps to MPC total_q_target; target cumulative quoted depth over [0, spread_max] "
-                "per side (base units); legacy JSON key total_q_target still accepted"
-            ),
-            "project_max_total_qty": (
-                "maps to MPC project_total_q_target; when true with positive max_total_qty, "
-                "rescales depth parameters toward that target; legacy key project_total_q_target still accepted"
+            "project_total_q_target": (
+                "when true with positive total_q_target, rescales depth parameters toward that target"
             ),
         },
         "float_bridge": {

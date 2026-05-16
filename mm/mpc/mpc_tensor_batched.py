@@ -281,60 +281,62 @@ def _format_action_verbose(flat: np.ndarray, n_components: int) -> str:
     )
 
 
+def _grid_levels(spread_max: float, spread_step: float) -> int:
+    step = max(1e-12, float(spread_step))
+    return max(2, int(math.ceil(float(spread_max) / step)))
+
+
+def _spread_grid_tensor(torch_mod: Any, grid_levels: int, spread_step: float, device: Any, dtype: Any) -> Any:
+    """Upper bucket edges from spread_step through grid_levels * spread_step (domain [0, spread_max])."""
+    return torch_mod.arange(1.0, float(grid_levels) + 1.0, dtype=dtype, device=device) * float(spread_step)
+
+
 def _book_cumulative_from_ob_rel(
     ob_rel: OrderbookRelative,
-    n_levels: int,
-    price_step: float,
+    grid_levels: int,
+    spread_step: float,
     device: Any,
     dtype: Any,
 ) -> tuple[Any, Any]:
-    """Build cumulative qty tensors on quote-price spread buckets."""
+    """Build cumulative qty tensors on quote spread buckets through each bucket upper edge."""
     torch_mod = _get_torch()
-    bid_cum = torch_mod.zeros(n_levels, dtype=dtype, device=device)
-    ask_cum = torch_mod.zeros(n_levels, dtype=dtype, device=device)
-    step = max(1e-12, float(price_step))
+    bid_cum = torch_mod.zeros(grid_levels, dtype=dtype, device=device)
+    ask_cum = torch_mod.zeros(grid_levels, dtype=dtype, device=device)
+    step = max(1e-12, float(spread_step))
     b_sum = 0.0
     for (spread, qty) in sorted(ob_rel.bids, key=lambda x: x[0]):
-        idx = _spread_bucket_index(float(spread), step, n_levels)
-        if 0 <= idx < n_levels:
+        idx = _spread_bucket_index(float(spread), step, grid_levels)
+        if 0 <= idx < grid_levels:
             b_sum += float(qty)
             bid_cum[idx] = b_sum
-    for i in range(1, n_levels):
+    for i in range(1, grid_levels):
         if bid_cum[i].item() == 0:
             bid_cum[i] = bid_cum[i - 1]
     a_sum = 0.0
     for (spread, qty) in sorted(ob_rel.asks, key=lambda x: x[0]):
-        idx = _spread_bucket_index(float(spread), step, n_levels)
-        if 0 <= idx < n_levels:
+        idx = _spread_bucket_index(float(spread), step, grid_levels)
+        if 0 <= idx < grid_levels:
             a_sum += float(qty)
             ask_cum[idx] = a_sum
-    for i in range(1, n_levels):
+    for i in range(1, grid_levels):
         if ask_cum[i].item() == 0:
             ask_cum[i] = ask_cum[i - 1]
     return bid_cum, ask_cum
 
 
-def _spread_bucket_index(spread: float, price_step: float, n_levels: int) -> int:
+def _spread_bucket_index(spread: float, spread_step: float, grid_levels: int) -> int:
     if spread <= 0.0:
         return 0
-    idx = int(math.ceil(spread / price_step)) - 1
-    return min(max(idx, 0), n_levels - 1)
+    idx = int(math.ceil(spread / spread_step)) - 1
+    return min(max(idx, 0), grid_levels - 1)
 
 
 def _book_cumulative_from_arrays(
     ob_bids: torch.Tensor,
     ob_asks: torch.Tensor,
-    n_grid: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Batched: ob_bids (n_samples, n_levels) -> cum (n_samples, n_grid)."""
-    n_levels = ob_bids.shape[1]
-    k = min(n_grid, n_levels)
-    cum_b = torch.cumsum(ob_bids[:, :k], dim=1)
-    cum_a = torch.cumsum(ob_asks[:, :k], dim=1)
-    if k < n_grid:
-        cum_b = torch.nn.functional.pad(cum_b, (0, n_grid - k), value=cum_b[:, -1:])
-        cum_a = torch.nn.functional.pad(cum_a, (0, n_grid - k), value=cum_a[:, -1:])
-    return cum_b, cum_a
+    """Batched marginal per-bucket qty -> cumulative depth along the spread grid."""
+    return torch.cumsum(ob_bids, dim=1), torch.cumsum(ob_asks, dim=1)
 
 
 
@@ -386,11 +388,11 @@ def soft_fill_batched(
     - return next market-only orderbook levels plus cash/inventory deltas from our fills
 
     Inputs:
-      book_cum_*: market-book cumulative depth on spread grid (n_samples, n_grid)
+      book_cum_*: market-book cumulative depth on spread grid (n_samples, grid_levels)
       sell_vol/buy_vol: market order flow per sample (n_samples, 1)
 
     Returns:
-      ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, n_grid)
+      ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
     # Use baseline-shifted cumulative depth to match discretization semantics:
@@ -621,9 +623,7 @@ class MonteCarloMPCTensorBatched:
         n_samples: int = 32,
         horizon: int = 4,
         spread_max: float = 100.0,
-        price_step: float = 1.0,
-        n_grid: int = 51,
-        ob_levels: int = 100,
+        spread_step: float = 1.0,
         soft_fill_temp: float = 1.0,
         adam_lr: float = 0.05,
         adam_epochs: int = 80,
@@ -642,8 +642,7 @@ class MonteCarloMPCTensorBatched:
         reward_coef: float = 1.0,
         size_coef: float = 0.0,
         spread_coef: float = 0.0,
-        spread_depth: float | None = None,
-        spread_target_lots: float = 1.0,
+        spread_depth: float = 1.0,
         hedge_enabled: bool | None = None,
         hedge_coef: float = 0.0,
         hedge_fee: float = 0.0,
@@ -659,9 +658,8 @@ class MonteCarloMPCTensorBatched:
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
         self.spread_max = float(spread_max)
-        self.price_step = max(1e-12, float(price_step))
-        self.n_grid = max(2, n_grid)
-        self.ob_levels = max(1, ob_levels)
+        self.spread_step = max(1e-12, float(spread_step))
+        self.grid_levels = _grid_levels(self.spread_max, self.spread_step)
         self.soft_fill_temp = soft_fill_temp
         self.adam_lr = adam_lr
         self.adam_epochs = adam_epochs
@@ -679,12 +677,7 @@ class MonteCarloMPCTensorBatched:
         self.reward_coef = float(reward_coef)
         self.size_coef = max(0.0, float(size_coef))
         self.spread_coef = max(0.0, float(spread_coef))
-        # Cumulative base-asset depth at which the spread penalty measures bid/ask width
-        # (see ``_action_spread_at_vwap_qty``). ``spread_target_lots`` is a deprecated alias.
-        if spread_depth is not None:
-            self.spread_depth = max(0.0, float(spread_depth))
-        else:
-            self.spread_depth = max(0.0, float(spread_target_lots))
+        self.spread_depth = max(0.0, float(spread_depth))
         if hedge_enabled is not None:
             self.hedge_enabled = bool(hedge_enabled)
         else:
@@ -735,22 +728,22 @@ class MonteCarloMPCTensorBatched:
         dtype = torch_mod.float64
 
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
-            state.ob_rel, self.n_grid, self.price_step, _device, dtype
+            state.ob_rel, self.grid_levels, self.spread_step, _device, dtype
         )
-        spread_grid = torch_mod.arange(1.0, self.n_grid + 1.0, dtype=dtype, device=_device) * self.price_step
+        spread_grid = _spread_grid_tensor(torch_mod, self.grid_levels, self.spread_step, _device, dtype)
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
 
-        ob_bids_0 = torch_mod.zeros(self.n_samples, self.ob_levels, dtype=dtype, device=_device)
-        ob_asks_0 = torch_mod.zeros(self.n_samples, self.ob_levels, dtype=dtype, device=_device)
+        ob_bids_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
+        ob_asks_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
         for (s, q) in state.ob_rel.bids:
-            i = _spread_bucket_index(float(s), self.price_step, self.ob_levels)
-            if 0 <= i < self.ob_levels:
+            i = _spread_bucket_index(float(s), self.spread_step, self.grid_levels)
+            if 0 <= i < self.grid_levels:
                 ob_bids_0[:, i] += float(q)
         for (s, q) in state.ob_rel.asks:
-            i = _spread_bucket_index(float(s), self.price_step, self.ob_levels)
-            if 0 <= i < self.ob_levels:
+            i = _spread_bucket_index(float(s), self.spread_step, self.grid_levels)
+            if 0 <= i < self.grid_levels:
                 ob_asks_0[:, i] += float(q)
         n = self.n_components
         single_len = 6 * n
@@ -797,9 +790,8 @@ class MonteCarloMPCTensorBatched:
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
         hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.hedge_fee)
         hedge_fee_rollout = max(0.0, min(1.0 - 1e-9, float(hedge_fee_rollout)))
-        spread_grid_rep = (
-            torch_mod.arange(1.0, float(self.ob_levels) + 1.0, dtype=dtype, device=_device)
-            * self.price_step
+        spread_grid_rep = _spread_grid_tensor(
+            torch_mod, self.grid_levels, self.spread_step, _device, dtype
         )
         vwap_depth = target_depth_lots_from_price_model(self.price_model)
 
@@ -938,7 +930,7 @@ class MonteCarloMPCTensorBatched:
                         book_cum_bid_h = book_cum_bid_0
                         book_cum_ask_h = book_cum_ask_0
                     else:
-                        book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks, self.n_grid)
+                        book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
                     action_uniformity_sum = action_uniformity_sum + _action_uniformity_l2_from_marginal_depth(
