@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from mm.mpc.mpc_state import MarketState
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.step import Step
 
@@ -18,11 +17,10 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class OrderFlowModel(Protocol):
-    """Sample (V_plus, V_minus) for next step given state or params; optional P(V_plus, V_minus)."""
+    """Sample (V_plus, V_minus) for next step from params; optional P(V_plus, V_minus)."""
 
     def sample_flow(
         self,
-        x: MarketState | None,
         params: dict | None,
         rng: np.random.Generator | None = None,
     ) -> tuple[int, int]:
@@ -33,7 +31,6 @@ class OrderFlowModel(Protocol):
         self,
         V_plus: int,
         V_minus: int,
-        x: MarketState | None,
         params: dict | None,
     ) -> float:
         """Return P(V_plus, V_minus | params). Default 0.0 if not implemented."""
@@ -121,7 +118,6 @@ class HurdleOrderFlow:
 
     def sample_flow(
         self,
-        x: MarketState | None,
         params: dict | None,
         rng: np.random.Generator | None = None,
     ) -> tuple[int, int]:
@@ -174,7 +170,6 @@ class HurdleOrderFlow:
         self,
         V_plus: int,
         V_minus: int,
-        x: MarketState | None,
         params: dict | None,
     ) -> float:
         """P(V_plus, V_minus); Weibull, Gamma, or hurdle log-normal per side."""

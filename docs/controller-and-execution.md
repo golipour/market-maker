@@ -120,4 +120,6 @@ Rejected orders emit `OrderValidationRejected` on `execution:orders:{exchange}`.
 ## Related documents
 
 - [Data flow](data-flow.md)
+- [Runtime mechanisms](mechanisms.md)
 - [Configuration](configuration.md)
+- [Observability](observability.md)

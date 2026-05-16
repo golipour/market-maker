@@ -7,42 +7,36 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | Document | Contents |
 |----------|----------|
 | [Architecture overview](architecture.md) | Layers, packages, event bus, envelopes, design principles |
-| [Data flow](data-flow.md) | Ingestion → frames → strategy → execution → persistence (with diagrams) |
+| [Data flow](data-flow.md) | End-to-end phases with sequence diagram |
+| **[Runtime mechanisms](mechanisms.md)** | **Detailed internals: tasks, queues, hedge drain/grace, raw vs cleaned books, execution** |
 | [Controller & execution](controller-and-execution.md) | `StrategyRunner`, MPC, risk, `OrderManager` |
-| [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana, local stack |
-| [Configuration](configuration.md) | Runtime JSON, environment variables, topics, example deploy |
+| [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
+| [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
+
+Start with [Data flow](data-flow.md) for the big picture, then read **[Runtime mechanisms](mechanisms.md)** when you need to know *why* the code does something (e.g. double `_drain_latest_inputs`, where own orders are subtracted).
 
 ## Quick start
 
 ```bash
-# From repository root
-cp .env.example .env   # add API tokens and MM_DATABASE_URL if needed
-docker compose up -d     # Postgres, Redis, Grafana, Prometheus, Loki, …
-
+cp .env.example .env
+docker compose up -d
 python -m mm.runtime --config mm/configs/market_maker.runtime.example.json
-# equivalent: python -m mm.tools.print_events --config …
 ```
-
-See [Configuration](configuration.md) for all flags and [Observability](observability.md) for Grafana dashboards under `grafana/dashboards/`.
 
 ## Repository layout (high level)
 
 ```
 market_maker/
-├── mm/                    # Application code
-│   ├── runtime/           # Single production entry: build + start RuntimeComponents
-│   ├── application/       # Frame assembler, execution service re-exports
-│   ├── strategies/        # MpcStrategyEngine
-│   ├── application/     # StrategyRunner, frame prep, execution routing
-│   ├── ingestion/         # SymbolEngine, replay
-│   ├── bus/               # In-memory or Redis Streams event bus
-│   ├── execution/         # OrderManager, reconcilers
-│   ├── persistence/       # Postgres + Parquet writers
-│   ├── observability/     # Metrics, logs, traces, bus subscribers
-│   ├── exchanges/         # Venue adapters (REST/WS market + orders)
-│   ├── mpc/               # Tensor batched MPC optimizer
+├── mm/
+│   ├── runtime/           # build_runtime_components, CLI entry
+│   ├── application/       # Frame assembler, StrategyRunner, frame prep
+│   ├── strategies/      # MpcStrategyEngine
+│   ├── ingestion/         # SymbolEngine
+│   ├── bus/               # memory | redis_streams
+│   ├── execution/         # OrderManager
+│   ├── risk/              # RuntimeRiskEngine
 │   └── configs/           # Example runtime JSON
-├── grafana/               # Provisioned dashboards + datasources
-├── docker-compose.yml     # Local observability + Postgres + Redis
-└── docs/                  # This documentation
+├── grafana/
+├── docker-compose.yml
+└── docs/
 ```

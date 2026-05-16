@@ -26,15 +26,6 @@ class OrderbookRelative:
 
 
 @dataclass(frozen=True)
-class MarketState:
-    """
-    Observable market state x_t: mid, volatility, spread, imbalance, flow stats.
-    Kept for backward compatibility; new code can use State.mid and State.ob_rel.
-    """
-    mid: float
-
-
-@dataclass(frozen=True)
 class Action:
     """
     Order placement relative to mid: deltas in ticks, sizes in (discretized) volume.
@@ -412,11 +403,6 @@ class State:
     hedge_sell_ref: float | None = None
     hedge_inventory: int = 0
     hedge_cash: float = 0.0
-
-    @property
-    def x(self) -> MarketState:
-        """Market part for backward compatibility (e.g. reward, price_dynamics)."""
-        return MarketState(mid=self.mid)
 
     @property
     def buy_vwap(self) -> float:

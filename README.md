@@ -8,6 +8,7 @@ Full architecture and operations guides live in **[docs/](docs/README.md)**:
 
 - [Architecture overview](docs/architecture.md)
 - [Data flow](docs/data-flow.md)
+- [Runtime mechanisms](docs/mechanisms.md) (detailed event flows & internals)
 - [Controller & execution](docs/controller-and-execution.md)
 - [Observability & operations](docs/observability.md)
 - [Configuration](docs/configuration.md)

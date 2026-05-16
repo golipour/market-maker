@@ -97,5 +97,6 @@ See `mm.core.topics.RuntimeTopics`.
 ## Related documents
 
 - [Data flow](data-flow.md)
+- [Runtime mechanisms](mechanisms.md)
 - [Controller & execution](controller-and-execution.md)
 - [Configuration](configuration.md)

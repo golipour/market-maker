@@ -1,6 +1,6 @@
 # Data flow
 
-This document traces **one primary interval** from exchange feeds through strategy to optional order placement and persistence.
+High-level path from exchange feeds to optional live orders. For **task queues, timing, double-drain hedge alignment, raw vs cleaned books**, and other internals, see **[Runtime mechanisms](mechanisms.md)**.
 
 ## End-to-end diagram
 
@@ -23,7 +23,7 @@ sequenceDiagram
   SCH->>SE: tick (interval_ms)
   SE->>BUS: MarketEvent on market:events:…
   BUS->>FA: primary queue (+ hedge queue)
-  FA->>FA: align hedge, attach private snapshots
+  FA->>FA: drain → hedge grace → drain → select hedge
   FA->>BUS: StrategyInputFrame on strategy:frames:…
   BUS->>SR: frame_queue
   SR->>SR: subtract own orders from books
@@ -43,114 +43,88 @@ sequenceDiagram
 
 ## Phase 1 — Market ingestion
 
-### SymbolEngine (`mm.ingestion.symbol_engine`)
+`SymbolEngine` maintains a local book + trade buffer, then publishes interval **`MarketEvent`** on `market:events:{exchange}:{symbol}:{interval_ms}`.
 
-For each configured source (primary and optional hedge):
-
-1. **`adapter.connect()`** — REST poll or WebSocket session.
-2. **`_feed_orderbook`** — snapshots/deltas into `OrderbookManager`.
-3. **`_feed_trades`** — trades into `RollingTradeBuffer` (deduplicated); optional publish on `market:raw:…:trades`.
-4. **`publish_on_intervals`** — registered on the shared **`IntervalScheduler`**.
-
-On each interval tick `(t_start_ms, t_end_ms, interval_ms)`:
-
-```text
-MarketEventBuilder.build(...) → bus.publish(
-  "market:events:{exchange}:{symbol}:{interval_ms}",
-  MarketEvent
-)
-```
-
-`MarketEvent` includes full `RawOrderbook`, interval trades, buy/sell volume, VWAP, imbalance, microprice.
-
-Errors publish to `market:errors:{exchange}:{symbol}`.
+Details: [Mechanisms — market ingestion](mechanisms.md#phase-1--market-ingestion-symbolengine)
 
 ## Phase 2 — Strategy input frames
 
-### StrategyInputFrameAssembler (`mm.application.frame_assembler`)
+`StrategyInputFrameAssembler` runs async tasks on primary/hedge market queues and private snapshot queues.
 
-Runs a background task on the **primary** market-event queue:
+Per primary `MarketEvent`:
 
-1. **`next_frame()`** — blocks on next primary `MarketEvent`.
-2. **`build_frame(primary)`**:
-   - Drains newer hedge events from hedge queue into a short history deque.
-   - **`_wait_for_matching_hedge`** — waits up to `hedge_grace_ms` for a hedge event whose `t_end_ms` is within `max_hedge_lag_ms` of primary.
-   - **`_select_hedge`** — picks best hedge or sets `hedge_status` (`ok`, `missing`, `stale`, …).
-   - Attaches latest **`PrivateStateSnapshot`** per role (primary / hedge) from private queues.
-3. **`bus.publish(frame_topic, StrategyInputFrame)`** where  
-   `frame_topic = strategy:frames:{primary_exchange}:{primary_symbol}:{interval_ms}`.
+1. **Drain** pending hedge + private inputs.
+2. **Wait** up to `hedge_grace_ms` for hedge with same `t_end_ms`.
+3. **Drain** again (catch arrivals during wait).
+4. **Select** hedge → `hedge_status` (`ready` / `missing` / `stale` / `disabled`).
+5. **Publish** `StrategyInputFrame` on `strategy:frames:…`.
 
-Own-order subtraction happens later in **`StrategyRunner`** (`clean_strategy_frame`), not in the assembler.
+The published frame still has the **exchange** orderbook (includes your resting orders). Cleaning happens in phase 2b.
+
+Details: [Mechanisms — frame assembly](mechanisms.md#phase-2--frame-assembly-strategyinputframeassembler)
 
 ### Frame contents
 
 | Field | Source |
 |-------|--------|
-| `primary` | Latest primary `MarketEvent` |
-| `hedge` | Aligned hedge `MarketEvent` or `None` |
-| `primary_private` / `hedge_private` | Latest snapshot from `private:state:{exchange}:snapshot` |
-| `hedge_status`, `hedge_lag_ms` | Assembler logic |
+| `primary` | Primary `MarketEvent` for this interval |
+| `hedge` | Aligned hedge event or `None` |
+| `primary_private` / `hedge_private` | Latest `private:state:{exchange}:snapshot` |
+| `hedge_status`, `hedge_lag_ms` | Assembler |
 | `created_at_ms` | Wall clock when frame was built |
+
+## Phase 2b — Own-order subtraction
+
+`StrategyRunner` loads `OrderManager.live_orders`, then `clean_strategy_frame` → `subtract_own_orders` on primary/hedge books before MPC.
+
+Details: [Mechanisms — own-order subtraction](mechanisms.md#phase-2b--own-order-subtraction-strategyrunner)
 
 ## Phase 3 — Strategy runner
 
-See [Controller & execution](controller-and-execution.md) for the full pipeline (`StrategyRunner`: clean book → MPC → risk → gates → `OrderManager`).
+`StrategyRunner`: clean frame → `MpcStrategyEngine.decide` → risk → publish → optional `OrderManager.sync`.
+
+Details: [Mechanisms — strategy decision](mechanisms.md#phase-3--strategy-decision-strategyrunner--mpcstrategyengine) · [Controller & execution](controller-and-execution.md)
 
 ## Phase 4 — Execution sync
 
-### OrderManager (`mm.execution.order_manager`)
+`OrderManager.sync`: cancels → place with venue limits → update `live_orders` → `execution:state`.
 
-Under a per-exchange lock:
+Details: [Mechanisms — execution](mechanisms.md#phase-4--execution-ordermanager)
 
-1. Publish `ExecutionSyncRequested` on `execution:orders:{exchange}`.
-2. **`_cancel_explicit`** — cancel IDs listed on the action.
-3. **`_cancel_missing`** — only if `cancel_missing=True` (runtime default: **false**).
-4. **`_place_new`** — for each order in the action:
-   - Skip wrong exchange, duplicate live key, failed venue limits.
-   - **`command_adapter.place_orders`**
-   - Update `_live_orders`, publish `PlaceOrdersAccepted`.
-5. Publish **`execution:state:{exchange}`** snapshot.
+## Phase 5 — Side effects
 
-Private reconcilers continuously refresh snapshots from exchange REST; execution reconciler aligns manager state with private streams.
+| Subscriber | Role |
+|------------|------|
+| `RuntimeObservabilitySubscriber` | Metrics, logs, traces |
+| `PostgresEventWriter` / `ParquetEventWriter` | Durable `mm_events` |
+| `RuntimeControlPlane` | Admin kill_switch / observe_only |
 
-## Phase 5 — Side effects (non-blocking for strategy)
-
-| Subscriber | Input topics | Output |
-|------------|--------------|--------|
-| `RuntimeObservabilitySubscriber` | frames, decisions, actions, execution, errors | Prometheus metrics, JSON logs, optional spans |
-| `PostgresEventWriter` | configured `persistence.topics` | `mm_events` table |
-| `ParquetEventWriter` | same | files under `MM_PARQUET_ROOT` |
-| `RuntimeControlPlane` | `admin:commands` | `admin:events`; kill_switch → risk; observe_only blocks live sync |
-
-Persistence uses `envelope_event()` so Postgres stores both `payload` JSONB and full `envelope` JSONB.
+Details: [Mechanisms — bus & persistence](mechanisms.md#event-bus-delivery) · [Observability](observability.md)
 
 ## Parallel flows (hedge venue)
 
-When `hedge` is configured:
-
-- Separate `SymbolEngine` publishes `market:events:wallex:…` (example).
-- Frame assembler consumes both primary and hedge market topics.
-- Hedge may have its own `OrderManager` if `hedge_private.enable_execution` and token are set.
-- MPC decision targets **primary** exchange for placement; hedge informs state/VWAP in `MpcStrategyEngine._state_from_frame`.
+Separate `SymbolEngine` per venue; assembler aligns hedge to primary window; MPC places on **primary**; hedge informs models/VWAP.
 
 ## Debugging breakpoints
 
 | Goal | Location |
 |------|----------|
-| Frame assembled | `frame_assembler.build_frame` return or `bus.publish` in `_run_primary` |
-| Frame consumed by strategy | `strategy_runner.on_frame` entry |
+| Frame assembled | `frame_assembler.build_frame` / `_run_primary` publish |
+| Hedge drain / grace | `frame_assembler._drain_latest_inputs`, `_wait_for_matching_hedge` |
 | Own-order subtraction | `clean_strategy_frame` |
+| MPC | `mpc_engine.decide` |
 | Risk | `risk_engine.validate_frame` |
-| MPC math / orders | `mpc_engine.decide` |
-| Pre-exchange validation | `order_manager._place_new` → `order_passes_limits` |
-| Bus-only inspection | `python -m mm.tools.print_events --config …` |
+| Venue limits | `order_manager._place_new` |
+
+Full map: [Mechanisms — debugging](mechanisms.md#debugging-map)
 
 ## Replay
 
-`mm.ingestion.replay_adapter` can republish persisted envelopes from disk into the bus for offline analysis (topics matching `market:events:*` and optional private topics).
+`mm.ingestion.replay_adapter` republishes persisted envelopes into the bus for offline runs.
 
 ## Related documents
 
+- **[Runtime mechanisms](mechanisms.md)** — detailed internals (recommended)
 - [Architecture overview](architecture.md)
 - [Controller & execution](controller-and-execution.md)
-- [Observability](observability.md)
+- [Configuration](configuration.md)

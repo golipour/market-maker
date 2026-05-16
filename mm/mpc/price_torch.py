@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from mm.mpc.mpc_state import MarketState
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.step import Step
 
@@ -23,7 +22,7 @@ class PriceModel(Protocol):
 
     def sample_next_mid(
         self,
-        x: MarketState,
+        mid: float,
         rng: np.random.Generator | None = None,
         params: dict | None = None,
     ) -> float:
@@ -32,10 +31,10 @@ class PriceModel(Protocol):
     def prob_mid(
         self,
         mid_next: float,
-        x: MarketState,
+        mid: float,
         params: dict | None = None,
     ) -> float:
-        """Return P(mid_next | x, params). Default 0.0 if not implemented."""
+        """Return P(mid_next | mid, params). Default 0.0 if not implemented."""
         ...
 
 
@@ -43,7 +42,7 @@ class GaussianPriceModel:
     """
     m_{t+1} = m_t + mu + epsilon, epsilon ~ N(0, sigma²).
     When params has mu_mid, sigma_mid (from price model), use those; else use
-    x.sigma with scale (or default_sigma if x has no sigma).
+    default_sigma with scale.
     """
 
     def __init__(self, scale: float = 1.0, default_sigma: float = 1e-4):
@@ -52,7 +51,7 @@ class GaussianPriceModel:
 
     def sample_next_mid(
         self,
-        x: MarketState,
+        mid: float,
         rng: np.random.Generator | None = None,
         params: dict | None = None,
     ) -> float:
@@ -62,28 +61,28 @@ class GaussianPriceModel:
             sigma = float(params.get("sigma_mid", self.default_sigma))
             sigma = max(1e-12, sigma)
             eps = rng.normal(0.0, sigma)
-            return int(round(x.mid + mu + eps))
-        sigma = getattr(x, "sigma", self.default_sigma) * self.scale
+            return int(round(mid + mu + eps))
+        sigma = self.default_sigma * self.scale
         sigma = max(1e-12, sigma)
         eps = rng.normal(0.0, sigma)
-        return int(round(x.mid + eps))
+        return int(round(mid + eps))
 
     def prob_mid(
         self,
         mid_next: float,
-        x: MarketState,
+        mid: float,
         params: dict | None = None,
     ) -> float:
-        """P(mid_next | x, params) for discrete outcome: P(round(mid+mu+eps) = mid_next)."""
+        """P(mid_next | mid, params) for discrete outcome: P(round(mid+mu+eps) = mid_next)."""
         from scipy.stats import norm
         if params is not None and ("mu_mid" in params or "sigma_mid" in params):
             mu = float(params.get("mu_mid", 0.0))
             sigma = float(params.get("sigma_mid", self.default_sigma))
         else:
             mu = 0.0
-            sigma = getattr(x, "sigma", self.default_sigma) * self.scale
+            sigma = self.default_sigma * self.scale
         sigma = max(1e-12, sigma)
-        mean = x.mid + mu
+        mean = mid + mu
         low = (mid_next - 0.5 - mean) / sigma
         high = (mid_next + 0.5 - mean) / sigma
         return float(norm.cdf(high) - norm.cdf(low))

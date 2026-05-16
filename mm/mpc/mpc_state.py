@@ -19,13 +19,6 @@ class OrderbookRelative:
 
 
 @dataclass(frozen=True)
-class MarketState:
-    """Observable market slice used by torch flow/price samplers."""
-
-    mid: float
-
-
-@dataclass(frozen=True)
 class Action:
     """Legacy single-level action kept for compatibility."""
 
@@ -193,7 +186,3 @@ class State:
     hedge_sell_vwap: float | None = None
     hedge_inventory: float = 0.0
     hedge_cash: float = 0.0
-
-    @property
-    def x(self) -> MarketState:
-        return MarketState(mid=self.mid)
