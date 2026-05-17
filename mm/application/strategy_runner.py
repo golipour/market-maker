@@ -19,7 +19,7 @@ from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.risk.engine import RuntimeRiskEngine
 from mm.runtime.config import ControllerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
-from mm.strategies.mpc_engine import MpcStrategyEngine
+from mm.strategies.mpc_engine import MpcStrategyEngine, order_summary_dict
 
 
 @dataclass(slots=True)
@@ -118,11 +118,19 @@ class StrategyRunner:
                 },
             )
 
-        await self._publish_decision(decision)
+        executed = self._should_execute_live(approved)
+        executed_orders: tuple[dict, ...] = ()
+        if executed:
+            executed_orders = tuple(
+                order_summary_dict(order)
+                for action in approved
+                for order in action.orders_to_create
+            )
+
+        await self._publish_decision(decision, executed_orders=executed_orders)
         for action in approved:
             await self._publish(self.config.normalized_action_topic, action)
 
-        executed = self._should_execute_live(approved)
         if executed:
             await route_actions_to_managers(approved, self.order_managers)
 
@@ -162,8 +170,16 @@ class StrategyRunner:
             return False
         return True
 
-    async def _publish_decision(self, decision: StrategyDecision) -> None:
-        await self._publish(self.config.normalized_decisions_topic, decision.as_payload())
+    async def _publish_decision(
+        self,
+        decision: StrategyDecision,
+        *,
+        executed_orders: tuple[dict[str, object], ...] = (),
+    ) -> None:
+        await self._publish(
+            self.config.normalized_decisions_topic,
+            decision.as_payload(executed_orders=executed_orders),
+        )
         await self._publish(self.config.normalized_action_topic, decision.action)
 
     async def _publish(self, topic: str, event: Any) -> None:

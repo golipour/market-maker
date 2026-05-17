@@ -1,6 +1,8 @@
 {
-  "annotations": { "list": [] },
-  "description": "Latest order book depth from persisted market events (mm_events). Set dashboard variables to match your runtime topic market:events:{exchange}:{symbol}:{interval_ms}. Redis Streams mirror the bus but are not provisioned as a Grafana datasource; use RedisInsight or a Redis plugin if you want live stream charts.",
+  "annotations": {
+    "list": []
+  },
+  "description": "Depth vs spread from mid: four pipeline stages, bid (green) and ask (red) on one chart each, fixed X in [-spread_max, +spread_max].",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -9,10 +11,15 @@
   "liveNow": true,
   "panels": [
     {
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
-        "content": "**Data source:** PostgreSQL table `mm_events`. Latest `MarketEvent` for `market:events:{exchange}:{symbol}:{interval_ms}`.\n\n**X-axis (all depth rows):** Shared numeric **price** scale `[mid − spread_max, mid + spread_max]` on every panel so rows 1–3 align vertically. Set **Spread max** to runtime `orderbook_grid.spread_max` (quote-per-base, e.g. IRT per USDT).\n\n**Row 1 — order book:** Cumulative market depth (bid left of mid, ask right).\n\n**Row 2 — continuous action:** Latest `StrategyDecision` — cumulative depth from `continuous_action_depth` (pre-discretization).\n\n**Row 3 — executable orders:** Marginal `qty` per limit price from `orders` (post-discretization).\n\n**Inspect errors:** Panel → **Inspect** → **Query**.",
+        "content": "**X-axis:** spread from mid (0), range **\u00b1 Spread max**.\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -20,447 +27,657 @@
       "type": "text"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 2,
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 4 },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) AS best_bid\nFROM latest;",
-          "refId": "A"
-        }
-      ],
-      "title": "Best bid (latest)",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 2,
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 4 },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0) AS best_ask\nFROM latest;",
-          "refId": "A"
-        }
-      ],
-      "title": "Best ask (latest)",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "decimals": 4,
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 4 },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "textMode": "auto"
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload, ts\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT EXTRACT(EPOCH FROM ts) * 1000 AS event_ts_ms\nFROM latest;",
-          "refId": "A"
-        }
-      ],
-      "title": "Event time (ms epoch)",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "fixedColor": "green", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 80,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
+          "color": {
+            "mode": "palette-classic"
           },
-          "mappings": [],
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
           "unit": "none"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "custom.axisLabel",
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
       "id": 10,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n),\nmm AS (\n  SELECT COALESCE((SELECT m FROM mid), 0) AS m\n),\nbounds AS (\n  SELECT m, m - ${spread_max}::double precision AS lo, m + ${spread_max}::double precision AS hi\n  FROM mm\n),\nlevels AS (\n  SELECT (b->>'price')::double precision AS price, (b->>'qty')::double precision AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nstep AS (\n  SELECT l.price, SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty\n  FROM levels l\n  CROSS JOIN bounds b\n  WHERE l.qty IS NOT NULL AND l.price IS NOT NULL\n    AND l.price >= b.lo AND l.price <= b.m\n)\nSELECT price, cum_qty\nFROM step\nORDER BY price ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Bid depth (cumulative qty vs price)",
-      "type": "barchart"
+      "title": "Market depth (cumulative)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 80,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
+          "color": {
+            "mode": "palette-classic"
           },
-          "mappings": [],
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
           "unit": "none"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "custom.axisLabel",
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
             ]
-          }
-        ]
-      },
-      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 8 },
-      "id": 11,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n),\nmm AS (\n  SELECT COALESCE((SELECT m FROM mid), 0) AS m\n),\nbounds AS (\n  SELECT m, m - ${spread_max}::double precision AS lo, m + ${spread_max}::double precision AS hi\n  FROM mm\n),\nlevels AS (\n  SELECT (a->>'price')::double precision AS price, (a->>'qty')::double precision AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nstep AS (\n  SELECT l.price, SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_qty\n  FROM levels l\n  CROSS JOIN bounds b\n  WHERE l.qty IS NOT NULL AND l.price IS NOT NULL\n    AND l.price >= b.m AND l.price <= b.hi\n)\nSELECT price, cum_qty\nFROM step\nORDER BY price ASC;",
-          "refId": "A"
-        }
-      ],
-      "title": "Ask depth (cumulative qty vs price)",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "fixedColor": "green", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 65,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
           },
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
       "id": 12,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\n  AND (p->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (p->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (p->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= 0\n    AND (p->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Bid — continuous depth (pre-discretization)",
-      "type": "barchart"
+      "title": "MPC sigmoid (cumulative)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 65,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
+          "color": {
+            "mode": "palette-classic"
           },
-          "mappings": [],
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
           "unit": "none"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "custom.axisLabel",
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
             ]
-          }
-        ]
-      },
-      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 22 },
-      "id": 13,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (p->>'price')::double precision AS price,\n       (p->>'cumulative_qty')::double precision AS cum_qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\nWHERE p ? 'price' AND p ? 'cumulative_qty'\n  AND (p->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (p->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
-          "refId": "A"
-        }
-      ],
-      "title": "Ask — continuous depth (pre-discretization)",
-      "type": "barchart"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "fixedColor": "green", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 80,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
           },
-          "mappings": [],
-          "unit": "none"
-        },
-        "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 14, "w": 12, "x": 0, "y": 36 },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
       "id": 14,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'buy'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\n  AND (o->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (o->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Bid — executable orders (marginal qty)",
-      "type": "barchart"
+      "title": "Spread ladder (marginal qty)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "fixedColor": "red", "mode": "fixed" },
-          "custom": {
-            "fillOpacity": 80,
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineWidth": 1
+          "color": {
+            "mode": "palette-classic"
           },
-          "mappings": [],
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
           "unit": "none"
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "price" },
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
             "properties": [
-              { "id": "min", "value": "${bid_x_min}" },
-              { "id": "max", "value": "${ask_x_max}" },
-              { "id": "decimals", "value": 2 }
+              {
+                "id": "custom.axisLabel",
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
             ]
           }
         ]
       },
-      "gridPos": { "h": 14, "w": 12, "x": 12, "y": 36 },
-      "id": 15,
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "id": 22,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "orientation": "vertical",
-        "showValue": "never",
-        "stacking": "none",
-        "tooltip": { "mode": "single", "sort": "none" },
-        "xField": "price",
-        "xTickLabelMaxLength": 24,
-        "xTickLabelRotation": -50,
-        "xTickLabelSpacing": 100
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${controller_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n)\nSELECT (o->>'price')::double precision AS price,\n       (o->>'qty')::double precision AS qty\nFROM latest,\nLATERAL jsonb_array_elements(COALESCE(payload->'orders', '[]'::jsonb)) AS o\nWHERE lower(trim(o->>'side')) = 'sell'\n  AND (o->>'price') IS NOT NULL\n  AND (o->>'qty') IS NOT NULL\n  AND (o->>'price')::double precision >= ${bid_x_min}::double precision\n  AND (o->>'price')::double precision <= ${ask_x_max}::double precision\nORDER BY 1 ASC;",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Ask — executable orders (marginal qty)",
-      "type": "barchart"
+      "title": "Executed orders (live sync)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
     }
   ],
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["market-maker", "postgres", "orderbook"],
+  "tags": [
+    "market-maker",
+    "postgres",
+    "orderbook"
+  ],
   "templating": {
     "list": [
       {
-        "current": { "text": "nobitex", "value": "nobitex" },
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
         "hide": 0,
         "label": "Exchange",
         "name": "exchange",
         "options": [
-          { "selected": true, "text": "nobitex", "value": "nobitex" },
-          { "selected": false, "text": "wallex", "value": "wallex" }
+          {
+            "selected": true,
+            "text": "nobitex",
+            "value": "nobitex"
+          },
+          {
+            "selected": false,
+            "text": "wallex",
+            "value": "wallex"
+          }
         ],
         "query": "nobitex,wallex",
         "skipUrlSync": false,
         "type": "custom"
       },
       {
-        "current": { "text": "USDT_IRT", "value": "USDT_IRT" },
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
         "hide": 0,
         "label": "Symbol",
         "name": "symbol",
@@ -469,7 +686,10 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "10000", "value": "10000" },
+        "current": {
+          "text": "10000",
+          "value": "10000"
+        },
         "hide": 0,
         "label": "Interval ms",
         "name": "interval_ms",
@@ -478,7 +698,10 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "strategy:decisions", "value": "strategy:decisions" },
+        "current": {
+          "text": "strategy:decisions",
+          "value": "strategy:decisions"
+        },
         "hide": 0,
         "label": "Decisions topic",
         "name": "controller_topic",
@@ -487,72 +710,27 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "2000", "value": "2000" },
+        "current": {
+          "text": "2000",
+          "value": "2000"
+        },
         "hide": 0,
-        "label": "Spread max (orderbook_grid.spread_max)",
+        "label": "Spread max (view window; MPC grid may use 100)",
         "name": "spread_max",
         "query": "2000",
         "skipUrlSync": false,
         "type": "textbox"
-      },
-      {
-        "current": { "selected": false, "text": "", "value": "" },
-        "datasource": { "type": "postgres", "uid": "postgres-mm" },
-        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) - ${spread_max}::double precision",
-        "hide": 2,
-        "includeAll": false,
-        "label": "",
-        "multi": false,
-        "name": "bid_x_min",
-        "options": [],
-        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) - ${spread_max}::double precision",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": true,
-        "sort": 0,
-        "type": "query"
-      },
-      {
-        "current": { "selected": false, "text": "", "value": "" },
-        "datasource": { "type": "postgres", "uid": "postgres-mm" },
-        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0)",
-        "hide": 2,
-        "includeAll": false,
-        "label": "",
-        "multi": false,
-        "name": "bid_x_max",
-        "options": [],
-        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0)",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": true,
-        "sort": 0,
-        "type": "query"
-      },
-      {
-        "current": { "selected": false, "text": "", "value": "" },
-        "datasource": { "type": "postgres", "uid": "postgres-mm" },
-        "definition": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) + ${spread_max}::double precision",
-        "hide": 2,
-        "includeAll": false,
-        "label": "",
-        "multi": false,
-        "name": "ask_x_max",
-        "options": [],
-        "query": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nmid AS (\n  SELECT COALESCE(\n    CASE\n      WHEN (payload->'orderbook'->'bids'->0) IS NOT NULL\n       AND (payload->'orderbook'->'asks'->0) IS NOT NULL\n      THEN (\n        (payload->'orderbook'->'bids'->0->>'price')::double precision +\n        (payload->'orderbook'->'asks'->0->>'price')::double precision\n      ) / 2.0\n      ELSE (payload->>'microprice')::double precision\n    END,\n    0.0\n  ) AS m\n  FROM latest\n)\nSELECT COALESCE((SELECT m FROM mid), 0) + ${spread_max}::double precision",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": true,
-        "sort": 0,
-        "type": "query"
       }
     ]
   },
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "MM order book depth (PostgreSQL)",
   "uid": "mm-orderbook-depth-pg",
-  "version": 10,
+  "version": 32,
   "weekStart": ""
 }

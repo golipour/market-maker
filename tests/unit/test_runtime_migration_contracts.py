@@ -99,6 +99,8 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
     assert payload["hedge_buy_vwap"] is None
     assert payload["hedge_sell_vwap"] is None
     assert "economics" not in payload
+    assert payload["ladder_orders"] == []
+    assert payload["executed_orders"] == []
 
 
 def test_mpc_market_flow_step_tuple_from_frame() -> None:

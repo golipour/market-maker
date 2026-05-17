@@ -83,6 +83,7 @@ class StrategyDecision:
     latency_ms: float = 0.0
     decision_hash: str = ""
     orders: tuple[dict[str, Any], ...] = ()
+    ladder_orders: tuple[dict[str, Any], ...] = ()
     model_updates: ModelUpdateReport = field(default_factory=ModelUpdateReport)
     diagnostics: DecisionDiagnostics = field(default_factory=DecisionDiagnostics)
     economics: dict[str, Any] | None = None
@@ -91,7 +92,7 @@ class StrategyDecision:
     def order_count(self) -> int:
         return len(self.action.orders_to_create)
 
-    def as_payload(self) -> dict[str, Any]:
+    def as_payload(self, *, executed_orders: tuple[dict[str, Any], ...] | None = None) -> dict[str, Any]:
         """JSON-friendly event payload for the runtime bus and persistence."""
 
         return {
@@ -117,6 +118,8 @@ class StrategyDecision:
             "sell_volume": self.sell_volume,
             "order_count": self.order_count,
             "orders": list(self.orders),
+            "ladder_orders": list(self.ladder_orders),
+            "executed_orders": list(executed_orders if executed_orders is not None else ()),
             "price_model": self.model_updates.price,
             "market_flow_model": self.model_updates.market_flow,
             "hedge_price_model": self.model_updates.hedge_price,

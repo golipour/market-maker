@@ -11,7 +11,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from mm.core.order_constraints import OrderConstraints, build_orders_from_sigmoid, mid_from_orderbook
+from mm.core.order_constraints import (
+    OrderConstraints,
+    apply_venue_constraints,
+    cap_orders_per_side,
+    ladder_orders_from_sigmoid,
+    mid_from_orderbook,
+)
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent
@@ -90,13 +96,14 @@ class MpcStrategyEngine:
             self.binding.primary,
             max_orders_per_side=self.config.max_orders_per_side,
         )
-        orders = build_orders_from_sigmoid(
+        ladder = ladder_orders_from_sigmoid(
             actor_id=self.config.actor_id,
             event=frame.primary,
             sigmoid_action=sigmoid_action,
             orderbook_grid=self.config.orderbook_grid,
-            constraints=order_constraints,
         )
+        venued = apply_venue_constraints(ladder, order_constraints)
+        orders = cap_orders_per_side(venued, order_constraints.max_orders_per_side)
         action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
         order_summaries = tuple(_order_summary(order) for order in action.orders_to_create)
         decision_hash = hashlib.sha256(
@@ -136,6 +143,7 @@ class MpcStrategyEngine:
             latency_ms=float(latency_ms),
             decision_hash=decision_hash,
             orders=order_summaries,
+            ladder_orders=tuple(_order_summary(order) for order in ladder),
             model_updates=self._model_update_report(),
             diagnostics=DecisionDiagnostics(
                 optimizer=optimizer,
@@ -425,7 +433,7 @@ def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quot
     return float(inventory), float(cash)
 
 
-def _order_summary(order: Order) -> dict[str, Any]:
+def order_summary_dict(order: Order) -> dict[str, Any]:
     return {
         "exchange": order.exchange,
         "symbol": order.symbol,
@@ -435,3 +443,7 @@ def _order_summary(order: Order) -> dict[str, Any]:
         "notional": order.price * order.qty,
         "client_order_id": order.client_order_id,
     }
+
+
+def _order_summary(order: Order) -> dict[str, Any]:
+    return order_summary_dict(order)

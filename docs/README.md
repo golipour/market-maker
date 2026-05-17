@@ -12,6 +12,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Controller & execution](controller-and-execution.md) | `StrategyRunner`, MPC, risk, `OrderManager` |
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
+| [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |
 
 Start with [Data flow](data-flow.md) for the big picture, then read **[Runtime mechanisms](mechanisms.md)** when you need to know *why* the code does something (e.g. double `_drain_latest_inputs`, where own orders are subtracted).
 
