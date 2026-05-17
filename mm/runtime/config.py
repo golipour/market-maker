@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from mm.core.models.instrument import SymbolBinding, build_instrument_spec
+from mm.core.models.instrument import (
+    InstrumentPrecisionConfig,
+    SymbolBinding,
+    build_instrument_spec,
+    instrument_precision_from_mapping,
+    merge_instrument_spec,
+)
 
 SourceRole = Literal["primary", "hedge"]
 BusKind = Literal["memory", "redis_streams"]
@@ -23,6 +29,7 @@ class MarketDataSourceConfig:
     depth_limit: int = 10
     trades_limit: int = 100
     poll_interval_ms: int = 1000
+    instrument: InstrumentPrecisionConfig | None = None
 
     def normalized_exchange(self) -> str:
         return self.exchange.lower().strip()
@@ -194,8 +201,6 @@ class ControllerRuntimeConfig:
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
-    qty_step: float = 1.0
-    min_order_qty: float = 0.0
     max_orders_per_side: int = 5
     vwap_depth: float | None = None
     price_model: dict[str, Any] | None = None
@@ -246,12 +251,8 @@ class MarketMakerRuntimeConfig:
     @property
     def binding(self) -> SymbolBinding:
         return SymbolBinding(
-            primary=build_instrument_spec(self.primary.normalized_exchange(), self.primary.symbol),
-            hedge=(
-                build_instrument_spec(self.hedge.normalized_exchange(), self.hedge.symbol)
-                if self.hedge is not None
-                else None
-            ),
+            primary=_instrument_spec_for_source(self.primary),
+            hedge=_instrument_spec_for_source(self.hedge) if self.hedge is not None else None,
         )
 
     @property
@@ -361,6 +362,21 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
     )
 
 
+def _instrument_spec_for_source(source: MarketDataSourceConfig):
+    from mm.exchanges.shared.instrument_spec_trade_stats import instrument_spec_from_trade_stats
+
+    try:
+        venue = instrument_spec_from_trade_stats(source.normalized_exchange(), source.symbol)
+    except Exception:
+        venue = None
+    return merge_instrument_spec(
+        source.normalized_exchange(),
+        source.symbol,
+        venue=venue,
+        overrides=source.instrument,
+    )
+
+
 def _source_from_mapping(payload: dict[str, Any], *, role: SourceRole) -> MarketDataSourceConfig:
     return MarketDataSourceConfig(
         role=role,
@@ -370,6 +386,7 @@ def _source_from_mapping(payload: dict[str, Any], *, role: SourceRole) -> Market
         depth_limit=int(payload.get("depth_limit", 10)),
         trades_limit=int(payload.get("trades_limit", 100)),
         poll_interval_ms=int(payload.get("poll_interval_ms", 1000)),
+        instrument=instrument_precision_from_mapping(payload.get("instrument")),
     )
 
 
@@ -451,8 +468,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
-        qty_step=float(payload.get("qty_step", 1.0)),
-        min_order_qty=float(payload.get("min_order_qty", 0.0)),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
         vwap_depth=(
             float(payload["vwap_depth"])
@@ -508,6 +523,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "decisions_topic": config.normalized_decisions_topic,
         "action_topic": config.normalized_action_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
+        "max_orders_per_side": config.max_orders_per_side,
         "vwap_depth": config.vwap_depth,
         "vwap_depth_note": (
             "cumulative base quantity cap for reference VWAP in MPC and residual price model; "

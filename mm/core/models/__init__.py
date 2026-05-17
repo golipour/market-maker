@@ -1,5 +1,10 @@
 from mm.core.models.execution import Action, Fill, Order, TradingState
-from mm.core.models.instrument import InstrumentSpec, SymbolBinding
+from mm.core.models.instrument import (
+    InstrumentPrecisionConfig,
+    InstrumentSpec,
+    SymbolBinding,
+    merge_instrument_spec,
+)
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.core.models.real_execution import RealExecutionModel

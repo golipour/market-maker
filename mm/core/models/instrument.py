@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 
 KNOWN_QUOTES = (
@@ -100,6 +100,21 @@ def instrument_contract(spec: InstrumentSpec) -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class InstrumentPrecisionConfig:
+    """Optional JSON fallback on ``primary`` / ``hedge`` (same field names as ``InstrumentSpec``).
+
+    At runtime, ``binding`` loads tick/lot/min from the exchange ``exchange_info`` API
+    first (see ``instrument_spec_from_trade_stats``); this block fills only fields the
+    API left unset.
+    """
+
+    price_step: float | None = None
+    qty_step: float | None = None
+    min_qty: float | None = None
+    min_notional: float | None = None
+
+
 def build_instrument_spec(
     exchange: str,
     symbol: str,
@@ -122,6 +137,38 @@ def build_instrument_spec(
     )
 
 
+def merge_instrument_spec(
+    exchange: str,
+    symbol: str,
+    *,
+    venue: InstrumentSpec | None = None,
+    overrides: InstrumentPrecisionConfig | None = None,
+) -> InstrumentSpec:
+    """Build domain spec: ``venue`` (e.g. from API) wins; ``overrides`` fill unset fields."""
+    base = venue or build_instrument_spec(exchange, symbol)
+    if overrides is None:
+        return base
+
+    def _pick(venue_val: float | None, override_val: float | None) -> float | None:
+        if venue_val is not None:
+            return venue_val
+        return override_val
+
+    return InstrumentSpec(
+        exchange=base.exchange,
+        symbol=base.symbol,
+        base_asset=base.base_asset,
+        quote_asset=base.quote_asset,
+        price_unit=base.price_unit,
+        qty_unit=base.qty_unit,
+        notional_unit=base.notional_unit,
+        price_step=_pick(base.price_step, overrides.price_step),
+        qty_step=_pick(base.qty_step, overrides.qty_step),
+        min_qty=_pick(base.min_qty, overrides.min_qty),
+        min_notional=_pick(base.min_notional, overrides.min_notional),
+    )
+
+
 def normalize_symbol(symbol: str) -> str:
     return "".join(ch for ch in symbol.upper().strip() if ch.isalnum())
 
@@ -138,3 +185,24 @@ def split_symbol(symbol: str) -> tuple[str, str]:
         if normalized.endswith(quote) and len(normalized) > len(quote):
             return normalized[: -len(quote)], quote
     raise ValueError(f"cannot infer base/quote assets from symbol: {symbol}")
+
+
+def instrument_precision_from_mapping(payload: Any) -> InstrumentPrecisionConfig | None:
+    """Parse optional ``instrument`` block on a market source (InstrumentSpec field names)."""
+    if not isinstance(payload, dict):
+        return None
+    keys = ("price_step", "qty_step", "min_qty", "min_notional")
+    if not any(k in payload for k in keys):
+        return None
+    return InstrumentPrecisionConfig(
+        price_step=_optional_float(payload.get("price_step")),
+        qty_step=_optional_float(payload.get("qty_step")),
+        min_qty=_optional_float(payload.get("min_qty")),
+        min_notional=_optional_float(payload.get("min_notional")),
+    )
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)

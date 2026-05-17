@@ -11,9 +11,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from mm.core.order_constraints import OrderConstraints, build_orders_from_sigmoid, mid_from_orderbook
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
-from mm.core.models.market import MarketEvent, RawOrderbook
+from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
 from mm.mpc.mpc_state import State
@@ -66,7 +67,7 @@ class MpcStrategyEngine:
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._controller = _build_controller(self.config)
+        self._controller = _build_controller(self.config, self.binding)
         self._market_flow_model = getattr(self._controller, "market_flow_model", None)
         self._price_model = getattr(self._controller, "price_model", None)
         self._hedge_price_model = getattr(self._controller, "hedge_price_model", None)
@@ -85,14 +86,16 @@ class MpcStrategyEngine:
         optimizer_stdout = io.StringIO()
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
-        orders = _orders_from_sigmoid_action(
+        order_constraints = OrderConstraints.from_spec(
+            self.binding.primary,
+            max_orders_per_side=self.config.max_orders_per_side,
+        )
+        orders = build_orders_from_sigmoid(
             actor_id=self.config.actor_id,
             event=frame.primary,
             sigmoid_action=sigmoid_action,
             orderbook_grid=self.config.orderbook_grid,
-            qty_step=self.config.qty_step,
-            min_order_qty=self.config.min_order_qty,
-            max_orders_per_side=self.config.max_orders_per_side,
+            constraints=order_constraints,
         )
         action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
         order_summaries = tuple(_order_summary(order) for order in action.orders_to_create)
@@ -170,7 +173,7 @@ class MpcStrategyEngine:
         )
 
 
-def _build_controller(config: ControllerRuntimeConfig) -> Any:
+def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -> Any:
     from mm.core.models.real_execution import RealExecutionModel
     from mm.mpc.market_order_flow_torch import (
         TorchDiscreteGammaModel,
@@ -222,13 +225,17 @@ def _build_controller(config: ControllerRuntimeConfig) -> Any:
     grid = config.orderbook_grid
     optimizer_cfg.pop("spread_max", None)
     optimizer_cfg.pop("spread_step", None)
+    order_constraints = OrderConstraints.from_spec(
+        binding.primary,
+        max_orders_per_side=config.max_orders_per_side,
+    )
     optimizer_defaults = {
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
-        "total_q_min": config.min_order_qty,
+        "total_q_min": order_constraints.min_qty,
         "total_q_target": None,
         "project_total_q_target": False,
         "device": "cpu",
@@ -281,7 +288,7 @@ def _state_from_frame(
     from mm.mpc.mpc_state import OrderbookRelative
 
     vwap_depth = _vwap_target_depth(price_model)
-    primary_mid = _mid(frame.primary.orderbook)
+    primary_mid = mid_from_orderbook(frame.primary.orderbook)
     bids = tuple(
         (spread, level.qty)
         for level in frame.primary.orderbook.bids
@@ -340,8 +347,8 @@ def _update_residual_mid_price_model(
     if model is None or previous is None:
         return
     try:
-        prev_mid = _mid(previous.primary.orderbook)
-        curr_mid = _mid(current.primary.orderbook)
+        prev_mid = mid_from_orderbook(previous.primary.orderbook)
+        curr_mid = mid_from_orderbook(current.primary.orderbook)
     except ValueError:
         return
     delta = float(curr_mid - prev_mid)
@@ -372,49 +379,6 @@ def _update_residual_mid_price_model(
         model.residual_mu_hist.append(float(0.5 * (mu_buy + mu_sell)))
     if hasattr(model, "residual_sigma_hist"):
         model.residual_sigma_hist.append(float(math.sqrt(0.5 * (sigma_buy * sigma_buy + sigma_sell * sigma_sell))))
-
-
-def _orders_from_sigmoid_action(
-    *,
-    actor_id: str,
-    event: MarketEvent,
-    sigmoid_action: Any,
-    orderbook_grid: Any,
-    qty_step: float,
-    min_order_qty: float,
-    max_orders_per_side: int,
-) -> list[Order]:
-    mid = _mid(event.orderbook)
-    qty_step = max(0.0, float(qty_step))
-    levels = list(orderbook_grid.spread_ladder())
-    orders: list[Order] = []
-    orders.extend(
-        _side_orders(
-            event=event,
-            actor_id=actor_id,
-            side="buy",
-            mid=mid,
-            spreads=levels,
-            depth_fn=sigmoid_action.depth_bid,
-            qty_step=qty_step,
-            min_order_qty=min_order_qty,
-            max_orders=max_orders_per_side,
-        )
-    )
-    orders.extend(
-        _side_orders(
-            event=event,
-            actor_id=actor_id,
-            side="sell",
-            mid=mid,
-            spreads=levels,
-            depth_fn=sigmoid_action.depth_ask,
-            qty_step=qty_step,
-            min_order_qty=min_order_qty,
-            max_orders=max_orders_per_side,
-        )
-    )
-    return orders
 
 
 def _continuous_action_depth_series(
@@ -448,61 +412,6 @@ def _continuous_action_depth_series(
         if math.isfinite(da):
             ask.append({"spread_quote": s, "price": mid_f + s, "cumulative_qty": da})
     return {"kind": "sigmoid_mixture", "mid": mid_f, "bid": bid, "ask": ask}
-
-
-def _side_orders(
-    *,
-    event: MarketEvent,
-    actor_id: str,
-    side: str,
-    mid: float,
-    spreads: list[float],
-    depth_fn: Any,
-    qty_step: float,
-    min_order_qty: float,
-    max_orders: int,
-) -> list[Order]:
-    out: list[Order] = []
-    prev_cumulative = float(depth_fn(0.0))
-    for idx, spread in enumerate(spreads):
-        cumulative = float(depth_fn(spread))
-        qty = max(0.0, cumulative - prev_cumulative)
-        prev_cumulative = cumulative
-        qty = _quantize_qty(qty, qty_step)
-        if qty < min_order_qty or qty <= 0.0:
-            continue
-        price = mid - spread if side == "buy" else mid + spread
-        if price <= 0 or not math.isfinite(price):
-            continue
-        out.append(
-            Order(
-                exchange=event.exchange,
-                symbol=event.symbol,
-                side=side,
-                price=float(price),
-                qty=float(qty),
-                client_order_id=f"{actor_id}:{side}:{event.t_end_ms}:{idx}",
-            )
-        )
-        if len(out) >= max(0, int(max_orders)):
-            break
-    return out
-
-
-def _quantize_qty(qty: float, qty_step: float) -> float:
-    if qty_step <= 0:
-        return float(qty)
-    return math.floor(float(qty) / qty_step) * qty_step
-
-
-def _mid(book: RawOrderbook) -> float:
-    if book.bids and book.asks:
-        return 0.5 * (book.bids[0].price + book.asks[0].price)
-    if book.bids:
-        return book.bids[0].price
-    if book.asks:
-        return book.asks[0].price
-    raise ValueError("cannot build MPC state from empty orderbook")
 
 
 def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
