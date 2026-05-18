@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource, order_passes_limits
 from mm.core.models.execution import Action, Fill, Order
+from mm.execution.plan import ActionStageReport, ExecutionSyncReport, summarize_orders
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.core.models.private import OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import now_ms
@@ -58,10 +60,13 @@ class OrderManager(AbstractOrderManager):
         return dict(self._live_orders)
 
     async def sync(self, actions: list[Action]) -> None:
-        async with self._lock:
-            await self._sync_locked(actions)
+        await self.sync_with_report(actions)
 
-    async def _sync_locked(self, actions: list[Action]) -> None:
+    async def sync_with_report(self, actions: list[Action]) -> ExecutionSyncReport:
+        async with self._lock:
+            return await self._sync_locked(actions)
+
+    async def _sync_locked(self, actions: list[Action]) -> ExecutionSyncReport:
         await self._publish(
             "execution:orders",
             {
@@ -77,8 +82,9 @@ class OrderManager(AbstractOrderManager):
         await self._cancel_explicit(actions)
         if self.cancel_missing:
             await self._cancel_missing(actions)
-        await self._place_new(actions)
+        report = await self._place_new(actions)
         await self._publish_snapshot()
+        return report
 
     def apply_private_snapshot(self, snapshot: PrivateStateSnapshot) -> ExecutionSnapshot:
         self._live_orders = {
@@ -207,8 +213,58 @@ class OrderManager(AbstractOrderManager):
         if to_cancel:
             await self._cancel_explicit([Action(actor_id="execution-manager", orders_to_cancel=tuple(to_cancel))])
 
-    async def _place_new(self, actions: list[Action]) -> None:
+    async def _place_new(self, actions: list[Action]) -> ExecutionSyncReport:
+        filtered, dedupe_skipped, venue_rejection_counts, rejected, after_dedupe = self._filter_for_placement(actions)
+        for order, limits, reason in rejected:
+            await self._publish(
+                "execution:orders",
+                {
+                    "type": "OrderValidationRejected",
+                    "exchange": self.exchange,
+                    "symbol": order.symbol,
+                    "reason": reason,
+                    "side": order.side,
+                    "price": float(order.price),
+                    "qty": float(order.qty),
+                    "min_base_qty": float(limits.min_base_qty),
+                    "min_notional_quote": float(limits.min_notional_quote),
+                    "timestamp_ms": self.clock_ms(),
+                },
+            )
+        limit_valid = summarize_orders([order for _, order in filtered])
+        if not filtered:
+            return ExecutionSyncReport(
+                dedupe_skipped=dedupe_skipped,
+                venue_rejection_counts=venue_rejection_counts,
+                after_dedupe=after_dedupe,
+                limit_valid=limit_valid,
+                placed=True,
+            )
+        return await self._place_filtered(
+            to_place=filtered,
+            dedupe_skipped=dedupe_skipped,
+            venue_rejection_counts=venue_rejection_counts,
+            after_dedupe=after_dedupe,
+            limit_valid=limit_valid,
+        )
+
+    def preview_placement(self, actions: list[Action]) -> ExecutionSyncReport:
+        filtered, dedupe_skipped, venue_rejection_counts, _rejected, after_dedupe = self._filter_for_placement(actions)
+        limit_valid = summarize_orders([order for _, order in filtered])
+        return ExecutionSyncReport(
+            dedupe_skipped=dedupe_skipped,
+            venue_rejection_counts=venue_rejection_counts,
+            after_dedupe=after_dedupe,
+            limit_valid=limit_valid,
+            accepted=limit_valid,
+            placed=False,
+        )
+
+    def _filter_for_placement(
+        self, actions: list[Action]
+    ) -> tuple[list[tuple[str, Order]], int, dict[str, int], list[tuple[Order, Any, str]], ActionStageReport]:
         current_keys = {_open_order_key(open_order) for open_order in self._live_orders.values()}
+        dedupe_skipped = 0
         to_place: list[tuple[str, Order]] = []
         for action in actions:
             for order in action.orders_to_create:
@@ -216,38 +272,43 @@ class OrderManager(AbstractOrderManager):
                     continue
                 key = _order_key(action.actor_id, order)
                 if key in current_keys:
+                    dedupe_skipped += 1
                     continue
                 to_place.append((action.actor_id, order))
                 current_keys.add(key)
-        if not to_place:
-            return
 
+        venue_rejection_counts: dict[str, int] = {}
         filtered: list[tuple[str, Order]] = []
+        rejected: list[tuple[Order, Any, str]] = []
         for actor_id, order in to_place:
             limits = self._limit_source.limits_for(order.symbol)
             ok, reason = order_passes_limits(order, limits)
             if ok:
                 filtered.append((actor_id, order))
             else:
-                await self._publish(
-                    "execution:orders",
-                    {
-                        "type": "OrderValidationRejected",
-                        "exchange": self.exchange,
-                        "symbol": order.symbol,
-                        "reason": reason,
-                        "side": order.side,
-                        "price": float(order.price),
-                        "qty": float(order.qty),
-                        "min_base_qty": float(limits.min_base_qty),
-                        "min_notional_quote": float(limits.min_notional_quote),
-                        "timestamp_ms": self.clock_ms(),
-                    },
-                )
-        to_place = filtered
-        if not to_place:
-            return
+                venue_rejection_counts[reason] = venue_rejection_counts.get(reason, 0) + 1
+                rejected.append((order, limits, reason))
+        after_dedupe = summarize_orders([order for _, order in to_place])
+        if dedupe_skipped:
+            after_dedupe = ActionStageReport(
+                order_count=after_dedupe.order_count,
+                buy_qty=after_dedupe.buy_qty,
+                sell_qty=after_dedupe.sell_qty,
+                buy_notional=after_dedupe.buy_notional,
+                sell_notional=after_dedupe.sell_notional,
+                rejection_counts={"duplicate_live_order": dedupe_skipped},
+            )
+        return filtered, dedupe_skipped, venue_rejection_counts, rejected, after_dedupe
 
+    async def _place_filtered(
+        self,
+        *,
+        to_place: list[tuple[str, Order]],
+        dedupe_skipped: int,
+        venue_rejection_counts: dict[str, int],
+        after_dedupe: ActionStageReport,
+        limit_valid: Any,
+    ) -> ExecutionSyncReport:
         orders = [order for _, order in to_place]
         await self._publish(
             "execution:orders",
@@ -260,7 +321,9 @@ class OrderManager(AbstractOrderManager):
         )
         order_ids = await self.command_adapter.place_orders(orders)
         timestamp_ms = self.clock_ms()
+        accepted_orders: list[Order] = []
         for (actor_id, order), order_id in zip(to_place, order_ids):
+            accepted_orders.append(order)
             self._live_orders[order_id] = OpenOrder(
                 exchange_order_id=order_id,
                 actor_id=actor_id,
@@ -278,6 +341,14 @@ class OrderManager(AbstractOrderManager):
                 "order_ids": order_ids,
                 "timestamp_ms": timestamp_ms,
             },
+        )
+        return ExecutionSyncReport(
+            dedupe_skipped=dedupe_skipped,
+            venue_rejection_counts=venue_rejection_counts,
+            after_dedupe=after_dedupe,
+            limit_valid=limit_valid,
+            accepted=summarize_orders(accepted_orders),
+            placed=True,
         )
 
     async def _publish_snapshot(self) -> None:

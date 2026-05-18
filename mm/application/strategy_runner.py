@@ -7,7 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from mm.application.action_routing import route_actions_to_managers
+from mm.application.action_routing import route_actions_to_managers, route_actions_to_managers_with_report
+from mm.execution.plan import stage_report_with_rejections
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
 from mm.bus.base import AbstractEventBus
@@ -125,8 +126,11 @@ class StrategyRunner:
             return []
 
         proposed = [decision.action]
-        approved = self.risk_engine.validate_frame(proposed, trading_state, clean_frame)
-        ctx.record_risk_result(proposed, approved)
+        risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
+        approved = risk_result.approved_list
+        approved_orders = tuple(order for action in approved for order in action.orders_to_create)
+        ctx.record_risk_result(proposed, approved, rejection_counts=dict(risk_result.rejection_counts))
+        ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
         if len(approved) < len(proposed) and self.bus is not None:
             await self.bus.publish(
                 "risk:events",
@@ -168,8 +172,17 @@ class StrategyRunner:
         for action in approved:
             await self._publish(self.config.normalized_action_topic, action)
 
-        if executed:
-            await route_actions_to_managers(approved, self.order_managers)
+        execution_report = None
+        if approved:
+            if executed:
+                execution_report = await route_actions_to_managers_with_report(approved, self.order_managers)
+            else:
+                primary_manager = self.order_managers.get(self._last_primary_exchange)
+                preview = getattr(primary_manager, "preview_placement", None) if primary_manager else None
+                if preview is not None:
+                    execution_report = preview(approved)
+        if execution_report is not None:
+            ctx.apply_execution_to_pipeline(execution_report, executed=executed)
 
         ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
         await self._publish_diagnostics(ctx)

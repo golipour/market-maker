@@ -9,6 +9,7 @@ from typing import Any
 from mm.core.models.execution import Order
 from mm.core.models.instrument import InstrumentSpec
 from mm.core.models.market import MarketEvent, RawOrderbook
+from mm.execution.plan import ActionPipelineReport, ActionStageReport, stage_report_with_rejections
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +50,26 @@ def ladder_orders_from_sigmoid(
     orderbook_grid: Any,
 ) -> list[Order]:
     """Marginal ladder on ``orderbook_grid.spread_ladder()`` (no venue or cap rules)."""
+    orders, _report = ladder_orders_from_sigmoid_with_report(
+        actor_id=actor_id,
+        event=event,
+        sigmoid_action=sigmoid_action,
+        orderbook_grid=orderbook_grid,
+    )
+    return orders
+
+
+def ladder_orders_from_sigmoid_with_report(
+    *,
+    actor_id: str,
+    event: MarketEvent,
+    sigmoid_action: Any,
+    orderbook_grid: Any,
+) -> tuple[list[Order], ActionStageReport]:
+    """Marginal ladder with a stage summary for diagnostics."""
     mid = mid_from_orderbook(event.orderbook)
     levels = list(orderbook_grid.spread_ladder())
+    rejection_counts: dict[str, int] = {}
     orders: list[Order] = []
     orders.extend(
         _ladder_side_orders(
@@ -60,6 +79,7 @@ def ladder_orders_from_sigmoid(
             mid=mid,
             spreads=levels,
             depth_fn=_side_depth_fn(sigmoid_action, "buy"),
+            rejection_counts=rejection_counts,
         )
     )
     orders.extend(
@@ -70,22 +90,35 @@ def ladder_orders_from_sigmoid(
             mid=mid,
             spreads=levels,
             depth_fn=_side_depth_fn(sigmoid_action, "sell"),
+            rejection_counts=rejection_counts,
         )
     )
-    return orders
+    return orders, stage_report_with_rejections(orders, rejection_counts)
 
 
 def apply_venue_constraints(orders: list[Order], constraints: OrderConstraints) -> list[Order]:
     """Round to tick/lot and drop orders below exchange minimums."""
+    out, _report = apply_venue_constraints_with_report(orders, constraints)
+    return out
+
+
+def apply_venue_constraints_with_report(
+    orders: list[Order], constraints: OrderConstraints
+) -> tuple[list[Order], ActionStageReport]:
+    """Round to tick/lot; return kept orders and per-reason rejection counts."""
     out: list[Order] = []
+    rejection_counts: dict[str, int] = {}
     for order in orders:
         price = _quantize_price(order.price, constraints.price_step)
         qty = _quantize_qty(order.qty, constraints.qty_step)
         if qty <= 0.0 or price <= 0.0 or not math.isfinite(price) or not math.isfinite(qty):
+            rejection_counts["invalid_price_or_qty"] = rejection_counts.get("invalid_price_or_qty", 0) + 1
             continue
         if constraints.min_qty is not None and qty < float(constraints.min_qty):
+            rejection_counts["below_min_qty"] = rejection_counts.get("below_min_qty", 0) + 1
             continue
         if constraints.min_notional is not None and price * qty < float(constraints.min_notional):
+            rejection_counts["below_min_notional"] = rejection_counts.get("below_min_notional", 0) + 1
             continue
         out.append(
             Order(
@@ -97,17 +130,35 @@ def apply_venue_constraints(orders: list[Order], constraints: OrderConstraints) 
                 client_order_id=order.client_order_id,
             )
         )
-    return out
+    return out, stage_report_with_rejections(out, rejection_counts)
 
 
 def cap_orders_per_side(orders: list[Order], max_per_side: int) -> list[Order]:
     """Keep the largest-qty orders per side (strategy cap)."""
+    out, _report = cap_orders_per_side_with_report(orders, max_per_side)
+    return out
+
+
+def cap_orders_per_side_with_report(
+    orders: list[Order], max_per_side: int
+) -> tuple[list[Order], ActionStageReport]:
+    """Keep largest-qty orders per side; report how many were dropped per side."""
     cap = max(0, int(max_per_side))
+    rejection_counts: dict[str, int] = {}
     if cap == 0:
-        return []
+        if orders:
+            rejection_counts["max_orders_per_side_zero"] = len(orders)
+        return [], stage_report_with_rejections([], rejection_counts)
     buys = sorted((o for o in orders if o.side.lower().strip() == "buy"), key=lambda o: o.qty, reverse=True)
     sells = sorted((o for o in orders if o.side.lower().strip() == "sell"), key=lambda o: o.qty, reverse=True)
-    return list(buys[:cap]) + list(sells[:cap])
+    dropped_buys = max(0, len(buys) - cap)
+    dropped_sells = max(0, len(sells) - cap)
+    if dropped_buys:
+        rejection_counts["capped_buy"] = dropped_buys
+    if dropped_sells:
+        rejection_counts["capped_sell"] = dropped_sells
+    kept = list(buys[:cap]) + list(sells[:cap])
+    return kept, stage_report_with_rejections(kept, rejection_counts)
 
 
 def build_orders_from_sigmoid(
@@ -118,14 +169,40 @@ def build_orders_from_sigmoid(
     orderbook_grid: Any,
     constraints: OrderConstraints,
 ) -> list[Order]:
-    ladder = ladder_orders_from_sigmoid(
+    orders, _pipeline, _ladder = build_orders_from_sigmoid_with_report(
+        actor_id=actor_id,
+        event=event,
+        sigmoid_action=sigmoid_action,
+        orderbook_grid=orderbook_grid,
+        constraints=constraints,
+    )
+    return orders
+
+
+def build_orders_from_sigmoid_with_report(
+    *,
+    actor_id: str,
+    event: MarketEvent,
+    sigmoid_action: Any,
+    orderbook_grid: Any,
+    constraints: OrderConstraints,
+    continuous: dict[str, Any] | None = None,
+) -> tuple[list[Order], ActionPipelineReport, list[Order]]:
+    ladder, ladder_report = ladder_orders_from_sigmoid_with_report(
         actor_id=actor_id,
         event=event,
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
     )
-    venued = apply_venue_constraints(ladder, constraints)
-    return cap_orders_per_side(venued, constraints.max_orders_per_side)
+    venued, venue_report = apply_venue_constraints_with_report(ladder, constraints)
+    capped, capped_report = cap_orders_per_side_with_report(venued, constraints.max_orders_per_side)
+    pipeline = ActionPipelineReport(
+        continuous=dict(continuous or {}),
+        ladder=ladder_report,
+        venue_quantized=venue_report,
+        capped=capped_report,
+    )
+    return capped, pipeline, ladder
 
 
 def _ladder_side_orders(
@@ -136,17 +213,21 @@ def _ladder_side_orders(
     mid: float,
     spreads: list[float],
     depth_fn: Any,
+    rejection_counts: dict[str, int] | None = None,
 ) -> list[Order]:
     out: list[Order] = []
     prev_cumulative = 0.0
+    rejects = rejection_counts if rejection_counts is not None else {}
     for idx, spread in enumerate(spreads):
         cumulative = float(depth_fn(spread))
         qty = max(0.0, cumulative - prev_cumulative)
         prev_cumulative = cumulative
         if qty <= 0.0:
+            rejects["zero_marginal_qty"] = rejects.get("zero_marginal_qty", 0) + 1
             continue
         price = mid - spread if side == "buy" else mid + spread
         if price <= 0 or not math.isfinite(price):
+            rejects["invalid_price"] = rejects.get("invalid_price", 0) + 1
             continue
         out.append(
             Order(
