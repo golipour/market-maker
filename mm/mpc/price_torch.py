@@ -354,3 +354,11 @@ class TorchResidualPriceModel:
             torch.tensor(sigma, dtype=_dtype, device=_device),
         )
         return d.sample(sample_shape)
+
+
+def score_mid_delta(delta_mid: float, params: dict) -> "ScoreResult":
+    """Pre-update Gaussian NLL for primary mid change (see ``mm.models.scoring``)."""
+
+    from mm.models.scoring import score_primary_mid_delta
+
+    return score_primary_mid_delta(delta_mid=delta_mid, params_before=params)

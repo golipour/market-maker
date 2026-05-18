@@ -159,27 +159,9 @@ class DecisionContext:
     def _model_scores(self, decision: StrategyDecision | None) -> dict[str, ModelScore]:
         if decision is None:
             return {}
-        updates = decision.model_updates
-        return {
-            "price": ModelScore(
-                model="price",
-                kind=str(updates.price.get("kind", "")),
-                updated=bool(updates.price.get("params")),
-                params_after=dict(updates.price.get("params") or {}),
-            ),
-            "market_flow": ModelScore(
-                model="market_flow",
-                kind=str(updates.market_flow.get("kind", "")),
-                updated=bool(updates.market_flow.get("params")),
-                params_after=dict(updates.market_flow.get("params") or {}),
-            ),
-            "hedge_price": ModelScore(
-                model="hedge_price",
-                kind=str(updates.hedge_price.get("kind", "")),
-                updated=bool(updates.hedge_price.get("params")),
-                params_after=dict(updates.hedge_price.get("params") or {}),
-            ),
-        }
+        if decision.model_scores:
+            return dict(decision.model_scores)
+        return {}
 
     def _optimizer_diagnostics(self, decision: StrategyDecision | None) -> OptimizerDiagnostics:
         if decision is None:

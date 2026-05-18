@@ -1453,3 +1453,22 @@ class TorchHurdleGeneralizedParetoModel:
 
 # Backward-compatible alias.
 TorchHurdleParetoModel = TorchHurdleGeneralizedParetoModel
+
+
+def score_flow_observation(
+    buy_volume: float,
+    sell_volume: float,
+    params: dict,
+    *,
+    kind: str,
+) -> "ScoreResult":
+    """Pre-update market-flow score (see ``mm.models.scoring``)."""
+
+    from mm.models.scoring import ScoreResult, score_market_flow
+
+    return score_market_flow(
+        buy_volume=buy_volume,
+        sell_volume=sell_volume,
+        params_before=params,
+        kind=kind,
+    )

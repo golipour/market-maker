@@ -139,3 +139,19 @@ class GaussianHedgeDeltaModel:
         d_buy = zeros if self.sigma_buy <= 0 else mod.randn(n, h, dtype=dtype, device=device) * self.sigma_buy
         d_sell = zeros if self.sigma_sell <= 0 else mod.randn(n, h, dtype=dtype, device=device) * self.sigma_sell
         return d_buy, d_sell
+
+
+def score_vwap_deltas(
+    delta_buy: float,
+    delta_sell: float,
+    params: dict,
+) -> "ScoreResult":
+    """Pre-update hedge VWAP delta score (see ``mm.models.scoring``)."""
+
+    from mm.models.scoring import score_hedge_vwap_deltas
+
+    return score_hedge_vwap_deltas(
+        delta_buy=delta_buy,
+        delta_sell=delta_sell,
+        params_before=params,
+    )

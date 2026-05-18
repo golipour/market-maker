@@ -23,6 +23,7 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
+from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig
@@ -86,9 +87,50 @@ class MpcStrategyEngine:
             self.config.orderbook_grid.spread_max,
             price_model=self._price_model,
         )
+        flow_kind = str((self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"))
+        price_kind = str((self.config.price_model or {}).get("kind", "residual"))
+        hedge_kind = str((self.config.hedge_price_model or {}).get("kind", "legacy"))
+        model_scores = score_frame_models(
+            frame=frame,
+            previous_frame=self._previous_frame,
+            state=state,
+            market_flow_model=self._market_flow_model,
+            price_model=self._price_model,
+            hedge_price_model=self._hedge_price_model,
+            market_flow_kind=flow_kind,
+            price_kind=price_kind,
+            hedge_price_kind=hedge_kind,
+        )
         _update_hedge_vwap_price_model(self._hedge_price_model, state)
+        if (
+            self._hedge_price_model is not None
+            and "hedge_price" in model_scores
+            and hasattr(self._hedge_price_model, "get_params")
+        ):
+            refresh_score_params_after(
+                model_scores,
+                key="hedge_price",
+                params_after=self._hedge_price_model.get_params(),
+                updated=True,
+            )
         _update_market_flow_model(self._market_flow_model, frame)
+        if self._market_flow_model is not None and "market_flow" in model_scores and hasattr(
+            self._market_flow_model, "get_params"
+        ):
+            refresh_score_params_after(
+                model_scores,
+                key="market_flow",
+                params_after=self._market_flow_model.get_params(),
+                updated=True,
+            )
         _update_residual_mid_price_model(self._price_model, self._previous_frame, frame)
+        if self._price_model is not None and "price" in model_scores and hasattr(self._price_model, "get_params"):
+            refresh_score_params_after(
+                model_scores,
+                key="price",
+                params_after=self._price_model.get_params(),
+                updated=self._previous_frame is not None,
+            )
         optimizer_stdout = io.StringIO()
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
@@ -145,6 +187,7 @@ class MpcStrategyEngine:
             orders=order_summaries,
             ladder_orders=tuple(_order_summary(order) for order in ladder),
             model_updates=self._model_update_report(),
+            model_scores=model_scores,
             diagnostics=DecisionDiagnostics(
                 optimizer=optimizer,
                 continuous_action_depth=_continuous_action_depth_series(
