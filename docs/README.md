@@ -13,6 +13,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
 | [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |
+| [Codebase upgrade plan](codebase-upgrade-plan.md) | Phased cleanup plan for diagnostics, optimizer refactors, risk config, hedging, and Grafana dashboards |
 | [Batched tensor MPC optimizer](mpc-tensor-batched-optimizer.md) | Detailed optimizer algorithm, objective components, diagnostics, performance and readability suggestions |
 | [Hedging in MPC](hedging-in-mpc.md) | How hedge rollouts work today, why live hedge execution is incomplete, and an implementation roadmap |
 
