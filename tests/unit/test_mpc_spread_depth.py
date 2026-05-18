@@ -7,6 +7,7 @@ import torch
 from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
 from mm.mpc.mpc_tensor_batched import _action_spread_at_depth, soft_fill_batched
 from mm.mpc.mpc_state import SigmoidMixtureAction
+from mm.mpc.reward_tensor import terminal_objective
 from mm.mpc.state_tensor import depth_bid_tensor
 
 
@@ -16,6 +17,79 @@ def test_spread_depth_stored() -> None:
     exe = object()
     mpc = MonteCarloMPCTensorBatched(opt, flow, exe, spread_depth=12.5)
     assert mpc.spread_depth == 12.5
+
+
+def test_clear_optimizer_names_map_to_legacy_attributes() -> None:
+    opt = object()
+    flow = object()
+    exe = object()
+    mpc = MonteCarloMPCTensorBatched(
+        opt,
+        flow,
+        exe,
+        expected_pnl_weight=2.0,
+        pnl_volatility_penalty_weight=3.0,
+        inventory_target_penalty_weight=4.0,
+        target_inventory=5.0,
+        quote_shape_uniformity_penalty_weight=6.0,
+        quote_size_target_penalty_weight=7.0,
+        quote_spread_penalty_weight=8.0,
+        quote_depth_target_for_spread=9.0,
+        quote_size_target_per_side=10.0,
+        hard_project_quote_size_target=True,
+        hedge_rollout_enabled=True,
+    )
+    assert mpc.expected_pnl_weight == 2.0
+    assert mpc.reward_coef == 2.0
+    assert mpc.pnl_volatility_penalty_weight == 3.0
+    assert mpc.risk_coef == 3.0
+    assert mpc.inventory_target_penalty_weight == 4.0
+    assert mpc.inv_coef == 4.0
+    assert mpc.target_inventory == 5.0
+    assert mpc.target_inv == 5.0
+    assert mpc.quote_shape_uniformity_penalty_weight == 6.0
+    assert mpc.uniformity_coef == 6.0
+    assert mpc.quote_size_target_penalty_weight == 7.0
+    assert mpc.size_coef == 7.0
+    assert mpc.quote_spread_penalty_weight == 8.0
+    assert mpc.spread_coef == 8.0
+    assert mpc.quote_depth_target_for_spread == 9.0
+    assert mpc.spread_depth == 9.0
+    assert mpc.quote_size_target_per_side == 10.0
+    assert mpc.total_q_target == 10.0
+    assert mpc.hard_project_quote_size_target is True
+    assert mpc.project_total_q_target is True
+    assert mpc.hedge_enabled is True
+
+
+def test_terminal_objective_uses_clear_component_names() -> None:
+    delta_w = torch.tensor([1.0, 3.0], dtype=torch.float64)
+    inv_terminal = torch.tensor([2.0, 4.0], dtype=torch.float64)
+
+    objective, components = terminal_objective(
+        delta_w,
+        inv_terminal,
+        expected_pnl_weight=2.0,
+        inventory_target_penalty_weight=0.5,
+        target_inventory=2.0,
+        pnl_volatility_penalty_weight=0.25,
+        uniformity=torch.tensor(4.0, dtype=torch.float64),
+        quote_shape_uniformity_penalty_weight=0.1,
+        size=torch.tensor(5.0, dtype=torch.float64),
+        quote_size_target_penalty_weight=0.2,
+        spread=torch.tensor(6.0, dtype=torch.float64),
+        quote_spread_penalty_weight=0.3,
+    )
+
+    assert set(components) == {
+        "expected_pnl",
+        "inventory_target_penalty",
+        "pnl_volatility_penalty",
+        "quote_shape_uniformity_penalty",
+        "quote_size_target_penalty",
+        "quote_spread_penalty",
+    }
+    assert torch.isclose(objective, sum(components.values()))
 
 
 def test_hedge_enabled_explicit_overrides_hedge_coef() -> None:

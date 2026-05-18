@@ -45,6 +45,13 @@ def _get_torch():
     return torch
 
 
+def _coalesce_param(*values: Any, default: Any = None) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return default
+
+
 def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """
     Convert optimizer bounds from effective parameter space to raw tensor space.
@@ -625,20 +632,31 @@ class MonteCarloMPCTensorBatched:
         total_q_max: float | int | None = None,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
-        inv_coef: float = 0.0,
-        target_inv: float = 0.0,
-        risk_coef: float = 0.0,
-        uniformity_coef: float = 0.0,
-        reward_coef: float = 1.0,
-        size_coef: float = 0.0,
-        spread_coef: float = 0.0,
-        spread_depth: float = 1.0,
+        inv_coef: float | None = None,
+        target_inv: float | None = None,
+        risk_coef: float | None = None,
+        uniformity_coef: float | None = None,
+        reward_coef: float | None = None,
+        size_coef: float | None = None,
+        spread_coef: float | None = None,
+        spread_depth: float | None = None,
         hedge_enabled: bool | None = None,
         hedge_coef: float = 0.0,
         hedge_fee: float = 0.0,
         hedge_reward_weight: float = 1.0,
         total_q_target: float | int | None = None,
         project_total_q_target: bool = False,
+        expected_pnl_weight: float | None = None,
+        pnl_volatility_penalty_weight: float | None = None,
+        inventory_target_penalty_weight: float | None = None,
+        target_inventory: float | None = None,
+        quote_shape_uniformity_penalty_weight: float | None = None,
+        quote_size_target_penalty_weight: float | None = None,
+        quote_spread_penalty_weight: float | None = None,
+        quote_depth_target_for_spread: float | None = None,
+        hedge_rollout_enabled: bool | None = None,
+        quote_size_target_per_side: float | int | None = None,
+        hard_project_quote_size_target: bool | None = None,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -660,16 +678,29 @@ class MonteCarloMPCTensorBatched:
         self.total_q_max = float(total_q_max) if total_q_max is not None else None
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
-        self.inv_coef = max(0.0, float(inv_coef))
-        self.target_inv = float(target_inv)
-        self.risk_coef = max(0.0, float(risk_coef))
-        self.uniformity_coef = max(0.0, float(uniformity_coef))
-        self.reward_coef = float(reward_coef)
-        self.size_coef = max(0.0, float(size_coef))
-        self.spread_coef = max(0.0, float(spread_coef))
-        self.spread_depth = max(0.0, float(spread_depth))
-        if hedge_enabled is not None:
-            self.hedge_enabled = bool(hedge_enabled)
+        self.expected_pnl_weight = float(_coalesce_param(expected_pnl_weight, reward_coef, default=1.0))
+        self.pnl_volatility_penalty_weight = max(
+            0.0, float(_coalesce_param(pnl_volatility_penalty_weight, risk_coef, default=0.0))
+        )
+        self.inventory_target_penalty_weight = max(
+            0.0, float(_coalesce_param(inventory_target_penalty_weight, inv_coef, default=0.0))
+        )
+        self.target_inventory = float(_coalesce_param(target_inventory, target_inv, default=0.0))
+        self.quote_shape_uniformity_penalty_weight = max(
+            0.0, float(_coalesce_param(quote_shape_uniformity_penalty_weight, uniformity_coef, default=0.0))
+        )
+        self.quote_size_target_penalty_weight = max(
+            0.0, float(_coalesce_param(quote_size_target_penalty_weight, size_coef, default=0.0))
+        )
+        self.quote_spread_penalty_weight = max(
+            0.0, float(_coalesce_param(quote_spread_penalty_weight, spread_coef, default=0.0))
+        )
+        self.quote_depth_target_for_spread = max(
+            0.0, float(_coalesce_param(quote_depth_target_for_spread, spread_depth, default=1.0))
+        )
+        hedge_flag = _coalesce_param(hedge_rollout_enabled, hedge_enabled, default=None)
+        if hedge_flag is not None:
+            self.hedge_enabled = bool(hedge_flag)
         else:
             # Legacy: non-zero hedge_coef enables hedge dynamics in rollouts.
             self.hedge_enabled = bool(float(hedge_coef) != 0.0)
@@ -677,8 +708,22 @@ class MonteCarloMPCTensorBatched:
         # otherwise this constructor value is used (backward compatible).
         self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
         self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
-        self.total_q_target = float(total_q_target) if total_q_target is not None else None
-        self.project_total_q_target = bool(project_total_q_target)
+        quote_size_target = _coalesce_param(quote_size_target_per_side, total_q_target, default=None)
+        self.quote_size_target_per_side = float(quote_size_target) if quote_size_target is not None else None
+        self.hard_project_quote_size_target = bool(
+            _coalesce_param(hard_project_quote_size_target, project_total_q_target, default=False)
+        )
+        # Backward-compatible attribute names used internally and by existing tests/tools.
+        self.reward_coef = self.expected_pnl_weight
+        self.risk_coef = self.pnl_volatility_penalty_weight
+        self.inv_coef = self.inventory_target_penalty_weight
+        self.uniformity_coef = self.quote_shape_uniformity_penalty_weight
+        self.size_coef = self.quote_size_target_penalty_weight
+        self.spread_coef = self.quote_spread_penalty_weight
+        self.spread_depth = self.quote_depth_target_for_spread
+        self.target_inv = self.target_inventory
+        self.total_q_target = self.quote_size_target_per_side
+        self.project_total_q_target = self.hard_project_quote_size_target
         self._last_action: SigmoidMixtureAction | None = None
         self._last_J_components: dict | None = None
         self._last_J_components_initial: dict | None = None
@@ -1083,16 +1128,16 @@ class MonteCarloMPCTensorBatched:
                 J, components = terminal_objective(
                     total_reward,
                     inv_t,
-                    reward_coef=self.reward_coef,
-                    inv_coef=self.inv_coef,
-                    target_inv=self.target_inv,
-                    risk_coef=self.risk_coef,
+                    expected_pnl_weight=self.expected_pnl_weight,
+                    inventory_target_penalty_weight=self.inventory_target_penalty_weight,
+                    target_inventory=self.target_inventory,
+                    pnl_volatility_penalty_weight=self.pnl_volatility_penalty_weight,
                     uniformity=action_uniformity_mean,
-                    uniformity_coef=self.uniformity_coef,
+                    quote_shape_uniformity_penalty_weight=self.quote_shape_uniformity_penalty_weight,
                     size=action_size_mean,
-                    size_coef=self.size_coef,
+                    quote_size_target_penalty_weight=self.quote_size_target_penalty_weight,
                     spread=action_spread_mean,
-                    spread_coef=self.spread_coef,
+                    quote_spread_penalty_weight=self.quote_spread_penalty_weight,
                 )
 
                 def _finite_item(t) -> float:

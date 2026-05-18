@@ -3,8 +3,12 @@ Differentiable (PyTorch) reward functions that take StateTensor and ActionTensor
 and return a scalar tensor so gradients flow for training or gradient-based optimization.
 
 Terminal objective (single mode):
-  J = reward_coef * J_mean - inv_coef * (J_inv - target_inv)^2 - risk_coef * J_std
-      - uniformity_coef * J_uniformity - size_coef * J_size - spread_coef * J_spread
+  J = expected_pnl_weight * J_mean
+      - inventory_target_penalty_weight * (J_inv - target_inventory)^2
+      - pnl_volatility_penalty_weight * J_std
+      - quote_shape_uniformity_penalty_weight * J_uniformity
+      - quote_size_target_penalty_weight * J_size
+      - quote_spread_penalty_weight * J_spread
 where:
   J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW),
   J_uniformity = E[L2-to-uniform marginal penalty], J_size/J_spread are action penalties.
@@ -148,42 +152,42 @@ def objective_std(delta_W: "Tensor") -> "Tensor":
 def terminal_objective(
     delta_W: "Tensor",
     inv_terminal: "Tensor",
-    reward_coef: float = 1.0,
-    inv_coef: float = 0.0,
-    target_inv: float = 0.0,
-    risk_coef: float = 0.0,
+    expected_pnl_weight: float = 1.0,
+    inventory_target_penalty_weight: float = 0.0,
+    target_inventory: float = 0.0,
+    pnl_volatility_penalty_weight: float = 0.0,
     uniformity: "Tensor | None" = None,
-    uniformity_coef: float = 0.0,
+    quote_shape_uniformity_penalty_weight: float = 0.0,
     size: "Tensor | None" = None,
-    size_coef: float = 0.0,
+    quote_size_target_penalty_weight: float = 0.0,
     spread: "Tensor | None" = None,
-    spread_coef: float = 0.0,
+    quote_spread_penalty_weight: float = 0.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
     Build scalar objective J from terminal ΔW and optional action regularizers.
 
     delta_W: (n_samples,) wealth change per trajectory, ΔW = W(s_{t+H}) - W(s_t).
     inv_terminal: (n_samples,) or (n_samples, 1) terminal inventory per trajectory.
-    reward_coef: multiplicative weight for mean reward term J_mean.
-    inv_coef: weight for inventory target penalty.
-    target_inv: desired terminal inventory target.
-    risk_coef: weight for ΔW volatility penalty (J_std).
+    expected_pnl_weight: multiplicative weight for mean reward term J_mean.
+    inventory_target_penalty_weight: weight for inventory target penalty.
+    target_inventory: desired terminal inventory target.
+    pnl_volatility_penalty_weight: weight for ΔW volatility penalty (J_std).
     uniformity: differentiable L2-to-uniform regularizer term from marginal action distributions.
-    uniformity_coef: additive weight for uniformity penalty.
+    quote_shape_uniformity_penalty_weight: additive weight for uniformity penalty.
     size: differentiable action-size penalty term.
-    size_coef: additive weight for size penalty.
+    quote_size_target_penalty_weight: additive weight for size penalty.
     spread: differentiable spread-at-depth penalty term.
-    spread_coef: additive weight for spread penalty.
+    quote_spread_penalty_weight: additive weight for spread penalty.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
         components: dict with weighted objective terms (ready for plotting/summing):
-            - term_reward = reward_coef * J_mean
-            - term_inv = -inv_coef * (J_inv - target_inv)^2
-            - term_risk = -risk_coef * J_std
-            - term_uniformity = -uniformity_coef * J_uniformity
-            - term_size = -size_coef * J_size
-            - term_spread = -spread_coef * J_spread
+            - expected_pnl = expected_pnl_weight * J_mean
+            - inventory_target_penalty = -inventory_target_penalty_weight * (J_inv - target_inventory)^2
+            - pnl_volatility_penalty = -pnl_volatility_penalty_weight * J_std
+            - quote_shape_uniformity_penalty = -quote_shape_uniformity_penalty_weight * J_uniformity
+            - quote_size_target_penalty = -quote_size_target_penalty_weight * J_size
+            - quote_spread_penalty = -quote_spread_penalty_weight * J_spread
     """
     torch = _get_torch()
     # Batched rollouts can produce inf/nan in ΔW when mid×inv overflows; poison the whole objective otherwise.
@@ -206,22 +210,22 @@ def terminal_objective(
         J_spread = J_mean * 0.0
     else:
         J_spread = torch.nan_to_num(spread.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6)
-    target = torch.tensor(float(target_inv), dtype=J_inv.dtype, device=J_inv.device)
+    target = torch.tensor(float(target_inventory), dtype=J_inv.dtype, device=J_inv.device)
     J_inv_penalty = (J_inv - target) * (J_inv - target)
 
-    term_reward = float(reward_coef) * J_mean
-    term_inv = -float(inv_coef) * J_inv_penalty
-    term_risk = -float(risk_coef) * J_std
-    term_uniformity = -float(uniformity_coef) * J_uniformity
-    term_size = -float(size_coef) * J_size
-    term_spread = -float(spread_coef) * J_spread
+    term_reward = float(expected_pnl_weight) * J_mean
+    term_inv = -float(inventory_target_penalty_weight) * J_inv_penalty
+    term_risk = -float(pnl_volatility_penalty_weight) * J_std
+    term_uniformity = -float(quote_shape_uniformity_penalty_weight) * J_uniformity
+    term_size = -float(quote_size_target_penalty_weight) * J_size
+    term_spread = -float(quote_spread_penalty_weight) * J_spread
     components = {
-        "term_reward": term_reward,
-        "term_inv": term_inv,
-        "term_risk": term_risk,
-        "term_uniformity": term_uniformity,
-        "term_size": term_size,
-        "term_spread": term_spread,
+        "expected_pnl": term_reward,
+        "inventory_target_penalty": term_inv,
+        "pnl_volatility_penalty": term_risk,
+        "quote_shape_uniformity_penalty": term_uniformity,
+        "quote_size_target_penalty": term_size,
+        "quote_spread_penalty": term_spread,
     }
     J = term_reward + term_inv + term_risk + term_uniformity + term_size + term_spread
 

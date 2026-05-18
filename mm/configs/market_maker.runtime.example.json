@@ -125,18 +125,17 @@
       "adam_epochs": 100,
       "adam_lr": 1e-1,
       "device": "cpu",
-      "reward_coef": 1.0,
-      "risk_coef": 1.0,
-      "inv_coef": 0.0,
-      "uniformity_coef": 0.0,
-      "size_coef": 1.0,
-      "spread_coef": 0.0,
-      "spread_depth": 10.0,
-      "hedge_enabled": false,
-      "hedge_coef": 0.0,
-      "target_inv": 10.0,
-      "total_q_target": 1000.0,
-      "project_total_q_target": false
+      "expected_pnl_weight": 1.0,
+      "pnl_volatility_penalty_weight": 1.0,
+      "inventory_target_penalty_weight": 0.0,
+      "target_inventory": 10.0,
+      "quote_shape_uniformity_penalty_weight": 0.0,
+      "quote_size_target_penalty_weight": 1.0,
+      "quote_spread_penalty_weight": 0.0,
+      "quote_depth_target_for_spread": 10.0,
+      "quote_size_target_per_side": 1000.0,
+      "hard_project_quote_size_target": false,
+      "hedge_rollout_enabled": false
     }
   }
 }

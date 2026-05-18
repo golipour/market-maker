@@ -80,7 +80,7 @@ This matters because a sigmoid mixture can have non-zero raw depth at spread zer
 Initialization order:
 
 1. If `warm_start=True` and `_last_action` exists, use the previous best action.
-2. Else, if `total_q_target` is positive, call `_initial_action_uniform_marginal_qrange()`.
+2. Else, if `quote_size_target_per_side` is positive, call `_initial_action_uniform_marginal_qrange()`.
 3. Else, use a simple handcrafted default:
    - increasing `L` per component
    - decreasing `k`
@@ -89,7 +89,7 @@ Initialization order:
 The uniform initialization tries to create a nearly flat marginal quote-size distribution over the spread grid. It chooses small `k`, centers components near the middle of the spread range, estimates `L` from the desired per-level quantity, and rescales so:
 
 ```text
-D(spread_max) - D(0) ~= total_q_target
+D(spread_max) - D(0) ~= quote_size_target_per_side
 ```
 
 Then the one-step action is repeated for every horizon step:
@@ -236,24 +236,24 @@ The terminal objective is built by `terminal_objective()`:
 
 ```text
 J =
-  reward_coef * E[total_reward]
-  - inv_coef * (E[terminal_inventory] - target_inv)^2
-  - risk_coef * Std(total_reward)
-  - uniformity_coef * uniformity_penalty
-  - size_coef * size_penalty
-  - spread_coef * spread_penalty
+  expected_pnl_weight * E[total_reward]
+  - inventory_target_penalty_weight * (E[terminal_inventory] - target_inventory)^2
+  - pnl_volatility_penalty_weight * Std(total_reward)
+  - quote_shape_uniformity_penalty_weight * uniformity_penalty
+  - quote_size_target_penalty_weight * size_penalty
+  - quote_spread_penalty_weight * spread_penalty
 ```
 
 The reported objective components are weighted terms:
 
 | Component | Meaning |
 | --- | --- |
-| `term_reward` | weighted expected total reward |
-| `term_inv` | weighted terminal inventory target penalty |
-| `term_risk` | weighted reward volatility penalty |
-| `term_uniformity` | weighted marginal-depth uniformity penalty |
-| `term_size` | weighted quote-size target penalty |
-| `term_spread` | weighted spread-at-depth penalty |
+| `expected_pnl` | weighted expected total reward |
+| `inventory_target_penalty` | weighted terminal inventory target penalty |
+| `pnl_volatility_penalty` | weighted reward volatility penalty |
+| `quote_shape_uniformity_penalty` | weighted marginal-depth uniformity penalty |
+| `quote_size_target_penalty` | weighted quote-size target penalty |
+| `quote_spread_penalty` | weighted spread-at-depth penalty |
 
 The scalar optimized value is:
 
@@ -269,14 +269,14 @@ loss = -J
 `_action_uniformity_l2_from_marginal_depth()` compares marginal quoted depth to a uniform target:
 
 ```text
-q_uniform = total_q_target / spread_max
+q_uniform = quote_size_target_per_side / spread_max
 ```
 
 It penalizes how far bid/ask marginal depth is from that uniform distribution.
 
 ### Size
 
-`_action_size_penalty_qrange()` penalizes the difference between each side's total quoted depth and `total_q_target`:
+`_action_size_penalty_qrange()` penalizes the difference between each side's total quoted depth and `quote_size_target_per_side`:
 
 ```text
 (Q_bid - target)^2 + (Q_ask - target)^2
@@ -290,13 +290,13 @@ Q_side = D_side(spread_max) - D_side(0)
 
 ### Spread At Depth
 
-`_action_spread_at_depth()` estimates the spread where effective cumulative depth `D(s) - D(0)` reaches `spread_depth`, using a differentiable soft-argmin over a dense grid. The penalty is:
+`_action_spread_at_depth()` estimates the spread where effective cumulative depth `D(s) - D(0)` reaches `quote_depth_target_for_spread`, using a differentiable soft-argmin over a dense grid. The penalty is:
 
 ```text
 spread_bid(target_depth) + spread_ask(target_depth)
 ```
 
-This encourages desired depth to sit closer to mid when `spread_coef` is positive.
+This encourages desired depth to sit closer to mid when `quote_spread_penalty_weight` is positive.
 
 ## Output
 

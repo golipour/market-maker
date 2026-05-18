@@ -176,7 +176,7 @@ class MpcStrategyEngine:
                     else {}
                 ),
                 "active_in_mpc": self._hedge_price_model is not None
-                and float(getattr(self._controller, "hedge_coef", 0.0) or 0.0) != 0.0,
+                and bool(getattr(self._controller, "hedge_enabled", False)),
             },
         )
 
@@ -244,8 +244,8 @@ def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "total_q_min": order_constraints.min_qty,
-        "total_q_target": None,
-        "project_total_q_target": False,
+        "quote_size_target_per_side": None,
+        "hard_project_quote_size_target": False,
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)

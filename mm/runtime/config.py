@@ -535,22 +535,22 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "hedge_price_model": config.hedge_price_model
             or {
                 "kind": "legacy",
-                "note": "EWMA Gaussian deltas on hedge refs; set optimizer.hedge_coef non-zero for rollouts",
+                "note": "EWMA Gaussian deltas on hedge refs; set optimizer.hedge_rollout_enabled for rollouts",
             },
             "execution_model": config.execution_model or {"kind": "real"},
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.spread_depth is cumulative base-asset quantity for the spread penalty "
+            "optimizer.quote_depth_target_for_spread is cumulative base-asset quantity for the spread penalty "
             "(see MPC _action_spread_at_depth); not exchange lot size."
         ),
         "optimizer_inventory_and_depth_targets": {
-            "target_inv": "desired inventory level for inv_coef penalty (base units)",
-            "total_q_target": (
+            "target_inventory": "desired inventory level for inventory_target_penalty_weight (base units)",
+            "quote_size_target_per_side": (
                 "target cumulative quoted depth over [0, spread_max] per side (base units)"
             ),
-            "project_total_q_target": (
-                "when true with positive total_q_target, rescales depth parameters toward that target"
+            "hard_project_quote_size_target": (
+                "when true with positive quote_size_target_per_side, rescales depth parameters toward that target"
             ),
         },
         "float_bridge": {
