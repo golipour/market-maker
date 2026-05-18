@@ -364,6 +364,7 @@ def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, 
     ]
     if config.controller is not None:
         topics.append(runtime_topics.strategy_decisions)
+        topics.append(config.controller.normalized_diagnostics_topic)
     if config.hedge is not None:
         hedge_exchange = config.hedge.normalized_exchange()
         topics.extend(
@@ -388,5 +389,10 @@ def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:
             config.controller.normalized_decisions_topic
             if config.controller is not None
             else "strategy:decisions"
+        ),
+        diagnostics_topic=(
+            config.controller.normalized_diagnostics_topic
+            if config.controller is not None
+            else None
         ),
     )

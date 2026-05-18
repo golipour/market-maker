@@ -39,4 +39,5 @@ def build_strategy_runner(
         risk_engine=build_risk_engine(ctrl.risk, clock_ms=now_ms),
         bus=bus,
         control_plane=control_plane,
+        run_id=config.observability.run_id,
     )

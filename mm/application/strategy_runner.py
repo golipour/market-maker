@@ -11,11 +11,13 @@ from mm.application.action_routing import route_actions_to_managers
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
 from mm.bus.base import AbstractEventBus
+from mm.controller.context import DecisionContext, execution_blocked_reasons
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
+from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.risk.engine import RuntimeRiskEngine
 from mm.runtime.config import ControllerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
@@ -33,6 +35,7 @@ class StrategyRunner:
     3. ``MpcStrategyEngine.decide`` on the clean frame.
     4. ``AbstractRiskEngine.validate_frame`` on the proposed action.
     5. Publish decision + approved action; ``route_actions_to_managers`` when allowed.
+    6. Publish ``ControllerDiagnostics`` (one per frame, including controller errors).
     """
 
     config: ControllerRuntimeConfig
@@ -42,7 +45,9 @@ class StrategyRunner:
     risk_engine: AbstractRiskEngine
     bus: AbstractEventBus | None = None
     control_plane: RuntimeControlPlane | None = None
+    run_id: str = ""
     _engine: MpcStrategyEngine = field(init=False, repr=False)
+    _diagnostics: DiagnosticsPublisher = field(init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
@@ -50,6 +55,10 @@ class StrategyRunner:
 
     def __post_init__(self) -> None:
         self._engine = MpcStrategyEngine(config=self.config, binding=self.binding)
+        self._diagnostics = DiagnosticsPublisher(
+            self.bus,
+            topic=self.config.normalized_diagnostics_topic,
+        )
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -85,9 +94,20 @@ class StrategyRunner:
             open_orders=open_orders,
         )
 
+        ctx = DecisionContext(
+            config=self.config,
+            frame=frame,
+            clean_frame=clean_frame,
+            trading_state=trading_state,
+            frame_step=self._frame_step,
+            run_id=self.run_id,
+        )
+
         try:
             decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
+            ctx.record_decision(decision)
         except Exception as exc:
+            ctx.record_controller_error(exc)
             await self._publish(
                 self.config.normalized_decisions_topic,
                 {
@@ -100,10 +120,13 @@ class StrategyRunner:
                     "message": str(exc),
                 },
             )
+            ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
+            await self._publish_diagnostics(ctx)
             return []
 
         proposed = [decision.action]
         approved = self.risk_engine.validate_frame(proposed, trading_state, clean_frame)
+        ctx.record_risk_result(proposed, approved)
         if len(approved) < len(proposed) and self.bus is not None:
             await self.bus.publish(
                 "risk:events",
@@ -118,7 +141,21 @@ class StrategyRunner:
                 },
             )
 
+        observe_only_control = (
+            self.control_plane is not None and self.control_plane.state.observe_only
+        )
         executed = self._should_execute_live(approved)
+        blocked = execution_blocked_reasons(
+            config=self.config,
+            frame_step=self._frame_step,
+            approved=approved,
+            observe_only_control=observe_only_control,
+            primary_manager_present=self.order_managers.get(self._last_primary_exchange) is not None,
+        )
+        if executed:
+            blocked = []
+        ctx.record_execution_gates(executed=executed, blocked_reasons=blocked)
+
         executed_orders: tuple[dict, ...] = ()
         if executed:
             executed_orders = tuple(
@@ -134,6 +171,9 @@ class StrategyRunner:
         if executed:
             await route_actions_to_managers(approved, self.order_managers)
 
+        ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
+        await self._publish_diagnostics(ctx)
+
         if self.bus is not None:
             await self.bus.publish(
                 f"strategy:journal:{self.config.actor_id}",
@@ -146,7 +186,7 @@ class StrategyRunner:
                     "proposed_actions": len(proposed),
                     "approved_actions": len(approved),
                     "executed": executed,
-                    "latency_ms": (time.monotonic_ns() - t0) / 1_000_000,
+                    "latency_ms": ctx.latency_ms,
                 },
             )
         return approved
@@ -181,6 +221,9 @@ class StrategyRunner:
             decision.as_payload(executed_orders=executed_orders),
         )
         await self._publish(self.config.normalized_action_topic, decision.action)
+
+    async def _publish_diagnostics(self, ctx: DecisionContext) -> None:
+        await self._diagnostics.publish(ctx.to_diagnostics())
 
     async def _publish(self, topic: str, event: Any) -> None:
         if self.bus is not None:

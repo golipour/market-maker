@@ -5,6 +5,7 @@ from typing import Protocol
 
 STRATEGY_ACTIONS_TOPIC = "strategy:actions"
 DEFAULT_STRATEGY_DECISIONS_TOPIC = "strategy:decisions"
+DEFAULT_STRATEGY_DIAGNOSTICS_TOPIC_PREFIX = "strategy:diagnostics"
 
 
 class MarketDataSourceLike(Protocol):
@@ -22,6 +23,7 @@ class RuntimeTopics:
     frame_topic: str | None = None
     action_topic: str = STRATEGY_ACTIONS_TOPIC
     decisions_topic: str = DEFAULT_STRATEGY_DECISIONS_TOPIC
+    diagnostics_topic: str | None = None
 
     @property
     def strategy_frame(self) -> str:
@@ -36,6 +38,10 @@ class RuntimeTopics:
     @property
     def strategy_decisions(self) -> str:
         return self.decisions_topic
+
+    @property
+    def strategy_diagnostics(self) -> str | None:
+        return self.diagnostics_topic
 
     @property
     def primary_market_events(self) -> str:

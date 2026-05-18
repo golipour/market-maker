@@ -200,6 +200,7 @@ class ControllerRuntimeConfig:
     action_start_after_steps: int = 0
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
+    diagnostics_topic: str | None = None
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
     vwap_depth: float | None = None
@@ -217,6 +218,14 @@ class ControllerRuntimeConfig:
     @property
     def normalized_decisions_topic(self) -> str:
         return self.decisions_topic.strip() or "strategy:decisions"
+
+    @property
+    def normalized_diagnostics_topic(self) -> str:
+        explicit = (self.diagnostics_topic or "").strip()
+        if explicit:
+            return explicit
+        actor = self.actor_id.strip() or "mpc-controller"
+        return f"strategy:diagnostics:{actor}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,6 +476,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
+        diagnostics_topic=(
+            str(payload["diagnostics_topic"]) if payload.get("diagnostics_topic") is not None else None
+        ),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
         vwap_depth=(

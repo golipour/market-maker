@@ -37,6 +37,7 @@
       "strategy:frames:nobitex:USDT_IRT:10000",
       "strategy:actions",
       "strategy:decisions",
+      "strategy:diagnostics:mpc-controller",
       "execution:orders:nobitex",
       "execution:orders:wallex",
       "execution:state:nobitex",
