@@ -19,6 +19,12 @@ from mm.mpc.state_tensor import (
     effective_depth_ask_tensor,
 )
 from mm.mpc.reward_tensor import terminal_objective
+from mm.mpc.optimizer_diagnostics import (
+    EpochObjectiveMetrics,
+    OptimizerRunDiagnostics,
+    build_action_snapshot,
+)
+from mm.observability.logs import log_event
 
 from mm.pricing import target_depth_lots_from_price_model, vwap_prices_batched
 
@@ -190,15 +196,19 @@ def _project_total_q_torch(
         tgt_bid = _desired(cur_bid)
         if tgt_bid is not None and cur_bid > eps:
             factor_bid = float(tgt_bid) / max(cur_bid, eps)
-            for i in range(n):
-                x_torch.data[start + 3 * i] = x_torch.data[start + 3 * i] * factor_bid
+            with torch_mod.no_grad():
+                for i in range(n):
+                    idx = start + 3 * i
+                    x_torch[idx].copy_(x_torch[idx] * factor_bid)
 
         cur_ask = _effective_qrange(3 * n, start)
         tgt_ask = _desired(cur_ask)
         if tgt_ask is not None and cur_ask > eps:
             factor_ask = float(tgt_ask) / max(cur_ask, eps)
-            for i in range(n):
-                x_torch.data[start + 3 * n + 3 * i] = x_torch.data[start + 3 * n + 3 * i] * factor_ask
+            with torch_mod.no_grad():
+                for i in range(n):
+                    idx = start + 3 * n + 3 * i
+                    x_torch[idx].copy_(x_torch[idx] * factor_ask)
 
 
 def _project_total_q_flat(
@@ -734,6 +744,7 @@ class MonteCarloMPCTensorBatched:
         self._last_main_reward_mean_initial: float = 0.0
         self._last_hedge_reward_mean_initial: float = 0.0
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
+        self._last_diagnostics: OptimizerRunDiagnostics | None = None
         self._x_torch: Any = None
         self._optimizer: Any = None
 
@@ -752,7 +763,15 @@ class MonteCarloMPCTensorBatched:
         else:
             self.bounds = bounds
 
+    @property
+    def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
+        return self._last_diagnostics
+
     def optimize(self, state: State) -> SigmoidMixtureAction:
+        action, _ = self.optimize_with_diagnostics(state)
+        return action
+
+    def optimize_with_diagnostics(self, state: State) -> tuple[SigmoidMixtureAction, OptimizerRunDiagnostics]:
         torch_mod = _get_torch()
         if isinstance(self.device, str) and self.device.lower() == "cpu":
             _device = torch_mod.device("cpu")
@@ -830,28 +849,36 @@ class MonteCarloMPCTensorBatched:
         # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
         # and hedge delta shocks (used when hedge dynamics are enabled).
         def draw_samples():
-            buy_vol = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            sell_vol = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            eps_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            eps_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
+            sample_shape = (self.n_samples, self.horizon)
+            if hasattr(self.market_flow_model, "sample"):
+                buy_vol, sell_vol = self.market_flow_model.sample(
+                    sample_shape, device=_device, dtype=dtype
+                )
+            else:
+                buy_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+                sell_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+                for s in range(self.n_samples):
+                    for h in range(self.horizon):
+                        bv, sv = self.market_flow_model.sample((1,), device=_device, dtype=dtype)
+                        buy_vol[s, h] = bv.squeeze()
+                        sell_vol[s, h] = sv.squeeze()
+            if hasattr(self.price_model, "sample_residual"):
+                eps_buy, eps_sell = self.price_model.sample_residual(
+                    sample_shape, device=_device, dtype=dtype
+                )
+            else:
+                eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+                eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             if self.hedge_price_model is not None and hasattr(self.hedge_price_model, "sample_deltas"):
                 d_hedge_buy, d_hedge_sell = self.hedge_price_model.sample_deltas(
-                    (self.n_samples, self.horizon),
+                    sample_shape,
                     device=_device,
                     dtype=dtype,
                     torch_mod=torch_mod,
                 )
             else:
-                d_hedge_buy = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-                d_hedge_sell = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
-            for s in range(self.n_samples):
-                for h in range(self.horizon):
-                    bv, sv = self.market_flow_model.sample((1,), device=_device, dtype=dtype)
-                    buy_vol[s, h] = bv.squeeze()
-                    sell_vol[s, h] = sv.squeeze()
-                    eb, es = self.price_model.sample_residual((), device=_device, dtype=dtype)
-                    eps_buy[s, h] = eb.squeeze()
-                    eps_sell[s, h] = es.squeeze()
+                d_hedge_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+                d_hedge_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             return buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell
 
         batch_time_sec = 0.0
@@ -867,14 +894,39 @@ class MonteCarloMPCTensorBatched:
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
 
+        spread_levels = tuple(
+            round(i * self.spread_step, 12) for i in range(self.grid_levels + 1)
+        )
+        initial_flat = _project_total_q_flat(
+            x_torch.detach().cpu().numpy()[:single_len],
+            n,
+            self.total_q_min,
+            self.total_q_max,
+            self.total_q_target,
+            self.project_total_q_target,
+            self.spread_max,
+        )
+        initial_action = SigmoidMixtureAction.from_flat_positive(
+            initial_flat, n_components=self.n_components
+        ).as_effective()
+        action_initial_snap = build_action_snapshot(
+            initial_action, mid=mid_0, spread_levels=spread_levels
+        )
+
         best_loss = float("inf")
         best_x = x_torch.detach().clone()
-        best_J_mean: float | None = None  # E[ΔW] for the best action (for E_dW plot)
-        best_J_mean_next: float | None = None  # E[ΔW_{t->t+1}] for best action
+        best_J_mean: float | None = None
+        best_J_mean_next: float | None = None
         best_main_reward_mean: float | None = None
         best_hedge_reward_mean: float | None = None
+        best_epoch: int | None = None
+        initial_metrics: EpochObjectiveMetrics | None = None
+        final_metrics: EpochObjectiveMetrics | None = None
+        best_metrics: EpochObjectiveMetrics | None = None
         self._last_J_components_initial = None
         captured_initial_components = False
+        nonfinite_loss_count = 0
+        nonfinite_grad_count = 0
         t0 = time.perf_counter()
 
         for epoch in range(self.adam_epochs):
@@ -892,7 +944,8 @@ class MonteCarloMPCTensorBatched:
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
             def closure():
-                nonlocal batch_time_sec, captured_initial_components
+                nonlocal batch_time_sec, captured_initial_components, initial_metrics, final_metrics
+                nonlocal nonfinite_loss_count, nonfinite_grad_count
                 optimizer.zero_grad()
                 with torch_mod.no_grad():
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
@@ -1147,20 +1200,35 @@ class MonteCarloMPCTensorBatched:
                     except Exception:
                         return 0.0
 
-                self._last_J_components = {k: _finite_item(v) for k, v in components.items()}
+                obj_value = _finite_item(J)
+                epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                    objective_value=obj_value,
+                    components={k: _finite_item(v) for k, v in components.items()},
+                    expected_total_reward=_finite_item(J_mean_raw),
+                    expected_next_reward=_finite_item(J_mean_next_raw),
+                    main_reward_mean=_finite_item(main_reward_mean_raw),
+                    hedge_reward_mean=_finite_item(hedge_reward_mean_raw),
+                )
+                self._last_J_components = dict(epoch_metrics.components)
                 if not captured_initial_components:
-                    self._last_J_components_initial = dict(self._last_J_components)
-                    self._last_main_reward_mean_initial = _finite_item(main_reward_mean_raw)
-                    self._last_hedge_reward_mean_initial = _finite_item(hedge_reward_mean_raw)
+                    self._last_J_components_initial = dict(epoch_metrics.components)
+                    self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
+                    self._last_hedge_reward_mean_initial = epoch_metrics.hedge_reward_mean
+                    initial_metrics = epoch_metrics
                     captured_initial_components = True
-                self._last_J_mean_raw = _finite_item(J_mean_raw)
-                self._last_E_dW_next = _finite_item(J_mean_next_raw)
-                self._last_main_reward_mean = _finite_item(main_reward_mean_raw)
-                self._last_hedge_reward_mean = _finite_item(hedge_reward_mean_raw)
+                final_metrics = epoch_metrics
+                self._last_J_mean_raw = epoch_metrics.expected_total_reward
+                self._last_E_dW_next = epoch_metrics.expected_next_reward
+                self._last_main_reward_mean = epoch_metrics.main_reward_mean
+                self._last_hedge_reward_mean = epoch_metrics.hedge_reward_mean
                 loss = -J
+                if not torch_mod.isfinite(loss):
+                    nonfinite_loss_count += 1
                 if torch_mod.isfinite(loss):
                     loss.backward()
                     if x_torch.grad is not None:
+                        if not torch_mod.isfinite(x_torch.grad).all():
+                            nonfinite_grad_count += 1
                         torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
                 return loss
 
@@ -1168,14 +1236,13 @@ class MonteCarloMPCTensorBatched:
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
                 best_x = x_torch.detach().clone()
-                jm = float(self._last_J_mean_raw)
-                best_J_mean = jm if math.isfinite(jm) else 0.0
-                jn = float(self._last_E_dW_next)
-                best_J_mean_next = jn if math.isfinite(jn) else 0.0
-                mr = float(self._last_main_reward_mean)
-                best_main_reward_mean = mr if math.isfinite(mr) else 0.0
-                ar = float(self._last_hedge_reward_mean)
-                best_hedge_reward_mean = ar if math.isfinite(ar) else 0.0
+                best_epoch = epoch
+                if final_metrics is not None:
+                    best_metrics = final_metrics
+                best_J_mean = final_metrics.expected_total_reward if final_metrics else 0.0
+                best_J_mean_next = final_metrics.expected_next_reward if final_metrics else 0.0
+                best_main_reward_mean = final_metrics.main_reward_mean if final_metrics else 0.0
+                best_hedge_reward_mean = final_metrics.hedge_reward_mean if final_metrics else 0.0
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -1198,8 +1265,19 @@ class MonteCarloMPCTensorBatched:
         best_action = SigmoidMixtureAction.from_flat_positive(
             best_flat_slice, n_components=self.n_components
         ).as_effective()
+        final_flat_slice = _project_total_q_flat(
+            x_torch.detach().cpu().numpy()[:single_len],
+            n,
+            self.total_q_min,
+            self.total_q_max,
+            self.total_q_target,
+            self.project_total_q_target,
+            self.spread_max,
+        )
+        final_action = SigmoidMixtureAction.from_flat_positive(
+            final_flat_slice, n_components=self.n_components
+        ).as_effective()
         self._last_sigmoid_action = best_action
-        # E_dW plot shows E[ΔW] (J_mean) for the best action, not the full objective J
         if best_J_mean is not None and math.isfinite(float(best_J_mean)):
             self._last_E_dW = float(best_J_mean)
         else:
@@ -1213,11 +1291,56 @@ class MonteCarloMPCTensorBatched:
             self._last_hedge_reward_mean = float(best_hedge_reward_mean)
         if self.warm_start:
             self._last_action = best_action
-        print(
-            f"batch={batch_time_sec:.3f}s train={train_time_sec:.3f}s total={total_sec:.3f}s "
-            f"MC batched (n={self.n_samples}, H={self.horizon})"
+        if best_metrics is None and final_metrics is not None:
+            best_metrics = final_metrics
+        if initial_metrics is None and final_metrics is not None:
+            initial_metrics = final_metrics
+        diagnostics = OptimizerRunDiagnostics(
+            config={
+                "kind": "monte_carlo_mpc_tensor_batched",
+                "n_samples": self.n_samples,
+                "horizon": self.horizon,
+                "adam_epochs": self.adam_epochs,
+                "fixed_mc_samples": self.fixed_mc_samples,
+                "spread_max": self.spread_max,
+                "spread_step": self.spread_step,
+            },
+            timing={
+                "sample_draw_sec": float(batch_time_sec),
+                "train_sec": float(train_time_sec),
+                "total_sec": float(total_sec),
+                "best_epoch": best_epoch,
+            },
+            initial=initial_metrics,
+            final=final_metrics,
+            best=best_metrics,
+            best_epoch=best_epoch,
+            action_initial=action_initial_snap,
+            action_final=build_action_snapshot(final_action, mid=mid_0, spread_levels=spread_levels),
+            action_best=build_action_snapshot(best_action, mid=mid_0, spread_levels=spread_levels),
+            gradients={
+                "nonfinite_loss_count": nonfinite_loss_count,
+                "nonfinite_grad_count": nonfinite_grad_count,
+            },
+            rollout={
+                "n_samples": self.n_samples,
+                "horizon": self.horizon,
+                "hedge_enabled": self.hedge_enabled,
+            },
         )
-        return best_action
+        self._last_diagnostics = diagnostics
+        log_event(
+            "mpc_optimizer_timing",
+            {
+                "batch_sec": batch_time_sec,
+                "train_sec": train_time_sec,
+                "total_sec": total_sec,
+                "n_samples": self.n_samples,
+                "horizon": self.horizon,
+                "best_epoch": best_epoch,
+            },
+        )
+        return best_action, diagnostics
 
     def reset_warm_start(self) -> None:
         self._last_action = None

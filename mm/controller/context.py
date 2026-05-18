@@ -169,8 +169,17 @@ class DecisionContext:
                 config={"kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched")},
             )
         opt = dict(decision.diagnostics.optimizer)
+        if "objective" in opt and isinstance(opt.get("objective"), dict):
+            return OptimizerDiagnostics(
+                config=dict(opt.get("config", {})),
+                timing=dict(opt.get("timing", {})),
+                objective=dict(opt.get("objective", {})),
+                action=dict(opt.get("action", {})),
+                gradients=dict(opt.get("gradients", {})),
+                rollout=dict(opt.get("rollout", {})),
+            )
         return OptimizerDiagnostics(
-            config={"kind": opt.pop("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))},
+            config={"kind": opt.get("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))},
             objective={
                 "legacy": {
                     "last_expected_delta_wealth": opt.get("last_expected_delta_wealth"),

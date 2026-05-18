@@ -134,6 +134,7 @@ class MpcStrategyEngine:
         optimizer_stdout = io.StringIO()
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
+        optimizer_run = getattr(self._controller, "last_diagnostics", None)
         order_constraints = OrderConstraints.from_spec(
             self.binding.primary,
             max_orders_per_side=self.config.max_orders_per_side,
@@ -153,12 +154,16 @@ class MpcStrategyEngine:
         ).hexdigest()
         latency_ms = (time.monotonic_ns() - t0) / 1_000_000
         optimizer_log = optimizer_stdout.getvalue().strip()
-        optimizer = {
-            "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
-            "last_expected_delta_wealth": getattr(self._controller, "_last_E_dW", None),
-            "last_components": getattr(self._controller, "_last_J_components", None),
-            "log": optimizer_log,
-        }
+        if optimizer_run is not None:
+            optimizer = optimizer_run.to_payload()
+            optimizer["rollout"] = {**dict(optimizer.get("rollout", {})), "log": optimizer_log}
+        else:
+            optimizer = {
+                "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
+                "last_expected_delta_wealth": getattr(self._controller, "_last_E_dW", None),
+                "last_components": getattr(self._controller, "_last_J_components", None),
+                "log": optimizer_log,
+            }
         decision = StrategyDecision(
             actor_id=self.config.actor_id,
             exchange=frame.primary.exchange,
