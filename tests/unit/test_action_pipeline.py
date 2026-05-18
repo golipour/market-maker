@@ -10,6 +10,9 @@ from mm.core.order_constraints import (
 )
 from mm.execution.order_manager import OrderManager
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
+from mm.core.risk_limits import VenueRiskLimits
+from mm.core.models.private import PrivateStateSnapshot
+from mm.core.models.strategy import StrategyInputFrame
 
 
 def _order(side: str, qty: float, price: float = 100.0, *, client_order_id: str | None = None) -> Order:
@@ -39,7 +42,10 @@ def test_cap_orders_per_side_reports_capped_counts() -> None:
 
 
 def test_runtime_risk_validate_with_result_counts_inventory_rejects() -> None:
-    risk = RuntimeRiskEngine(limits=RiskLimits(max_inventory=1.0), clock_ms=lambda: 1000)
+    risk = RuntimeRiskEngine(
+        limits=RiskLimits(primary=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
+        clock_ms=lambda: 1000,
+    )
     action = Action(actor_id="a", orders_to_create=(_order("buy", 5.0),))
     event = MarketEvent(
         exchange="nobitex",
@@ -55,7 +61,13 @@ def test_runtime_risk_validate_with_result_counts_inventory_rejects() -> None:
         imbalance=0.0,
         microprice=0.0,
     )
-    result = risk.validate_with_result([action], TradingState(actor_id="a", inventory=0.0, cash=0.0), event)
+    frame = StrategyInputFrame(
+        primary=event,
+        primary_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
+    )
+    result = risk.validate_frame_with_result(
+        [action], TradingState(actor_id="a", inventory=0.0, cash=1_000_000.0), frame
+    )
     assert result.approved == ()
     assert result.rejection_counts.get("max_inventory", 0) >= 1
 

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from mm.core.models.execution import Action, Order, TradingState
 from mm.core.models.market import MarketEvent, RawOrderbook
+from mm.core.models.private import PrivateStateSnapshot
+from mm.core.models.strategy import StrategyInputFrame
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
+from mm.core.risk_limits import VenueRiskLimits
 
 
 def _event(t_end_ms: int = 1000) -> MarketEvent:
@@ -43,19 +46,28 @@ def test_runtime_risk_rejects_when_kill_switch_enabled() -> None:
 
 
 def test_runtime_risk_filters_inventory_breach() -> None:
-    risk = RuntimeRiskEngine(RiskLimits(max_inventory=1.0), clock_ms=lambda: 1000)
-
-    approved = risk.validate(
+    risk = RuntimeRiskEngine(
+        RiskLimits(primary=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
+        clock_ms=lambda: 1000,
+    )
+    frame_event = _event()
+    approved = risk.validate_frame(
         [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 2.0),))],
-        TradingState(actor_id="a1"),
-        _event(),
+        TradingState(actor_id="a1", cash=1_000_000.0),
+        StrategyInputFrame(
+            primary=frame_event,
+            primary_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
+        ),
     )
 
     assert approved == []
 
 
 def test_runtime_risk_rejects_stale_data() -> None:
-    risk = RuntimeRiskEngine(RiskLimits(max_data_age_ms=10), clock_ms=lambda: 2000)
+    risk = RuntimeRiskEngine(
+        RiskLimits(primary=VenueRiskLimits(max_market_data_age_ms=10, max_private_state_age_ms=60_000)),
+        clock_ms=lambda: 2000,
+    )
 
     approved = risk.validate(
         [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],

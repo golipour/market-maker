@@ -134,8 +134,24 @@ Without token, private reconciler is skipped and **no live orders** on that exch
   "max_orders_per_side": 10,
   "risk": {
     "enabled": true,
-    "max_inventory": 1000.0,
-    "max_data_age_ms": 60000
+    "primary": {
+      "min_inventory": 0.0,
+      "max_inventory": 1000.0,
+      "min_cash": 10000000.0,
+      "max_open_notional": 200000000.0,
+      "max_order_notional": 50000000.0,
+      "max_market_data_age_ms": 60000,
+      "max_private_state_age_ms": 120000
+    },
+    "hedge": {
+      "min_inventory": 0.0,
+      "max_inventory": 1000.0,
+      "min_cash": 10000000.0,
+      "max_market_order_notional": 50000000.0,
+      "max_slippage_bps": 20.0,
+      "max_market_data_age_ms": 60000,
+      "max_private_state_age_ms": 120000
+    }
   },
   "vwap_depth": 100.0,
   "price_model": { "kind": "residual", ... },
@@ -151,10 +167,28 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 | `observe_only: true` | Decisions published; **no** `OrderManager.sync` |
 | `action_start_after_steps` | MPC runs from frame 1; sync only after N frames |
 | `enabled: false` | No strategy runner |
-| `risk.enabled: false` | Pass-through risk (no inventory/staleness checks) |
-| `risk.max_inventory` | Per-order cap vs wallet inventory from private snapshot |
+| `risk.enabled: false` | Pass-through risk (no hard gates) |
+| `risk.primary` | Hard gates for primary quote orders (see below) |
+| `risk.hedge` | Hard gates for hedge venue / private freshness when hedge is active |
 
-Optimizer keys map to `mm.mpc.mpc_tensor_batched` (samples, horizon, coefs, inventory targets, device, etc.).
+### Hard risk (`controller.risk`)
+
+Separate from **optimizer soft preferences** (`inventory_target_penalty_weight`, `target_inventory`, etc. under `controller.optimizer`). The runtime risk engine enforces hard limits before any order reaches the venue.
+
+| Field | Role |
+|-------|------|
+| `primary.min_inventory` | Floor on base inventory after a sell (default `0.0`; spot has no shorts) |
+| `primary.max_inventory` | Ceiling on base inventory after a buy |
+| `primary.min_cash` | Minimum quote cash after a buy |
+| `primary.max_open_notional` | Cap on resting open order notional (same exchange/symbol) |
+| `primary.max_order_notional` | Per-order notional cap |
+| `primary.max_market_data_age_ms` | Reject if primary market event is too old |
+| `primary.max_private_state_age_ms` | Reject if primary private snapshot missing or stale |
+| `hedge.*` | Same inventory/cash floors for hedge wallet; `max_market_order_notional` and `max_slippage_bps` for live hedge orders (Phase 6) |
+
+Legacy flat keys still parse for one release: top-level `max_inventory` and `max_data_age_ms` map to `risk.primary`.
+
+Optimizer keys map to `mm.mpc.mpc_tensor_batched` (samples, horizon, penalty weights, inventory targets, device, etc.).
 
 ## Derived topics
 

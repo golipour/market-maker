@@ -62,6 +62,8 @@ class RiskResult:
 
     approved: tuple[Action, ...] = ()
     rejection_counts: dict[str, int] = field(default_factory=dict)
+    exposure_before: dict[str, float] = field(default_factory=dict)
+    exposure_after: dict[str, float] = field(default_factory=dict)
 
     @property
     def approved_list(self) -> list[Action]:

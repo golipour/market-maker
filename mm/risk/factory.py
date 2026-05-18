@@ -17,9 +17,6 @@ def build_risk_engine(
     if config is None or not config.enabled:
         return PassThroughRiskEngine()
     return RuntimeRiskEngine(
-        RiskLimits(
-            max_inventory=config.max_inventory,
-            max_data_age_ms=config.max_data_age_ms,
-        ),
+        RiskLimits(primary=config.primary, hedge=config.hedge),
         clock_ms=clock_ms,
     )

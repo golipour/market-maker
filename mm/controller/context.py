@@ -71,6 +71,8 @@ class DecisionContext:
     executed: bool = False
     blocked_reasons: list[str] = field(default_factory=list)
     risk_rejection_counts: dict[str, int] = field(default_factory=dict)
+    risk_exposure_before: dict[str, float] = field(default_factory=dict)
+    risk_exposure_after: dict[str, float] = field(default_factory=dict)
     action_pipeline_report: ActionPipelineReport | None = None
 
     def record_controller_error(self, exc: BaseException) -> None:
@@ -82,9 +84,21 @@ class DecisionContext:
         if decision.action_pipeline_report is not None:
             self.action_pipeline_report = decision.action_pipeline_report
 
-    def record_risk_result(self, proposed: list[Action], approved: list[Action], *, rejection_counts: dict[str, int] | None = None) -> None:
+    def record_risk_result(
+        self,
+        proposed: list[Action],
+        approved: list[Action],
+        *,
+        rejection_counts: dict[str, int] | None = None,
+        exposure_before: dict[str, float] | None = None,
+        exposure_after: dict[str, float] | None = None,
+    ) -> None:
         self.proposed_actions = list(proposed)
         self.approved_actions = list(approved)
+        if exposure_before is not None:
+            self.risk_exposure_before = dict(exposure_before)
+        if exposure_after is not None:
+            self.risk_exposure_after = dict(exposure_after)
         if rejection_counts:
             self.risk_rejection_counts = dict(rejection_counts)
         elif len(approved) < len(proposed):
@@ -248,17 +262,16 @@ class DecisionContext:
             len(a.orders_to_create) == len(p.orders_to_create)
             for a, p in zip(self.approved_actions, self.proposed_actions)
         ) if self.proposed_actions else True
+        exposure_before = self.risk_exposure_before or {
+            "inventory": self.trading_state.inventory,
+            "cash": self.trading_state.cash,
+        }
+        exposure_after = self.risk_exposure_after or exposure_before
         return RiskDiagnostics(
             approved=orders_ok and not self.risk_rejection_counts,
             rejection_counts=dict(self.risk_rejection_counts),
-            exposure_before={
-                "inventory": self.trading_state.inventory,
-                "cash": self.trading_state.cash,
-            },
-            exposure_after={
-                "inventory": self.trading_state.inventory,
-                "cash": self.trading_state.cash,
-            },
+            exposure_before=exposure_before,
+            exposure_after=exposure_after,
             limits=_risk_limits_payload(limits),
         )
 
@@ -288,8 +301,8 @@ def _order_stage_summary_from_dicts(orders: tuple[dict[str, Any], ...]) -> dict[
 def _risk_limits_payload(limits: RiskRuntimeConfig) -> dict[str, Any]:
     return {
         "enabled": limits.enabled,
-        "max_inventory": limits.max_inventory,
-        "max_data_age_ms": limits.max_data_age_ms,
+        "primary": limits.primary.as_dict(),
+        "hedge": limits.hedge.as_dict(),
     }
 
 

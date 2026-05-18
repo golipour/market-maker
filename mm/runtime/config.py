@@ -13,6 +13,7 @@ from mm.core.models.instrument import (
     instrument_precision_from_mapping,
     merge_instrument_spec,
 )
+from mm.core.risk_limits import HedgeVenueRiskLimits, VenueRiskLimits
 
 SourceRole = Literal["primary", "hedge"]
 BusKind = Literal["memory", "redis_streams"]
@@ -175,11 +176,21 @@ class OrderbookGridConfig:
 
 @dataclass(frozen=True, slots=True)
 class RiskRuntimeConfig:
-    """Pre-execution risk gate (inventory, staleness, kill switch)."""
+    """Hard pre-execution risk gates (separate from optimizer soft preferences)."""
 
     enabled: bool = True
-    max_inventory: float = float("inf")
-    max_data_age_ms: int = 10_000
+    primary: VenueRiskLimits = field(default_factory=VenueRiskLimits)
+    hedge: HedgeVenueRiskLimits = field(default_factory=HedgeVenueRiskLimits)
+
+    @property
+    def max_inventory(self) -> float:
+        """Alias for legacy flat config and diagnostics."""
+        return self.primary.max_inventory
+
+    @property
+    def max_data_age_ms(self) -> int:
+        """Alias for legacy flat config."""
+        return self.primary.max_market_data_age_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,10 +509,54 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
 def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
     if not isinstance(payload, dict):
         return RiskRuntimeConfig()
-    return RiskRuntimeConfig(
-        enabled=bool(payload.get("enabled", True)),
+    enabled = bool(payload.get("enabled", True))
+    primary_payload = payload.get("primary")
+    hedge_payload = payload.get("hedge")
+    if isinstance(primary_payload, dict):
+        primary = _venue_risk_from_mapping(primary_payload)
+    else:
+        primary = _venue_risk_from_mapping(payload, legacy_flat=True)
+    hedge = _hedge_risk_from_mapping(hedge_payload) if isinstance(hedge_payload, dict) else HedgeVenueRiskLimits()
+    return RiskRuntimeConfig(enabled=enabled, primary=primary, hedge=hedge)
+
+
+def _venue_risk_from_mapping(payload: dict[str, Any], *, legacy_flat: bool = False) -> VenueRiskLimits:
+    """Parse primary venue limits; ``legacy_flat`` reads top-level migration aliases."""
+
+    def _get(key: str, default: Any) -> Any:
+        if legacy_flat and key in payload:
+            return payload[key]
+        return payload.get(key, default)
+
+    max_inv = float(_get("max_inventory", float("inf")))
+    min_inv = float(_get("min_inventory", 0.0))
+    if min_inv < 0.0:
+        min_inv = 0.0
+    return VenueRiskLimits(
+        min_inventory=min_inv,
+        max_inventory=max_inv,
+        min_cash=float(_get("min_cash", 0.0)),
+        max_open_notional=float(_get("max_open_notional", float("inf"))),
+        max_order_notional=float(_get("max_order_notional", float("inf"))),
+        max_market_data_age_ms=int(_get("max_market_data_age_ms", _get("max_data_age_ms", 10_000))),
+        max_private_state_age_ms=int(_get("max_private_state_age_ms", 60_000)),
+    )
+
+
+def _hedge_risk_from_mapping(payload: dict[str, Any] | None) -> HedgeVenueRiskLimits:
+    if not isinstance(payload, dict):
+        return HedgeVenueRiskLimits()
+    min_inv = float(payload.get("min_inventory", 0.0))
+    if min_inv < 0.0:
+        min_inv = 0.0
+    return HedgeVenueRiskLimits(
+        min_inventory=min_inv,
         max_inventory=float(payload.get("max_inventory", float("inf"))),
-        max_data_age_ms=int(payload.get("max_data_age_ms", 10_000)),
+        min_cash=float(payload.get("min_cash", 0.0)),
+        max_market_order_notional=float(payload.get("max_market_order_notional", float("inf"))),
+        max_slippage_bps=float(payload.get("max_slippage_bps", float("inf"))),
+        max_market_data_age_ms=int(payload.get("max_market_data_age_ms", payload.get("max_data_age_ms", 10_000))),
+        max_private_state_age_ms=int(payload.get("max_private_state_age_ms", 60_000)),
     )
 
 
@@ -556,6 +611,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer.quote_depth_target_for_spread is cumulative base-asset quantity for the spread penalty "
             "(see MPC _action_spread_at_depth); not exchange lot size."
         ),
+        "risk": {
+            "enabled": config.risk.enabled,
+            "primary": config.risk.primary.as_dict(),
+            "hedge": config.risk.hedge.as_dict(),
+            "note": "hard gates only; inventory_target_penalty_weight lives under optimizer",
+        },
         "optimizer_inventory_and_depth_targets": {
             "target_inventory": "desired inventory level for inventory_target_penalty_weight (base units)",
             "quote_size_target_per_side": (

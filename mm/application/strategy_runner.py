@@ -129,7 +129,13 @@ class StrategyRunner:
         risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
         approved = risk_result.approved_list
         approved_orders = tuple(order for action in approved for order in action.orders_to_create)
-        ctx.record_risk_result(proposed, approved, rejection_counts=dict(risk_result.rejection_counts))
+        ctx.record_risk_result(
+            proposed,
+            approved,
+            rejection_counts=dict(risk_result.rejection_counts),
+            exposure_before=dict(risk_result.exposure_before),
+            exposure_after=dict(risk_result.exposure_after),
+        )
         ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
         if len(approved) < len(proposed) and self.bus is not None:
             await self.bus.publish(
