@@ -129,6 +129,36 @@ def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
     return [o for o in orders if isinstance(o, dict)]
 
 
+def place_market_order(
+    symbol: str,
+    side: str,
+    amount: str | float,
+    api_token: str | None,
+    client_order_id: str | None = None,
+) -> dict[str, Any]:
+    if not api_token:
+        return {"status": "failed", "message": "missing api token"}
+    from mm.exchanges.instrument_wire import build_instrument_wire
+
+    wire = build_instrument_wire("nobitex", symbol)
+    src, dst = wire.private_order_currencies()
+    payload: dict[str, Any] = {
+        "type": str(side).lower(),
+        "execution": "market",
+        "srcCurrency": src,
+        "dstCurrency": dst,
+        "amount": str(amount),
+    }
+    cid = _nobitex_client_order_id(client_order_id)
+    if cid:
+        payload["clientOrderId"] = cid
+    try:
+        out = _post_auth("/market/orders/add", api_token, data=payload)
+    except Exception as e:
+        return {"status": "failed", "message": str(e)}
+    return out if isinstance(out, dict) else {"status": "failed", "message": "bad response"}
+
+
 def place_limit_order(
     symbol: str,
     side: str,

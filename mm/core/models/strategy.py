@@ -6,7 +6,6 @@ from typing import Any, Literal
 from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
-from mm.diagnostics.models import ModelScore
 from mm.execution.plan import ActionPipelineReport
 
 HedgeStatus = Literal["disabled", "ready", "missing", "stale"]
@@ -87,7 +86,7 @@ class StrategyDecision:
     orders: tuple[dict[str, Any], ...] = ()
     ladder_orders: tuple[dict[str, Any], ...] = ()
     model_updates: ModelUpdateReport = field(default_factory=ModelUpdateReport)
-    model_scores: dict[str, ModelScore] = field(default_factory=dict)
+    model_scores: dict[str, Any] = field(default_factory=dict)
     action_pipeline_report: ActionPipelineReport | None = None
     diagnostics: DecisionDiagnostics = field(default_factory=DecisionDiagnostics)
     economics: dict[str, Any] | None = None

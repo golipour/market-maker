@@ -190,6 +190,29 @@ Legacy flat keys still parse for one release: top-level `max_inventory` and `max
 
 Optimizer keys map to `mm.mpc.mpc_tensor_batched` (samples, horizon, penalty weights, inventory targets, device, etc.).
 
+## Live hedging (fill-driven)
+
+Separate from MPC simulation (`controller.optimizer.hedge_rollout_enabled`):
+
+```json
+"hedging": {
+  "enabled": false,
+  "observe_only": true,
+  "actor_id": "hedge-executor",
+  "dedupe_window_ms": 300000
+}
+```
+
+| Field | Effect |
+|-------|--------|
+| `enabled` | Subscribe to `private:state:{primary}:fills` and emit hedge intents |
+| `observe_only` | Publish intents/diagnostics but do not place hedge market orders |
+| `dedupe_window_ms` | Ignore duplicate fill events within the window |
+
+Primary fill **buy** → hedge **sell**; primary fill **sell** → hedge **buy**. Hedge orders use `order_type: market` and pass through `controller.risk.hedge` limits. Topics: `hedge:intents:{actor_id}`, `hedge:diagnostics:{actor_id}`.
+
+Requires `hedge`, `hedge_private.enable_execution`, and a hedge `OrderManager`.
+
 ## Derived topics
 
 From `MarketMakerRuntimeConfig`:

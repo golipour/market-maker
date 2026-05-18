@@ -170,6 +170,30 @@ def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
     return [o for o in orders if isinstance(o, dict)]
 
 
+def place_market_order(
+    symbol: str,
+    side: str,
+    amount: str | float,
+    api_token: str | None,
+    client_order_id: str | None = None,
+) -> dict[str, Any]:
+    if not api_token:
+        return {"status": "failed", "message": "missing api token"}
+    payload: dict[str, Any] = {
+        "symbol": api_symbol(symbol),
+        "type": "MARKET",
+        "side": str(side).upper(),
+        "quantity": str(amount),
+    }
+    if client_order_id:
+        payload["client_id"] = str(client_order_id)[:64]
+    try:
+        out = _post_json_auth("/v1/account/orders", api_token, payload)
+    except Exception as e:
+        return {"status": "failed", "message": str(e)}
+    return out if isinstance(out, dict) else {"status": "failed", "message": "bad response"}
+
+
 def place_limit_order(
     symbol: str,
     side: str,

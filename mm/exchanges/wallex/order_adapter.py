@@ -38,6 +38,14 @@ class WallexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
 
     def _place_one(self, order: Order) -> dict[str, Any]:
         sym = order.symbol or self.symbol
+        if str(order.order_type).lower().strip() == "market":
+            return private_rest.place_market_order(
+                sym,
+                order.side,
+                str(order.qty),
+                self.api_token,
+                client_order_id=order.client_order_id,
+            )
         return private_rest.place_limit_order(
             sym,
             order.side,

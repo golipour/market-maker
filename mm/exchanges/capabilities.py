@@ -88,6 +88,7 @@ class OrderCommandCapabilities:
     place_rest: bool
     cancel_rest: bool
     amend_rest: bool = False
+    market_order_rest: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +116,9 @@ EXCHANGE_CAPABILITIES: dict[str, ExchangeCapabilities] = {
             fills_websocket=False,
             preferred_mode="rest",
         ),
-        order_commands=OrderCommandCapabilities(place_rest=True, cancel_rest=True),
+        order_commands=OrderCommandCapabilities(
+            place_rest=True, cancel_rest=True, market_order_rest=True
+        ),
     ),
     "wallex": ExchangeCapabilities(
         exchange="wallex",
@@ -133,9 +136,15 @@ EXCHANGE_CAPABILITIES: dict[str, ExchangeCapabilities] = {
             fills_websocket=False,
             preferred_mode="rest",
         ),
-        order_commands=OrderCommandCapabilities(place_rest=True, cancel_rest=True),
+        order_commands=OrderCommandCapabilities(
+            place_rest=True, cancel_rest=True, market_order_rest=True
+        ),
     ),
 }
+
+
+def supports_market_orders(exchange: str) -> bool:
+    return get_exchange_capabilities(exchange).order_commands.market_order_rest
 
 
 def get_exchange_capabilities(exchange: str) -> ExchangeCapabilities:

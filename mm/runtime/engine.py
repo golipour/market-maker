@@ -27,6 +27,7 @@ from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
 from mm.runtime.control import RuntimeControlPlane
+from mm.hedging.service import build_hedge_execution_service
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -49,6 +50,7 @@ class RuntimeComponents:
     observability_daemons: tuple[object, ...] = ()
     control_plane: RuntimeControlPlane | None = None
     strategy_runner: object | None = None
+    hedge_execution_service: object | None = None
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
 
@@ -66,6 +68,8 @@ class RuntimeComponents:
         await self.frame_assembler.start()
         if self.strategy_runner is not None:
             await self.strategy_runner.start()
+        if self.hedge_execution_service is not None:
+            await self.hedge_execution_service.start()
         if self.control_plane is not None:
             await self.control_plane.start()
         for engine in self.engines.values():
@@ -83,6 +87,8 @@ class RuntimeComponents:
             self._scheduler_task.cancel()
             await asyncio.gather(self._scheduler_task, return_exceptions=True)
             self._scheduler_task = None
+        if self.hedge_execution_service is not None:
+            await self.hedge_execution_service.stop()
         if self.strategy_runner is not None:
             await self.strategy_runner.stop()
         if self.control_plane is not None:
@@ -235,6 +241,13 @@ async def build_runtime_components(
         control_plane=control_plane,
     )
 
+    hedge_execution_service = build_hedge_execution_service(
+        config,
+        bus=runtime_bus,
+        order_managers=order_managers,
+        control_plane=control_plane,
+    )
+
     persistence_daemons = _build_persistence_daemons(config, runtime_bus)
     observability_daemons = _build_observability_daemons(config, runtime_bus)
 
@@ -254,6 +267,7 @@ async def build_runtime_components(
         observability_daemons=observability_daemons,
         control_plane=control_plane,
         strategy_runner=strategy_runner,
+        hedge_execution_service=hedge_execution_service,
     )
 
 
@@ -373,8 +387,12 @@ def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, 
                 RuntimeTopics.execution_orders(hedge_exchange),
                 RuntimeTopics.execution_state(hedge_exchange),
                 RuntimeTopics.private_snapshot(hedge_exchange),
+                f"private:state:{config.primary.normalized_exchange()}:fills",
             ]
         )
+    if config.hedging is not None and config.hedging.enabled:
+        topics.append(config.hedging.normalized_intents_topic)
+        topics.append(config.hedging.normalized_diagnostics_topic)
     return tuple(dict.fromkeys(topics))
 
 

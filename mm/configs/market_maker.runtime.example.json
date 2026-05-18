@@ -49,7 +49,9 @@
       "private:state:nobitex:open_orders",
       "private:state:wallex:open_orders",
       "private:state:nobitex:fills",
-      "private:state:wallex:fills"
+      "private:state:wallex:fills",
+      "hedge:intents:hedge-executor",
+      "hedge:diagnostics:hedge-executor"
     ],
     "batch_size": 100,
     "flush_interval_ms": 1000
@@ -154,5 +156,11 @@
       "hard_project_quote_size_target": false,
       "hedge_rollout_enabled": false
     }
+  },
+  "hedging": {
+    "enabled": false,
+    "observe_only": true,
+    "actor_id": "hedge-executor",
+    "dedupe_window_ms": 300000
   }
 }

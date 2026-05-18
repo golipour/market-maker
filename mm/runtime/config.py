@@ -175,6 +175,34 @@ class OrderbookGridConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HedgingRuntimeConfig:
+    """Live fill-driven hedge execution (separate from MPC ``hedge_rollout_enabled``)."""
+
+    enabled: bool = False
+    actor_id: str = "hedge-executor"
+    observe_only: bool = True
+    intents_topic: str | None = None
+    diagnostics_topic: str | None = None
+    dedupe_window_ms: int = 300_000
+
+    @property
+    def normalized_intents_topic(self) -> str:
+        explicit = (self.intents_topic or "").strip()
+        if explicit:
+            return explicit
+        actor = self.actor_id.strip() or "hedge-executor"
+        return f"hedge:intents:{actor}"
+
+    @property
+    def normalized_diagnostics_topic(self) -> str:
+        explicit = (self.diagnostics_topic or "").strip()
+        if explicit:
+            return explicit
+        actor = self.actor_id.strip() or "hedge-executor"
+        return f"hedge:diagnostics:{actor}"
+
+
+@dataclass(frozen=True, slots=True)
 class RiskRuntimeConfig:
     """Hard pre-execution risk gates (separate from optimizer soft preferences)."""
 
@@ -256,6 +284,7 @@ class MarketMakerRuntimeConfig:
     primary_private: PrivateRuntimeConfig | None = None
     hedge_private: PrivateRuntimeConfig | None = None
     controller: ControllerRuntimeConfig | None = None
+    hedging: HedgingRuntimeConfig | None = None
     bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
     persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
     observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
@@ -376,6 +405,7 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         primary_private=_private_from_mapping(payload.get("primary_private")),
         hedge_private=_private_from_mapping(payload.get("hedge_private")),
         controller=_controller_from_mapping(payload.get("controller")),
+        hedging=_hedging_from_mapping(payload.get("hedging")),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
@@ -503,6 +533,23 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
         risk=_risk_from_mapping(payload.get("risk")),
+    )
+
+
+def _hedging_from_mapping(payload: Any) -> HedgingRuntimeConfig | None:
+    if not isinstance(payload, dict):
+        return None
+    return HedgingRuntimeConfig(
+        enabled=bool(payload.get("enabled", False)),
+        actor_id=str(payload.get("actor_id", "hedge-executor")),
+        observe_only=bool(payload.get("observe_only", True)),
+        intents_topic=(
+            str(payload["intents_topic"]) if payload.get("intents_topic") is not None else None
+        ),
+        diagnostics_topic=(
+            str(payload["diagnostics_topic"]) if payload.get("diagnostics_topic") is not None else None
+        ),
+        dedupe_window_ms=max(1000, int(payload.get("dedupe_window_ms", 300_000))),
     )
 
 
