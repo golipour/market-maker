@@ -566,8 +566,8 @@ def _action_spread_at_depth(
     """
     Differentiable proxy for spread at which cumulative bid/ask depth reaches target_cumulative_qty.
 
-    For each side, evaluate D(δ) on a dense spread grid in [0, spread_max], then use a
-    soft-argmin of |D(δ) - target| to get an effective spread. Returns:
+    For each side, evaluate effective quoted depth D(δ) - D(0) on a dense spread grid
+    in [0, spread_max], then use a soft-argmin of |depth(δ) - target| to get an effective spread. Returns:
       spread_bid(target) + spread_ask(target)
     """
     if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
@@ -580,8 +580,10 @@ def _action_spread_at_depth(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
-    ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    bid_depth_raw = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
+    ask_depth_raw = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    bid_depth = torch_mod.clamp(bid_depth_raw - bid_depth_raw[0], min=0.0)
+    ask_depth = torch_mod.clamp(ask_depth_raw - ask_depth_raw[0], min=0.0)
     tgt = torch_mod.tensor(float(target_cumulative_qty), dtype=params.dtype, device=params.device)
     bid_err = torch_mod.abs(bid_depth - tgt)
     ask_err = torch_mod.abs(ask_depth - tgt)

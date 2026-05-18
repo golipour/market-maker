@@ -31,19 +31,21 @@ Main wiring is in `mm.runtime.engine`.
 
 ### Layer Map
 
-| Layer | Main files | Responsibility |
-| --- | --- | --- |
-| Runtime composition | `mm/runtime/engine.py`, `mm/runtime/config.py` | Build and start the graph from JSON config |
-| Market ingestion | `mm/ingestion/symbol_engine.py` | Connect adapters, consume trades/books, publish raw data and errors |
-| Aggregation | `mm/aggregation/builder.py`, `mm/aggregation/scheduler.py` | Convert rolling book/trades into interval `MarketEvent`s |
-| Frame assembly | `mm/application/frame_assembler.py` | Align primary, hedge, and private snapshots into `StrategyInputFrame` |
-| Frame cleaning | `mm/application/frame_preparation.py` | Subtract own open orders before strategy decisions |
-| Strategy/controller | `mm/application/strategy_runner.py`, `mm/strategies/mpc_engine.py`, `mm/mpc/*` | Build MPC state, update models, optimize, discretize ladder orders |
-| Risk | `mm/risk/engine.py` | Kill switch, stale-data gate, inventory filtering |
-| Execution | `mm/execution/order_manager.py`, `mm/application/action_routing.py` | Route actions, cancel/place orders, maintain local live-order view |
-| Venue constraints | `mm/core/order_constraints.py`, `mm/execution/order_validation.py` | Quantize strategy orders and reject venue-invalid orders |
-| Persistence | `mm/persistence/*` | Store event envelopes in Postgres or Parquet |
-| Observability | `mm/observability/*` | Convert bus events into metrics, logs, traces |
+
+| Layer               | Main files                                                                     | Responsibility                                                        |
+| ------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| Runtime composition | `mm/runtime/engine.py`, `mm/runtime/config.py`                                 | Build and start the graph from JSON config                            |
+| Market ingestion    | `mm/ingestion/symbol_engine.py`                                                | Connect adapters, consume trades/books, publish raw data and errors   |
+| Aggregation         | `mm/aggregation/builder.py`, `mm/aggregation/scheduler.py`                     | Convert rolling book/trades into interval `MarketEvent`s              |
+| Frame assembly      | `mm/application/frame_assembler.py`                                            | Align primary, hedge, and private snapshots into `StrategyInputFrame` |
+| Frame cleaning      | `mm/application/frame_preparation.py`                                          | Subtract own open orders before strategy decisions                    |
+| Strategy/controller | `mm/application/strategy_runner.py`, `mm/strategies/mpc_engine.py`, `mm/mpc/*` | Build MPC state, update models, optimize, discretize ladder orders    |
+| Risk                | `mm/risk/engine.py`                                                            | Kill switch, stale-data gate, inventory filtering                     |
+| Execution           | `mm/execution/order_manager.py`, `mm/application/action_routing.py`            | Route actions, cancel/place orders, maintain local live-order view    |
+| Venue constraints   | `mm/core/order_constraints.py`, `mm/execution/order_validation.py`             | Quantize strategy orders and reject venue-invalid orders              |
+| Persistence         | `mm/persistence/*`                                                             | Store event envelopes in Postgres or Parquet                          |
+| Observability       | `mm/observability/*`                                                           | Convert bus events into metrics, logs, traces                         |
+
 
 ## Data Flow
 
@@ -398,13 +400,15 @@ The goal is not a large rewrite. Start by extracting pure helper functions from 
 
 Add Prometheus metrics:
 
-| Metric | Type | Labels | Meaning |
-| --- | --- | --- | --- |
-| `mm_model_nll` | histogram/gauge | `actor_id`, `exchange`, `symbol`, `model`, `side` | Pre-update negative log likelihood |
-| `mm_model_log_likelihood` | gauge | same | Raw log likelihood |
-| `mm_model_observation` | gauge | `model`, `field` | Realized volume/delta being scored |
-| `mm_model_param` | gauge | `model`, `param` | Selected bounded parameter values |
-| `mm_model_score_skipped_total` | counter | `model`, `reason` | Missing previous frame, missing hedge, invalid sigma, etc. |
+
+| Metric                         | Type            | Labels                                            | Meaning                                                    |
+| ------------------------------ | --------------- | ------------------------------------------------- | ---------------------------------------------------------- |
+| `mm_model_nll`                 | histogram/gauge | `actor_id`, `exchange`, `symbol`, `model`, `side` | Pre-update negative log likelihood                         |
+| `mm_model_log_likelihood`      | gauge           | same                                              | Raw log likelihood                                         |
+| `mm_model_observation`         | gauge           | `model`, `field`                                  | Realized volume/delta being scored                         |
+| `mm_model_param`               | gauge           | `model`, `param`                                  | Selected bounded parameter values                          |
+| `mm_model_score_skipped_total` | counter         | `model`, `reason`                                 | Missing previous frame, missing hedge, invalid sigma, etc. |
+
 
 For Grafana, plot:
 
@@ -675,4 +679,3 @@ The first engineering patch should be small:
 5. Add unit tests for market-flow NLL and price NLL using fixed model params.
 
 This gives immediate visibility into whether the price and flow models are working without changing order behavior.
-

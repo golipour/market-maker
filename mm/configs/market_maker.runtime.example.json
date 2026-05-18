@@ -83,8 +83,8 @@
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
     "orderbook_grid": {
-      "spread_step": 1.0,
-      "spread_max": 100.0
+      "spread_step": 10.0,
+      "spread_max": 1000.0
     },
     "max_orders_per_side": 100,
     "risk": {
@@ -129,13 +129,13 @@
       "risk_coef": 1.0,
       "inv_coef": 0.0,
       "uniformity_coef": 0.0,
-      "size_coef": 0.0,
+      "size_coef": 1.0,
       "spread_coef": 0.0,
-      "spread_depth": 100.0,
+      "spread_depth": 10.0,
       "hedge_enabled": false,
       "hedge_coef": 0.0,
       "target_inv": 10.0,
-      "total_q_target": 1.0,
+      "total_q_target": 1000.0,
       "project_total_q_target": false
     }
   }

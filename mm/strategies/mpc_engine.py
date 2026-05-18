@@ -395,7 +395,7 @@ def _continuous_action_depth_series(
     mid: float,
     orderbook_grid: Any,
 ) -> dict[str, Any]:
-    """Cumulative depth from the optimizer (pre-discretization) on the same spread grid as ladder orders."""
+    """Effective cumulative depth ``D(spread) - D(0)`` on the same grid as ladder orders."""
 
     depth_bid = getattr(sigmoid_action, "depth_bid", None)
     depth_ask = getattr(sigmoid_action, "depth_ask", None)
@@ -405,21 +405,37 @@ def _continuous_action_depth_series(
     mid_f = float(mid)
     bid: list[dict[str, float]] = []
     ask: list[dict[str, float]] = []
+    try:
+        bid_base = float(depth_bid(0.0))
+    except Exception:
+        bid_base = 0.0
+    try:
+        ask_base = float(depth_ask(0.0))
+    except Exception:
+        ask_base = 0.0
     for spread in levels:
         s = float(spread)
         try:
-            db = float(depth_bid(s))
+            db = max(0.0, float(depth_bid(s)) - bid_base)
         except Exception:
             db = float("nan")
         try:
-            da = float(depth_ask(s))
+            da = max(0.0, float(depth_ask(s)) - ask_base)
         except Exception:
             da = float("nan")
         if math.isfinite(db):
             bid.append({"spread_quote": s, "price": mid_f - s, "cumulative_qty": db})
         if math.isfinite(da):
             ask.append({"spread_quote": s, "price": mid_f + s, "cumulative_qty": da})
-    return {"kind": "sigmoid_mixture", "mid": mid_f, "bid": bid, "ask": ask}
+    return {
+        "kind": "sigmoid_mixture",
+        "mid": mid_f,
+        "baseline_policy": "cumulative_qty = raw_depth(spread) - raw_depth(0)",
+        "bid_raw_depth_at_zero": bid_base,
+        "ask_raw_depth_at_zero": ask_base,
+        "bid": bid,
+        "ask": ask,
+    }
 
 
 def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
