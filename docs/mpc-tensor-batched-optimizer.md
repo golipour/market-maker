@@ -327,6 +327,8 @@ The optimizer currently stores several private diagnostic fields:
 
 These are useful, but they are incomplete as a stable diagnostics API. In particular, `_last_J_components` can represent the last closure, while `best_x` can come from an earlier epoch. For diagnostics, record initial, final-last, and best snapshots explicitly.
 
+For hedge-specific objective behavior and the gap between simulated hedging and live hedge orders, see [Hedging In The MPC Objective](hedging-in-mpc.md).
+
 ## Recommended Diagnostics Event Fields
 
 Add an explicit optimizer diagnostics snapshot to the proposed `ControllerDiagnostics` event:

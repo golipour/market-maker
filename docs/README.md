@@ -14,6 +14,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
 | [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |
 | [Batched tensor MPC optimizer](mpc-tensor-batched-optimizer.md) | Detailed optimizer algorithm, objective components, diagnostics, performance and readability suggestions |
+| [Hedging in MPC](hedging-in-mpc.md) | How hedge rollouts work today, why live hedge execution is incomplete, and an implementation roadmap |
 
 Start with [Data flow](data-flow.md) for the big picture, then read **[Runtime mechanisms](mechanisms.md)** when you need to know *why* the code does something (e.g. double `_drain_latest_inputs`, where own orders are subtracted).
 
