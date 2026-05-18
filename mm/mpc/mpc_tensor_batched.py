@@ -15,8 +15,8 @@ import torch
 from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
-    depth_bid_tensor,
-    depth_ask_tensor,
+    effective_depth_bid_tensor,
+    effective_depth_ask_tensor,
 )
 from mm.mpc.reward_tensor import terminal_objective
 
@@ -395,15 +395,8 @@ def soft_fill_batched(
       ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
-    # Use baseline-shifted cumulative depth to match discretization semantics:
-    # effective depth on quoted levels s=1..N is D(s)-D(0).
-    depth_bid_raw = depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    depth_ask_raw = depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    s0 = spread_grid.new_zeros((1,))
-    depth_bid_0 = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
-    depth_ask_0 = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
-    depth_bid = torch.clamp(depth_bid_raw - depth_bid_0, min=0.0)
-    depth_ask = torch.clamp(depth_ask_raw - depth_ask_0, min=0.0)
+    depth_bid = effective_depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
+    depth_ask = effective_depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
     eps = 1e-12
     # Convert cumulative quoted depth to marginal level sizes.
     depth_bid_prev = torch.cat([torch.zeros_like(depth_bid[:1]), depth_bid[:-1]], dim=0)
@@ -498,13 +491,10 @@ def _action_uniformity_l2_from_marginal_depth(
         return params.sum() * 0.0
 
     torch_mod = _get_torch()
-    bid_cum = depth_bid_tensor(params, spread_ticks, n_components, use_softplus)
-    ask_cum = depth_ask_tensor(params, spread_ticks, n_components, use_softplus)
-    s0 = torch_mod.zeros(1, dtype=spread_ticks.dtype, device=spread_ticks.device)
-    bid0 = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)
-    ask0 = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)
-    bid_prev = torch_mod.cat([bid0, bid_cum[:-1]], dim=0)
-    ask_prev = torch_mod.cat([ask0, ask_cum[:-1]], dim=0)
+    bid_cum = effective_depth_bid_tensor(params, spread_ticks, n_components, use_softplus)
+    ask_cum = effective_depth_ask_tensor(params, spread_ticks, n_components, use_softplus)
+    bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_cum[:1]), bid_cum[:-1]], dim=0)
+    ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_cum[:1]), ask_cum[:-1]], dim=0)
     bid_marg = torch_mod.clamp(
         bid_cum - bid_prev,
         min=0.0,
@@ -545,8 +535,8 @@ def _action_size_penalty_qrange(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
-    ask_depth = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    bid_depth = effective_depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
+    ask_depth = effective_depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
     q_bid = torch_mod.clamp(bid_depth[1] - bid_depth[0], min=0.0)
     q_ask = torch_mod.clamp(ask_depth[1] - ask_depth[0], min=0.0)
     tgt = torch_mod.tensor(float(total_q_target), dtype=params.dtype, device=params.device)
@@ -580,10 +570,8 @@ def _action_spread_at_depth(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth_raw = depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
-    ask_depth_raw = depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
-    bid_depth = torch_mod.clamp(bid_depth_raw - bid_depth_raw[0], min=0.0)
-    ask_depth = torch_mod.clamp(ask_depth_raw - ask_depth_raw[0], min=0.0)
+    bid_depth = effective_depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
+    ask_depth = effective_depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
     tgt = torch_mod.tensor(float(target_cumulative_qty), dtype=params.dtype, device=params.device)
     bid_err = torch_mod.abs(bid_depth - tgt)
     ask_err = torch_mod.abs(ask_depth - tgt)
@@ -1162,7 +1150,9 @@ class MonteCarloMPCTensorBatched:
             self.project_total_q_target,
             self.spread_max,
         )
-        best_action = SigmoidMixtureAction.from_flat_positive(best_flat_slice, n_components=self.n_components)
+        best_action = SigmoidMixtureAction.from_flat_positive(
+            best_flat_slice, n_components=self.n_components
+        ).as_effective()
         self._last_sigmoid_action = best_action
         # E_dW plot shows E[ΔW] (J_mean) for the best action, not the full objective J
         if best_J_mean is not None and math.isfinite(float(best_J_mean)):

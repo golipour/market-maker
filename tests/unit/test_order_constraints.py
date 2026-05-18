@@ -21,6 +21,14 @@ class _FakeSigmoid:
         return float(spread) * 0.05
 
 
+class _RawSigmoidWithBaseline:
+    def depth_bid(self, spread: float) -> float:
+        return 10.0 + float(spread)
+
+    def depth_ask(self, spread: float) -> float:
+        return 20.0 + 2.0 * float(spread)
+
+
 class _FakeGrid:
     def spread_ladder(self) -> tuple[float, ...]:
         return (1.0, 2.0, 3.0)
@@ -69,6 +77,43 @@ def test_cap_orders_per_side_keeps_largest_qty() -> None:
     assert sell_qtys == [0.4, 0.1]
 
 
+def test_ladder_orders_use_effective_depth_not_raw_depth_at_zero() -> None:
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+
+    event = MarketEvent(
+        exchange="nobitex",
+        symbol="USDT_IRT",
+        interval_ms=1000,
+        t_start_ms=0,
+        t_end_ms=1000,
+        orderbook=RawOrderbook(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            timestamp_ms=1000,
+            bids=(PriceLevel(price=99.0, qty=1.0),),
+            asks=(PriceLevel(price=101.0, qty=1.0),),
+            is_snapshot=True,
+        ),
+        trades=(),
+        buy_volume=0.0,
+        sell_volume=0.0,
+        vwap=0.0,
+        imbalance=0.0,
+        microprice=0.0,
+    )
+    orders = ladder_orders_from_sigmoid(
+        actor_id="a",
+        event=event,
+        sigmoid_action=_RawSigmoidWithBaseline(),
+        orderbook_grid=_FakeGrid(),
+    )
+
+    buy_qtys = [order.qty for order in orders if order.side == "buy"]
+    sell_qtys = [order.qty for order in orders if order.side == "sell"]
+    assert buy_qtys == [1.0, 1.0, 1.0]
+    assert sell_qtys == [2.0, 2.0, 2.0]
+
+
 def test_binding_merges_api_venue_then_config_fallback(monkeypatch) -> None:
     from mm.core.models.instrument import build_instrument_spec
     from mm.exchanges.shared import instrument_spec_trade_stats as mod
@@ -109,4 +154,3 @@ def test_binding_config_fills_when_api_omits_fields(monkeypatch) -> None:
     spec = config.binding.primary
     assert spec.qty_step == 0.01
     assert spec.min_qty == 0.01
-

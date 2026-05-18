@@ -6,6 +6,7 @@ import torch
 
 from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
 from mm.mpc.mpc_tensor_batched import _action_spread_at_depth, soft_fill_batched
+from mm.mpc.mpc_state import SigmoidMixtureAction
 from mm.mpc.state_tensor import depth_bid_tensor
 
 
@@ -33,6 +34,24 @@ def test_hedge_enabled_defaults_from_hedge_coef() -> None:
     exe = object()
     assert MonteCarloMPCTensorBatched(opt, flow, exe, hedge_coef=0.0).hedge_enabled is False
     assert MonteCarloMPCTensorBatched(opt, flow, exe, hedge_coef=0.01).hedge_enabled is True
+
+
+def test_effective_sigmoid_action_exposes_executable_depth() -> None:
+    raw = SigmoidMixtureAction(
+        bid_L=(100.0,),
+        bid_k=(1.0,),
+        bid_x0=(10.0,),
+        ask_L=(100.0,),
+        ask_k=(1.0,),
+        ask_x0=(10.0,),
+    )
+    effective = raw.as_effective()
+
+    assert effective.to_flat() == raw.to_flat()
+    assert effective.depth_bid(0.0) == 0.0
+    assert effective.depth_ask(0.0) == 0.0
+    assert math.isclose(effective.depth_bid(12.0), raw.depth_bid(12.0) - raw.depth_bid(0.0))
+    assert math.isclose(effective.raw_depth_bid(12.0), raw.depth_bid(12.0))
 
 
 def test_spread_at_depth_uses_depth_minus_depth_at_zero() -> None:

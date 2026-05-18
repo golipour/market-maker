@@ -152,6 +152,34 @@ def depth_ask_tensor(
     return depth
 
 
+def effective_depth_bid_tensor(
+    params: "Tensor",
+    spread: "Tensor",
+    n_components: int,
+    use_softplus: bool = True,
+) -> "Tensor":
+    """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
+    torch = _get_torch()
+    raw = depth_bid_tensor(params, spread, n_components, use_softplus=use_softplus)
+    s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
+    base = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    return torch.clamp(raw - base, min=0.0)
+
+
+def effective_depth_ask_tensor(
+    params: "Tensor",
+    spread: "Tensor",
+    n_components: int,
+    use_softplus: bool = True,
+) -> "Tensor":
+    """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
+    torch = _get_torch()
+    raw = depth_ask_tensor(params, spread, n_components, use_softplus=use_softplus)
+    s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
+    base = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    return torch.clamp(raw - base, min=0.0)
+
+
 def depth_bid_derivative_tensor(
     params: "Tensor",
     spread: "Tensor",

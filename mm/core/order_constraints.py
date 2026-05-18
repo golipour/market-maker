@@ -59,7 +59,7 @@ def ladder_orders_from_sigmoid(
             side="buy",
             mid=mid,
             spreads=levels,
-            depth_fn=sigmoid_action.depth_bid,
+            depth_fn=_side_depth_fn(sigmoid_action, "buy"),
         )
     )
     orders.extend(
@@ -69,7 +69,7 @@ def ladder_orders_from_sigmoid(
             side="sell",
             mid=mid,
             spreads=levels,
-            depth_fn=sigmoid_action.depth_ask,
+            depth_fn=_side_depth_fn(sigmoid_action, "sell"),
         )
     )
     return orders
@@ -138,7 +138,7 @@ def _ladder_side_orders(
     depth_fn: Any,
 ) -> list[Order]:
     out: list[Order] = []
-    prev_cumulative = float(depth_fn(0.0))
+    prev_cumulative = 0.0
     for idx, spread in enumerate(spreads):
         cumulative = float(depth_fn(spread))
         qty = max(0.0, cumulative - prev_cumulative)
@@ -159,6 +159,23 @@ def _ladder_side_orders(
             )
         )
     return out
+
+
+def _side_depth_fn(sigmoid_action: Any, side: str) -> Any:
+    if side == "buy":
+        effective = getattr(sigmoid_action, "effective_depth_bid", None)
+        return effective if callable(effective) else _baseline_shifted_depth(getattr(sigmoid_action, "depth_bid"))
+    effective = getattr(sigmoid_action, "effective_depth_ask", None)
+    return effective if callable(effective) else _baseline_shifted_depth(getattr(sigmoid_action, "depth_ask"))
+
+
+def _baseline_shifted_depth(raw_depth_fn: Any) -> Any:
+    base = float(raw_depth_fn(0.0))
+
+    def _depth(spread: float) -> float:
+        return max(0.0, float(raw_depth_fn(spread)) - base)
+
+    return _depth
 
 
 def _quantize_qty(qty: float, qty_step: float | None) -> float:

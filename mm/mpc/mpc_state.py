@@ -36,7 +36,13 @@ def _sigmoid_stable(z: float) -> float:
 
 @dataclass(frozen=True)
 class SigmoidMixtureAction:
-    """Mixture-of-sigmoids depth parameterization for batched MPC."""
+    """Raw mixture-of-sigmoids cumulative depth parameterization for batched MPC.
+
+    ``depth_bid`` / ``depth_ask`` return raw model depth ``D(spread)``. The
+    executable quote depth is ``D(spread) - D(0)``; use
+    ``effective_depth_bid`` / ``effective_depth_ask`` when building orders or
+    diagnostics from this raw action.
+    """
 
     bid_L: tuple[float, ...]
     bid_k: tuple[float, ...]
@@ -140,6 +146,28 @@ class SigmoidMixtureAction:
             out += self.ask_L[i] * s
         return out
 
+    def effective_depth_bid(self, spread: float) -> float:
+        """Executable cumulative bid depth: ``max(0, D_bid(spread) - D_bid(0))``."""
+
+        return max(0.0, self.depth_bid(spread) - self.depth_bid(0.0))
+
+    def effective_depth_ask(self, spread: float) -> float:
+        """Executable cumulative ask depth: ``max(0, D_ask(spread) - D_ask(0))``."""
+
+        return max(0.0, self.depth_ask(spread) - self.depth_ask(0.0))
+
+    def as_effective(self) -> EffectiveSigmoidMixtureAction:
+        """Return a view whose ``depth_*`` methods expose executable depth."""
+
+        return EffectiveSigmoidMixtureAction(
+            bid_L=self.bid_L,
+            bid_k=self.bid_k,
+            bid_x0=self.bid_x0,
+            ask_L=self.ask_L,
+            ask_k=self.ask_k,
+            ask_x0=self.ask_x0,
+        )
+
     def depth_bid_derivative(self, spread: float) -> float:
         out = 0.0
         for i in range(self.n_components):
@@ -155,6 +183,36 @@ class SigmoidMixtureAction:
             s = _sigmoid_stable(z)
             out += self.ask_L[i] * self.ask_k[i] * s * (1.0 - s)
         return out
+
+
+@dataclass(frozen=True)
+class EffectiveSigmoidMixtureAction(SigmoidMixtureAction):
+    """Sigmoid action view where ``depth_*`` returns executable ``D(spread) - D(0)``.
+
+    The flat parameters remain the original raw sigmoid-mixture parameters, so this
+    can still be used for warm starts and diagnostics requiring the underlying model.
+    """
+
+    def raw_depth_bid(self, spread: float) -> float:
+        return super().depth_bid(spread)
+
+    def raw_depth_ask(self, spread: float) -> float:
+        return super().depth_ask(spread)
+
+    def depth_bid(self, spread: float) -> float:
+        return max(0.0, self.raw_depth_bid(spread) - self.raw_depth_bid(0.0))
+
+    def depth_ask(self, spread: float) -> float:
+        return max(0.0, self.raw_depth_ask(spread) - self.raw_depth_ask(0.0))
+
+    def effective_depth_bid(self, spread: float) -> float:
+        return self.depth_bid(spread)
+
+    def effective_depth_ask(self, spread: float) -> float:
+        return self.depth_ask(spread)
+
+    def as_effective(self) -> EffectiveSigmoidMixtureAction:
+        return self
 
 
 def sigmoid_mixture_action_bounds(

@@ -59,6 +59,9 @@ x_torch length = H * 6 * n_components
 ```
 
 Only the first horizon action is returned. The remaining horizon actions are planning variables.
+The returned object is an effective action view: its `depth_bid()` and `depth_ask()`
+methods expose executable cumulative depth `D(spread) - D(0)`, while the underlying
+flat parameters remain the raw sigmoid-mixture parameters for warm starts and debugging.
 
 `L` and `k` are optimized in raw unconstrained space and converted to positive values with `softplus`. Bounds are given in effective positive space and converted to raw space by `_bounds_effective_to_raw()`.
 

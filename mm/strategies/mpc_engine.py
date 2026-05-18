@@ -397,30 +397,24 @@ def _continuous_action_depth_series(
 ) -> dict[str, Any]:
     """Effective cumulative depth ``D(spread) - D(0)`` on the same grid as ladder orders."""
 
-    depth_bid = getattr(sigmoid_action, "depth_bid", None)
-    depth_ask = getattr(sigmoid_action, "depth_ask", None)
+    depth_bid = _effective_depth_callable(sigmoid_action, "bid")
+    depth_ask = _effective_depth_callable(sigmoid_action, "ask")
     if not callable(depth_bid) or not callable(depth_ask):
         return {"kind": "unknown", "mid": float(mid), "bid": [], "ask": []}
     levels = list(orderbook_grid.spread_ladder())
     mid_f = float(mid)
     bid: list[dict[str, float]] = []
     ask: list[dict[str, float]] = []
-    try:
-        bid_base = float(depth_bid(0.0))
-    except Exception:
-        bid_base = 0.0
-    try:
-        ask_base = float(depth_ask(0.0))
-    except Exception:
-        ask_base = 0.0
+    bid_base = _raw_depth_at_zero(sigmoid_action, "bid")
+    ask_base = _raw_depth_at_zero(sigmoid_action, "ask")
     for spread in levels:
         s = float(spread)
         try:
-            db = max(0.0, float(depth_bid(s)) - bid_base)
+            db = float(depth_bid(s))
         except Exception:
             db = float("nan")
         try:
-            da = max(0.0, float(depth_ask(s)) - ask_base)
+            da = float(depth_ask(s))
         except Exception:
             da = float("nan")
         if math.isfinite(db):
@@ -436,6 +430,40 @@ def _continuous_action_depth_series(
         "bid": bid,
         "ask": ask,
     }
+
+
+def _effective_depth_callable(sigmoid_action: Any, side: str) -> Any:
+    name = "effective_depth_bid" if side == "bid" else "effective_depth_ask"
+    fn = getattr(sigmoid_action, name, None)
+    if callable(fn):
+        return fn
+    raw_name = "depth_bid" if side == "bid" else "depth_ask"
+    raw = getattr(sigmoid_action, raw_name, None)
+    if not callable(raw):
+        return None
+    try:
+        base = float(raw(0.0))
+    except Exception:
+        base = 0.0
+
+    def _depth(spread: float) -> float:
+        return max(0.0, float(raw(spread)) - base)
+
+    return _depth
+
+
+def _raw_depth_at_zero(sigmoid_action: Any, side: str) -> float:
+    raw_name = "raw_depth_bid" if side == "bid" else "raw_depth_ask"
+    raw = getattr(sigmoid_action, raw_name, None)
+    if not callable(raw):
+        raw_name = "depth_bid" if side == "bid" else "depth_ask"
+        raw = getattr(sigmoid_action, raw_name, None)
+    if not callable(raw):
+        return 0.0
+    try:
+        return float(raw(0.0))
+    except Exception:
+        return 0.0
 
 
 def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
