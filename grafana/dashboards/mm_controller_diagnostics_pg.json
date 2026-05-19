@@ -116,50 +116,17 @@
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
+      "collapsed": false,
       "gridPos": {
-        "h": 8,
+        "h": 1,
         "w": 24,
         "x": 0,
         "y": 18
       },
       "id": 11,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'best_minus_initial' AS metric,\n  (e.payload #>> ARRAY['optimizer','objective','improvement','best_minus_initial'])::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective','improvement','best_minus_initial'] IS NOT NULL\nUNION ALL\nSELECT e.ts, 'final_minus_initial',\n  (e.payload #>> ARRAY['optimizer','objective','improvement','final_minus_initial'])::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective','improvement','final_minus_initial'] IS NOT NULL\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Objective improvement",
-      "type": "timeseries"
+      "panels": [],
+      "title": "Objective components",
+      "type": "row"
     },
     {
       "datasource": {
@@ -174,10 +141,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
+        "h": 6,
+        "w": 12,
         "x": 0,
-        "y": 26
+        "y": 19
       },
       "id": 12,
       "options": {
@@ -200,11 +167,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage || '.' || kv.key AS metric,\n  (kv.value #>> '{}')::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['optimizer','objective',stage,'components'], '{}'::jsonb)\n) AS kv(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','expected_pnl'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','expected_pnl'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Objective components",
+      "title": "expected_pnl",
       "type": "timeseries"
     },
     {
@@ -220,12 +187,12 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 34
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 19
       },
-      "id": 20,
+      "id": 13,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -246,11 +213,195 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", m AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('sample_draw_sec', (e.payload->'optimizer'->'timing'->>'sample_draw_sec')::double precision),\n    ('train_sec', (e.payload->'optimizer'->'timing'->>'train_sec')::double precision),\n    ('total_sec', (e.payload->'optimizer'->'timing'->>'total_sec')::double precision),\n    ('best_epoch', (e.payload->'optimizer'->'timing'->>'best_epoch')::double precision)\n) AS t(m, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nUNION ALL\nSELECT e.ts, 'nonfinite_loss_count',\n  (e.payload->'optimizer'->'gradients'->>'nonfinite_loss_count')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'optimizer'->'gradients' ? 'nonfinite_loss_count'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_target_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_target_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Optimizer timing",
+      "title": "inventory_target_penalty",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','pnl_volatility_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','pnl_volatility_penalty'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "pnl_volatility_penalty",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_shape_uniformity_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_shape_uniformity_penalty'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "quote_shape_uniformity_penalty",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_size_target_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_size_target_penalty'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "quote_size_target_penalty",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_spread_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_spread_penalty'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "quote_spread_penalty",
       "type": "timeseries"
     },
     {
@@ -269,7 +420,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 37
       },
       "id": 30,
       "options": {
@@ -315,7 +466,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 45
       },
       "id": 31,
       "options": {
@@ -361,7 +512,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 53
       },
       "id": 32,
       "options": {

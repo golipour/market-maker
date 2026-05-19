@@ -45,11 +45,11 @@ def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 8) -> dict
     }
 
 
-def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 8, w: int = 24) -> dict[str, Any]:
+def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 8, w: int = 24, x: int = 0) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {"defaults": {"unit": "short", "decimals": 4}, "overrides": []},
-        "gridPos": {"h": h, "w": w, "x": 0, "y": y},
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
         "id": id_,
         "options": {
             "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
@@ -115,6 +115,34 @@ def _dashboard(
     }
 
 
+def _panel_objective_component(
+    id_: int,
+    y: int,
+    *,
+    title: str,
+    component_key: str,
+    diag_filter: str,
+    x: int = 0,
+    w: int = 12,
+    h: int = 6,
+) -> dict[str, Any]:
+    return _panel_sql_timeseries(
+        id_,
+        y,
+        title,
+        f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}'] IS NOT NULL
+ORDER BY 1""",
+        h=h,
+        w=w,
+        x=x,
+    )
+
+
 def controller_diagnostics_dashboard() -> dict[str, Any]:
     diag_filter = """
   e.topic = '${diagnostics_topic}'
@@ -163,63 +191,58 @@ WHERE {diag_filter}
   AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL
 ORDER BY 1""",
         ),
-        _panel_sql_timeseries(
-            11,
-            18,
-            "Objective improvement",
-            f"""SELECT e.ts AS "time", 'best_minus_initial' AS metric,
-  (e.payload #>> ARRAY['optimizer','objective','improvement','best_minus_initial'])::double precision AS value
-FROM mm_events e
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['optimizer','objective','improvement','best_minus_initial'] IS NOT NULL
-UNION ALL
-SELECT e.ts, 'final_minus_initial',
-  (e.payload #>> ARRAY['optimizer','objective','improvement','final_minus_initial'])::double precision
-FROM mm_events e
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['optimizer','objective','improvement','final_minus_initial'] IS NOT NULL
-ORDER BY 1""",
-        ),
-        _panel_sql_timeseries(
+        _panel_row(11, 18, "Objective components"),
+        _panel_objective_component(
             12,
-            26,
-            "Objective components",
-            f"""SELECT e.ts AS "time", stage || '.' || kv.key AS metric,
-  (kv.value #>> '{{}}')::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
-CROSS JOIN LATERAL jsonb_each(
-  COALESCE(e.payload #> ARRAY['optimizer','objective',stage,'components'], '{{}}'::jsonb)
-) AS kv(key, value)
-WHERE {diag_filter}
-  AND jsonb_typeof(kv.value) = 'number'
-ORDER BY 1""",
+            19,
+            title="expected_pnl",
+            component_key="expected_pnl",
+            diag_filter=diag_filter,
+            x=0,
         ),
-        _panel_sql_timeseries(
-            20,
-            34,
-            "Optimizer timing",
-            f"""SELECT e.ts AS "time", m AS metric, v AS value
-FROM mm_events e
-CROSS JOIN LATERAL (
-  VALUES
-    ('sample_draw_sec', (e.payload->'optimizer'->'timing'->>'sample_draw_sec')::double precision),
-    ('train_sec', (e.payload->'optimizer'->'timing'->>'train_sec')::double precision),
-    ('total_sec', (e.payload->'optimizer'->'timing'->>'total_sec')::double precision),
-    ('best_epoch', (e.payload->'optimizer'->'timing'->>'best_epoch')::double precision)
-) AS t(m, v)
-WHERE {diag_filter} AND v IS NOT NULL
-UNION ALL
-SELECT e.ts, 'nonfinite_loss_count',
-  (e.payload->'optimizer'->'gradients'->>'nonfinite_loss_count')::double precision
-FROM mm_events e
-WHERE {diag_filter}
-  AND e.payload->'optimizer'->'gradients' ? 'nonfinite_loss_count'
-ORDER BY 1""",
+        _panel_objective_component(
+            13,
+            19,
+            title="inventory_target_penalty",
+            component_key="inventory_target_penalty",
+            diag_filter=diag_filter,
+            x=12,
+        ),
+        _panel_objective_component(
+            14,
+            25,
+            title="pnl_volatility_penalty",
+            component_key="pnl_volatility_penalty",
+            diag_filter=diag_filter,
+            x=0,
+        ),
+        _panel_objective_component(
+            15,
+            25,
+            title="quote_shape_uniformity_penalty",
+            component_key="quote_shape_uniformity_penalty",
+            diag_filter=diag_filter,
+            x=12,
+        ),
+        _panel_objective_component(
+            16,
+            31,
+            title="quote_size_target_penalty",
+            component_key="quote_size_target_penalty",
+            diag_filter=diag_filter,
+            x=0,
+        ),
+        _panel_objective_component(
+            17,
+            31,
+            title="quote_spread_penalty",
+            component_key="quote_spread_penalty",
+            diag_filter=diag_filter,
+            x=12,
         ),
         _panel_sql_timeseries(
             30,
-            42,
+            37,
             "Action pipeline — order count by stage",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #> ARRAY['action_pipeline',stage,'order_count'])::int::double precision AS value
@@ -232,7 +255,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             31,
-            50,
+            45,
             "Execution gate blocks (by reason)",
             f"""SELECT e.ts AS "time", reason.value AS metric, 1::double precision AS value
 FROM mm_events e
@@ -244,7 +267,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             32,
-            58,
+            53,
             "Risk rejection counts",
             f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
 FROM mm_events e
