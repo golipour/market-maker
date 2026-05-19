@@ -685,6 +685,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "when true, objective terms are dimensionless (PnL/CVaR/vol vs wealth, "
                 "inventory vs scale, size/spread vs targets, concentration in [0,1])"
             ),
+            "objective_penalty_shape": (
+                "softplus (default when normalized) or squared; softplus gives ~linear "
+                "penalties for small relative errors, closer in scale to expected_pnl"
+            ),
+            "objective_penalty_sharpness": "softplus sharpness (default 8); higher = more linear near zero",
             "quote_size_softmax_L": (
                 "when true with positive quote_size_target_per_side, L_i are softmax mixture weights "
                 "normalized so D(spread_max)-D(0) equals the target (architectural size constraint)"

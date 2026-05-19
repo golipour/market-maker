@@ -66,7 +66,22 @@ def test_spread_penalty_asymmetric_only_penalizes_wide_spreads() -> None:
     tight = torch.tensor(20.0, dtype=torch.float64)
     wide = torch.tensor(150.0, dtype=torch.float64)
     assert float(relative_spread_penalty_excess_tensor(tight, tgt).item()) == 0.0
-    assert float(relative_spread_penalty_excess_tensor(wide, tgt).item()) == pytest.approx(0.25, rel=1e-9)
+    assert float(
+        relative_spread_penalty_excess_tensor(wide, tgt, shape="squared").item()
+    ) == pytest.approx(0.25, rel=1e-9)
+    soft = float(relative_spread_penalty_excess_tensor(wide, tgt, shape="softplus").item())
+    assert soft > 0.0
+
+
+def test_softplus_penalty_more_linear_than_squared_at_small_error() -> None:
+    """10% relative miss: softplus ~0.05 vs squared ~0.01 — closer to linear PnL scale."""
+    from mm.mpc.objective_normalize import softplus_unit_penalty_scalar
+
+    rel = 0.1
+    sq = rel * rel
+    sp = softplus_unit_penalty_scalar(rel, sharpness=8.0)
+    assert sp > sq
+    assert sp == pytest.approx(0.05, abs=0.02)
 
 
 def test_spread_penalty_at_target_is_zero() -> None:

@@ -203,6 +203,8 @@ def terminal_objective(
     wealth_scale: float = 1.0,
     inventory_scale: float = 1.0,
     normalize_components: bool = True,
+    penalty_shape: str = "softplus",
+    penalty_sharpness: float = 8.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
     Build scalar objective J from terminal ΔW and optional action regularizers.
@@ -226,6 +228,8 @@ def terminal_objective(
     inventory_scale: reference inventory for relative inventory-target penalty (base units).
     normalize_components: when true, scale reward/risk terms by ``wealth_scale`` and
         inventory penalty by ``inventory_scale`` so weights are dimensionless.
+    penalty_shape: ``softplus`` (default when normalized) or ``squared`` for penalty curvature.
+    penalty_sharpness: sharpness for softplus penalties (higher = closer to linear near zero).
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
@@ -271,7 +275,15 @@ def terminal_objective(
     inv_scale = max(1e-8, float(inventory_scale))
     if normalize_components:
         J_mean_term = J_mean / w_scale
-        J_inv_penalty = ((J_inv - target) / inv_scale) ** 2
+        rel_inv = (J_inv - target) / inv_scale
+        if penalty_shape == "squared":
+            J_inv_penalty = rel_inv * rel_inv
+        else:
+            from mm.mpc.objective_normalize import softplus_unit_penalty_tensor
+
+            J_inv_penalty = softplus_unit_penalty_tensor(
+                torch.abs(rel_inv), sharpness=penalty_sharpness
+            )
         J_std_term = J_std / w_scale
         J_soft_cvar_term = J_soft_cvar / w_scale
     else:

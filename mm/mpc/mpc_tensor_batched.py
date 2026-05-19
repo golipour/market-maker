@@ -607,12 +607,14 @@ def _action_size_penalty_qrange(
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     normalize: bool = True,
+    shape: str = "softplus",
+    sharpness: float = 8.0,
 ) -> torch.Tensor:
     """
-    Squared error to target quoted size over s=0..spread_max (baseline-shift Q_range).
+    Error to target quoted size over s=0..spread_max (baseline-shift Q_range).
 
-    When ``normalize`` is true (default), returns dimensionless
-    ``((Q_bid - Q_tgt)/Q_tgt)^2 + ((Q_ask - Q_tgt)/Q_tgt)^2``.
+    When ``normalize`` is true, returns dimensionless symmetric penalties on
+    ``|Q - Q_tgt| / Q_tgt`` using ``shape`` (default ``softplus``, or ``squared``).
     """
     if quote_size_target_per_side is None or float(quote_size_target_per_side) <= 0.0 or n_components <= 0:
         return params.sum() * 0.0
@@ -635,9 +637,17 @@ def _action_size_penalty_qrange(
         if l_param is not None and l_param.use_softmax
         else float(quote_size_target_per_side)
     )
-    tgt = torch_mod.tensor(float(tgt_q), dtype=params.dtype, device=params.device)
-    if normalize and float(tgt_q) > 0.0:
-        return ((q_bid - tgt) / tgt) ** 2 + ((q_ask - tgt) / tgt) ** 2
+    tgt_f = float(tgt_q)
+    if normalize and tgt_f > 0.0:
+        from mm.mpc.objective_normalize import dimensionless_symmetric_penalty_tensor
+
+        penalty_shape = "squared" if shape == "squared" else "softplus"
+        return dimensionless_symmetric_penalty_tensor(
+            q_bid, tgt_f, shape=penalty_shape, sharpness=sharpness
+        ) + dimensionless_symmetric_penalty_tensor(
+            q_ask, tgt_f, shape=penalty_shape, sharpness=sharpness
+        )
+    tgt = torch_mod.tensor(tgt_f, dtype=params.dtype, device=params.device)
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
@@ -653,13 +663,14 @@ def _action_spread_at_depth(
     grid_points: int = 100,
     softmin_temp: float = 40.0,
     normalize: bool = True,
+    shape: str = "softplus",
+    sharpness: float = 8.0,
 ) -> torch.Tensor:
     """
     Penalize effective quote spread (soft-argmin depth location) vs ``quote_spread_target``.
 
     For each side, find spread δ where cumulative depth reaches ``target_cumulative_qty``.
-    When ``normalize`` is true (default), returns a one-sided relative penalty: only spreads
-    **wider** than ``quote_spread_target`` are penalized (tighter quotes incur zero spread penalty).
+    When ``normalize`` is true, one-sided relative excess vs target (softplus or squared).
     """
     if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
         return params.sum() * 0.0
@@ -690,9 +701,12 @@ def _action_spread_at_depth(
     from mm.mpc.objective_normalize import relative_spread_penalty_excess_tensor, spread_target_scale
 
     s_tgt = spread_target_scale(quote_spread_target, spread_max)
+    penalty_shape = "squared" if shape == "squared" else "softplus"
     return relative_spread_penalty_excess_tensor(
-        bid_spread, s_tgt
-    ) + relative_spread_penalty_excess_tensor(ask_spread, s_tgt)
+        bid_spread, s_tgt, shape=penalty_shape, sharpness=sharpness
+    ) + relative_spread_penalty_excess_tensor(
+        ask_spread, s_tgt, shape=penalty_shape, sharpness=sharpness
+    )
 
 
 def _delta_wealth_mtm_batched(
@@ -763,6 +777,8 @@ class MonteCarloMPCTensorBatched:
         quote_depth_target_for_spread: float | None = None,
         quote_spread_target: float | int | None = None,
         objective_normalize_components: bool = True,
+        objective_penalty_shape: str | None = None,
+        objective_penalty_sharpness: float | None = None,
         hedge_rollout_enabled: bool | None = None,
         quote_size_target_per_side: float | int | None = None,
         hard_project_quote_size_target: bool = False,
@@ -828,6 +844,19 @@ class MonteCarloMPCTensorBatched:
             float(quote_spread_target) if quote_spread_target is not None else None
         )
         self.objective_normalize_components = bool(objective_normalize_components)
+        default_shape = "softplus" if self.objective_normalize_components else "squared"
+        raw_shape = str(objective_penalty_shape or default_shape).lower().strip()
+        if raw_shape not in ("softplus", "squared"):
+            raise ValueError(
+                f"objective_penalty_shape must be 'softplus' or 'squared', got {raw_shape!r}"
+            )
+        self.objective_penalty_shape = raw_shape
+        from mm.mpc.objective_normalize import DEFAULT_PENALTY_SHARPNESS
+
+        self.objective_penalty_sharpness = max(
+            1e-6,
+            float(objective_penalty_sharpness or DEFAULT_PENALTY_SHARPNESS),
+        )
         hedge_flag = _coalesce_param(hedge_rollout_enabled, hedge_enabled, default=None)
         if hedge_flag is not None:
             self.hedge_enabled = bool(hedge_flag)
@@ -919,6 +948,8 @@ class MonteCarloMPCTensorBatched:
     def _penalty_kwargs(self) -> dict[str, Any]:
         kw = self._depth_call_kwargs()
         kw["normalize"] = self.objective_normalize_components
+        kw["shape"] = self.objective_penalty_shape
+        kw["sharpness"] = self.objective_penalty_sharpness
         return kw
 
     def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
@@ -1202,7 +1233,8 @@ class MonteCarloMPCTensorBatched:
                         action_h,
                         spread_grid,
                         n,
-                        **penalty_kw,
+                        normalize=self.objective_normalize_components,
+                        **depth_kw,
                     )
                     action_size_sum = action_size_sum + _action_size_penalty_qrange(
                         action_h,
@@ -1375,6 +1407,8 @@ class MonteCarloMPCTensorBatched:
                     wealth_scale=obj_wealth_scale,
                     inventory_scale=obj_inventory_scale,
                     normalize_components=self.objective_normalize_components,
+                    penalty_shape=self.objective_penalty_shape,
+                    penalty_sharpness=self.objective_penalty_sharpness,
                 )
 
                 def _finite_item(t) -> float:
