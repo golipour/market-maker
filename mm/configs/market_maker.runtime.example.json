@@ -81,7 +81,7 @@
   "controller": {
     "enabled": true,
     "observe_only": false,
-    "action_start_after_steps": 5,
+    "action_start_after_steps": 100,
     "actor_id": "mpc-controller",
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
@@ -95,18 +95,18 @@
       "primary": {
         "min_inventory": 0.0,
         "max_inventory": 1000.0,
-        "min_cash": 10000000.0,
-        "max_open_notional": 200000000.0,
-        "max_order_notional": 50000000.0,
+        "min_cash": 0.0,
+        "max_open_notional": 100000000.0,
+        "max_order_notional": 100000000.0,
         "max_market_data_age_ms": 60000,
         "max_private_state_age_ms": 120000
       },
       "hedge": {
         "min_inventory": 0.0,
         "max_inventory": 1000.0,
-        "min_cash": 10000000.0,
-        "max_market_order_notional": 50000000.0,
-        "max_slippage_bps": 20.0,
+        "min_cash": 0.0,
+        "max_market_order_notional": 10000000.0,
+        "max_slippage_bps": 100.0,
         "max_market_data_age_ms": 60000,
         "max_private_state_age_ms": 120000
       }
@@ -131,14 +131,14 @@
     },
     "execution_model": {
       "kind": "real",
-      "maker_fee": 0.00000015,
-      "hedge_fee": 0.000000025
+      "maker_fee": 0.0,
+      "hedge_fee": 0.0
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
-      "n_components": 1,
+      "n_components": 4,
       "n_samples": 64,
-      "warm_start": false,
+      "warm_start": true,
       "fixed_mc_samples": true,
       "horizon": 1,
       "adam_epochs": 100,

@@ -1,0 +1,332 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Portfolio state and limits from ControllerDiagnostics.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Source:** `ControllerDiagnostics.state` and `risk.limits`.\n\nInventory/cash from diagnostics frames; limits from configured hard risk.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'primary_inventory' AS metric,\n  (e.payload #>> '{state,primary_inventory}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_inventory',\n  (e.payload #>> '{state,hedge_inventory}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Inventory (primary vs hedge)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'primary_cash' AS metric,\n  (e.payload #>> '{state,primary_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_cash',\n  (e.payload #>> '{state,hedge_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Cash (primary vs hedge)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'primary_marked' AS metric,\n  ((e.payload #>> '{state,primary_cash}')::double precision\n   + (e.payload #>> '{state,primary_inventory}')::double precision\n     * COALESCE((e.payload #>> '{state,primary_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_marked',\n  ((e.payload #>> '{state,hedge_cash}')::double precision\n   + (e.payload #>> '{state,hedge_inventory}')::double precision\n     * COALESCE((e.payload #>> '{state,hedge_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Marked portfolio value (approx)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", lim AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('min', (e.payload #>> ARRAY['risk','limits','primary','min_inventory'])::double precision),\n    ('max', (e.payload #>> ARRAY['risk','limits','primary','max_inventory'])::double precision)\n) AS t(lim, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Inventory limits (primary)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'primary_plus_hedge' AS metric,\n  ((e.payload #>> '{state,primary_inventory}')::double precision\n   + (e.payload #>> '{state,hedge_inventory}')::double precision) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Combined inventory exposure",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "postgres",
+    "portfolio"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
+        "label": "Primary exchange",
+        "name": "primary_exchange",
+        "query": "nobitex,wallex",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "wallex",
+          "value": "wallex"
+        },
+        "label": "Hedge exchange",
+        "name": "hedge_exchange",
+        "query": "nobitex,wallex",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
+        "label": "Symbol",
+        "name": "symbol",
+        "query": "USDT_IRT",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "mpc-controller",
+          "value": "mpc-controller"
+        },
+        "label": "Actor ID",
+        "name": "actor_id",
+        "query": "mpc-controller",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "label": "Diagnostics topic",
+        "name": "diagnostics_topic",
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM portfolio (PostgreSQL)",
+  "uid": "mm-portfolio-pg",
+  "version": 1,
+  "weekStart": ""
+}

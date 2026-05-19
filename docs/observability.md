@@ -99,12 +99,18 @@ Grafana provisioning:
 
 | UID / file | Purpose |
 |------------|---------|
+| `mm-controller-diagnostics-pg` | Optimizer objectives, action pipeline, risk, execution gates (`ControllerDiagnostics`) |
+| `mm-strategy-model-params-pg` | Model params from decisions + NLL / residuals from diagnostics |
+| `mm-portfolio-pg` | Inventory, cash, marked value, limits from diagnostics |
+| `mm-hedge-execution-pg` | Fill-driven hedge intents and execution outcomes |
 | `mm-orderbook-depth-pg` | Latest book + MPC continuous depth + executable orders (Postgres) |
 | `mm_runtime_overview` | Prometheus runtime metrics |
 | `mm_events_postgres` | Raw `mm_events` exploration |
 | `private_state_postgres` | Private snapshots |
 
-**Dashboard variables** must match runtime: e.g. `exchange=nobitex`, `symbol=USDT_IRT`, `interval_ms=10000`, `spread_max` = `orderbook_grid.max_spread`.
+**Dashboard variables** must match runtime: e.g. `exchange=nobitex`, `symbol=USDT_IRT`, `interval_ms=10000`, `diagnostics_topic=strategy:diagnostics:mpc-controller`, `hedge_diagnostics_topic=hedge:diagnostics:hedge-executor`.
+
+Regenerate JSON from `python3 mm/tools/generate_grafana_dashboards.py` after changing panel SQL.
 
 ## Admin control plane
 
