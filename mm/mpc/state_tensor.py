@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch
     from torch import Tensor
+    from mm.mpc.l_param import LParamConfig
     from mm.mpc.mpc_state import State, SigmoidMixtureAction
 
 # Default number of orderbook buckets per side.
@@ -110,19 +111,24 @@ def depth_bid_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """
     Cumulative bid depth at quote-price spread: D(δ) = sum_i L_i * sigmoid(k_i * (δ - x0_i)).
     L and k taken as softplus(params) when use_softplus=True so gradients flow.
     spread: any shape; output has same shape.
     """
+    from mm.mpc.l_param import positive_L_torch
+
     torch = _get_torch()
-    L = params[0 : 3 * n_components : 3]
-    k = params[1 : 3 * n_components : 3]
+    L_raw = params[0 : 3 * n_components : 3]
+    k_raw = params[1 : 3 * n_components : 3]
     x0 = params[2 : 3 * n_components : 3]
+    L = positive_L_torch(L_raw, k_raw, x0, l_param=l_param, use_softplus=use_softplus)
     if use_softplus:
-        L = _softplus_positive(L)
-        k = _softplus_positive(k)
+        k = _softplus_positive(k_raw)
+    else:
+        k = k_raw
     # spread: (...,); L, k, x0: (n_components,)
     # z_i = k_i * (spread - x0_i) -> (..., n_components)
     z = (spread.unsqueeze(-1) - x0) * k
@@ -136,16 +142,21 @@ def depth_ask_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """Cumulative ask depth at quote-price spread (same formula as bid, ask-side params)."""
+    from mm.mpc.l_param import positive_L_torch
+
     torch = _get_torch()
     base = 3 * n_components
-    L = params[base + 0 : base + 3 * n_components : 3]
-    k = params[base + 1 : base + 3 * n_components : 3]
+    L_raw = params[base + 0 : base + 3 * n_components : 3]
+    k_raw = params[base + 1 : base + 3 * n_components : 3]
     x0 = params[base + 2 : base + 3 * n_components : 3]
+    L = positive_L_torch(L_raw, k_raw, x0, l_param=l_param, use_softplus=use_softplus)
     if use_softplus:
-        L = _softplus_positive(L)
-        k = _softplus_positive(k)
+        k = _softplus_positive(k_raw)
+    else:
+        k = k_raw
     z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     depth = (L * s).sum(dim=-1)
@@ -157,12 +168,13 @@ def effective_depth_bid_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_bid_tensor(params, spread, n_components, use_softplus=use_softplus)
+    raw = depth_bid_tensor(params, spread, n_components, use_softplus=use_softplus, l_param=l_param)
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    base = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus, l_param=l_param)[0]
     return torch.clamp(raw - base, min=0.0)
 
 
@@ -171,12 +183,13 @@ def effective_depth_ask_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_ask_tensor(params, spread, n_components, use_softplus=use_softplus)
+    raw = depth_ask_tensor(params, spread, n_components, use_softplus=use_softplus, l_param=l_param)
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus)[0]
+    base = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus, l_param=l_param)[0]
     return torch.clamp(raw - base, min=0.0)
 
 
@@ -185,15 +198,20 @@ def depth_bid_derivative_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """Marginal bid depth d/dδ D(δ) = sum_i L_i * k_i * s_i * (1 - s_i). Same shape as spread."""
+    from mm.mpc.l_param import positive_L_torch
+
     torch = _get_torch()
-    L = params[0 : 3 * n_components : 3]
-    k = params[1 : 3 * n_components : 3]
+    L_raw = params[0 : 3 * n_components : 3]
+    k_raw = params[1 : 3 * n_components : 3]
     x0 = params[2 : 3 * n_components : 3]
+    L = positive_L_torch(L_raw, k_raw, x0, l_param=l_param, use_softplus=use_softplus)
     if use_softplus:
-        L = _softplus_positive(L)
-        k = _softplus_positive(k)
+        k = _softplus_positive(k_raw)
+    else:
+        k = k_raw
     z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)
@@ -205,16 +223,21 @@ def depth_ask_derivative_tensor(
     spread: "Tensor",
     n_components: int,
     use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
 ) -> "Tensor":
     """Marginal ask depth d/dδ D(δ). Same shape as spread."""
+    from mm.mpc.l_param import positive_L_torch
+
     torch = _get_torch()
     base = 3 * n_components
-    L = params[base + 0 : base + 3 * n_components : 3]
-    k = params[base + 1 : base + 3 * n_components : 3]
+    L_raw = params[base + 0 : base + 3 * n_components : 3]
+    k_raw = params[base + 1 : base + 3 * n_components : 3]
     x0 = params[base + 2 : base + 3 * n_components : 3]
+    L = positive_L_torch(L_raw, k_raw, x0, l_param=l_param, use_softplus=use_softplus)
     if use_softplus:
-        L = _softplus_positive(L)
-        k = _softplus_positive(k)
+        k = _softplus_positive(k_raw)
+    else:
+        k = k_raw
     z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)

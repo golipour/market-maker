@@ -669,8 +669,18 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_size_target_per_side": (
                 "target cumulative quoted depth over [0, spread_max] per side (base units)"
             ),
+            "quote_size_softmax_L": (
+                "when true with positive quote_size_target_per_side, L_i are softmax mixture weights "
+                "normalized so D(spread_max)-D(0) equals the target (architectural size constraint)"
+            ),
             "hard_project_quote_size_target": (
-                "when true with positive quote_size_target_per_side, rescales depth parameters toward that target"
+                "when true with positive quote_size_target_per_side, rescales depth parameters toward that target "
+                "(ignored when quote_size_softmax_L is true)"
+            ),
+            "quote_size_min_per_side": "lower bound on cumulative quoted depth per side (base units)",
+            "quote_size_max_per_side": "upper bound on cumulative quoted depth per side (base units)",
+            "hard_project_quote_size_range": (
+                "when true with min and/or max set, clamps projected depth into the configured range"
             ),
         },
         "float_bridge": {

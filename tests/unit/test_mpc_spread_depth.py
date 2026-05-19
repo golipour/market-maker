@@ -4,11 +4,53 @@ import math
 
 import torch
 
-from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
-from mm.mpc.mpc_tensor_batched import _action_spread_at_depth, soft_fill_batched
+from mm.mpc.mpc_tensor_batched import (
+    MonteCarloMPCTensorBatched,
+    _action_spread_at_depth,
+    _desired_quote_size_per_side,
+    soft_fill_batched,
+)
 from mm.mpc.mpc_state import SigmoidMixtureAction
 from mm.mpc.reward_tensor import terminal_objective
 from mm.mpc.state_tensor import depth_bid_tensor
+
+
+def test_quote_size_projection_applies_target_then_range() -> None:
+    assert _desired_quote_size_per_side(
+        5.0,
+        quote_size_target_per_side=3.0,
+        hard_project_quote_size_target=True,
+        quote_size_min_per_side=0.1,
+        quote_size_max_per_side=10.0,
+        hard_project_quote_size_range=True,
+    ) == 3.0
+
+    assert _desired_quote_size_per_side(
+        5.0,
+        quote_size_target_per_side=15.0,
+        hard_project_quote_size_target=True,
+        quote_size_min_per_side=0.1,
+        quote_size_max_per_side=10.0,
+        hard_project_quote_size_range=True,
+    ) == 10.0
+
+    assert _desired_quote_size_per_side(
+        15.0,
+        quote_size_target_per_side=None,
+        hard_project_quote_size_target=False,
+        quote_size_min_per_side=0.1,
+        quote_size_max_per_side=10.0,
+        hard_project_quote_size_range=True,
+    ) == 10.0
+
+    assert _desired_quote_size_per_side(
+        5.0,
+        quote_size_target_per_side=3.0,
+        hard_project_quote_size_target=False,
+        quote_size_min_per_side=0.1,
+        quote_size_max_per_side=10.0,
+        hard_project_quote_size_range=False,
+    ) is None
 
 
 def test_spread_depth_stored() -> None:
@@ -37,6 +79,9 @@ def test_clear_optimizer_names_map_to_legacy_attributes() -> None:
         quote_depth_target_for_spread=9.0,
         quote_size_target_per_side=10.0,
         hard_project_quote_size_target=True,
+        hard_project_quote_size_range=True,
+        quote_size_min_per_side=1.0,
+        quote_size_max_per_side=20.0,
         hedge_rollout_enabled=True,
     )
     assert mpc.expected_pnl_weight == 2.0
@@ -56,9 +101,10 @@ def test_clear_optimizer_names_map_to_legacy_attributes() -> None:
     assert mpc.quote_depth_target_for_spread == 9.0
     assert mpc.spread_depth == 9.0
     assert mpc.quote_size_target_per_side == 10.0
-    assert mpc.total_q_target == 10.0
     assert mpc.hard_project_quote_size_target is True
-    assert mpc.project_total_q_target is True
+    assert mpc.hard_project_quote_size_range is True
+    assert mpc.quote_size_min_per_side == 1.0
+    assert mpc.quote_size_max_per_side == 20.0
     assert mpc.hedge_enabled is True
 
 

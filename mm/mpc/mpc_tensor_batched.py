@@ -12,6 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 import torch
 
+from mm.mpc.l_param import LParamConfig, sigmoid_action_from_flat_raw
 from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
@@ -43,7 +44,7 @@ class MPCOptimizer(Protocol):
 
 
 # -----------------------------------------------------------------------------
-# Helpers: bounds, total_q projection, book cumulative
+# Helpers: bounds, quote-size projection, book cumulative
 # -----------------------------------------------------------------------------
 
 
@@ -58,17 +59,24 @@ def _coalesce_param(*values: Any, default: Any = None) -> Any:
     return default
 
 
-def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
+def _bounds_effective_to_raw(
+    bounds: list[tuple[float, float]],
+    *,
+    l_softmax: bool = False,
+) -> list[tuple[float, float]]:
     """
     Convert optimizer bounds from effective parameter space to raw tensor space.
 
     L and k (index 0/1 of each 3-tuple) are represented in raw space and mapped via
     softplus during model evaluation, so their bounds must be inverse-softplus mapped.
+    When ``l_softmax`` is true, L slots are unconstrained logits and bounds pass through.
     x0 (index 2) is used directly and left unchanged.
     """
     out: list[tuple[float, float]] = []
     for i, (lo, hi) in enumerate(bounds):
-        if i % 3 in (0, 1):  # L, k
+        if i % 3 == 0 and l_softmax:
+            out.append((float(lo), float(hi)))
+        elif i % 3 in (0, 1):  # L (softplus) or k
             out.append((_inv_softplus_np(float(lo)), _inv_softplus_np(float(hi))))
         else:  # x0
             out.append((float(lo), float(hi)))
@@ -86,7 +94,9 @@ def _inv_softplus_np(y: float) -> float:
 def _initial_action_uniform_marginal_qrange(
     n_components: int,
     spread_max: float,
-    total_q_target: float | None,
+    quote_size_target_per_side: float | None,
+    *,
+    use_softmax_L: bool = False,
 ) -> np.ndarray | None:
     """
     Build an initial flat action (raw optimizer params) using a simple linear-range
@@ -94,16 +104,16 @@ def _initial_action_uniform_marginal_qrange(
 
     We place x0 near N/2 and choose a small k so most of [0..N] lies in the near-linear
     part of sigmoid. Then pick L so baseline-shift marginal is approximately uniform:
-      m(s) = D(s)-D(s-1) ~= total_q_target / N.
+      m(s) = D(s)-D(s-1) ~= quote_size_target_per_side / N.
 
     Finally we rescale L for exact baseline-shift total:
-      D(N) - D(0) = total_q_target.
+      D(N) - D(0) = quote_size_target_per_side.
     """
-    if total_q_target is None or float(total_q_target) <= 0.0:
+    if quote_size_target_per_side is None or float(quote_size_target_per_side) <= 0.0:
         return None
     n = max(1, int(n_components))
     sm = max(1, int(round(float(spread_max))))
-    q_level = float(total_q_target) / float(sm)
+    q_level = float(quote_size_target_per_side) / float(sm)
     x0_center = 0.5 * float(sm)
     # Keep each component centered in the same linear region; tiny jitter avoids exact symmetry.
     if n == 1:
@@ -123,10 +133,13 @@ def _initial_action_uniform_marginal_qrange(
     s_hi = 1.0 / (1.0 + np.exp(-(k_eff * (float(sm) - x0))))
     s_lo = 1.0 / (1.0 + np.exp(-(k_eff * (0.0 - x0))))
     d_n = float(np.sum(L_eff * (s_hi - s_lo)))
-    if d_n > 1e-12:
-        L_eff *= float(total_q_target) / d_n
+    if d_n > 1e-12 and not use_softmax_L:
+        L_eff *= float(quote_size_target_per_side) / d_n
 
-    L_raw = np.array([_inv_softplus_np(v) for v in L_eff], dtype=np.float64)
+    if use_softmax_L:
+        L_raw = np.zeros(n, dtype=np.float64)
+    else:
+        L_raw = np.array([_inv_softplus_np(v) for v in L_eff], dtype=np.float64)
     k_raw = np.array([_inv_softplus_np(v) for v in k_eff], dtype=np.float64)
 
     bid_part: list[float] = []
@@ -137,34 +150,79 @@ def _initial_action_uniform_marginal_qrange(
     return np.array(bid_part + ask_part, dtype=np.float64)
 
 
-def _project_total_q_torch(
+def _clamp_quote_size_per_side(
+    cur_q: float,
+    *,
+    quote_size_min_per_side: float | None,
+    quote_size_max_per_side: float | None,
+) -> float:
+    lo = float(quote_size_min_per_side) if quote_size_min_per_side is not None else -float("inf")
+    hi = float(quote_size_max_per_side) if quote_size_max_per_side is not None else float("inf")
+    return float(min(max(cur_q, lo), hi))
+
+
+def _desired_quote_size_per_side(
+    cur_q: float,
+    *,
+    quote_size_target_per_side: float | None,
+    hard_project_quote_size_target: bool,
+    quote_size_min_per_side: float | None,
+    quote_size_max_per_side: float | None,
+    hard_project_quote_size_range: bool,
+) -> float | None:
+    """Option A: hard target projection first, then hard range projection."""
+
+    eps = 1e-12
+    if cur_q <= eps:
+        return None
+    use_target = bool(
+        hard_project_quote_size_target
+        and quote_size_target_per_side is not None
+        and float(quote_size_target_per_side) > 0.0
+    )
+    has_range = (quote_size_min_per_side is not None) or (quote_size_max_per_side is not None)
+    use_range = bool(hard_project_quote_size_range and has_range)
+    if not use_target and not use_range:
+        return None
+
+    q = cur_q
+    if use_target:
+        q = float(quote_size_target_per_side)
+    if use_range:
+        q = _clamp_quote_size_per_side(
+            q,
+            quote_size_min_per_side=quote_size_min_per_side,
+            quote_size_max_per_side=quote_size_max_per_side,
+        )
+    if abs(q - cur_q) <= eps * max(1.0, abs(cur_q)):
+        return None
+    return q
+
+
+def _project_quote_size_torch(
     x_torch: Any,
     single_len: int,
     n_components: int,
-    total_q_min: float | None,
-    total_q_max: float | None,
-    total_q_target: float | None,
-    project_total_q_target: bool,
+    *,
+    quote_size_target_per_side: float | None,
+    hard_project_quote_size_target: bool,
+    quote_size_min_per_side: float | None,
+    quote_size_max_per_side: float | None,
+    hard_project_quote_size_range: bool,
     spread_max: float,
     torch_mod: Any,
 ) -> None:
     """
-    In-place project L by quoted size over discretizer range s=1..N (N=spread_max),
+    In-place project L by quoted size over discretizer range s=0..N (N=spread_max),
     under baseline-shift convention Q_range = D(N) - D(0).
 
-    - If project_total_q_target is True and total_q_target > 0, enforce Q_range ~= target.
-    - Otherwise, project Q_range into [total_q_min, total_q_max] when bounds are set.
+    Target and range projection are independent toggles. When both are enabled, target
+    projection runs first and range projection clamps the result.
     """
-    has_range_bounds = (total_q_min is not None) or (total_q_max is not None)
-    use_target = bool(project_total_q_target and total_q_target is not None and float(total_q_target) > 0.0)
-    if (not has_range_bounds) and (not use_target):
-        return
-    total_q_min_f = float(total_q_min) if total_q_min is not None else None
-    total_q_max_f = float(total_q_max) if total_q_max is not None else None
-    total_q_target_f = float(total_q_target) if total_q_target is not None else None
     spread_hi = max(0.0, float(spread_max))
     spread_lo = 0.0
     eps = 1e-12
+    n = n_components
 
     def _effective_qrange(side_off: int, start: int) -> float:
         q = 0.0
@@ -182,18 +240,17 @@ def _project_total_q_torch(
         except Exception:
             return 0.0
 
-    def _desired(cur_q: float) -> float | None:
-        if use_target:
-            return total_q_target_f
-        lo = total_q_min_f if total_q_min_f is not None else -float("inf")
-        hi = total_q_max_f if total_q_max_f is not None else float("inf")
-        return float(min(max(cur_q, lo), hi))
-
-    n = n_components
     num_slices = x_torch.numel() // single_len
     for start in range(0, num_slices * single_len, single_len):
         cur_bid = _effective_qrange(0, start)
-        tgt_bid = _desired(cur_bid)
+        tgt_bid = _desired_quote_size_per_side(
+            cur_bid,
+            quote_size_target_per_side=quote_size_target_per_side,
+            hard_project_quote_size_target=hard_project_quote_size_target,
+            quote_size_min_per_side=quote_size_min_per_side,
+            quote_size_max_per_side=quote_size_max_per_side,
+            hard_project_quote_size_range=hard_project_quote_size_range,
+        )
         if tgt_bid is not None and cur_bid > eps:
             factor_bid = float(tgt_bid) / max(cur_bid, eps)
             with torch_mod.no_grad():
@@ -202,7 +259,14 @@ def _project_total_q_torch(
                     x_torch[idx].copy_(x_torch[idx] * factor_bid)
 
         cur_ask = _effective_qrange(3 * n, start)
-        tgt_ask = _desired(cur_ask)
+        tgt_ask = _desired_quote_size_per_side(
+            cur_ask,
+            quote_size_target_per_side=quote_size_target_per_side,
+            hard_project_quote_size_target=hard_project_quote_size_target,
+            quote_size_min_per_side=quote_size_min_per_side,
+            quote_size_max_per_side=quote_size_max_per_side,
+            hard_project_quote_size_range=hard_project_quote_size_range,
+        )
         if tgt_ask is not None and cur_ask > eps:
             factor_ask = float(tgt_ask) / max(cur_ask, eps)
             with torch_mod.no_grad():
@@ -211,23 +275,18 @@ def _project_total_q_torch(
                     x_torch[idx].copy_(x_torch[idx] * factor_ask)
 
 
-def _project_total_q_flat(
+def _project_quote_size_flat(
     flat: np.ndarray,
     n_components: int,
-    total_q_min: float | None,
-    total_q_max: float | None,
-    total_q_target: float | None,
-    project_total_q_target: bool,
+    *,
+    quote_size_target_per_side: float | None,
+    hard_project_quote_size_target: bool,
+    quote_size_min_per_side: float | None,
+    quote_size_max_per_side: float | None,
+    hard_project_quote_size_range: bool,
     spread_max: float,
 ) -> np.ndarray:
-    """
-    Project one flat param vector by quoted size over discretizer range s=1..N
-    (N=spread_max), under baseline-shift convention Q_range = D(N) - D(0).
-    """
-    has_range_bounds = (total_q_min is not None) or (total_q_max is not None)
-    use_target = bool(project_total_q_target and total_q_target is not None and float(total_q_target) > 0.0)
-    if (not has_range_bounds) and (not use_target):
-        return flat
+    """Project one flat param vector using the same target-then-range semantics."""
     out = np.array(flat, dtype=np.float64, copy=True)
     n = n_components
     spread_hi = max(0.0, float(spread_max))
@@ -235,7 +294,6 @@ def _project_total_q_flat(
     eps = 1e-12
 
     def _softplus_np(x: float) -> float:
-        # Stable softplus matching torch behavior closely enough for projection.
         return float(np.log1p(np.exp(-abs(float(x)))) + max(float(x), 0.0) + 1e-8)
 
     def _sigmoid_np(x: float) -> float:
@@ -256,28 +314,24 @@ def _project_total_q_flat(
             q += L_eff * (s_hi - s_lo)
         return float(q)
 
-    def _desired(cur_q: float) -> float:
-        if use_target:
-            return float(total_q_target)
-        lo = float(total_q_min) if total_q_min is not None else -float("inf")
-        hi = float(total_q_max) if total_q_max is not None else float("inf")
-        return float(min(max(cur_q, lo), hi))
-
-    cur_bid = _effective_qrange(0)
-    if cur_bid > eps:
-        target_bid = _desired(cur_bid)
-        scale = target_bid / max(cur_bid, eps)
+    def _project_side(side_off: int) -> None:
+        cur_q = _effective_qrange(side_off)
+        desired = _desired_quote_size_per_side(
+            cur_q,
+            quote_size_target_per_side=quote_size_target_per_side,
+            hard_project_quote_size_target=hard_project_quote_size_target,
+            quote_size_min_per_side=quote_size_min_per_side,
+            quote_size_max_per_side=quote_size_max_per_side,
+            hard_project_quote_size_range=hard_project_quote_size_range,
+        )
+        if desired is None or cur_q <= eps:
+            return
+        scale = float(desired) / max(cur_q, eps)
         for i in range(n):
-            out[3 * i] *= scale
+            out[side_off + 3 * i] *= scale
 
-    base = 3 * n
-    cur_ask = _effective_qrange(base)
-    if cur_ask > eps:
-        target_ask = _desired(cur_ask)
-        scale = target_ask / max(cur_ask, eps)
-        for i in range(n):
-            out[base + 3 * i] *= scale
-
+    _project_side(0)
+    _project_side(3 * n)
     return out
 
 
@@ -397,6 +451,7 @@ def soft_fill_batched(
     maker_fee: float,
     soft_temp: float = 1.0,
     use_softplus: bool = True,
+    l_param: LParamConfig | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Batched soft transition using combined (book + quoted) depth:
@@ -412,8 +467,12 @@ def soft_fill_batched(
       ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
-    depth_bid = effective_depth_bid_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
-    depth_ask = effective_depth_ask_tensor(params, spread_grid, n_components, use_softplus=use_softplus)
+    depth_bid = effective_depth_bid_tensor(
+        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
+    )
+    depth_ask = effective_depth_ask_tensor(
+        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
+    )
     eps = 1e-12
     # Convert cumulative quoted depth to marginal level sizes.
     depth_bid_prev = torch.cat([torch.zeros_like(depth_bid[:1]), depth_bid[:-1]], dim=0)
@@ -486,10 +545,11 @@ def _action_uniformity_l2_from_marginal_depth(
     params: torch.Tensor,
     spread_ticks: torch.Tensor,
     n_components: int,
-    total_q_target: float | None,
+    quote_size_target_per_side: float | None,
     spread_max: float,
     *,
     use_softplus: bool = True,
+    l_param: LParamConfig | None = None,
 ) -> torch.Tensor:
     """
     L2-to-uniform regularizer from discrete marginal depth implied by cumulative depth.
@@ -500,7 +560,7 @@ def _action_uniformity_l2_from_marginal_depth(
       marg[s] = D(s) - D(s-1), s >= 2
 
     Then each side is penalized in raw units against the uniform target level:
-      q_uniform = total_q_target / spread_max
+      q_uniform = quote_size_target_per_side / spread_max
     (no probability normalization).
     Returns average penalty across bid and ask.
     """
@@ -508,8 +568,12 @@ def _action_uniformity_l2_from_marginal_depth(
         return params.sum() * 0.0
 
     torch_mod = _get_torch()
-    bid_cum = effective_depth_bid_tensor(params, spread_ticks, n_components, use_softplus)
-    ask_cum = effective_depth_ask_tensor(params, spread_ticks, n_components, use_softplus)
+    bid_cum = effective_depth_bid_tensor(
+        params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
+    )
+    ask_cum = effective_depth_ask_tensor(
+        params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
+    )
     bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_cum[:1]), bid_cum[:-1]], dim=0)
     ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_cum[:1]), ask_cum[:-1]], dim=0)
     bid_marg = torch_mod.clamp(
@@ -520,7 +584,7 @@ def _action_uniformity_l2_from_marginal_depth(
         ask_cum - ask_prev,
         min=0.0,
     )
-    q_target = max(0.0, float(total_q_target or 0.0))
+    q_target = max(0.0, float(quote_size_target_per_side or 0.0))
     denom = max(1.0, float(spread_max))
     q_uniform = q_target / denom
     uni = torch_mod.full_like(bid_marg, q_uniform)
@@ -534,9 +598,10 @@ def _action_size_penalty_qrange(
     params: torch.Tensor,
     n_components: int,
     spread_max: float,
-    total_q_target: float | None,
+    quote_size_target_per_side: float | None,
     *,
     use_softplus: bool = True,
+    l_param: LParamConfig | None = None,
 ) -> torch.Tensor:
     """
     Squared error penalty to target quoted size over discretizer range s=1..N
@@ -544,7 +609,7 @@ def _action_size_penalty_qrange(
       (Q_range_bid - Q_target)^2 + (Q_range_ask - Q_target)^2
     where Q_range_side = D_side(spread_max) - D_side(0).
     """
-    if total_q_target is None or float(total_q_target) <= 0.0 or n_components <= 0:
+    if quote_size_target_per_side is None or float(quote_size_target_per_side) <= 0.0 or n_components <= 0:
         return params.sum() * 0.0
     torch_mod = _get_torch()
     s = torch_mod.tensor(
@@ -552,11 +617,20 @@ def _action_size_penalty_qrange(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = effective_depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
-    ask_depth = effective_depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    bid_depth = effective_depth_bid_tensor(
+        params, s, n_components, use_softplus=use_softplus, l_param=l_param
+    )
+    ask_depth = effective_depth_ask_tensor(
+        params, s, n_components, use_softplus=use_softplus, l_param=l_param
+    )
     q_bid = torch_mod.clamp(bid_depth[1] - bid_depth[0], min=0.0)
     q_ask = torch_mod.clamp(ask_depth[1] - ask_depth[0], min=0.0)
-    tgt = torch_mod.tensor(float(total_q_target), dtype=params.dtype, device=params.device)
+    tgt_q = (
+        l_param.effective_quote_size_target()
+        if l_param is not None and l_param.use_softmax
+        else float(quote_size_target_per_side)
+    )
+    tgt = torch_mod.tensor(float(tgt_q), dtype=params.dtype, device=params.device)
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
@@ -567,6 +641,7 @@ def _action_spread_at_depth(
     target_cumulative_qty: float,
     *,
     use_softplus: bool = True,
+    l_param: LParamConfig | None = None,
     grid_points: int = 100,
     softmin_temp: float = 40.0,
 ) -> torch.Tensor:
@@ -587,8 +662,12 @@ def _action_spread_at_depth(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = effective_depth_bid_tensor(params, s, n_components, use_softplus=use_softplus)
-    ask_depth = effective_depth_ask_tensor(params, s, n_components, use_softplus=use_softplus)
+    bid_depth = effective_depth_bid_tensor(
+        params, s, n_components, use_softplus=use_softplus, l_param=l_param
+    )
+    ask_depth = effective_depth_ask_tensor(
+        params, s, n_components, use_softplus=use_softplus, l_param=l_param
+    )
     tgt = torch_mod.tensor(float(target_cumulative_qty), dtype=params.dtype, device=params.device)
     bid_err = torch_mod.abs(bid_depth - tgt)
     ask_err = torch_mod.abs(ask_depth - tgt)
@@ -638,8 +717,8 @@ class MonteCarloMPCTensorBatched:
         device: str | None = None,
         bounds: list[tuple[float, float]] | None = None,
         warm_start: bool = False,
-        total_q_min: float | int | None = None,
-        total_q_max: float | int | None = None,
+        quote_size_min_per_side: float | int | None = None,
+        quote_size_max_per_side: float | int | None = None,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
         inv_coef: float | None = None,
@@ -654,8 +733,6 @@ class MonteCarloMPCTensorBatched:
         hedge_coef: float = 0.0,
         hedge_fee: float = 0.0,
         hedge_reward_weight: float = 1.0,
-        total_q_target: float | int | None = None,
-        project_total_q_target: bool = False,
         expected_pnl_weight: float | None = None,
         pnl_volatility_penalty_weight: float | None = None,
         inventory_target_penalty_weight: float | None = None,
@@ -666,7 +743,9 @@ class MonteCarloMPCTensorBatched:
         quote_depth_target_for_spread: float | None = None,
         hedge_rollout_enabled: bool | None = None,
         quote_size_target_per_side: float | int | None = None,
-        hard_project_quote_size_target: bool | None = None,
+        hard_project_quote_size_target: bool = False,
+        hard_project_quote_size_range: bool = False,
+        quote_size_softmax_L: bool = False,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -684,8 +763,12 @@ class MonteCarloMPCTensorBatched:
         self.adam_grad_clip = adam_grad_clip
         self.device = device
         self.warm_start = warm_start
-        self.total_q_min = float(total_q_min) if total_q_min is not None else None
-        self.total_q_max = float(total_q_max) if total_q_max is not None else None
+        self.quote_size_min_per_side = (
+            float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
+        )
+        self.quote_size_max_per_side = (
+            float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
+        )
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
         self.expected_pnl_weight = float(_coalesce_param(expected_pnl_weight, reward_coef, default=1.0))
@@ -718,11 +801,18 @@ class MonteCarloMPCTensorBatched:
         # otherwise this constructor value is used (backward compatible).
         self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
         self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
-        quote_size_target = _coalesce_param(quote_size_target_per_side, total_q_target, default=None)
-        self.quote_size_target_per_side = float(quote_size_target) if quote_size_target is not None else None
-        self.hard_project_quote_size_target = bool(
-            _coalesce_param(hard_project_quote_size_target, project_total_q_target, default=False)
+        self.quote_size_target_per_side = (
+            float(quote_size_target_per_side) if quote_size_target_per_side is not None else None
         )
+        self.hard_project_quote_size_target = bool(hard_project_quote_size_target)
+        self.hard_project_quote_size_range = bool(hard_project_quote_size_range)
+        self.quote_size_softmax_L = bool(quote_size_softmax_L)
+        if self.quote_size_softmax_L and (
+            self.quote_size_target_per_side is None or float(self.quote_size_target_per_side) <= 0.0
+        ):
+            raise ValueError(
+                "quote_size_softmax_L requires positive quote_size_target_per_side"
+            )
         # Backward-compatible attribute names used internally and by existing tests/tools.
         self.reward_coef = self.expected_pnl_weight
         self.risk_coef = self.pnl_volatility_penalty_weight
@@ -732,9 +822,8 @@ class MonteCarloMPCTensorBatched:
         self.spread_coef = self.quote_spread_penalty_weight
         self.spread_depth = self.quote_depth_target_for_spread
         self.target_inv = self.target_inventory
-        self.total_q_target = self.quote_size_target_per_side
-        self.project_total_q_target = self.hard_project_quote_size_target
         self._last_action: SigmoidMixtureAction | None = None
+        self._last_raw_flat: np.ndarray | None = None
         self._last_J_components: dict | None = None
         self._last_J_components_initial: dict | None = None
         self._last_J_mean_raw: float = 0.0
@@ -749,23 +838,60 @@ class MonteCarloMPCTensorBatched:
         self._optimizer: Any = None
 
         if bounds is None:
-            L_max = 1e5
-            if self.total_q_max is not None:
-                L_max = max(L_max, float(self.total_q_max))
-            if self.total_q_target is not None:
-                L_max = max(L_max, float(self.total_q_target))
-            self.bounds = sigmoid_mixture_action_bounds(
-                n_components=self.n_components,
-                L_max=L_max,
-                k_max=100.0,
-                x0_max=self.spread_max,
-            )
+            if self.quote_size_softmax_L:
+                n = self.n_components
+                logit_bound = (-30.0, 30.0)
+                k_bound = (1e-6, 100.0)
+                x0_bound = (-self.spread_max, self.spread_max)
+                self.bounds = [logit_bound, k_bound, x0_bound] * (2 * n)
+            else:
+                L_max = 1e5
+                if self.quote_size_max_per_side is not None:
+                    L_max = max(L_max, float(self.quote_size_max_per_side))
+                if self.quote_size_target_per_side is not None:
+                    L_max = max(L_max, float(self.quote_size_target_per_side))
+                self.bounds = sigmoid_mixture_action_bounds(
+                    n_components=self.n_components,
+                    L_max=L_max,
+                    k_max=100.0,
+                    x0_max=self.spread_max,
+                )
         else:
             self.bounds = bounds
 
     @property
     def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
         return self._last_diagnostics
+
+    def _l_param_config(self) -> LParamConfig | None:
+        if not self.quote_size_softmax_L:
+            return None
+        return LParamConfig(
+            use_softmax=True,
+            quote_size_target=self.quote_size_target_per_side,
+            spread_max=self.spread_max,
+            quote_size_min=self.quote_size_min_per_side,
+            quote_size_max=self.quote_size_max_per_side,
+            apply_quote_size_range=self.hard_project_quote_size_range,
+        )
+
+    def _depth_call_kwargs(self) -> dict[str, Any]:
+        return {"use_softplus": True, "l_param": self._l_param_config()}
+
+    def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
+        lp = self._l_param_config()
+        if lp is not None:
+            return sigmoid_action_from_flat_raw(flat, self.n_components, l_param=lp)
+        return SigmoidMixtureAction.from_flat_positive(flat, n_components=self.n_components).as_effective()
+
+    def _quote_size_projection_kwargs(self) -> dict[str, Any]:
+        return {
+            "quote_size_target_per_side": self.quote_size_target_per_side,
+            "hard_project_quote_size_target": self.hard_project_quote_size_target,
+            "quote_size_min_per_side": self.quote_size_min_per_side,
+            "quote_size_max_per_side": self.quote_size_max_per_side,
+            "hard_project_quote_size_range": self.hard_project_quote_size_range,
+        }
 
     def optimize(self, state: State) -> SigmoidMixtureAction:
         action, _ = self.optimize_with_diagnostics(state)
@@ -803,13 +929,16 @@ class MonteCarloMPCTensorBatched:
         single_len = 6 * n
         param_len = self.horizon * single_len
 
-        if self.warm_start and self._last_action is not None:
+        if self.warm_start and self._last_raw_flat is not None:
+            one_action = np.array(self._last_raw_flat[:single_len], dtype=np.float64)
+        elif self.warm_start and self._last_action is not None:
             one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
         else:
             one_action = _initial_action_uniform_marginal_qrange(
                 n_components=n,
                 spread_max=self.spread_max,
-                total_q_target=self.total_q_target,
+                quote_size_target_per_side=self.quote_size_target_per_side,
+                use_softmax_L=self.quote_size_softmax_L,
             )
             if one_action is None:
                 sm = self.spread_max
@@ -824,7 +953,7 @@ class MonteCarloMPCTensorBatched:
 
         # Bounds are specified in effective model space. Convert L/k bounds to raw
         # parameter space because optimization variable x_torch is raw.
-        bounds_raw = _bounds_effective_to_raw(self.bounds)
+        bounds_raw = _bounds_effective_to_raw(self.bounds, l_softmax=self.quote_size_softmax_L)
         bounds_full = bounds_raw * self.horizon
         lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
         upper = torch_mod.tensor([b[1] for b in bounds_full], dtype=dtype, device=_device)
@@ -897,18 +1026,15 @@ class MonteCarloMPCTensorBatched:
         spread_levels = tuple(
             round(i * self.spread_step, 12) for i in range(self.grid_levels + 1)
         )
-        initial_flat = _project_total_q_flat(
-            x_torch.detach().cpu().numpy()[:single_len],
-            n,
-            self.total_q_min,
-            self.total_q_max,
-            self.total_q_target,
-            self.project_total_q_target,
-            self.spread_max,
-        )
-        initial_action = SigmoidMixtureAction.from_flat_positive(
-            initial_flat, n_components=self.n_components
-        ).as_effective()
+        initial_flat = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
+        if not self.quote_size_softmax_L:
+            initial_flat = _project_quote_size_flat(
+                initial_flat,
+                n,
+                spread_max=self.spread_max,
+                **self._quote_size_projection_kwargs(),
+            )
+        initial_action = self._flat_to_effective_action(initial_flat)
         action_initial_snap = build_action_snapshot(
             initial_action, mid=mid_0, spread_levels=spread_levels
         )
@@ -932,15 +1058,13 @@ class MonteCarloMPCTensorBatched:
         for epoch in range(self.adam_epochs):
             if self.verbose:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
-                cur_flat = _project_total_q_flat(
-                    cur_flat,
-                    n,
-                    self.total_q_min,
-                    self.total_q_max,
-                    self.total_q_target,
-                    self.project_total_q_target,
-                    self.spread_max,
-                )
+                if not self.quote_size_softmax_L:
+                    cur_flat = _project_quote_size_flat(
+                        cur_flat,
+                        n,
+                        spread_max=self.spread_max,
+                        **self._quote_size_projection_kwargs(),
+                    )
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
             def closure():
@@ -949,12 +1073,15 @@ class MonteCarloMPCTensorBatched:
                 optimizer.zero_grad()
                 with torch_mod.no_grad():
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
-                    _project_total_q_torch(
-                        x_torch, single_len, n,
-                        self.total_q_min, self.total_q_max,
-                        self.total_q_target, self.project_total_q_target,
-                        self.spread_max, torch_mod,
-                    )
+                    if not self.quote_size_softmax_L:
+                        _project_quote_size_torch(
+                            x_torch,
+                            single_len,
+                            n,
+                            spread_max=self.spread_max,
+                            torch_mod=torch_mod,
+                            **self._quote_size_projection_kwargs(),
+                        )
 
                 if self.fixed_mc_samples:
                     buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell = (
@@ -1018,27 +1145,28 @@ class MonteCarloMPCTensorBatched:
                         book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
+                    depth_kw = self._depth_call_kwargs()
                     action_uniformity_sum = action_uniformity_sum + _action_uniformity_l2_from_marginal_depth(
                         action_h,
                         spread_grid,
                         n,
-                        self.total_q_target,
+                        self.quote_size_target_per_side,
                         self.spread_max,
-                        use_softplus=True,
+                        **depth_kw,
                     )
                     action_size_sum = action_size_sum + _action_size_penalty_qrange(
                         action_h,
                         n,
                         self.spread_max,
-                        self.total_q_target,
-                        use_softplus=True,
+                        self.quote_size_target_per_side,
+                        **depth_kw,
                     )
                     action_spread_sum = action_spread_sum + _action_spread_at_depth(
                         action_h,
                         n,
                         self.spread_max,
                         self.spread_depth,
-                        use_softplus=True,
+                        **depth_kw,
                     )
                     sell_h = sell_vol[:, h : h + 1]
                     buy_h = buy_vol[:, h : h + 1]
@@ -1095,7 +1223,7 @@ class MonteCarloMPCTensorBatched:
                         spread_grid,
                         maker_fee,
                         soft_temp=self.soft_fill_temp,
-                        use_softplus=True,
+                        **depth_kw,
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
@@ -1253,30 +1381,23 @@ class MonteCarloMPCTensorBatched:
             total_sec = loop_elapsed
         best_flat = best_x.cpu().numpy()
         best_flat_slice = best_flat[:single_len]
-        best_flat_slice = _project_total_q_flat(
-            best_flat_slice,
-            n,
-            self.total_q_min,
-            self.total_q_max,
-            self.total_q_target,
-            self.project_total_q_target,
-            self.spread_max,
-        )
-        best_action = SigmoidMixtureAction.from_flat_positive(
-            best_flat_slice, n_components=self.n_components
-        ).as_effective()
-        final_flat_slice = _project_total_q_flat(
-            x_torch.detach().cpu().numpy()[:single_len],
-            n,
-            self.total_q_min,
-            self.total_q_max,
-            self.total_q_target,
-            self.project_total_q_target,
-            self.spread_max,
-        )
-        final_action = SigmoidMixtureAction.from_flat_positive(
-            final_flat_slice, n_components=self.n_components
-        ).as_effective()
+        if not self.quote_size_softmax_L:
+            best_flat_slice = _project_quote_size_flat(
+                best_flat_slice,
+                n,
+                spread_max=self.spread_max,
+                **self._quote_size_projection_kwargs(),
+            )
+        best_action = self._flat_to_effective_action(best_flat_slice)
+        final_flat_slice = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
+        if not self.quote_size_softmax_L:
+            final_flat_slice = _project_quote_size_flat(
+                final_flat_slice,
+                n,
+                spread_max=self.spread_max,
+                **self._quote_size_projection_kwargs(),
+            )
+        final_action = self._flat_to_effective_action(final_flat_slice)
         self._last_sigmoid_action = best_action
         if best_J_mean is not None and math.isfinite(float(best_J_mean)):
             self._last_E_dW = float(best_J_mean)
@@ -1291,6 +1412,7 @@ class MonteCarloMPCTensorBatched:
             self._last_hedge_reward_mean = float(best_hedge_reward_mean)
         if self.warm_start:
             self._last_action = best_action
+            self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
         if best_metrics is None and final_metrics is not None:
             best_metrics = final_metrics
         if initial_metrics is None and final_metrics is not None:

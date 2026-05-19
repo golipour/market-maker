@@ -291,9 +291,10 @@ def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -
         "adam_epochs": 10,
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
-        "total_q_min": order_constraints.min_qty,
+        "quote_size_min_per_side": order_constraints.min_qty,
         "quote_size_target_per_side": None,
         "hard_project_quote_size_target": False,
+        "hard_project_quote_size_range": False,
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)

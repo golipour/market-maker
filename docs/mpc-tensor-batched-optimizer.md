@@ -503,7 +503,7 @@ Cache them by `(device, dtype, grid_levels, horizon, n_samples, n_components)` w
 
 ### 8. Review Projection Math
 
-`_project_total_q_torch()` rescales raw `L` parameters, not effective `softplus(L)` values. Because `softplus(a*x)` is not equal to `a*softplus(x)`, the projection is approximate and nonlinear.
+`_project_quote_size_torch()` rescales raw `L` parameters, not effective `softplus(L)` values. Because `softplus(a*x)` is not equal to `a*softplus(x)`, the projection is approximate and nonlinear.
 
 If strict total quantity is important, project in effective space and transform back through inverse softplus, or make size control purely a differentiable penalty instead of a hard projection.
 

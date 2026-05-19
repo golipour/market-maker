@@ -149,11 +149,15 @@
       "inventory_target_penalty_weight": 0.0,
       "target_inventory": 10.0,
       "quote_shape_uniformity_penalty_weight": 0.0,
-      "quote_size_target_penalty_weight": 10000.0,
-      "quote_spread_penalty_weight": 100.0,
-      "quote_depth_target_for_spread": 1.0,
+      "quote_size_target_penalty_weight": 0.0,
+      "quote_spread_penalty_weight": 1.0,
+      "quote_depth_target_for_spread": 10.0,
       "quote_size_target_per_side": 3.0,
+      "quote_size_softmax_L": true,
       "hard_project_quote_size_target": false,
+      "quote_size_min_per_side": 0.1,
+      "quote_size_max_per_side": 10.0,
+      "hard_project_quote_size_range": false,
       "hedge_rollout_enabled": false
     }
   },

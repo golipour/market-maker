@@ -267,22 +267,22 @@ def _quantize_marginal_levels(
     return out
 
 
-def _top_up_levels_to_total_q_min_at_spread_max(
+def _top_up_levels_to_quote_size_min_at_spread_max(
     levels: list[tuple[float, int]],
     *,
     spread_max: float,
-    total_q_min: float | None,
+    quote_size_min_per_side: float | None,
     lot_size: int,
 ) -> list[tuple[float, int]]:
     """
-    After quantization, ensure cumulative quoted size reaches feasible total_q_min
+    After quantization, ensure cumulative quoted size reaches feasible quote_size_min_per_side
     by placing residual size at spread_max level.
     """
-    if total_q_min is None:
+    if quote_size_min_per_side is None:
         return levels
     lot_size = max(1, int(lot_size))
     # Keep target feasible in discrete lot units.
-    target_q = int(math.ceil(float(total_q_min) / float(lot_size))) * lot_size
+    target_q = int(math.ceil(float(quote_size_min_per_side) / float(lot_size))) * lot_size
     if target_q <= 0:
         return levels
     curr_q = int(sum(int(q) for _, q in levels))
@@ -307,7 +307,7 @@ def sigmoid_action_to_discretized_action(
     s_a_min: float = 1.0,
     s_a_max: float = 100.0,
     lot_size: int = 1,
-    total_q_min: float | None = None,
+    quote_size_min_per_side: float | None = None,
 ) -> DiscretizedOrderAction:
     """
     Convert SigmoidMixtureAction to a discrete ladder of (spread_ticks, qty) per side
@@ -344,18 +344,18 @@ def sigmoid_action_to_discretized_action(
     bids_q = _quantize_marginal_levels(bid_spreads, bid_marginal, lot_size)
     asks_q = _quantize_marginal_levels(ask_spreads, ask_marginal, lot_size)
     bids = tuple(
-        _top_up_levels_to_total_q_min_at_spread_max(
+        _top_up_levels_to_quote_size_min_at_spread_max(
             bids_q,
             spread_max=float(s_b_max),
-            total_q_min=total_q_min,
+            quote_size_min_per_side=quote_size_min_per_side,
             lot_size=lot_size,
         )
     )
     asks = tuple(
-        _top_up_levels_to_total_q_min_at_spread_max(
+        _top_up_levels_to_quote_size_min_at_spread_max(
             asks_q,
             spread_max=float(s_a_max),
-            total_q_min=total_q_min,
+            quote_size_min_per_side=quote_size_min_per_side,
             lot_size=lot_size,
         )
     )
