@@ -736,6 +736,8 @@ class MonteCarloMPCTensorBatched:
         hedge_reward_weight: float = 1.0,
         expected_pnl_weight: float | None = None,
         pnl_volatility_penalty_weight: float | None = None,
+        pnl_cvar_penalty_weight: float | None = None,
+        cvar_softmax_temperature: float = 10.0,
         inventory_target_penalty_weight: float | None = None,
         target_inventory: float | None = None,
         quote_shape_concentration_penalty_weight: float | None = None,
@@ -776,6 +778,8 @@ class MonteCarloMPCTensorBatched:
         self.pnl_volatility_penalty_weight = max(
             0.0, float(_coalesce_param(pnl_volatility_penalty_weight, risk_coef, default=0.0))
         )
+        self.pnl_cvar_penalty_weight = max(0.0, float(pnl_cvar_penalty_weight or 0.0))
+        self.cvar_softmax_temperature = max(1e-6, float(cvar_softmax_temperature))
         self.inventory_target_penalty_weight = max(
             0.0, float(_coalesce_param(inventory_target_penalty_weight, inv_coef, default=0.0))
         )
@@ -1322,6 +1326,8 @@ class MonteCarloMPCTensorBatched:
                     inventory_target_penalty_weight=self.inventory_target_penalty_weight,
                     target_inventory=self.target_inventory,
                     pnl_volatility_penalty_weight=self.pnl_volatility_penalty_weight,
+                    pnl_cvar_penalty_weight=self.pnl_cvar_penalty_weight,
+                    cvar_softmax_temperature=self.cvar_softmax_temperature,
                     concentration=action_concentration_mean,
                     quote_shape_concentration_penalty_weight=self.quote_shape_concentration_penalty_weight,
                     size=action_size_mean,

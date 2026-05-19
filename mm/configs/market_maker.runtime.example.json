@@ -87,7 +87,7 @@
     "action_topic": "strategy:actions",
     "orderbook_grid": {
       "spread_step": 10.0,
-      "spread_max": 500.0
+      "spread_max": 200.0
     },
     "max_orders_per_side": 100,
     "risk": {
@@ -145,7 +145,9 @@
       "adam_lr": 1e-1,
       "device": "cpu",
       "expected_pnl_weight": 1.0,
-      "pnl_volatility_penalty_weight": 1.0,
+      "pnl_volatility_penalty_weight": 0.0,
+      "pnl_cvar_penalty_weight": 0.0,
+      "cvar_softmax_temperature": 10.0,
       "inventory_target_penalty_weight": 0.0,
       "target_inventory": 10.0,
       "quote_shape_concentration_penalty_weight": 0.0,

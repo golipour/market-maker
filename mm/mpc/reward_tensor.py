@@ -6,11 +6,13 @@ Terminal objective (single mode):
   J = expected_pnl_weight * J_mean
       - inventory_target_penalty_weight * (J_inv - target_inventory)^2
       - pnl_volatility_penalty_weight * J_std
+      - pnl_cvar_penalty_weight * J_soft_cvar
       - quote_shape_concentration_penalty_weight * J_concentration
       - quote_size_target_penalty_weight * J_size
       - quote_spread_penalty_weight * J_spread
 where:
   J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW),
+  J_soft_cvar = -E_soft_tail[ΔW] (softmax weights on low-reward MC paths),
   J_concentration = E[Herfindahl marginal-depth concentration], J_size/J_spread are action penalties.
 """
 
@@ -149,6 +151,37 @@ def objective_std(delta_W: "Tensor") -> "Tensor":
     return torch.sqrt(v.clamp(min=1e-20))
 
 
+def objective_soft_tail_mean(
+    rewards: "Tensor",
+    *,
+    temperature: float = 10.0,
+) -> "Tensor":
+    """
+    Differentiable soft mean of the lower tail of per-path rewards.
+
+    ``w_i = softmax(-temperature * R_i)`` puts mass on low-reward Monte Carlo paths;
+    returns ``sum_i w_i * R_i``. Lower values indicate worse tail outcomes.
+    """
+    torch = _get_torch()
+    r = rewards.view(-1)
+    if r.numel() <= 0:
+        return r.sum()
+    beta = max(1e-6, float(temperature))
+    logits = -beta * (r - r.max())
+    w = torch.softmax(logits, dim=0)
+    return (w * r).sum()
+
+
+def objective_soft_cvar(rewards: "Tensor", *, temperature: float = 10.0) -> "Tensor":
+    """
+    Soft CVaR risk term aligned with hard ``cvar = -mean(worst_tail_rewards)``.
+
+    Positive when tail paths are bad (low reward); subtract ``pnl_cvar_penalty_weight * J``
+    from the objective to penalize downside tail risk.
+    """
+    return -objective_soft_tail_mean(rewards, temperature=temperature)
+
+
 def terminal_objective(
     delta_W: "Tensor",
     inv_terminal: "Tensor",
@@ -156,6 +189,8 @@ def terminal_objective(
     inventory_target_penalty_weight: float = 0.0,
     target_inventory: float = 0.0,
     pnl_volatility_penalty_weight: float = 0.0,
+    pnl_cvar_penalty_weight: float = 0.0,
+    cvar_softmax_temperature: float = 10.0,
     concentration: "Tensor | None" = None,
     quote_shape_concentration_penalty_weight: float = 0.0,
     uniformity: "Tensor | None" = None,
@@ -174,6 +209,8 @@ def terminal_objective(
     inventory_target_penalty_weight: weight for inventory target penalty.
     target_inventory: desired terminal inventory target.
     pnl_volatility_penalty_weight: weight for ΔW volatility penalty (J_std).
+    pnl_cvar_penalty_weight: weight for soft lower-tail CVaR penalty (J_soft_cvar).
+    cvar_softmax_temperature: softmax temperature for soft CVaR (higher = sharper tail focus).
     concentration: differentiable Herfindahl concentration term from marginal quote depth.
     quote_shape_concentration_penalty_weight: additive weight for concentration penalty.
     uniformity, quote_shape_uniformity_penalty_weight: deprecated aliases for concentration args.
@@ -188,6 +225,7 @@ def terminal_objective(
             - expected_pnl = expected_pnl_weight * J_mean
             - inventory_target_penalty = -inventory_target_penalty_weight * (J_inv - target_inventory)^2
             - pnl_volatility_penalty = -pnl_volatility_penalty_weight * J_std
+            - pnl_cvar_penalty = -pnl_cvar_penalty_weight * J_soft_cvar
             - quote_shape_concentration_penalty = -quote_shape_concentration_penalty_weight * J_concentration
             - quote_size_target_penalty = -quote_size_target_penalty_weight * J_size
             - quote_spread_penalty = -quote_spread_penalty_weight * J_spread
@@ -199,6 +237,7 @@ def terminal_objective(
     J_mean = objective_mean(delta_W)
     J_inv = objective_inv(inv_terminal)
     J_std = objective_std(delta_W)
+    J_soft_cvar = objective_soft_cvar(delta_W, temperature=cvar_softmax_temperature)
     conc_input = concentration if concentration is not None else uniformity
     conc_weight = (
         quote_shape_concentration_penalty_weight
@@ -225,6 +264,7 @@ def terminal_objective(
     term_reward = float(expected_pnl_weight) * J_mean
     term_inv = -float(inventory_target_penalty_weight) * J_inv_penalty
     term_risk = -float(pnl_volatility_penalty_weight) * J_std
+    term_cvar = -float(pnl_cvar_penalty_weight) * J_soft_cvar
     term_concentration = -float(conc_weight) * J_concentration
     term_size = -float(quote_size_target_penalty_weight) * J_size
     term_spread = -float(quote_spread_penalty_weight) * J_spread
@@ -232,10 +272,11 @@ def terminal_objective(
         "expected_pnl": term_reward,
         "inventory_target_penalty": term_inv,
         "pnl_volatility_penalty": term_risk,
+        "pnl_cvar_penalty": term_cvar,
         "quote_shape_concentration_penalty": term_concentration,
         "quote_size_target_penalty": term_size,
         "quote_spread_penalty": term_spread,
     }
-    J = term_reward + term_inv + term_risk + term_concentration + term_size + term_spread
+    J = term_reward + term_inv + term_risk + term_cvar + term_concentration + term_size + term_spread
 
     return J, components

@@ -132,6 +132,7 @@ def test_terminal_objective_uses_clear_component_names() -> None:
         "expected_pnl",
         "inventory_target_penalty",
         "pnl_volatility_penalty",
+        "pnl_cvar_penalty",
         "quote_shape_concentration_penalty",
         "quote_size_target_penalty",
         "quote_spread_penalty",

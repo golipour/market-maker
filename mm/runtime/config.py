@@ -664,6 +664,15 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "hedge": config.risk.hedge.as_dict(),
             "note": "hard gates only; inventory_target_penalty_weight lives under optimizer",
         },
+        "optimizer_risk_terms": {
+            "pnl_volatility_penalty_weight": "penalty on Std(total_reward) across MC paths",
+            "pnl_cvar_penalty_weight": (
+                "penalty on soft lower-tail CVaR of total_reward (softmax weights on worst paths)"
+            ),
+            "cvar_softmax_temperature": (
+                "softmax temperature for soft CVaR; higher focuses more on worst MC samples"
+            ),
+        },
         "optimizer_inventory_and_depth_targets": {
             "target_inventory": "desired inventory level for inventory_target_penalty_weight (base units)",
             "quote_size_target_per_side": (
