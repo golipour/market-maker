@@ -115,6 +115,51 @@ def _dashboard(
     }
 
 
+def _panel_objective_contribution_fractions(
+    id_: int,
+    y: int,
+    *,
+    diag_filter: str,
+    h: int = 8,
+    w: int = 24,
+    x: int = 0,
+) -> dict[str, Any]:
+    return {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {"unit": "percentunit", "decimals": 2, "min": 0, "max": 1},
+            "overrides": [],
+        },
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+            "tooltip": {"mode": "multi", "sort": "desc"},
+        },
+        "targets": [
+            {
+                "datasource": PG_DS,
+                "editorMode": "code",
+                "format": "time_series",
+                "rawQuery": True,
+                "rawSql": f"""SELECT e.ts AS "time",
+  stage || '/' || comp.key AS metric,
+  (comp.value)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective',stage,'contribution_fractions'], '{{}}'::jsonb)
+) AS comp(key, value)
+WHERE {diag_filter}
+ORDER BY 1""",
+                "refId": "A",
+            }
+        ],
+        "title": "Objective component contribution fractions (|term| share)",
+        "type": "timeseries",
+    }
+
+
 def _panel_objective_component(
     id_: int,
     y: int,
@@ -219,8 +264,8 @@ ORDER BY 1""",
         _panel_objective_component(
             15,
             25,
-            title="quote_shape_uniformity_penalty",
-            component_key="quote_shape_uniformity_penalty",
+            title="quote_shape_concentration_penalty",
+            component_key="quote_shape_concentration_penalty",
             diag_filter=diag_filter,
             x=12,
         ),
@@ -240,9 +285,14 @@ ORDER BY 1""",
             diag_filter=diag_filter,
             x=12,
         ),
+        _panel_objective_contribution_fractions(
+            18,
+            37,
+            diag_filter=diag_filter,
+        ),
         _panel_sql_timeseries(
             30,
-            37,
+            45,
             "Action pipeline — order count by stage",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #> ARRAY['action_pipeline',stage,'order_count'])::int::double precision AS value
@@ -255,7 +305,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             31,
-            45,
+            53,
             "Execution gate blocks (by reason)",
             f"""SELECT e.ts AS "time", reason.value AS metric, 1::double precision AS value
 FROM mm_events e
@@ -267,7 +317,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             32,
-            53,
+            61,
             "Risk rejection counts",
             f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
 FROM mm_events e

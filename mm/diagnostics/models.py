@@ -30,6 +30,7 @@ class ObjectiveSnapshot:
     value: float | None = None
     loss: float | None = None
     components: dict[str, float] = field(default_factory=dict)
+    contribution_fractions: dict[str, float] = field(default_factory=dict)
     expected_total_reward: float | None = None
     expected_next_reward: float | None = None
     main_reward_mean: float | None = None

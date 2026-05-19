@@ -6,12 +6,12 @@ Terminal objective (single mode):
   J = expected_pnl_weight * J_mean
       - inventory_target_penalty_weight * (J_inv - target_inventory)^2
       - pnl_volatility_penalty_weight * J_std
-      - quote_shape_uniformity_penalty_weight * J_uniformity
+      - quote_shape_concentration_penalty_weight * J_concentration
       - quote_size_target_penalty_weight * J_size
       - quote_spread_penalty_weight * J_spread
 where:
   J_mean = E[ΔW], J_inv = E[q_{t+H}], J_std = Std(ΔW),
-  J_uniformity = E[L2-to-uniform marginal penalty], J_size/J_spread are action penalties.
+  J_concentration = E[Herfindahl marginal-depth concentration], J_size/J_spread are action penalties.
 """
 
 from __future__ import annotations
@@ -156,6 +156,8 @@ def terminal_objective(
     inventory_target_penalty_weight: float = 0.0,
     target_inventory: float = 0.0,
     pnl_volatility_penalty_weight: float = 0.0,
+    concentration: "Tensor | None" = None,
+    quote_shape_concentration_penalty_weight: float = 0.0,
     uniformity: "Tensor | None" = None,
     quote_shape_uniformity_penalty_weight: float = 0.0,
     size: "Tensor | None" = None,
@@ -172,8 +174,9 @@ def terminal_objective(
     inventory_target_penalty_weight: weight for inventory target penalty.
     target_inventory: desired terminal inventory target.
     pnl_volatility_penalty_weight: weight for ΔW volatility penalty (J_std).
-    uniformity: differentiable L2-to-uniform regularizer term from marginal action distributions.
-    quote_shape_uniformity_penalty_weight: additive weight for uniformity penalty.
+    concentration: differentiable Herfindahl concentration term from marginal quote depth.
+    quote_shape_concentration_penalty_weight: additive weight for concentration penalty.
+    uniformity, quote_shape_uniformity_penalty_weight: deprecated aliases for concentration args.
     size: differentiable action-size penalty term.
     quote_size_target_penalty_weight: additive weight for size penalty.
     spread: differentiable spread-at-depth penalty term.
@@ -185,7 +188,7 @@ def terminal_objective(
             - expected_pnl = expected_pnl_weight * J_mean
             - inventory_target_penalty = -inventory_target_penalty_weight * (J_inv - target_inventory)^2
             - pnl_volatility_penalty = -pnl_volatility_penalty_weight * J_std
-            - quote_shape_uniformity_penalty = -quote_shape_uniformity_penalty_weight * J_uniformity
+            - quote_shape_concentration_penalty = -quote_shape_concentration_penalty_weight * J_concentration
             - quote_size_target_penalty = -quote_size_target_penalty_weight * J_size
             - quote_spread_penalty = -quote_spread_penalty_weight * J_spread
     """
@@ -196,11 +199,17 @@ def terminal_objective(
     J_mean = objective_mean(delta_W)
     J_inv = objective_inv(inv_terminal)
     J_std = objective_std(delta_W)
-    if uniformity is None:
-        J_uniformity = J_mean * 0.0
+    conc_input = concentration if concentration is not None else uniformity
+    conc_weight = (
+        quote_shape_concentration_penalty_weight
+        if quote_shape_concentration_penalty_weight != 0.0
+        else quote_shape_uniformity_penalty_weight
+    )
+    if conc_input is None:
+        J_concentration = J_mean * 0.0
     else:
-        J_uniformity = torch.nan_to_num(
-            uniformity.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6
+        J_concentration = torch.nan_to_num(
+            conc_input.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6
         )
     if size is None:
         J_size = J_mean * 0.0
@@ -216,17 +225,17 @@ def terminal_objective(
     term_reward = float(expected_pnl_weight) * J_mean
     term_inv = -float(inventory_target_penalty_weight) * J_inv_penalty
     term_risk = -float(pnl_volatility_penalty_weight) * J_std
-    term_uniformity = -float(quote_shape_uniformity_penalty_weight) * J_uniformity
+    term_concentration = -float(conc_weight) * J_concentration
     term_size = -float(quote_size_target_penalty_weight) * J_size
     term_spread = -float(quote_spread_penalty_weight) * J_spread
     components = {
         "expected_pnl": term_reward,
         "inventory_target_penalty": term_inv,
         "pnl_volatility_penalty": term_risk,
-        "quote_shape_uniformity_penalty": term_uniformity,
+        "quote_shape_concentration_penalty": term_concentration,
         "quote_size_target_penalty": term_size,
         "quote_spread_penalty": term_spread,
     }
-    J = term_reward + term_inv + term_risk + term_uniformity + term_size + term_spread
+    J = term_reward + term_inv + term_risk + term_concentration + term_size + term_spread
 
     return J, components

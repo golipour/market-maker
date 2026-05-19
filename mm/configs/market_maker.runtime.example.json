@@ -87,7 +87,7 @@
     "action_topic": "strategy:actions",
     "orderbook_grid": {
       "spread_step": 10.0,
-      "spread_max": 1000.0
+      "spread_max": 500.0
     },
     "max_orders_per_side": 100,
     "risk": {
@@ -148,12 +148,12 @@
       "pnl_volatility_penalty_weight": 1.0,
       "inventory_target_penalty_weight": 0.0,
       "target_inventory": 10.0,
-      "quote_shape_uniformity_penalty_weight": 0.0,
+      "quote_shape_concentration_penalty_weight": 0.0,
       "quote_size_target_penalty_weight": 0.0,
       "quote_spread_penalty_weight": 1.0,
       "quote_depth_target_for_spread": 10.0,
       "quote_size_target_per_side": 3.0,
-      "quote_size_softmax_L": true,
+      "quote_size_softmax_L": false,
       "hard_project_quote_size_target": false,
       "quote_size_min_per_side": 0.1,
       "quote_size_max_per_side": 10.0,

@@ -73,7 +73,7 @@ def test_clear_optimizer_names_map_to_legacy_attributes() -> None:
         pnl_volatility_penalty_weight=3.0,
         inventory_target_penalty_weight=4.0,
         target_inventory=5.0,
-        quote_shape_uniformity_penalty_weight=6.0,
+        quote_shape_concentration_penalty_weight=6.0,
         quote_size_target_penalty_weight=7.0,
         quote_spread_penalty_weight=8.0,
         quote_depth_target_for_spread=9.0,
@@ -92,7 +92,8 @@ def test_clear_optimizer_names_map_to_legacy_attributes() -> None:
     assert mpc.inv_coef == 4.0
     assert mpc.target_inventory == 5.0
     assert mpc.target_inv == 5.0
-    assert mpc.quote_shape_uniformity_penalty_weight == 6.0
+    assert mpc.quote_shape_concentration_penalty_weight == 6.0
+    assert mpc.concentration_coef == 6.0
     assert mpc.uniformity_coef == 6.0
     assert mpc.quote_size_target_penalty_weight == 7.0
     assert mpc.size_coef == 7.0
@@ -119,8 +120,8 @@ def test_terminal_objective_uses_clear_component_names() -> None:
         inventory_target_penalty_weight=0.5,
         target_inventory=2.0,
         pnl_volatility_penalty_weight=0.25,
-        uniformity=torch.tensor(4.0, dtype=torch.float64),
-        quote_shape_uniformity_penalty_weight=0.1,
+        concentration=torch.tensor(0.8, dtype=torch.float64),
+        quote_shape_concentration_penalty_weight=0.1,
         size=torch.tensor(5.0, dtype=torch.float64),
         quote_size_target_penalty_weight=0.2,
         spread=torch.tensor(6.0, dtype=torch.float64),
@@ -131,7 +132,7 @@ def test_terminal_objective_uses_clear_component_names() -> None:
         "expected_pnl",
         "inventory_target_penalty",
         "pnl_volatility_penalty",
-        "quote_shape_uniformity_penalty",
+        "quote_shape_concentration_penalty",
         "quote_size_target_penalty",
         "quote_spread_penalty",
     }

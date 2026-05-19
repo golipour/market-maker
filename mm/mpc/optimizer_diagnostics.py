@@ -22,6 +22,22 @@ def _components_to_float(components: dict[str, Any]) -> dict[str, float]:
     return {str(k): _finite(v) for k, v in components.items()}
 
 
+def compute_contribution_fractions(
+    components: dict[str, float],
+    *,
+    eps: float = 1e-12,
+) -> dict[str, float]:
+    """
+    Share of each weighted objective term by |component| / sum(|components|).
+
+    Makes it easy to see whether e.g. spread penalty dominates the scalar objective
+    regardless of sign.
+    """
+    abs_components = {str(k): abs(float(v)) for k, v in components.items()}
+    total_abs = sum(abs_components.values()) + float(eps)
+    return {k: v / total_abs for k, v in abs_components.items()}
+
+
 @dataclass(slots=True)
 class EpochObjectiveMetrics:
     """Scalar objective facts from one optimizer closure evaluation."""
@@ -62,6 +78,7 @@ class EpochObjectiveMetrics:
             value=self.objective_value,
             loss=self.loss,
             components=dict(self.components),
+            contribution_fractions=compute_contribution_fractions(self.components),
             expected_total_reward=self.expected_total_reward,
             expected_next_reward=self.expected_next_reward,
             main_reward_mean=self.main_reward_mean,
@@ -76,6 +93,7 @@ def objective_snapshot_payload(snapshot: ObjectiveSnapshot | None) -> dict[str, 
         "value": snapshot.value,
         "loss": snapshot.loss,
         "components": dict(snapshot.components),
+        "contribution_fractions": dict(snapshot.contribution_fractions),
         "expected_total_reward": snapshot.expected_total_reward,
         "expected_next_reward": snapshot.expected_next_reward,
         "main_reward_mean": snapshot.main_reward_mean,

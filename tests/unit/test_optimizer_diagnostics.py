@@ -7,7 +7,7 @@ import torch
 
 from mm.mpc.mpc_state import OrderbookRelative, State
 from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
-from mm.mpc.optimizer_diagnostics import EpochObjectiveMetrics
+from mm.mpc.optimizer_diagnostics import EpochObjectiveMetrics, compute_contribution_fractions
 from mm.mpc.reward_tensor import terminal_objective
 
 
@@ -46,6 +46,33 @@ def _minimal_state() -> State:
         buy_vwap=99.5,
         sell_vwap=100.5,
     )
+
+
+def test_contribution_fractions_sum_to_one() -> None:
+    components = {
+        "expected_pnl": 10.0,
+        "quote_spread_penalty": -8.0,
+        "inventory_target_penalty": -2.0,
+    }
+    fracs = compute_contribution_fractions(components)
+    assert fracs["expected_pnl"] == pytest.approx(0.5, rel=1e-9)
+    assert fracs["quote_spread_penalty"] == pytest.approx(0.4, rel=1e-9)
+    assert fracs["inventory_target_penalty"] == pytest.approx(0.1, rel=1e-9)
+    assert sum(fracs.values()) == pytest.approx(1.0, rel=1e-9)
+
+
+def test_objective_snapshot_includes_contribution_fractions() -> None:
+    metrics = EpochObjectiveMetrics.from_tensors(
+        objective_value=5.0,
+        components={"expected_pnl": 5.0, "quote_spread_penalty": -5.0},
+        expected_total_reward=0.0,
+        expected_next_reward=0.0,
+        main_reward_mean=0.0,
+        hedge_reward_mean=0.0,
+    )
+    snap = metrics.to_snapshot()
+    assert snap.contribution_fractions["expected_pnl"] == pytest.approx(0.5)
+    assert snap.contribution_fractions["quote_spread_penalty"] == pytest.approx(0.5)
 
 
 def test_objective_components_sum_equals_value() -> None:
@@ -87,7 +114,7 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
         device="cpu",
         inventory_target_penalty_weight=0.0,
         pnl_volatility_penalty_weight=0.0,
-        quote_shape_uniformity_penalty_weight=0.0,
+        quote_shape_concentration_penalty_weight=0.0,
         quote_size_target_penalty_weight=0.0,
         quote_spread_penalty_weight=0.0,
     )
@@ -100,6 +127,9 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
     assert float(best["value"]) >= float(initial["value"]) - 1e-9
     comp_sum = sum(float(v) for v in best["components"].values())
     assert comp_sum == pytest.approx(float(best["value"]), rel=1e-5)
+    fracs = best.get("contribution_fractions") or {}
+    assert fracs
+    assert sum(float(v) for v in fracs.values()) == pytest.approx(1.0, rel=1e-5)
     assert payload["action"]["best"]["effective_depth"]["bid"]
     assert payload["action"]["initial"]["effective_depth"]["bid"]
     assert diagnostics.best_epoch is not None

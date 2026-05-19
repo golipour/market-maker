@@ -541,57 +541,56 @@ def soft_fill_batched(
     return ob_bids_next, ob_asks_next, cash_delta, inv_delta
 
 
-def _action_uniformity_l2_from_marginal_depth(
+def _marginal_depth_from_cumulative(
+    bid_cum: torch.Tensor,
+    ask_cum: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Marginal per-level depth from baseline-shifted cumulative depth on spread_ticks."""
+    torch_mod = _get_torch()
+    bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_cum[:1]), bid_cum[:-1]], dim=0)
+    ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_cum[:1]), ask_cum[:-1]], dim=0)
+    bid_marg = torch_mod.clamp(bid_cum - bid_prev, min=0.0)
+    ask_marg = torch_mod.clamp(ask_cum - ask_prev, min=0.0)
+    return bid_marg, ask_marg
+
+
+def _herfindahl_concentration(marginal: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Herfindahl index of level shares: sum_i (q_i / Q)^2 in [1/n_levels, 1]."""
+    total = marginal.sum().clamp(min=eps)
+    share = marginal / total
+    return (share * share).sum()
+
+
+def _action_concentration_penalty_from_marginal_depth(
     params: torch.Tensor,
     spread_ticks: torch.Tensor,
     n_components: int,
-    quote_size_target_per_side: float | None,
-    spread_max: float,
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
 ) -> torch.Tensor:
     """
-    L2-to-uniform regularizer from discrete marginal depth implied by cumulative depth.
+    Penalize pathological concentration of quoted depth in a few spread buckets.
 
-    To match action discretization semantics, marginal levels are built from cumulative
-    depth on integer spreads with spread-0 baseline:
-      marg[1] = D(1) - D(0)
-      marg[s] = D(s) - D(s-1), s >= 2
+    Uses the Herfindahl index on marginal level shares (not a flat target shape):
+      H = sum_i (marg_i / sum_j marg_j)^2
 
-    Then each side is penalized in raw units against the uniform target level:
-      q_uniform = quote_size_target_per_side / spread_max
-    (no probability normalization).
-    Returns average penalty across bid and ask.
+    A single bucket with all depth gives H=1; uniform spread gives H=1/n_levels.
+    Returns the average of bid-side and ask-side H (scalar tensor).
     """
     if n_components <= 0 or spread_ticks.numel() <= 1:
         return params.sum() * 0.0
 
-    torch_mod = _get_torch()
     bid_cum = effective_depth_bid_tensor(
         params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
     )
     ask_cum = effective_depth_ask_tensor(
         params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
     )
-    bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_cum[:1]), bid_cum[:-1]], dim=0)
-    ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_cum[:1]), ask_cum[:-1]], dim=0)
-    bid_marg = torch_mod.clamp(
-        bid_cum - bid_prev,
-        min=0.0,
-    )
-    ask_marg = torch_mod.clamp(
-        ask_cum - ask_prev,
-        min=0.0,
-    )
-    q_target = max(0.0, float(quote_size_target_per_side or 0.0))
-    denom = max(1.0, float(spread_max))
-    q_uniform = q_target / denom
-    uni = torch_mod.full_like(bid_marg, q_uniform)
-    bid_l2 = torch.mean((bid_marg - uni) ** 2)
-    ask_l2 = torch.mean((ask_marg - uni) ** 2)
-    l2_mean = 0.5 * (bid_l2 + ask_l2)
-    return torch_mod.sqrt(torch_mod.clamp(l2_mean, min=1e-20))
+    bid_marg, ask_marg = _marginal_depth_from_cumulative(bid_cum, ask_cum)
+    h_bid = _herfindahl_concentration(bid_marg)
+    h_ask = _herfindahl_concentration(ask_marg)
+    return 0.5 * (h_bid + h_ask)
 
 
 def _action_size_penalty_qrange(
@@ -724,7 +723,9 @@ class MonteCarloMPCTensorBatched:
         inv_coef: float | None = None,
         target_inv: float | None = None,
         risk_coef: float | None = None,
+        concentration_coef: float | None = None,
         uniformity_coef: float | None = None,
+        quote_shape_uniformity_penalty_weight: float | None = None,
         reward_coef: float | None = None,
         size_coef: float | None = None,
         spread_coef: float | None = None,
@@ -737,7 +738,7 @@ class MonteCarloMPCTensorBatched:
         pnl_volatility_penalty_weight: float | None = None,
         inventory_target_penalty_weight: float | None = None,
         target_inventory: float | None = None,
-        quote_shape_uniformity_penalty_weight: float | None = None,
+        quote_shape_concentration_penalty_weight: float | None = None,
         quote_size_target_penalty_weight: float | None = None,
         quote_spread_penalty_weight: float | None = None,
         quote_depth_target_for_spread: float | None = None,
@@ -779,8 +780,17 @@ class MonteCarloMPCTensorBatched:
             0.0, float(_coalesce_param(inventory_target_penalty_weight, inv_coef, default=0.0))
         )
         self.target_inventory = float(_coalesce_param(target_inventory, target_inv, default=0.0))
-        self.quote_shape_uniformity_penalty_weight = max(
-            0.0, float(_coalesce_param(quote_shape_uniformity_penalty_weight, uniformity_coef, default=0.0))
+        self.quote_shape_concentration_penalty_weight = max(
+            0.0,
+            float(
+                _coalesce_param(
+                    quote_shape_concentration_penalty_weight,
+                    concentration_coef,
+                    quote_shape_uniformity_penalty_weight,
+                    uniformity_coef,
+                    default=0.0,
+                )
+            ),
         )
         self.quote_size_target_penalty_weight = max(
             0.0, float(_coalesce_param(quote_size_target_penalty_weight, size_coef, default=0.0))
@@ -817,7 +827,8 @@ class MonteCarloMPCTensorBatched:
         self.reward_coef = self.expected_pnl_weight
         self.risk_coef = self.pnl_volatility_penalty_weight
         self.inv_coef = self.inventory_target_penalty_weight
-        self.uniformity_coef = self.quote_shape_uniformity_penalty_weight
+        self.concentration_coef = self.quote_shape_concentration_penalty_weight
+        self.uniformity_coef = self.concentration_coef
         self.size_coef = self.quote_size_target_penalty_weight
         self.spread_coef = self.quote_spread_penalty_weight
         self.spread_depth = self.quote_depth_target_for_spread
@@ -1133,7 +1144,7 @@ class MonteCarloMPCTensorBatched:
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_hedge_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                action_uniformity_sum = torch_mod.zeros((), dtype=dtype, device=_device)
+                action_concentration_sum = torch_mod.zeros((), dtype=dtype, device=_device)
                 action_size_sum = torch_mod.zeros((), dtype=dtype, device=_device)
                 action_spread_sum = torch_mod.zeros((), dtype=dtype, device=_device)
 
@@ -1146,12 +1157,10 @@ class MonteCarloMPCTensorBatched:
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
                     depth_kw = self._depth_call_kwargs()
-                    action_uniformity_sum = action_uniformity_sum + _action_uniformity_l2_from_marginal_depth(
+                    action_concentration_sum = action_concentration_sum + _action_concentration_penalty_from_marginal_depth(
                         action_h,
                         spread_grid,
                         n,
-                        self.quote_size_target_per_side,
-                        self.spread_max,
                         **depth_kw,
                     )
                     action_size_sum = action_size_sum + _action_size_penalty_qrange(
@@ -1291,7 +1300,7 @@ class MonteCarloMPCTensorBatched:
                     hedge_inv_t = hedge_inv_next
 
                 # total_reward = ΔW per trajectory (same as W(s_{t+H}) - W(s_t)); inv_t = terminal inventory
-                action_uniformity_mean = action_uniformity_sum / float(self.horizon)
+                action_concentration_mean = action_concentration_sum / float(self.horizon)
                 action_size_mean = action_size_sum / float(self.horizon)
                 action_spread_mean = action_spread_sum / float(self.horizon)
                 J_mean_raw = torch_mod.nan_to_num(
@@ -1313,8 +1322,8 @@ class MonteCarloMPCTensorBatched:
                     inventory_target_penalty_weight=self.inventory_target_penalty_weight,
                     target_inventory=self.target_inventory,
                     pnl_volatility_penalty_weight=self.pnl_volatility_penalty_weight,
-                    uniformity=action_uniformity_mean,
-                    quote_shape_uniformity_penalty_weight=self.quote_shape_uniformity_penalty_weight,
+                    concentration=action_concentration_mean,
+                    quote_shape_concentration_penalty_weight=self.quote_shape_concentration_penalty_weight,
                     size=action_size_mean,
                     quote_size_target_penalty_weight=self.quote_size_target_penalty_weight,
                     spread=action_spread_mean,
