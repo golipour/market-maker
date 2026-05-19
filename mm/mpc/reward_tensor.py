@@ -4,7 +4,7 @@ and return a scalar tensor so gradients flow for training or gradient-based opti
 
 Terminal objective (single mode):
   J = expected_pnl_weight * J_mean
-      - inventory_target_penalty_weight * (J_inv - target_inventory)^2
+      - inventory_target_penalty_weight * |J_inv - target_inventory| / inventory_scale
       - pnl_volatility_penalty_weight * J_std
       - pnl_cvar_penalty_weight * J_soft_cvar
       - quote_shape_concentration_penalty_weight * J_concentration
@@ -203,8 +203,6 @@ def terminal_objective(
     wealth_scale: float = 1.0,
     inventory_scale: float = 1.0,
     normalize_components: bool = True,
-    penalty_shape: str = "softplus",
-    penalty_sharpness: float = 8.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
     Build scalar objective J from terminal ΔW and optional action regularizers.
@@ -228,14 +226,12 @@ def terminal_objective(
     inventory_scale: reference inventory for relative inventory-target penalty (base units).
     normalize_components: when true, scale reward/risk terms by ``wealth_scale`` and
         inventory penalty by ``inventory_scale`` so weights are dimensionless.
-    penalty_shape: ``softplus`` (default when normalized) or ``squared`` for penalty curvature.
-    penalty_sharpness: sharpness for softplus penalties (higher = closer to linear near zero).
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
         components: dict with weighted objective terms (ready for plotting/summing):
             - expected_pnl = expected_pnl_weight * J_mean
-            - inventory_target_penalty = -inventory_target_penalty_weight * (J_inv - target_inventory)^2
+            - inventory_target_penalty = -inventory_target_penalty_weight * |J_inv - target| / inventory_scale
             - pnl_volatility_penalty = -pnl_volatility_penalty_weight * J_std
             - pnl_cvar_penalty = -pnl_cvar_penalty_weight * J_soft_cvar
             - quote_shape_concentration_penalty = -quote_shape_concentration_penalty_weight * J_concentration
@@ -275,15 +271,7 @@ def terminal_objective(
     inv_scale = max(1e-8, float(inventory_scale))
     if normalize_components:
         J_mean_term = J_mean / w_scale
-        rel_inv = (J_inv - target) / inv_scale
-        if penalty_shape == "squared":
-            J_inv_penalty = rel_inv * rel_inv
-        else:
-            from mm.mpc.objective_normalize import softplus_unit_penalty_tensor
-
-            J_inv_penalty = softplus_unit_penalty_tensor(
-                torch.abs(rel_inv), sharpness=penalty_sharpness
-            )
+        J_inv_penalty = torch.abs(J_inv - target) / inv_scale
         J_std_term = J_std / w_scale
         J_soft_cvar_term = J_soft_cvar / w_scale
     else:

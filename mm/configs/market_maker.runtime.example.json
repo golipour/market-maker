@@ -156,8 +156,6 @@
       "quote_spread_target": 10.0,
       "quote_depth_target_for_spread": 10.0,
       "objective_normalize_components": true,
-      "objective_penalty_shape": "softplus",
-      "objective_penalty_sharpness": 8.0,
       "quote_size_target_per_side": 3.0,
       "quote_size_softmax_L": false,
       "hard_project_quote_size_target": false,

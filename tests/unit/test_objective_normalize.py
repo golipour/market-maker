@@ -33,7 +33,7 @@ def test_size_penalty_is_dimensionless_when_normalized() -> None:
     )
     assert raw > 0.0
     assert norm >= 0.0
-    assert norm <= raw / (target * target) + 1e-6 or norm < raw
+    assert norm < raw
 
 
 def test_terminal_objective_pnl_scales_with_wealth() -> None:
@@ -66,22 +66,18 @@ def test_spread_penalty_asymmetric_only_penalizes_wide_spreads() -> None:
     tight = torch.tensor(20.0, dtype=torch.float64)
     wide = torch.tensor(150.0, dtype=torch.float64)
     assert float(relative_spread_penalty_excess_tensor(tight, tgt).item()) == 0.0
-    assert float(
-        relative_spread_penalty_excess_tensor(wide, tgt, shape="squared").item()
-    ) == pytest.approx(0.25, rel=1e-9)
-    soft = float(relative_spread_penalty_excess_tensor(wide, tgt, shape="softplus").item())
-    assert soft > 0.0
+    assert float(relative_spread_penalty_excess_tensor(wide, tgt).item()) == pytest.approx(0.5, rel=1e-9)
 
 
-def test_softplus_penalty_more_linear_than_squared_at_small_error() -> None:
-    """10% relative miss: softplus ~0.05 vs squared ~0.01 — closer to linear PnL scale."""
-    from mm.mpc.objective_normalize import softplus_unit_penalty_scalar
+def test_relative_absolute_error_is_linear_in_deviation() -> None:
+    from mm.mpc.objective_normalize import relative_absolute_error_tensor
 
-    rel = 0.1
-    sq = rel * rel
-    sp = softplus_unit_penalty_scalar(rel, sharpness=8.0)
-    assert sp > sq
-    assert sp == pytest.approx(0.05, abs=0.02)
+    tgt = 10.0
+    ten_pct_miss = float(relative_absolute_error_tensor(torch.tensor(11.0), tgt).item())
+    fifty_miss = float(relative_absolute_error_tensor(torch.tensor(15.0), tgt).item())
+    assert ten_pct_miss == pytest.approx(0.1, rel=1e-9)
+    assert fifty_miss == pytest.approx(0.5, rel=1e-9)
+    assert fifty_miss == pytest.approx(5.0 * ten_pct_miss, rel=1e-9)
 
 
 def test_spread_penalty_at_target_is_zero() -> None:
