@@ -147,7 +147,7 @@
       "expected_pnl_weight": 1.0,
       "pnl_volatility_penalty_weight": 0.0,
       "pnl_cvar_penalty_weight": 0.0,
-      "cvar_softmax_temperature": 10.0,
+      "cvar_softmax_temperature": 1.0,
       "inventory_target_penalty_weight": 0.0,
       "target_inventory": 10.0,
       "quote_shape_concentration_penalty_weight": 0.0,

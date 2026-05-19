@@ -658,8 +658,8 @@ def _action_spread_at_depth(
     Penalize effective quote spread (soft-argmin depth location) vs ``quote_spread_target``.
 
     For each side, find spread δ where cumulative depth reaches ``target_cumulative_qty``.
-    When ``normalize`` is true (default), returns
-    ``((δ_bid - s_tgt)/s_tgt)^2 + ((δ_ask - s_tgt)/s_tgt)^2`` (symmetric: too tight or too wide).
+    When ``normalize`` is true (default), returns a one-sided relative penalty: only spreads
+    **wider** than ``quote_spread_target`` are penalized (tighter quotes incur zero spread penalty).
     """
     if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
         return params.sum() * 0.0
@@ -687,11 +687,12 @@ def _action_spread_at_depth(
     ask_spread = torch_mod.sum(ask_w * s)
     if not normalize:
         return bid_spread + ask_spread
-    from mm.mpc.objective_normalize import spread_target_scale
+    from mm.mpc.objective_normalize import relative_spread_penalty_excess_tensor, spread_target_scale
 
     s_tgt = spread_target_scale(quote_spread_target, spread_max)
-    tgt = torch_mod.tensor(float(s_tgt), dtype=params.dtype, device=params.device)
-    return ((bid_spread - tgt) / tgt) ** 2 + ((ask_spread - tgt) / tgt) ** 2
+    return relative_spread_penalty_excess_tensor(
+        bid_spread, s_tgt
+    ) + relative_spread_penalty_excess_tensor(ask_spread, s_tgt)
 
 
 def _delta_wealth_mtm_batched(

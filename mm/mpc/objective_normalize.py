@@ -55,6 +55,26 @@ def relative_squared_error_tensor(actual: "Tensor", target: float, *, eps: float
     return ((actual - t) / t) ** 2
 
 
+def relative_spread_penalty_excess_tensor(
+    spread: "Tensor",
+    target_spread: float,
+    *,
+    eps: float = 1e-8,
+) -> "Tensor":
+    """
+    One-sided relative spread penalty: only penalize spreads wider than target.
+
+    Returns ``(max(0, spread - s_tgt) / s_tgt)^2`` (dimensionless, zero when spread <= target).
+    """
+
+    import torch
+
+    denom = max(float(eps), abs(float(target_spread)))
+    tgt = torch.tensor(denom, dtype=spread.dtype, device=spread.device)
+    excess = torch.clamp(spread - tgt, min=0.0)
+    return (excess / tgt) ** 2
+
+
 def normalize_herfindahl(h: "Tensor", n_levels: int, *, eps: float = 1e-8) -> "Tensor":
     """
     Map Herfindahl index H in [1/n, 1] to [0, 1]: 0 = uniform depth, 1 = single bucket.

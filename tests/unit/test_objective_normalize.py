@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from mm.mpc.mpc_tensor_batched import _action_size_penalty_qrange, _action_spread_at_depth
@@ -55,8 +56,21 @@ def test_terminal_objective_pnl_scales_with_wealth() -> None:
     assert comp_norm["expected_pnl"] == comp_raw["expected_pnl"] / 1000.0
 
 
-def test_spread_penalty_zero_at_target_spread() -> None:
-    """Symmetric relative spread penalty is ~0 when soft-argmin spread equals target."""
+def test_spread_penalty_asymmetric_only_penalizes_wide_spreads() -> None:
+    """Tighter-than-target spreads incur zero penalty; wider spreads do not."""
+    import torch
+
+    from mm.mpc.objective_normalize import relative_spread_penalty_excess_tensor
+
+    tgt = 100.0
+    tight = torch.tensor(20.0, dtype=torch.float64)
+    wide = torch.tensor(150.0, dtype=torch.float64)
+    assert float(relative_spread_penalty_excess_tensor(tight, tgt).item()) == 0.0
+    assert float(relative_spread_penalty_excess_tensor(wide, tgt).item()) == pytest.approx(0.25, rel=1e-9)
+
+
+def test_spread_penalty_at_target_is_zero() -> None:
+    """Integrated spread penalty is finite and non-negative."""
     l_raw = math.log(math.exp(50.0) - 1.0)
     k_raw = math.log(math.exp(2.0) - 1.0)
     x0 = 100.0
