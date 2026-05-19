@@ -678,6 +678,13 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_size_target_per_side": (
                 "target cumulative quoted depth over [0, spread_max] per side (base units)"
             ),
+            "quote_spread_target": (
+                "target quote spread per side in quote-per-base units for relative spread penalty"
+            ),
+            "objective_normalize_components": (
+                "when true, objective terms are dimensionless (PnL/CVaR/vol vs wealth, "
+                "inventory vs scale, size/spread vs targets, concentration in [0,1])"
+            ),
             "quote_size_softmax_L": (
                 "when true with positive quote_size_target_per_side, L_i are softmax mixture weights "
                 "normalized so D(spread_max)-D(0) equals the target (architectural size constraint)"

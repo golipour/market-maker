@@ -192,6 +192,7 @@ def test_spread_at_depth_uses_depth_minus_depth_at_zero() -> None:
         target_cumulative_qty=target,
         grid_points=400,
         softmin_temp=5.0,
+        normalize=False,
     )
 
     raw0 = float(depth_bid_tensor(params, torch.tensor([0.0], dtype=torch.float64), 1)[0])

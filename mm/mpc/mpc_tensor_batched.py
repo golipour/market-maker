@@ -568,15 +568,13 @@ def _action_concentration_penalty_from_marginal_depth(
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    normalize: bool = True,
 ) -> torch.Tensor:
     """
-    Penalize pathological concentration of quoted depth in a few spread buckets.
+    Penalize concentration of quoted depth in a few spread buckets (Herfindahl index).
 
-    Uses the Herfindahl index on marginal level shares (not a flat target shape):
-      H = sum_i (marg_i / sum_j marg_j)^2
-
-    A single bucket with all depth gives H=1; uniform spread gives H=1/n_levels.
-    Returns the average of bid-side and ask-side H (scalar tensor).
+    When ``normalize`` is true (default), maps H from [1/n, 1] to dimensionless [0, 1]
+    (0 = uniform, 1 = single bucket) and returns the bid/ask average.
     """
     if n_components <= 0 or spread_ticks.numel() <= 1:
         return params.sum() * 0.0
@@ -590,7 +588,14 @@ def _action_concentration_penalty_from_marginal_depth(
     bid_marg, ask_marg = _marginal_depth_from_cumulative(bid_cum, ask_cum)
     h_bid = _herfindahl_concentration(bid_marg)
     h_ask = _herfindahl_concentration(ask_marg)
-    return 0.5 * (h_bid + h_ask)
+    if not normalize:
+        return 0.5 * (h_bid + h_ask)
+    from mm.mpc.objective_normalize import normalize_herfindahl
+
+    n_levels = max(1, int(spread_ticks.numel()))
+    h_bid_n = normalize_herfindahl(h_bid, n_levels)
+    h_ask_n = normalize_herfindahl(h_ask, n_levels)
+    return 0.5 * (h_bid_n + h_ask_n)
 
 
 def _action_size_penalty_qrange(
@@ -601,12 +606,13 @@ def _action_size_penalty_qrange(
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    normalize: bool = True,
 ) -> torch.Tensor:
     """
-    Squared error penalty to target quoted size over discretizer range s=1..N
-    (N=spread_max), using baseline-shift convention:
-      (Q_range_bid - Q_target)^2 + (Q_range_ask - Q_target)^2
-    where Q_range_side = D_side(spread_max) - D_side(0).
+    Squared error to target quoted size over s=0..spread_max (baseline-shift Q_range).
+
+    When ``normalize`` is true (default), returns dimensionless
+    ``((Q_bid - Q_tgt)/Q_tgt)^2 + ((Q_ask - Q_tgt)/Q_tgt)^2``.
     """
     if quote_size_target_per_side is None or float(quote_size_target_per_side) <= 0.0 or n_components <= 0:
         return params.sum() * 0.0
@@ -630,6 +636,8 @@ def _action_size_penalty_qrange(
         else float(quote_size_target_per_side)
     )
     tgt = torch_mod.tensor(float(tgt_q), dtype=params.dtype, device=params.device)
+    if normalize and float(tgt_q) > 0.0:
+        return ((q_bid - tgt) / tgt) ** 2 + ((q_ask - tgt) / tgt) ** 2
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
@@ -639,17 +647,19 @@ def _action_spread_at_depth(
     spread_max: float,
     target_cumulative_qty: float,
     *,
+    quote_spread_target: float | None = None,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     grid_points: int = 100,
     softmin_temp: float = 40.0,
+    normalize: bool = True,
 ) -> torch.Tensor:
     """
-    Differentiable proxy for spread at which cumulative bid/ask depth reaches target_cumulative_qty.
+    Penalize effective quote spread (soft-argmin depth location) vs ``quote_spread_target``.
 
-    For each side, evaluate effective quoted depth D(δ) - D(0) on a dense spread grid
-    in [0, spread_max], then use a soft-argmin of |depth(δ) - target| to get an effective spread. Returns:
-      spread_bid(target) + spread_ask(target)
+    For each side, find spread δ where cumulative depth reaches ``target_cumulative_qty``.
+    When ``normalize`` is true (default), returns
+    ``((δ_bid - s_tgt)/s_tgt)^2 + ((δ_ask - s_tgt)/s_tgt)^2`` (symmetric: too tight or too wide).
     """
     if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
         return params.sum() * 0.0
@@ -675,7 +685,13 @@ def _action_spread_at_depth(
     ask_w = torch_mod.softmax(-temp * ask_err, dim=0)
     bid_spread = torch_mod.sum(bid_w * s)
     ask_spread = torch_mod.sum(ask_w * s)
-    return bid_spread + ask_spread
+    if not normalize:
+        return bid_spread + ask_spread
+    from mm.mpc.objective_normalize import spread_target_scale
+
+    s_tgt = spread_target_scale(quote_spread_target, spread_max)
+    tgt = torch_mod.tensor(float(s_tgt), dtype=params.dtype, device=params.device)
+    return ((bid_spread - tgt) / tgt) ** 2 + ((ask_spread - tgt) / tgt) ** 2
 
 
 def _delta_wealth_mtm_batched(
@@ -744,6 +760,8 @@ class MonteCarloMPCTensorBatched:
         quote_size_target_penalty_weight: float | None = None,
         quote_spread_penalty_weight: float | None = None,
         quote_depth_target_for_spread: float | None = None,
+        quote_spread_target: float | int | None = None,
+        objective_normalize_components: bool = True,
         hedge_rollout_enabled: bool | None = None,
         quote_size_target_per_side: float | int | None = None,
         hard_project_quote_size_target: bool = False,
@@ -805,6 +823,10 @@ class MonteCarloMPCTensorBatched:
         self.quote_depth_target_for_spread = max(
             0.0, float(_coalesce_param(quote_depth_target_for_spread, spread_depth, default=1.0))
         )
+        self.quote_spread_target = (
+            float(quote_spread_target) if quote_spread_target is not None else None
+        )
+        self.objective_normalize_components = bool(objective_normalize_components)
         hedge_flag = _coalesce_param(hedge_rollout_enabled, hedge_enabled, default=None)
         if hedge_flag is not None:
             self.hedge_enabled = bool(hedge_flag)
@@ -893,6 +915,11 @@ class MonteCarloMPCTensorBatched:
     def _depth_call_kwargs(self) -> dict[str, Any]:
         return {"use_softplus": True, "l_param": self._l_param_config()}
 
+    def _penalty_kwargs(self) -> dict[str, Any]:
+        kw = self._depth_call_kwargs()
+        kw["normalize"] = self.objective_normalize_components
+        return kw
+
     def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
         lp = self._l_param_config()
         if lp is not None:
@@ -929,6 +956,14 @@ class MonteCarloMPCTensorBatched:
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
+        from mm.mpc.objective_normalize import inventory_scale as inv_scale_fn
+        from mm.mpc.objective_normalize import wealth_scale as wealth_scale_fn
+
+        obj_wealth_scale = wealth_scale_fn(cash_0, inv_0, float(state.sell_vwap))
+        obj_inventory_scale = inv_scale_fn(
+            self.target_inventory,
+            self.quote_size_target_per_side,
+        )
 
         ob_bids_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
         ob_asks_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
@@ -1161,25 +1196,27 @@ class MonteCarloMPCTensorBatched:
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
                     depth_kw = self._depth_call_kwargs()
+                    penalty_kw = self._penalty_kwargs()
                     action_concentration_sum = action_concentration_sum + _action_concentration_penalty_from_marginal_depth(
                         action_h,
                         spread_grid,
                         n,
-                        **depth_kw,
+                        **penalty_kw,
                     )
                     action_size_sum = action_size_sum + _action_size_penalty_qrange(
                         action_h,
                         n,
                         self.spread_max,
                         self.quote_size_target_per_side,
-                        **depth_kw,
+                        **penalty_kw,
                     )
                     action_spread_sum = action_spread_sum + _action_spread_at_depth(
                         action_h,
                         n,
                         self.spread_max,
-                        self.spread_depth,
-                        **depth_kw,
+                        self.quote_depth_target_for_spread,
+                        quote_spread_target=self.quote_spread_target,
+                        **penalty_kw,
                     )
                     sell_h = sell_vol[:, h : h + 1]
                     buy_h = buy_vol[:, h : h + 1]
@@ -1334,6 +1371,9 @@ class MonteCarloMPCTensorBatched:
                     quote_size_target_penalty_weight=self.quote_size_target_penalty_weight,
                     spread=action_spread_mean,
                     quote_spread_penalty_weight=self.quote_spread_penalty_weight,
+                    wealth_scale=obj_wealth_scale,
+                    inventory_scale=obj_inventory_scale,
+                    normalize_components=self.objective_normalize_components,
                 )
 
                 def _finite_item(t) -> float:

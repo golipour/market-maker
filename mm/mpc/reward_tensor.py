@@ -199,6 +199,10 @@ def terminal_objective(
     quote_size_target_penalty_weight: float = 0.0,
     spread: "Tensor | None" = None,
     quote_spread_penalty_weight: float = 0.0,
+    *,
+    wealth_scale: float = 1.0,
+    inventory_scale: float = 1.0,
+    normalize_components: bool = True,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
     Build scalar objective J from terminal ΔW and optional action regularizers.
@@ -216,8 +220,12 @@ def terminal_objective(
     uniformity, quote_shape_uniformity_penalty_weight: deprecated aliases for concentration args.
     size: differentiable action-size penalty term.
     quote_size_target_penalty_weight: additive weight for size penalty.
-    spread: differentiable spread-at-depth penalty term.
+    spread: differentiable spread-at-depth penalty term (dimensionless when normalized upstream).
     quote_spread_penalty_weight: additive weight for spread penalty.
+    wealth_scale: reference wealth for relative PnL / volatility / CVaR (quote units).
+    inventory_scale: reference inventory for relative inventory-target penalty (base units).
+    normalize_components: when true, scale reward/risk terms by ``wealth_scale`` and
+        inventory penalty by ``inventory_scale`` so weights are dimensionless.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
@@ -259,12 +267,23 @@ def terminal_objective(
     else:
         J_spread = torch.nan_to_num(spread.view(-1).mean(), nan=0.0, posinf=1e6, neginf=-1e6)
     target = torch.tensor(float(target_inventory), dtype=J_inv.dtype, device=J_inv.device)
-    J_inv_penalty = (J_inv - target) * (J_inv - target)
+    w_scale = max(1e-8, float(wealth_scale))
+    inv_scale = max(1e-8, float(inventory_scale))
+    if normalize_components:
+        J_mean_term = J_mean / w_scale
+        J_inv_penalty = ((J_inv - target) / inv_scale) ** 2
+        J_std_term = J_std / w_scale
+        J_soft_cvar_term = J_soft_cvar / w_scale
+    else:
+        J_mean_term = J_mean
+        J_inv_penalty = (J_inv - target) * (J_inv - target)
+        J_std_term = J_std
+        J_soft_cvar_term = J_soft_cvar
 
-    term_reward = float(expected_pnl_weight) * J_mean
+    term_reward = float(expected_pnl_weight) * J_mean_term
     term_inv = -float(inventory_target_penalty_weight) * J_inv_penalty
-    term_risk = -float(pnl_volatility_penalty_weight) * J_std
-    term_cvar = -float(pnl_cvar_penalty_weight) * J_soft_cvar
+    term_risk = -float(pnl_volatility_penalty_weight) * J_std_term
+    term_cvar = -float(pnl_cvar_penalty_weight) * J_soft_cvar_term
     term_concentration = -float(conc_weight) * J_concentration
     term_size = -float(quote_size_target_penalty_weight) * J_size
     term_spread = -float(quote_spread_penalty_weight) * J_spread
