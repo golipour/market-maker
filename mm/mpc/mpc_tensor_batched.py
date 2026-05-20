@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from mm.mpc.l_param import LParamConfig, sigmoid_action_from_flat_raw
+from mm.mpc.spread_ref import SpreadRefConfig
 from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
@@ -63,6 +64,7 @@ def _bounds_effective_to_raw(
     bounds: list[tuple[float, float]],
     *,
     l_softmax: bool = False,
+    x0_ref_slots: set[int] | None = None,
 ) -> list[tuple[float, float]]:
     """
     Convert optimizer bounds from effective parameter space to raw tensor space.
@@ -70,7 +72,7 @@ def _bounds_effective_to_raw(
     L and k (index 0/1 of each 3-tuple) are represented in raw space and mapped via
     softplus during model evaluation, so their bounds must be inverse-softplus mapped.
     When ``l_softmax`` is true, L slots are unconstrained logits and bounds pass through.
-    x0 (index 2) is used directly and left unchanged.
+    Slots in ``x0_ref_slots`` (spread-ref reparam) pass x0 bounds through unchanged.
     """
     out: list[tuple[float, float]] = []
     for i, (lo, hi) in enumerate(bounds):
@@ -78,6 +80,8 @@ def _bounds_effective_to_raw(
             out.append((float(lo), float(hi)))
         elif i % 3 in (0, 1):  # L (softplus) or k
             out.append((_inv_softplus_np(float(lo)), _inv_softplus_np(float(hi))))
+        elif x0_ref_slots is not None and i in x0_ref_slots:
+            out.append((float(lo), float(hi)))
         else:  # x0
             out.append((float(lo), float(hi)))
     return out
@@ -91,12 +95,26 @@ def _inv_softplus_np(y: float) -> float:
     return float(np.log(np.expm1(y_f)))
 
 
+def _k_eff_from_x0_centers(x0: np.ndarray, spread_max: float) -> np.ndarray:
+    """
+    Per-component k so |k*(s-x0)| stays in the near-linear sigmoid region on [0..spread_max].
+
+    Same rule for every component, including spread-ref component 0, using that component's center.
+    """
+    del spread_max  # kept for call-site symmetry with grid extent
+    return np.array(
+        [max(1e-3, min(0.05, 2.0 / max(1.0, float(xc)))) for xc in x0],
+        dtype=np.float64,
+    )
+
+
 def _initial_action_uniform_marginal_qrange(
     n_components: int,
     spread_max: float,
     quote_size_target_per_side: float | None,
     *,
     use_softmax_L: bool = False,
+    spread_ref: SpreadRefConfig | None = None,
 ) -> np.ndarray | None:
     """
     Build an initial flat action (raw optimizer params) using a simple linear-range
@@ -121,32 +139,48 @@ def _initial_action_uniform_marginal_qrange(
     else:
         x0 = np.linspace(x0_center - 0.01 * sm, x0_center + 0.01 * sm, n, dtype=np.float64)
 
-    # Linear-range choice: keep |k*(s-x0)| relatively small on [0..N].
-    k_base = max(1e-3, min(0.05, 2.0 / max(1.0, float(sm))))
-    k_eff = np.full(n, k_base, dtype=np.float64)
+    if spread_ref is not None:
+        from mm.mpc.spread_ref import decode_first_centers_np
 
-    # Linearized slope: sigmoid'(z) ~ 1/4 around z~0 => marginal ~ sum_i(L_i*k_i/4).
-    L_total = max(1e-6, 4.0 * q_level / max(k_base, 1e-12))
-    L_eff = np.full(n, max(1e-6, L_total / float(n)), dtype=np.float64)
+        x0_bid_0, x0_ask_0 = decode_first_centers_np(0.0, 0.0, spread_ref)
+        bid_x0 = np.concatenate(([x0_bid_0], x0[1:])) if n > 1 else np.array([x0_bid_0])
+        ask_x0 = np.concatenate(([x0_ask_0], x0[1:])) if n > 1 else np.array([x0_ask_0])
+    else:
+        bid_x0 = ask_x0 = x0
 
-    # Final exact normalization on D(N)-D(0) (discretizer convention total).
-    s_hi = 1.0 / (1.0 + np.exp(-(k_eff * (float(sm) - x0))))
-    s_lo = 1.0 / (1.0 + np.exp(-(k_eff * (0.0 - x0))))
-    d_n = float(np.sum(L_eff * (s_hi - s_lo)))
-    if d_n > 1e-12 and not use_softmax_L:
-        L_eff *= float(quote_size_target_per_side) / d_n
+    bid_k = _k_eff_from_x0_centers(bid_x0, sm)
+    ask_k = _k_eff_from_x0_centers(ask_x0, sm)
+
+    def _side_L_eff(x0_side: np.ndarray, k_side: np.ndarray) -> np.ndarray:
+        k_mean = max(1e-12, float(np.mean(k_side)))
+        L_total = max(1e-6, 4.0 * q_level / k_mean)
+        L_side = np.full(n, max(1e-6, L_total / float(n)), dtype=np.float64)
+        s_hi = 1.0 / (1.0 + np.exp(-(k_side * (float(sm) - x0_side))))
+        s_lo = 1.0 / (1.0 + np.exp(-(k_side * (0.0 - x0_side))))
+        d_n = float(np.sum(L_side * (s_hi - s_lo)))
+        if d_n > 1e-12 and not use_softmax_L:
+            L_side *= float(quote_size_target_per_side) / d_n
+        return L_side
+
+    bid_L = _side_L_eff(bid_x0, bid_k)
+    ask_L = _side_L_eff(ask_x0, ask_k)
 
     if use_softmax_L:
-        L_raw = np.zeros(n, dtype=np.float64)
+        bid_L_raw = np.zeros(n, dtype=np.float64)
+        ask_L_raw = np.zeros(n, dtype=np.float64)
     else:
-        L_raw = np.array([_inv_softplus_np(v) for v in L_eff], dtype=np.float64)
-    k_raw = np.array([_inv_softplus_np(v) for v in k_eff], dtype=np.float64)
+        bid_L_raw = np.array([_inv_softplus_np(v) for v in bid_L], dtype=np.float64)
+        ask_L_raw = np.array([_inv_softplus_np(v) for v in ask_L], dtype=np.float64)
+    bid_k_raw = np.array([_inv_softplus_np(v) for v in bid_k], dtype=np.float64)
+    ask_k_raw = np.array([_inv_softplus_np(v) for v in ask_k], dtype=np.float64)
 
     bid_part: list[float] = []
     ask_part: list[float] = []
     for i in range(n):
-        bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
-        ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
+        x0_slot_bid = 0.0 if (spread_ref is not None and i == 0) else float(bid_x0[i])
+        x0_slot_ask = 0.0 if (spread_ref is not None and i == 0) else float(ask_x0[i])
+        bid_part.extend([float(bid_L_raw[i]), float(bid_k_raw[i]), x0_slot_bid])
+        ask_part.extend([float(ask_L_raw[i]), float(ask_k_raw[i]), x0_slot_ask])
     return np.array(bid_part + ask_part, dtype=np.float64)
 
 
@@ -452,6 +486,8 @@ def soft_fill_batched(
     soft_temp: float = 1.0,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    spread_ref: SpreadRefConfig | None = None,
+    full_params: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Batched soft transition using combined (book + quoted) depth:
@@ -467,12 +503,15 @@ def soft_fill_batched(
       ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
-    depth_bid = effective_depth_bid_tensor(
-        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
-    )
-    depth_ask = effective_depth_ask_tensor(
-        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
-    )
+    fp = full_params if full_params is not None else params
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "spread_ref": spread_ref,
+        "full_params": fp,
+    }
+    depth_bid = effective_depth_bid_tensor(params, spread_grid, n_components, **depth_kw)
+    depth_ask = effective_depth_ask_tensor(params, spread_grid, n_components, **depth_kw)
     eps = 1e-12
     # Convert cumulative quoted depth to marginal level sizes.
     depth_bid_prev = torch.cat([torch.zeros_like(depth_bid[:1]), depth_bid[:-1]], dim=0)
@@ -568,6 +607,8 @@ def _action_concentration_penalty_from_marginal_depth(
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    spread_ref: SpreadRefConfig | None = None,
+    full_params: torch.Tensor | None = None,
     normalize: bool = True,
 ) -> torch.Tensor:
     """
@@ -579,12 +620,14 @@ def _action_concentration_penalty_from_marginal_depth(
     if n_components <= 0 or spread_ticks.numel() <= 1:
         return params.sum() * 0.0
 
-    bid_cum = effective_depth_bid_tensor(
-        params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
-    )
-    ask_cum = effective_depth_ask_tensor(
-        params, spread_ticks, n_components, use_softplus=use_softplus, l_param=l_param
-    )
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "spread_ref": spread_ref,
+        "full_params": full_params if full_params is not None else params,
+    }
+    bid_cum = effective_depth_bid_tensor(params, spread_ticks, n_components, **depth_kw)
+    ask_cum = effective_depth_ask_tensor(params, spread_ticks, n_components, **depth_kw)
     bid_marg, ask_marg = _marginal_depth_from_cumulative(bid_cum, ask_cum)
     h_bid = _herfindahl_concentration(bid_marg)
     h_ask = _herfindahl_concentration(ask_marg)
@@ -606,6 +649,8 @@ def _action_size_penalty_qrange(
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    spread_ref: SpreadRefConfig | None = None,
+    full_params: torch.Tensor | None = None,
     normalize: bool = True,
 ) -> torch.Tensor:
     """
@@ -622,12 +667,14 @@ def _action_size_penalty_qrange(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = effective_depth_bid_tensor(
-        params, s, n_components, use_softplus=use_softplus, l_param=l_param
-    )
-    ask_depth = effective_depth_ask_tensor(
-        params, s, n_components, use_softplus=use_softplus, l_param=l_param
-    )
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "spread_ref": spread_ref,
+        "full_params": full_params if full_params is not None else params,
+    }
+    bid_depth = effective_depth_bid_tensor(params, s, n_components, **depth_kw)
+    ask_depth = effective_depth_ask_tensor(params, s, n_components, **depth_kw)
     q_bid = torch_mod.clamp(bid_depth[1] - bid_depth[0], min=0.0)
     q_ask = torch_mod.clamp(ask_depth[1] - ask_depth[0], min=0.0)
     tgt_q = (
@@ -674,6 +721,8 @@ def _quoted_spread_bps_from_action(
     *,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    spread_ref: SpreadRefConfig | None = None,
+    full_params: torch.Tensor | None = None,
     grid_points: int = 100,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -691,12 +740,15 @@ def _quoted_spread_bps_from_action(
         dtype=params.dtype,
         device=params.device,
     )
-    bid_depth = effective_depth_bid_tensor(
-        params, s, n_components, use_softplus=use_softplus, l_param=l_param
-    )
-    ask_depth = effective_depth_ask_tensor(
-        params, s, n_components, use_softplus=use_softplus, l_param=l_param
-    )
+    fp = full_params if full_params is not None else params
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "spread_ref": spread_ref,
+        "full_params": fp,
+    }
+    bid_depth = effective_depth_bid_tensor(params, s, n_components, **depth_kw)
+    ask_depth = effective_depth_ask_tensor(params, s, n_components, **depth_kw)
     bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_depth[:1]), bid_depth[:-1]], dim=0)
     ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_depth[:1]), ask_depth[:-1]], dim=0)
     marg_bid = torch_mod.clamp(bid_depth - bid_prev, min=0.0)
@@ -719,6 +771,8 @@ def _action_spread_at_depth(
     quote_spread_target_bps: float | None = None,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    spread_ref: SpreadRefConfig | None = None,
+    full_params: torch.Tensor | None = None,
     grid_points: int = 100,
     normalize: bool = True,
 ) -> torch.Tensor:
@@ -739,6 +793,8 @@ def _action_spread_at_depth(
         mid,
         use_softplus=use_softplus,
         l_param=l_param,
+        spread_ref=spread_ref,
+        full_params=full_params if full_params is not None else params,
         grid_points=grid_points,
     )
     if not normalize:
@@ -825,6 +881,9 @@ class MonteCarloMPCTensorBatched:
         hard_project_quote_size_target: bool = False,
         hard_project_quote_size_range: bool = False,
         quote_size_softmax_L: bool = False,
+        spread_ref_quantity: float | int | None = None,
+        spread_max_at_ref: float | int | None = None,
+        spread_ref_constrain: bool = False,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -907,6 +966,13 @@ class MonteCarloMPCTensorBatched:
             raise ValueError(
                 "quote_size_softmax_L requires positive quote_size_target_per_side"
             )
+        self.spread_ref = SpreadRefConfig.from_values(
+            spread_ref_quantity=(
+                float(spread_ref_quantity) if spread_ref_quantity is not None else None
+            ),
+            spread_max_at_ref=float(spread_max_at_ref) if spread_max_at_ref is not None else None,
+            spread_ref_constrain=bool(spread_ref_constrain),
+        )
         # Backward-compatible attribute names used internally and by existing tests/tools.
         self.reward_coef = self.expected_pnl_weight
         self.risk_coef = self.pnl_volatility_penalty_weight
@@ -933,12 +999,19 @@ class MonteCarloMPCTensorBatched:
         self._optimizer: Any = None
 
         if bounds is None:
-            if self.quote_size_softmax_L:
+            if self.quote_size_softmax_L or self.spread_ref is not None:
                 n = self.n_components
-                logit_bound = (-30.0, 30.0)
+                l_bound = (-30.0, 30.0) if self.quote_size_softmax_L else (1e-6, 1e5)
+                if self.quote_size_max_per_side is not None and not self.quote_size_softmax_L:
+                    l_bound = (1e-6, max(l_bound[1], float(self.quote_size_max_per_side)))
                 k_bound = (1e-6, 100.0)
-                x0_bound = (-self.spread_max, self.spread_max)
-                self.bounds = [logit_bound, k_bound, x0_bound] * (2 * n)
+                x0_inner = (-self.spread_max, self.spread_max)
+                x0_ref = (-30.0, 30.0)
+                side_bounds: list[tuple[float, float]] = []
+                for i in range(n):
+                    x0_b = x0_ref if self.spread_ref is not None and i == 0 else x0_inner
+                    side_bounds.extend([l_bound, k_bound, x0_b])
+                self.bounds = side_bounds * 2
             else:
                 L_max = 1e5
                 if self.quote_size_max_per_side is not None:
@@ -970,18 +1043,50 @@ class MonteCarloMPCTensorBatched:
             apply_quote_size_range=self.hard_project_quote_size_range,
         )
 
-    def _depth_call_kwargs(self) -> dict[str, Any]:
-        return {"use_softplus": True, "l_param": self._l_param_config()}
+    def _depth_call_kwargs(self, full_params: Any | None = None) -> dict[str, Any]:
+        return {
+            "use_softplus": True,
+            "l_param": self._l_param_config(),
+            "spread_ref": self.spread_ref,
+            "full_params": full_params,
+        }
 
-    def _penalty_kwargs(self) -> dict[str, Any]:
-        kw = self._depth_call_kwargs()
+    def _penalty_kwargs(self, full_params: Any | None = None) -> dict[str, Any]:
+        kw = self._depth_call_kwargs(full_params=full_params)
         kw["normalize"] = self.objective_normalize_components
         return kw
 
+    def _uses_raw_action_params(self) -> bool:
+        """Optimizer flat vector uses logits / spread-ref slots, not effective L,k,x0."""
+        return self.quote_size_softmax_L or self.spread_ref is not None
+
+    def _raw_flat_valid_for_warm_start(self, flat: np.ndarray, n: int) -> bool:
+        """Reject warm-start vectors from a different parameterization."""
+        single_len = 6 * n
+        if flat.size < single_len:
+            return False
+        if self.spread_ref is not None:
+            # Component-0 x0 slots are u_skew (bid) and u_tight (ask), not quote spreads.
+            if abs(float(flat[2])) > 40.0 or abs(float(flat[3 * n + 2])) > 40.0:
+                return False
+        if self.quote_size_softmax_L:
+            # L slots are softmax logits, not softplus(L).
+            for i in range(n):
+                if float(flat[3 * i]) > 40.0:
+                    return False
+                if float(flat[3 * n + 3 * i]) > 40.0:
+                    return False
+        return True
+
     def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
         lp = self._l_param_config()
-        if lp is not None:
-            return sigmoid_action_from_flat_raw(flat, self.n_components, l_param=lp)
+        if self._uses_raw_action_params():
+            return sigmoid_action_from_flat_raw(
+                flat,
+                self.n_components,
+                l_param=lp,
+                spread_ref=self.spread_ref,
+            )
         return SigmoidMixtureAction.from_flat_positive(flat, n_components=self.n_components).as_effective()
 
     def _quote_size_projection_kwargs(self) -> dict[str, Any]:
@@ -1038,15 +1143,24 @@ class MonteCarloMPCTensorBatched:
         param_len = self.horizon * single_len
 
         if self.warm_start and self._last_raw_flat is not None:
-            one_action = np.array(self._last_raw_flat[:single_len], dtype=np.float64)
-        elif self.warm_start and self._last_action is not None:
-            one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
+            candidate = np.array(self._last_raw_flat[:single_len], dtype=np.float64)
+            if self._raw_flat_valid_for_warm_start(candidate, n):
+                one_action = candidate
+            else:
+                self._last_raw_flat = None
+                one_action = None
         else:
+            one_action = None
+        if one_action is None and self.warm_start and self._last_action is not None:
+            if not self._uses_raw_action_params():
+                one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
+        if one_action is None:
             one_action = _initial_action_uniform_marginal_qrange(
                 n_components=n,
                 spread_max=self.spread_max,
                 quote_size_target_per_side=self.quote_size_target_per_side,
                 use_softmax_L=self.quote_size_softmax_L,
+                spread_ref=self.spread_ref,
             )
             if one_action is None:
                 sm = self.spread_max
@@ -1061,7 +1175,11 @@ class MonteCarloMPCTensorBatched:
 
         # Bounds are specified in effective model space. Convert L/k bounds to raw
         # parameter space because optimization variable x_torch is raw.
-        bounds_raw = _bounds_effective_to_raw(self.bounds, l_softmax=self.quote_size_softmax_L)
+        bounds_raw = _bounds_effective_to_raw(
+            self.bounds,
+            l_softmax=self.quote_size_softmax_L,
+            x0_ref_slots={0, 3 * n + 0} if self.spread_ref is not None else None,
+        )
         bounds_full = bounds_raw * self.horizon
         lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
         upper = torch_mod.tensor([b[1] for b in bounds_full], dtype=dtype, device=_device)
@@ -1253,8 +1371,8 @@ class MonteCarloMPCTensorBatched:
                         book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
 
                     action_h = x_torch[h * single_len : (h + 1) * single_len]
-                    depth_kw = self._depth_call_kwargs()
-                    penalty_kw = self._penalty_kwargs()
+                    depth_kw = self._depth_call_kwargs(full_params=action_h)
+                    penalty_kw = self._penalty_kwargs(full_params=action_h)
                     action_concentration_sum = action_concentration_sum + _action_concentration_penalty_from_marginal_depth(
                         action_h,
                         spread_grid,
@@ -1527,7 +1645,11 @@ class MonteCarloMPCTensorBatched:
             self._last_hedge_reward_mean = float(best_hedge_reward_mean)
         if self.warm_start:
             self._last_action = best_action
-            self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
+            # Always store raw optimizer params (logits / u_skew), not effective L,x0.
+            self._last_raw_flat = np.array(
+                best_x.detach().cpu().numpy()[:single_len],
+                dtype=np.float64,
+            )
         if best_metrics is None and final_metrics is not None:
             best_metrics = final_metrics
         if initial_metrics is None and final_metrics is not None:

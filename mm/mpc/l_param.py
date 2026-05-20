@@ -10,6 +10,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction, SigmoidMixtureAction
+    from mm.mpc.spread_ref import SpreadRefConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,31 +129,51 @@ def sigmoid_action_from_flat_raw(
     n_components: int,
     *,
     l_param: LParamConfig | None,
+    spread_ref: SpreadRefConfig | None = None,
     use_softplus: bool = True,
 ) -> EffectiveSigmoidMixtureAction:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
+    from mm.mpc.spread_ref import (
+        apply_spread_ref_L_floor_np,
+        decode_k_side_np,
+        decode_x0_side_np,
+    )
 
     arr = np.asarray(flat, dtype=np.float64)
     n = n_components
+    bid_x0 = decode_x0_side_np(
+        arr[2 : 3 * n : 3],
+        side="bid",
+        spread_ref=spread_ref,
+        raw_other_x0_slot=float(arr[3 * n + 2]) if spread_ref is not None else None,
+    )
+    bid_k = decode_k_side_np(arr[1 : 3 * n : 3], spread_ref=spread_ref)
     bid_L = positive_L_numpy(
         arr[0 : 3 * n : 3],
         arr[1 : 3 * n : 3],
-        arr[2 : 3 * n : 3],
+        bid_x0,
         l_param=l_param,
         use_softplus=use_softplus,
     )
-    bid_k = np.array([_softplus_np(float(v)) for v in arr[1 : 3 * n : 3]], dtype=np.float64)
-    bid_x0 = arr[2 : 3 * n : 3]
+    if spread_ref is not None:
+        bid_L = apply_spread_ref_L_floor_np(bid_L, bid_k, bid_x0, spread_ref)
     base = 3 * n
+    ask_x0 = decode_x0_side_np(
+        arr[base + 2 : base + 3 * n : 3],
+        side="ask",
+        spread_ref=spread_ref,
+        raw_other_x0_slot=float(arr[2]) if spread_ref is not None else None,
+    )
+    ask_k = decode_k_side_np(arr[base + 1 : base + 3 * n : 3], spread_ref=spread_ref)
     ask_L = positive_L_numpy(
         arr[base + 0 : base + 3 * n : 3],
         arr[base + 1 : base + 3 * n : 3],
-        arr[base + 2 : base + 3 * n : 3],
+        ask_x0,
         l_param=l_param,
         use_softplus=use_softplus,
     )
-    ask_k = np.array([_softplus_np(float(v)) for v in arr[base + 1 : base + 3 * n : 3]], dtype=np.float64)
-    ask_x0 = arr[base + 2 : base + 3 * n : 3]
+    if spread_ref is not None:
+        ask_L = apply_spread_ref_L_floor_np(ask_L, ask_k, ask_x0, spread_ref)
     return EffectiveSigmoidMixtureAction(
         bid_L=tuple(float(x) for x in bid_L),
         bid_k=tuple(float(x) for x in bid_k),
