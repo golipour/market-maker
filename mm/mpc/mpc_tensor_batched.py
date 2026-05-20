@@ -645,29 +645,45 @@ def _action_size_penalty_qrange(
     return (q_bid - tgt) ** 2 + (q_ask - tgt) ** 2
 
 
-def _action_spread_at_depth(
+def _side_vwap_to_depth_torch(
+    spreads: torch.Tensor,
+    marg_qty: torch.Tensor,
+    prices: torch.Tensor,
+    target_qty: float,
+) -> torch.Tensor:
+    """
+    VWAP on one side of the quote ladder to fill ``target_qty`` base units (differentiable).
+
+    Walks spread levels from mid outward; ``take_i = min(marg_i, max(0, Q - cum_{i-1}))``.
+    """
+    torch_mod = _get_torch()
+    eps = 1e-12
+    q = max(eps, float(target_qty))
+    cum_prev = torch_mod.cat([torch_mod.zeros(1, dtype=marg_qty.dtype, device=marg_qty.device), torch_mod.cumsum(marg_qty, dim=0)[:-1]])
+    take = torch_mod.clamp(torch_mod.min(marg_qty, q - cum_prev), min=0.0)
+    qty = take.sum().clamp(min=eps)
+    return (take * prices).sum() / qty
+
+
+def _quoted_spread_bps_from_action(
     params: torch.Tensor,
     n_components: int,
     spread_max: float,
     target_cumulative_qty: float,
+    mid: float,
     *,
-    quote_spread_target: float | None = None,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     grid_points: int = 100,
-    softmin_temp: float = 40.0,
-    normalize: bool = True,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Penalize effective quote spread (soft-argmin depth location) vs ``quote_spread_target``.
+    Quoted bid/ask depth VWAPs and total spread in bps from the controller curve (not market BBO).
 
-    For each side, find spread δ where cumulative depth reaches ``target_cumulative_qty``.
-    When ``normalize`` is true (default), returns a one-sided relative penalty: only spreads
-    **wider** than ``quote_spread_target`` are penalized (tighter quotes incur zero spread penalty).
+    At each side, VWAP is taken over marginal quote levels until ``target_cumulative_qty`` base
+    is filled. ``spread_bps = (ask_vwap - bid_vwap) / mid * 10_000``.
     """
-    if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
-        return params.sum() * 0.0
     torch_mod = _get_torch()
+    mid_t = torch_mod.tensor(max(1e-12, float(mid)), dtype=params.dtype, device=params.device)
     s = torch_mod.linspace(
         0.0,
         max(0.0, float(spread_max)),
@@ -681,22 +697,59 @@ def _action_spread_at_depth(
     ask_depth = effective_depth_ask_tensor(
         params, s, n_components, use_softplus=use_softplus, l_param=l_param
     )
-    tgt = torch_mod.tensor(float(target_cumulative_qty), dtype=params.dtype, device=params.device)
-    bid_err = torch_mod.abs(bid_depth - tgt)
-    ask_err = torch_mod.abs(ask_depth - tgt)
-    temp = max(1e-6, float(softmin_temp))
-    bid_w = torch_mod.softmax(-temp * bid_err, dim=0)
-    ask_w = torch_mod.softmax(-temp * ask_err, dim=0)
-    bid_spread = torch_mod.sum(bid_w * s)
-    ask_spread = torch_mod.sum(ask_w * s)
-    if not normalize:
-        return bid_spread + ask_spread
-    from mm.mpc.objective_normalize import relative_spread_penalty_excess_tensor, spread_target_scale
+    bid_prev = torch_mod.cat([torch_mod.zeros_like(bid_depth[:1]), bid_depth[:-1]], dim=0)
+    ask_prev = torch_mod.cat([torch_mod.zeros_like(ask_depth[:1]), ask_depth[:-1]], dim=0)
+    marg_bid = torch_mod.clamp(bid_depth - bid_prev, min=0.0)
+    marg_ask = torch_mod.clamp(ask_depth - ask_prev, min=0.0)
+    bid_prices = mid_t - s
+    ask_prices = mid_t + s
+    bid_vwap = _side_vwap_to_depth_torch(s, marg_bid, bid_prices, target_cumulative_qty)
+    ask_vwap = _side_vwap_to_depth_torch(s, marg_ask, ask_prices, target_cumulative_qty)
+    spread_bps = (ask_vwap - bid_vwap) / mid_t * 10_000.0
+    return bid_vwap, ask_vwap, spread_bps
 
-    s_tgt = spread_target_scale(quote_spread_target, spread_max)
-    return relative_spread_penalty_excess_tensor(
-        bid_spread, s_tgt
-    ) + relative_spread_penalty_excess_tensor(ask_spread, s_tgt)
+
+def _action_spread_at_depth(
+    params: torch.Tensor,
+    n_components: int,
+    spread_max: float,
+    target_cumulative_qty: float,
+    mid: float,
+    *,
+    quote_spread_target_bps: float | None = None,
+    use_softplus: bool = True,
+    l_param: LParamConfig | None = None,
+    grid_points: int = 100,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """
+    Spread penalty from quoted depth VWAPs (controller curve only, not market BBO).
+
+    ``spread_bps = (ask_vwap - bid_vwap) / mid * 10_000`` at ``quote_depth_target_for_spread``.
+    When ``normalize`` is true, one-sided linear penalty:
+    ``max(0, spread_bps - target_bps) / target_bps``.
+    """
+    if n_components <= 0 or float(target_cumulative_qty) <= 0.0:
+        return params.sum() * 0.0
+    _, _, spread_bps = _quoted_spread_bps_from_action(
+        params,
+        n_components,
+        spread_max,
+        target_cumulative_qty,
+        mid,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        grid_points=grid_points,
+    )
+    if not normalize:
+        return spread_bps
+    from mm.mpc.objective_normalize import (
+        relative_spread_penalty_excess_bps,
+        resolve_quote_spread_target_bps,
+    )
+
+    tgt_bps = resolve_quote_spread_target_bps(quote_spread_target_bps)
+    return relative_spread_penalty_excess_bps(spread_bps, tgt_bps)
 
 
 def _delta_wealth_mtm_batched(
@@ -765,7 +818,7 @@ class MonteCarloMPCTensorBatched:
         quote_size_target_penalty_weight: float | None = None,
         quote_spread_penalty_weight: float | None = None,
         quote_depth_target_for_spread: float | None = None,
-        quote_spread_target: float | int | None = None,
+        quote_spread_target_bps: float | int | None = None,
         objective_normalize_components: bool = True,
         hedge_rollout_enabled: bool | None = None,
         quote_size_target_per_side: float | int | None = None,
@@ -828,8 +881,8 @@ class MonteCarloMPCTensorBatched:
         self.quote_depth_target_for_spread = max(
             0.0, float(_coalesce_param(quote_depth_target_for_spread, spread_depth, default=1.0))
         )
-        self.quote_spread_target = (
-            float(quote_spread_target) if quote_spread_target is not None else None
+        self.quote_spread_target_bps = (
+            float(quote_spread_target_bps) if quote_spread_target_bps is not None else None
         )
         self.objective_normalize_components = bool(objective_normalize_components)
         hedge_flag = _coalesce_param(hedge_rollout_enabled, hedge_enabled, default=None)
@@ -1215,14 +1268,6 @@ class MonteCarloMPCTensorBatched:
                         self.quote_size_target_per_side,
                         **penalty_kw,
                     )
-                    action_spread_sum = action_spread_sum + _action_spread_at_depth(
-                        action_h,
-                        n,
-                        self.spread_max,
-                        self.quote_depth_target_for_spread,
-                        quote_spread_target=self.quote_spread_target,
-                        **penalty_kw,
-                    )
                     sell_h = sell_vol[:, h : h + 1]
                     buy_h = buy_vol[:, h : h + 1]
                     eps_buy_h = eps_buy[:, h : h + 1]
@@ -1239,6 +1284,16 @@ class MonteCarloMPCTensorBatched:
                         ob_asks,
                         mid_fallback_t,
                         spread_grid,
+                    )
+                    mid_for_spread = float(mid_t.detach().mean().item())
+                    action_spread_sum = action_spread_sum + _action_spread_at_depth(
+                        action_h,
+                        n,
+                        self.spread_max,
+                        self.quote_depth_target_for_spread,
+                        mid_for_spread,
+                        quote_spread_target_bps=self.quote_spread_target_bps,
+                        **penalty_kw,
                     )
                     if h == 0:
                         # Use upstream VWAPs (single vwap_depth policy),

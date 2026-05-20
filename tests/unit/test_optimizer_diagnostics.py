@@ -136,6 +136,29 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
     assert action.n_components == 1
 
 
+def test_payload_contribution_fractions_match_final_only() -> None:
+    mpc = MonteCarloMPCTensorBatched(
+        _FixedPriceModel(),
+        _FixedFlowModel(),
+        _FixedExecutionModel(),
+        n_components=1,
+        n_samples=2,
+        horizon=1,
+        spread_max=10.0,
+        spread_step=5.0,
+        adam_epochs=2,
+        fixed_mc_samples=True,
+        device="cpu",
+    )
+    _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
+    payload = diagnostics.to_payload()
+    top = payload["objective"]["contribution_fractions"]
+    final = payload["objective"]["final"]["contribution_fractions"]
+    assert top == final
+    assert sum(float(v) for v in top.values()) == pytest.approx(1.0, rel=1e-5)
+    assert top.keys() == final.keys()
+
+
 def test_objective_snapshot_payload_improvement_fields() -> None:
     mpc = MonteCarloMPCTensorBatched(
         _FixedPriceModel(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from mm.mpc.mpc_tensor_batched import (
@@ -176,29 +177,20 @@ def test_effective_sigmoid_action_exposes_executable_depth() -> None:
     assert math.isclose(effective.raw_depth_bid(12.0), raw.depth_bid(12.0))
 
 
-def test_spread_at_depth_uses_depth_minus_depth_at_zero() -> None:
-    # One bid and one ask component with effective L=100, k=1, x0=10.
-    # Raw D(0) is already positive, so using raw D(s) would place target depth
-    # too close to zero. The correct target is raw D(s) - raw D(0).
+def test_quoted_spread_bps_from_depth_vwap() -> None:
+    from mm.mpc.mpc_tensor_batched import _quoted_spread_bps_from_action
+
     l_raw = math.log(math.exp(100.0) - 1.0)
     k_raw = math.log(math.exp(1.0) - 1.0)
     params = torch.tensor([l_raw, k_raw, 10.0, l_raw, k_raw, 10.0], dtype=torch.float64)
-
-    target = 10.0
-    spread = _action_spread_at_depth(
-        params,
-        n_components=1,
-        spread_max=20.0,
-        target_cumulative_qty=target,
-        grid_points=400,
-        softmin_temp=5.0,
-        normalize=False,
+    mid = 100_000.0
+    target_qty = 10.0
+    bid_vwap, ask_vwap, spread_bps = _quoted_spread_bps_from_action(
+        params, 1, 20.0, target_qty, mid, grid_points=400
     )
-
-    raw0 = float(depth_bid_tensor(params, torch.tensor([0.0], dtype=torch.float64), 1)[0])
-    expected = 10.0 + math.log((target + raw0) / (100.0 - target - raw0))
-    # The function returns bid spread + ask spread; both sides are symmetric.
-    assert math.isclose(float(spread), 2.0 * expected, rel_tol=0.02)
+    spread_price = float(ask_vwap.item() - bid_vwap.item())
+    assert spread_bps.item() == pytest.approx(1e4 * spread_price / mid, rel=1e-5)
+    assert float(spread_bps.item()) > 0.0
 
 
 def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:

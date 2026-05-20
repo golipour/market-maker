@@ -28,10 +28,11 @@ def compute_contribution_fractions(
     eps: float = 1e-12,
 ) -> dict[str, float]:
     """
-    Share of each weighted objective term by |component| / sum(|components|).
+    Share of each **weighted** objective term in the scalar ``J`` optimized at closure end.
 
-    Makes it easy to see whether e.g. spread penalty dominates the scalar objective
-    regardless of sign.
+    Uses ``|component| / sum(|component|)`` where each ``component`` is already the
+    fully weighted term from ``terminal_objective`` (e.g. ``expected_pnl_weight * E[ΔW]/wealth``).
+    Signs are ignored so penalties and reward are comparable as magnitude shares.
     """
     abs_components = {str(k): abs(float(v)) for k, v in components.items()}
     total_abs = sum(abs_components.values()) + float(eps)
@@ -182,6 +183,9 @@ class OptimizerRunDiagnostics:
                 else None
             ),
         }
+        final_fractions = (
+            dict(final_snap.contribution_fractions) if final_snap is not None else {}
+        )
         return {
             "config": dict(self.config),
             "timing": dict(self.timing),
@@ -190,6 +194,7 @@ class OptimizerRunDiagnostics:
                 "final": objective_snapshot_payload(final_snap),
                 "best": objective_snapshot_payload(best_snap),
                 "improvement": improvement,
+                "contribution_fractions": final_fractions,
             },
             "action": {
                 "initial": action_snapshot_payload(self.action_initial),

@@ -143,19 +143,22 @@ def _panel_objective_contribution_fractions(
                 "format": "time_series",
                 "rawQuery": True,
                 "rawSql": f"""SELECT e.ts AS "time",
-  stage || '/' || comp.key AS metric,
+  comp.key AS metric,
   (comp.value)::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
 CROSS JOIN LATERAL jsonb_each_text(
-  COALESCE(e.payload #> ARRAY['optimizer','objective',stage,'contribution_fractions'], '{{}}'::jsonb)
+  COALESCE(
+    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],
+    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],
+    '{{}}'::jsonb
+  )
 ) AS comp(key, value)
 WHERE {diag_filter}
 ORDER BY 1""",
                 "refId": "A",
             }
         ],
-        "title": "Objective component contribution fractions (|term| share)",
+        "title": "Objective contribution fractions — final (|weighted term| share)",
         "type": "timeseries",
     }
 

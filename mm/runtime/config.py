@@ -678,8 +678,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_size_target_per_side": (
                 "target cumulative quoted depth over [0, spread_max] per side (base units)"
             ),
-            "quote_spread_target": (
-                "target quote spread per side in quote-per-base units for relative spread penalty"
+            "quote_spread_target_bps": (
+                "target quoted width in basis points: (ask_depth_vwap - bid_depth_vwap) / mid * 10^4 "
+                "at quote_depth_target_for_spread on the controller curve (not market BBO)"
+            ),
+            "quote_depth_target_for_spread": (
+                "cumulative base depth per side for bid/ask depth VWAP when computing spread_bps"
             ),
             "objective_normalize_components": (
                 "when true, objective terms are dimensionless (PnL/CVaR/vol vs wealth, "

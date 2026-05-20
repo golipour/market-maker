@@ -34,12 +34,32 @@ def inventory_scale(
     return max(float(eps), max(parts))
 
 
-def spread_target_scale(quote_spread_target: float | None, spread_max: float, *, eps: float = 1e-8) -> float:
-    """Positive spread reference for relative spread penalty."""
+def resolve_quote_spread_target_bps(
+    quote_spread_target_bps: float | None,
+    *,
+    default_bps: float = 50.0,
+    eps: float = 1e-8,
+) -> float:
+    """Target quoted width in basis points (ask depth VWAP − bid depth VWAP) / mid × 10⁴."""
 
-    if quote_spread_target is not None and float(quote_spread_target) > 0.0:
-        return float(quote_spread_target)
-    return max(float(eps), 0.5 * max(0.0, float(spread_max)))
+    if quote_spread_target_bps is not None and float(quote_spread_target_bps) > 0.0:
+        return float(quote_spread_target_bps)
+    return max(float(eps), float(default_bps))
+
+
+def relative_spread_penalty_excess_bps(
+    spread_bps: "Tensor",
+    target_bps: float,
+    *,
+    eps: float = 1e-8,
+) -> "Tensor":
+    """One-sided linear penalty: ``max(0, spread_bps - target_bps) / target_bps``."""
+
+    import torch
+
+    tgt = max(float(eps), float(target_bps))
+    t = torch.tensor(tgt, dtype=spread_bps.dtype, device=spread_bps.device)
+    return torch.clamp(spread_bps - t, min=0.0) / t
 
 
 def relative_absolute_error_tensor(actual: "Tensor", target: float, *, eps: float = 1e-8) -> "Tensor":
@@ -55,26 +75,6 @@ def relative_absolute_error_tensor(actual: "Tensor", target: float, *, eps: floa
     denom = max(float(eps), abs(float(target)))
     t = torch.tensor(denom, dtype=actual.dtype, device=actual.device)
     return torch.abs(actual - t) / t
-
-
-def relative_spread_penalty_excess_tensor(
-    spread: "Tensor",
-    target_spread: float,
-    *,
-    eps: float = 1e-8,
-) -> "Tensor":
-    """
-    One-sided relative spread penalty: only spreads wider than target.
-
-    Returns ``max(0, spread - s_tgt) / s_tgt`` (linear, zero when spread <= target).
-    """
-
-    import torch
-
-    denom = max(float(eps), abs(float(target_spread)))
-    tgt = torch.tensor(denom, dtype=spread.dtype, device=spread.device)
-    excess = torch.clamp(spread - tgt, min=0.0)
-    return excess / tgt
 
 
 def normalize_herfindahl(h: "Tensor", n_levels: int, *, eps: float = 1e-8) -> "Tensor":
