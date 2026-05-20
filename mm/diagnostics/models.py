@@ -60,8 +60,10 @@ class ActionPipelineDiagnostics:
     venue_quantized: dict[str, Any] = field(default_factory=dict)
     capped: dict[str, Any] = field(default_factory=dict)
     risk_approved: dict[str, Any] = field(default_factory=dict)
-    execution_deduped: dict[str, Any] = field(default_factory=dict)
-    venue_limit_valid: dict[str, Any] = field(default_factory=dict)
+    target: dict[str, Any] = field(default_factory=dict)
+    kept: dict[str, Any] = field(default_factory=dict)
+    canceled: dict[str, Any] = field(default_factory=dict)
+    placed: dict[str, Any] = field(default_factory=dict)
     venue_accepted: dict[str, Any] = field(default_factory=dict)
 
 
@@ -204,8 +206,10 @@ def _action_pipeline_payload(pipeline: ActionPipelineDiagnostics) -> dict[str, A
         "venue_quantized": dict(pipeline.venue_quantized),
         "capped": dict(pipeline.capped),
         "risk_approved": dict(pipeline.risk_approved),
-        "execution_deduped": dict(pipeline.execution_deduped),
-        "venue_limit_valid": dict(pipeline.venue_limit_valid),
+        "target": dict(pipeline.target),
+        "kept": dict(pipeline.kept),
+        "canceled": dict(pipeline.canceled),
+        "placed": dict(pipeline.placed),
         "venue_accepted": dict(pipeline.venue_accepted),
     }
 

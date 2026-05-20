@@ -150,8 +150,8 @@ class MpcStrategyEngine:
             constraints=order_constraints,
             continuous=continuous_depth,
         )
-        action = Action(actor_id=self.config.actor_id, orders_to_create=tuple(orders))
-        order_summaries = tuple(_order_summary(order) for order in action.orders_to_create)
+        action = Action(actor_id=self.config.actor_id, orders=tuple(orders))
+        order_summaries = tuple(_order_summary(order) for order in action.orders)
         decision_hash = hashlib.sha256(
             json.dumps(order_summaries, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()

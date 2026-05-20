@@ -10,8 +10,14 @@ from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource, order_passes_limits
 from mm.core.models.execution import Action, Fill, Order
-from mm.execution.plan import ActionStageReport, ExecutionSyncReport, summarize_orders
+from mm.execution.plan import (
+    ActionStageReport,
+    ExecutionSyncReport,
+    summarize_open_orders,
+    summarize_orders,
+)
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
+from mm.execution.reconcile import ReconcileConfig, ReconcilePlan, reconcile_target_orders
 from mm.core.models.private import OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.provider_adapter import now_ms
 
@@ -28,13 +34,7 @@ class ExecutionSnapshot:
 
 
 class OrderManager(AbstractOrderManager):
-    """Owns exchange order commands and the local live-order view.
-
-    The manager accepts float-domain strategy actions and delegates all exchange
-    wire details to an AbstractOrderCommandAdapter. Private REST/WS state can be
-    applied separately so own-order subtraction and observability use exchange
-    truth, not only optimistic local command results.
-    """
+    """Reconciles declarative target orders from each actor to exchange live orders."""
 
     def __init__(
         self,
@@ -43,15 +43,15 @@ class OrderManager(AbstractOrderManager):
         *,
         bus: AbstractEventBus | None = None,
         clock_ms: Callable[[], int] = now_ms,
-        cancel_missing: bool = False,
         limit_source: AbstractVenueOrderLimitSource | None = None,
+        reconcile_config: ReconcileConfig | None = None,
     ):
         self.exchange = exchange.lower().strip()
         self.command_adapter = command_adapter
         self.bus = bus
         self.clock_ms = clock_ms
-        self.cancel_missing = bool(cancel_missing)
         self._limit_source: AbstractVenueOrderLimitSource = limit_source or NoOpVenueOrderLimitSource()
+        self._reconcile_config = reconcile_config or ReconcileConfig()
         self._live_orders: dict[str, OpenOrder] = {}
         self._lock = asyncio.Lock()
 
@@ -67,24 +67,48 @@ class OrderManager(AbstractOrderManager):
             return await self._sync_locked(actions)
 
     async def _sync_locked(self, actions: list[Action]) -> ExecutionSyncReport:
+        target_count = sum(len(action.orders) for action in actions)
         await self._publish(
             "execution:orders",
             {
                 "type": "ExecutionSyncRequested",
                 "exchange": self.exchange,
                 "action_count": len(actions),
-                "create_count": sum(len(action.orders_to_create) for action in actions),
-                "cancel_count": sum(len(action.orders_to_cancel) for action in actions),
-                "cancel_missing": self.cancel_missing,
+                "target_count": target_count,
                 "timestamp_ms": self.clock_ms(),
             },
         )
-        await self._cancel_explicit(actions)
-        if self.cancel_missing:
-            await self._cancel_missing(actions)
-        report = await self._place_new(actions)
+        combined = ExecutionSyncReport()
+        for action in actions:
+            combined = combined.merge(await self._reconcile_action(action, execute=True))
         await self._publish_snapshot()
-        return report
+        return combined
+
+    def preview_placement(self, actions: list[Action]) -> ExecutionSyncReport:
+        """Dry-run reconcile without exchange cancel/place API calls."""
+
+        combined = ExecutionSyncReport()
+        for action in actions:
+            for symbol in self._symbols_for_action(action):
+                plan = self._plan_for_scope(action, symbol=symbol)
+                partial = self._report_from_plan(action, plan, symbol=symbol)
+                filtered, venue_rejection_counts, _rejected = self._validate_orders_for_action(
+                    action, plan
+                )
+                limit_valid = summarize_orders([order for _, order in filtered])
+                combined = combined.merge(
+                    ExecutionSyncReport(
+                        target=partial.target,
+                        kept=partial.kept,
+                        canceled=partial.canceled,
+                        to_place=partial.to_place,
+                        limit_valid=limit_valid,
+                        accepted=limit_valid,
+                        venue_rejection_counts=venue_rejection_counts,
+                        cancel_count=partial.cancel_count,
+                    )
+                )
+        return combined
 
     def apply_private_snapshot(self, snapshot: PrivateStateSnapshot) -> ExecutionSnapshot:
         self._live_orders = {
@@ -163,151 +187,144 @@ class OrderManager(AbstractOrderManager):
                 "timestamp_ms": self.clock_ms(),
             },
         )
-        await self._cancel_explicit([Action(actor_id="admin", orders_to_cancel=tuple(order_ids))])
+        await self._cancel_order_ids(order_ids)
         await self._publish_snapshot()
 
-    async def _cancel_explicit(self, actions: list[Action]) -> None:
-        cancel_ids: list[str] = []
-        seen: set[str] = set()
-        for action in actions:
-            for order_id in action.orders_to_cancel:
-                if order_id not in seen:
-                    seen.add(order_id)
-                    cancel_ids.append(order_id)
-        if not cancel_ids:
+    async def _cancel_order_ids(self, order_ids: list[str]) -> None:
+        if not order_ids:
             return
         await self._publish(
             "execution:orders",
             {
                 "type": "CancelOrdersRequested",
                 "exchange": self.exchange,
-                "order_ids": cancel_ids,
+                "order_ids": order_ids,
                 "timestamp_ms": self.clock_ms(),
             },
         )
-        await self.command_adapter.cancel_orders(cancel_ids)
-        for order_id in cancel_ids:
+        await self.command_adapter.cancel_orders(order_ids)
+        for order_id in order_ids:
             self._live_orders.pop(order_id, None)
         await self._publish(
             "execution:orders",
             {
                 "type": "CancelOrdersAccepted",
                 "exchange": self.exchange,
-                "order_ids": cancel_ids,
+                "order_ids": order_ids,
                 "timestamp_ms": self.clock_ms(),
             },
         )
 
-    async def _cancel_missing(self, actions: list[Action]) -> None:
-        desired = {
-            _order_key(action.actor_id, order)
-            for action in actions
-            for order in action.orders_to_create
+    async def _reconcile_action(self, action: Action, *, execute: bool) -> ExecutionSyncReport:
+        combined = ExecutionSyncReport()
+        for symbol in self._symbols_for_action(action):
+            plan = self._plan_for_scope(action, symbol=symbol)
+            partial = self._report_from_plan(action, plan, symbol=symbol)
+            if execute and plan.cancel_ids:
+                await self._cancel_order_ids(list(plan.cancel_ids))
+            filtered, venue_rejection_counts, rejected = self._validate_orders_for_action(action, plan)
+            if execute:
+                for order, limits, reason in rejected:
+                    await self._publish(
+                        "execution:orders",
+                        {
+                            "type": "OrderValidationRejected",
+                            "exchange": self.exchange,
+                            "symbol": order.symbol,
+                            "reason": reason,
+                            "side": order.side,
+                            "price": float(order.price),
+                            "qty": float(order.qty),
+                            "min_base_qty": float(limits.min_base_qty),
+                            "min_notional_quote": float(limits.min_notional_quote),
+                            "timestamp_ms": self.clock_ms(),
+                        },
+                    )
+            limit_valid = summarize_orders([order for _, order in filtered])
+            partial_report = ExecutionSyncReport(
+                target=partial.target,
+                kept=partial.kept,
+                canceled=partial.canceled,
+                to_place=partial.to_place,
+                limit_valid=limit_valid,
+                accepted=limit_valid,
+                venue_rejection_counts=venue_rejection_counts,
+                cancel_count=partial.cancel_count,
+                placed=False,
+            )
+            if execute and filtered:
+                partial_report = await self._place_filtered(
+                    to_place=filtered,
+                    report=partial_report,
+                    limit_valid=limit_valid,
+                    venue_rejection_counts=venue_rejection_counts,
+                )
+            combined = combined.merge(partial_report)
+        return combined
+
+    def _symbols_for_action(self, action: Action) -> list[str | None]:
+        symbols = {
+            order.symbol
+            for order in action.orders
             if order.exchange.lower().strip() == self.exchange
         }
-        to_cancel = [
-            order_id
-            for order_id, open_order in self._live_orders.items()
-            if _open_order_key(open_order) not in desired
+        if not symbols:
+            return [None]
+        return sorted(symbols)
+
+    def _plan_for_scope(self, action: Action, *, symbol: str | None) -> ReconcilePlan:
+        return reconcile_target_orders(
+            actor_id=action.actor_id,
+            exchange=self.exchange,
+            symbol=symbol,
+            desired=action.orders,
+            live_orders=self._live_orders,
+            config=self._reconcile_config,
+        )
+
+    def _report_from_plan(
+        self, action: Action, plan: ReconcilePlan, *, symbol: str | None
+    ) -> ExecutionSyncReport:
+        scoped_desired = [
+            o
+            for o in action.orders
+            if o.exchange.lower().strip() == self.exchange
+            and (symbol is None or o.symbol == symbol)
         ]
-        if to_cancel:
-            await self._cancel_explicit([Action(actor_id="execution-manager", orders_to_cancel=tuple(to_cancel))])
-
-    async def _place_new(self, actions: list[Action]) -> ExecutionSyncReport:
-        filtered, dedupe_skipped, venue_rejection_counts, rejected, after_dedupe = self._filter_for_placement(actions)
-        for order, limits, reason in rejected:
-            await self._publish(
-                "execution:orders",
-                {
-                    "type": "OrderValidationRejected",
-                    "exchange": self.exchange,
-                    "symbol": order.symbol,
-                    "reason": reason,
-                    "side": order.side,
-                    "price": float(order.price),
-                    "qty": float(order.qty),
-                    "min_base_qty": float(limits.min_base_qty),
-                    "min_notional_quote": float(limits.min_notional_quote),
-                    "timestamp_ms": self.clock_ms(),
-                },
-            )
-        limit_valid = summarize_orders([order for _, order in filtered])
-        if not filtered:
-            return ExecutionSyncReport(
-                dedupe_skipped=dedupe_skipped,
-                venue_rejection_counts=venue_rejection_counts,
-                after_dedupe=after_dedupe,
-                limit_valid=limit_valid,
-                placed=True,
-            )
-        return await self._place_filtered(
-            to_place=filtered,
-            dedupe_skipped=dedupe_skipped,
-            venue_rejection_counts=venue_rejection_counts,
-            after_dedupe=after_dedupe,
-            limit_valid=limit_valid,
-        )
-
-    def preview_placement(self, actions: list[Action]) -> ExecutionSyncReport:
-        filtered, dedupe_skipped, venue_rejection_counts, _rejected, after_dedupe = self._filter_for_placement(actions)
-        limit_valid = summarize_orders([order for _, order in filtered])
+        canceled_orders = [
+            self._live_orders[oid] for oid in plan.cancel_ids if oid in self._live_orders
+        ]
         return ExecutionSyncReport(
-            dedupe_skipped=dedupe_skipped,
-            venue_rejection_counts=venue_rejection_counts,
-            after_dedupe=after_dedupe,
-            limit_valid=limit_valid,
-            accepted=limit_valid,
-            placed=False,
+            target=summarize_orders(scoped_desired),
+            kept=summarize_open_orders(list(plan.keep)),
+            canceled=summarize_open_orders(canceled_orders),
+            to_place=summarize_orders(plan.place),
+            cancel_count=len(plan.cancel_ids),
         )
 
-    def _filter_for_placement(
-        self, actions: list[Action]
-    ) -> tuple[list[tuple[str, Order]], int, dict[str, int], list[tuple[Order, Any, str]], ActionStageReport]:
-        current_keys = {_open_order_key(open_order) for open_order in self._live_orders.values()}
-        dedupe_skipped = 0
-        to_place: list[tuple[str, Order]] = []
-        for action in actions:
-            for order in action.orders_to_create:
-                if order.exchange.lower().strip() != self.exchange:
-                    continue
-                key = _order_key(action.actor_id, order)
-                if key in current_keys:
-                    dedupe_skipped += 1
-                    continue
-                to_place.append((action.actor_id, order))
-                current_keys.add(key)
-
+    def _validate_orders_for_action(
+        self, action: Action, plan: ReconcilePlan
+    ) -> tuple[list[tuple[str, Order]], dict[str, int], list[tuple[Order, Any, str]]]:
         venue_rejection_counts: dict[str, int] = {}
         filtered: list[tuple[str, Order]] = []
         rejected: list[tuple[Order, Any, str]] = []
-        for actor_id, order in to_place:
+        for order in plan.place:
             limits = self._limit_source.limits_for(order.symbol)
             ok, reason = order_passes_limits(order, limits)
             if ok:
-                filtered.append((actor_id, order))
+                filtered.append((action.actor_id, order))
             else:
                 venue_rejection_counts[reason] = venue_rejection_counts.get(reason, 0) + 1
                 rejected.append((order, limits, reason))
-        after_dedupe = summarize_orders([order for _, order in to_place])
-        if dedupe_skipped:
-            after_dedupe = ActionStageReport(
-                order_count=after_dedupe.order_count,
-                buy_qty=after_dedupe.buy_qty,
-                sell_qty=after_dedupe.sell_qty,
-                buy_notional=after_dedupe.buy_notional,
-                sell_notional=after_dedupe.sell_notional,
-                rejection_counts={"duplicate_live_order": dedupe_skipped},
-            )
-        return filtered, dedupe_skipped, venue_rejection_counts, rejected, after_dedupe
+        return filtered, venue_rejection_counts, rejected
 
     async def _place_filtered(
         self,
         *,
         to_place: list[tuple[str, Order]],
-        dedupe_skipped: int,
+        report: ExecutionSyncReport,
+        limit_valid: ActionStageReport,
         venue_rejection_counts: dict[str, int],
-        after_dedupe: ActionStageReport,
-        limit_valid: Any,
     ) -> ExecutionSyncReport:
         orders = [order for _, order in to_place]
         await self._publish(
@@ -343,11 +360,14 @@ class OrderManager(AbstractOrderManager):
             },
         )
         return ExecutionSyncReport(
-            dedupe_skipped=dedupe_skipped,
-            venue_rejection_counts=venue_rejection_counts,
-            after_dedupe=after_dedupe,
+            target=report.target,
+            kept=report.kept,
+            canceled=report.canceled,
+            to_place=report.to_place,
             limit_valid=limit_valid,
             accepted=summarize_orders(accepted_orders),
+            venue_rejection_counts=venue_rejection_counts,
+            cancel_count=report.cancel_count,
             placed=True,
         )
 
@@ -357,23 +377,6 @@ class OrderManager(AbstractOrderManager):
     async def _publish(self, topic_prefix: str, event) -> None:
         if self.bus is not None:
             await self.bus.publish(f"{topic_prefix}:{self.exchange}", event)
-
-
-def _order_key(actor_id: str | None, order: Order) -> tuple:
-    return (
-        actor_id,
-        order.client_order_id,
-        order.exchange.lower().strip(),
-        order.symbol,
-        order.side.lower().strip(),
-        float(order.price),
-        float(order.qty),
-        order.order_type.lower().strip(),
-    )
-
-
-def _open_order_key(open_order: OpenOrder) -> tuple:
-    return _order_key(open_order.actor_id, open_order.order)
 
 
 def _order_summary(order: Order) -> dict:

@@ -128,7 +128,7 @@ class StrategyRunner:
         proposed = [decision.action]
         risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
         approved = risk_result.approved_list
-        approved_orders = tuple(order for action in approved for order in action.orders_to_create)
+        approved_orders = tuple(order for action in approved for order in action.orders)
         ctx.record_risk_result(
             proposed,
             approved,
@@ -171,7 +171,7 @@ class StrategyRunner:
             executed_orders = tuple(
                 order_summary_dict(order)
                 for action in approved
-                for order in action.orders_to_create
+                for order in action.orders
             )
 
         await self._publish_decision(decision, executed_orders=executed_orders)

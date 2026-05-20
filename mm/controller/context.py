@@ -103,8 +103,8 @@ class DecisionContext:
             self.risk_rejection_counts = dict(rejection_counts)
         elif len(approved) < len(proposed):
             self.risk_rejection_counts["actions_filtered"] = len(proposed) - len(approved)
-            proposed_orders = sum(len(a.orders_to_create) for a in proposed)
-            approved_orders = sum(len(a.orders_to_create) for a in approved)
+            proposed_orders = sum(len(a.orders) for a in proposed)
+            approved_orders = sum(len(a.orders) for a in approved)
             if approved_orders < proposed_orders:
                 self.risk_rejection_counts["orders_filtered"] = proposed_orders - approved_orders
 
@@ -116,8 +116,10 @@ class DecisionContext:
     def apply_execution_to_pipeline(self, execution_report: ExecutionSyncReport, *, executed: bool) -> None:
         if self.action_pipeline_report is None:
             return
-        self.action_pipeline_report.execution_deduped = execution_report.after_dedupe
-        self.action_pipeline_report.venue_limit_valid = ActionStageReport(
+        self.action_pipeline_report.target = execution_report.target
+        self.action_pipeline_report.kept = execution_report.kept
+        self.action_pipeline_report.canceled = execution_report.canceled
+        self.action_pipeline_report.placed = ActionStageReport(
             order_count=execution_report.limit_valid.order_count,
             buy_qty=execution_report.limit_valid.buy_qty,
             sell_qty=execution_report.limit_valid.sell_qty,
@@ -126,7 +128,7 @@ class DecisionContext:
             rejection_counts=dict(execution_report.venue_rejection_counts),
         )
         self.action_pipeline_report.venue_accepted = (
-            execution_report.accepted if executed else self.action_pipeline_report.venue_limit_valid
+            execution_report.accepted if executed else self.action_pipeline_report.placed
         )
 
     def record_execution_gates(self, *, executed: bool, blocked_reasons: list[str]) -> None:
@@ -240,13 +242,15 @@ class DecisionContext:
                 venue_quantized=report.venue_quantized.as_dict(),
                 capped=report.capped.as_dict(),
                 risk_approved=report.risk_approved.as_dict(),
-                execution_deduped=report.execution_deduped.as_dict(),
-                venue_limit_valid=report.venue_limit_valid.as_dict(),
+                target=report.target.as_dict(),
+                kept=report.kept.as_dict(),
+                canceled=report.canceled.as_dict(),
+                placed=report.placed.as_dict(),
                 venue_accepted=report.venue_accepted.as_dict(),
             )
         if decision is None:
             return ActionPipelineDiagnostics()
-        approved_orders = tuple(order for a in self.approved_actions for order in a.orders_to_create)
+        approved_orders = tuple(order for a in self.approved_actions for order in a.orders)
         return ActionPipelineDiagnostics(
             continuous=dict(decision.diagnostics.continuous_action_depth),
             ladder=_order_stage_summary_from_dicts(tuple(decision.ladder_orders)),
@@ -259,7 +263,7 @@ class DecisionContext:
     def _risk_diagnostics(self) -> RiskDiagnostics:
         limits = self.config.risk
         orders_ok = all(
-            len(a.orders_to_create) == len(p.orders_to_create)
+            len(a.orders) == len(p.orders)
             for a, p in zip(self.approved_actions, self.proposed_actions)
         ) if self.proposed_actions else True
         exposure_before = self.risk_exposure_before or {

@@ -110,7 +110,7 @@ def _minimal_decision(event: MarketEvent) -> StrategyDecision:
         symbol=event.symbol,
         t_end_ms=event.t_end_ms,
         frame_step=1,
-        action=Action(actor_id="test-runner", orders_to_create=(order,)),
+        action=Action(actor_id="test-runner", orders=(order,)),
     )
 
 

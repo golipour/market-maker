@@ -90,6 +90,10 @@
       "spread_max": 200.0
     },
     "max_orders_per_side": 100,
+    "reconcile": {
+      "price_tol_bps": 10.0,
+      "qty_tol_rel": 0.01
+    },
     "risk": {
       "enabled": true,
       "primary": {

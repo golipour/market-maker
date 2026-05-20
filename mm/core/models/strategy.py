@@ -93,7 +93,7 @@ class StrategyDecision:
 
     @property
     def order_count(self) -> int:
-        return len(self.action.orders_to_create)
+        return len(self.action.orders)
 
     def as_payload(self, *, executed_orders: tuple[dict[str, Any], ...] | None = None) -> dict[str, Any]:
         """JSON-friendly event payload for the runtime bus and persistence."""

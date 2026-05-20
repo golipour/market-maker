@@ -176,7 +176,7 @@ class RuntimeRiskEngine(AbstractRiskEngine):
         filtered: list[Action] = []
         for action in actions:
             safe_orders: list[Order] = []
-            for order in action.orders_to_create:
+            for order in action.orders:
                 ok, reason = _check_order(
                     order,
                     inventory=inventory,
@@ -197,15 +197,14 @@ class RuntimeRiskEngine(AbstractRiskEngine):
                 elif reason is not None:
                     counter_inc("mm_risk_reject_total", labels={"reason": reason})
                     rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
-            if safe_orders or action.orders_to_cancel:
+            if safe_orders:
                 filtered.append(
                     Action(
                         actor_id=action.actor_id,
-                        orders_to_create=tuple(safe_orders),
-                        orders_to_cancel=action.orders_to_cancel,
+                        orders=tuple(safe_orders),
                     )
                 )
-            elif action.orders_to_create:
+            elif action.orders:
                 rejection_counts["action_empty_after_filter"] = (
                     rejection_counts.get("action_empty_after_filter", 0) + 1
                 )
@@ -219,7 +218,7 @@ class RuntimeRiskEngine(AbstractRiskEngine):
 
 
 def _proposed_order_count(actions: list[Action]) -> int:
-    return sum(len(a.orders_to_create) for a in actions)
+    return sum(len(a.orders) for a in actions)
 
 
 def _exposure_dict(state: TradingState) -> dict[str, float]:

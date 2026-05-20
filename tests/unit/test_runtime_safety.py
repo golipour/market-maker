@@ -37,7 +37,7 @@ def test_runtime_risk_rejects_when_kill_switch_enabled() -> None:
     risk.set_kill_switch(True)
 
     approved = risk.validate(
-        [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
+        [Action(actor_id="a1", orders=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
         TradingState(actor_id="a1"),
         _event(),
     )
@@ -52,7 +52,7 @@ def test_runtime_risk_filters_inventory_breach() -> None:
     )
     frame_event = _event()
     approved = risk.validate_frame(
-        [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 2.0),))],
+        [Action(actor_id="a1", orders=(Order("nobitex", "BTC_IRT", "buy", 1.0, 2.0),))],
         TradingState(actor_id="a1", cash=1_000_000.0),
         StrategyInputFrame(
             primary=frame_event,
@@ -70,7 +70,7 @@ def test_runtime_risk_rejects_stale_data() -> None:
     )
 
     approved = risk.validate(
-        [Action(actor_id="a1", orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
+        [Action(actor_id="a1", orders=(Order("nobitex", "BTC_IRT", "buy", 1.0, 1.0),))],
         TradingState(actor_id="a1"),
         _event(1000),
     )

@@ -25,7 +25,8 @@ from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
-from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, SourceRole
+from mm.execution.reconcile import ReconcileConfig
+from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
 from mm.runtime.control import RuntimeControlPlane
 from mm.hedging.service import build_hedge_execution_service
 from mm.runtime.pipeline import build_symbol_engine
@@ -207,8 +208,8 @@ async def build_runtime_components(
                     exchange=source.normalized_exchange(),
                     command_adapter=order_selection.adapter,
                     bus=runtime_bus,
-                    cancel_missing=False,
                     limit_source=select_venue_order_limit_source(source.normalized_exchange()),
+                    reconcile_config=_execution_reconcile_config(config),
                 )
                 order_managers[source.normalized_exchange()] = manager
             execution_reconcilers[source.role] = ExecutionStateReconciler(
@@ -413,4 +414,16 @@ def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:
             if config.controller is not None
             else None
         ),
+    )
+
+
+def _execution_reconcile_config(config: MarketMakerRuntimeConfig) -> ReconcileConfig:
+    runtime = (
+        config.controller.reconcile
+        if config.controller is not None
+        else ReconcileRuntimeConfig()
+    )
+    return ReconcileConfig(
+        price_tol_bps=runtime.price_tol_bps,
+        qty_tol_rel=runtime.qty_tol_rel,
     )

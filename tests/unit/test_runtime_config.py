@@ -97,6 +97,35 @@ def test_controller_action_start_after_steps_from_mapping() -> None:
     assert config.controller.action_start_after_steps == 15
 
 
+def test_controller_reconcile_from_mapping() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"role": "primary", "exchange": "nobitex", "symbol": "BTC_IRT"},
+            "interval_ms": 1000,
+            "controller": {
+                "enabled": True,
+                "reconcile": {"price_tol_bps": 5.0, "qty_tol_rel": 0.01},
+            },
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.reconcile.price_tol_bps == 5.0
+    assert config.controller.reconcile.qty_tol_rel == 0.01
+
+
+def test_controller_reconcile_defaults_when_missing() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"role": "primary", "exchange": "nobitex", "symbol": "BTC_IRT"},
+            "interval_ms": 1000,
+            "controller": {"enabled": True},
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.reconcile.price_tol_bps == 0.0
+    assert config.controller.reconcile.qty_tol_rel == 0.0
+
+
 def test_controller_action_start_after_steps_clamps_negative() -> None:
     config = runtime_config_from_mapping(
         {

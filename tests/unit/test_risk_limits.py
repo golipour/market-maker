@@ -61,7 +61,7 @@ def test_spot_rejects_sell_exceeding_inventory() -> None:
     )
     action = Action(
         actor_id="a",
-        orders_to_create=(Order("nobitex", "BTC_IRT", "sell", 100.0, 5.0),),
+        orders=(Order("nobitex", "BTC_IRT", "sell", 100.0, 5.0),),
     )
     result = risk.validate_frame_with_result(
         [action],
@@ -78,7 +78,7 @@ def test_rejects_buy_when_cash_too_low() -> None:
     frame = StrategyInputFrame(primary=_event(), primary_private=_private(1000))
     action = Action(
         actor_id="a",
-        orders_to_create=(Order("nobitex", "BTC_IRT", "buy", 100.0, 10.0),),
+        orders=(Order("nobitex", "BTC_IRT", "buy", 100.0, 10.0),),
     )
     result = risk.validate_frame_with_result(
         [action],

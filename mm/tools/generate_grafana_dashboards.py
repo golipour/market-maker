@@ -301,7 +301,7 @@ ORDER BY 1""",
   (e.payload #> ARRAY['action_pipeline',stage,'order_count'])::int::double precision AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY[
-  'ladder','venue_quantized','capped','risk_approved','execution_deduped','venue_limit_valid','venue_accepted'
+  'ladder','venue_quantized','capped','risk_approved','target','kept','canceled','placed','venue_accepted'
 ]) AS stage
 WHERE {diag_filter}
 ORDER BY 1""",

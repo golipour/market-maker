@@ -222,6 +222,24 @@ class RiskRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReconcileRuntimeConfig:
+    """Tolerance when matching declarative target orders to live open orders.
+
+    ``price_tol_bps``: max relative price gap in basis points (0 = exact match after quantization).
+    ``qty_tol_rel``: max relative quantity gap vs live ``remaining_qty`` (0 = exact).
+    """
+
+    price_tol_bps: float = 0.0
+    qty_tol_rel: float = 0.0
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            "price_tol_bps": float(self.price_tol_bps),
+            "qty_tol_rel": float(self.qty_tol_rel),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ControllerRuntimeConfig:
     """Config for the optional MPC controller on the event bus.
 
@@ -249,6 +267,7 @@ class ControllerRuntimeConfig:
     execution_model: dict[str, Any] | None = None
     optimizer: dict[str, Any] | None = None
     risk: RiskRuntimeConfig = field(default_factory=RiskRuntimeConfig)
+    reconcile: ReconcileRuntimeConfig = field(default_factory=ReconcileRuntimeConfig)
 
     @property
     def normalized_action_topic(self) -> str:
@@ -533,6 +552,16 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
         risk=_risk_from_mapping(payload.get("risk")),
+        reconcile=_reconcile_from_mapping(payload.get("reconcile")),
+    )
+
+
+def _reconcile_from_mapping(payload: Any) -> ReconcileRuntimeConfig:
+    if not isinstance(payload, dict):
+        return ReconcileRuntimeConfig()
+    return ReconcileRuntimeConfig(
+        price_tol_bps=max(0.0, float(payload.get("price_tol_bps", 0.0))),
+        qty_tol_rel=max(0.0, float(payload.get("qty_tol_rel", 0.0))),
     )
 
 
@@ -663,6 +692,13 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "primary": config.risk.primary.as_dict(),
             "hedge": config.risk.hedge.as_dict(),
             "note": "hard gates only; inventory_target_penalty_weight lives under optimizer",
+        },
+        "reconcile": {
+            **config.reconcile.as_dict(),
+            "note": (
+                "OrderManager target-state matching: keep live orders within tolerance, "
+                "cancel orphans, place unmatched targets"
+            ),
         },
         "optimizer_risk_terms": {
             "pnl_volatility_penalty_weight": "penalty on Std(total_reward) across MC paths",

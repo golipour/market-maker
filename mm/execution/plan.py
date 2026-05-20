@@ -39,8 +39,10 @@ class ActionPipelineReport:
     venue_quantized: ActionStageReport = field(default_factory=ActionStageReport)
     capped: ActionStageReport = field(default_factory=ActionStageReport)
     risk_approved: ActionStageReport = field(default_factory=ActionStageReport)
-    execution_deduped: ActionStageReport = field(default_factory=ActionStageReport)
-    venue_limit_valid: ActionStageReport = field(default_factory=ActionStageReport)
+    target: ActionStageReport = field(default_factory=ActionStageReport)
+    kept: ActionStageReport = field(default_factory=ActionStageReport)
+    canceled: ActionStageReport = field(default_factory=ActionStageReport)
+    placed: ActionStageReport = field(default_factory=ActionStageReport)
     venue_accepted: ActionStageReport = field(default_factory=ActionStageReport)
 
     def as_dict(self) -> dict[str, Any]:
@@ -50,8 +52,10 @@ class ActionPipelineReport:
             "venue_quantized": self.venue_quantized.as_dict(),
             "capped": self.capped.as_dict(),
             "risk_approved": self.risk_approved.as_dict(),
-            "execution_deduped": self.execution_deduped.as_dict(),
-            "venue_limit_valid": self.venue_limit_valid.as_dict(),
+            "target": self.target.as_dict(),
+            "kept": self.kept.as_dict(),
+            "canceled": self.canceled.as_dict(),
+            "placed": self.placed.as_dict(),
             "venue_accepted": self.venue_accepted.as_dict(),
         }
 
@@ -72,13 +76,16 @@ class RiskResult:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionSyncReport:
-    """Order-manager placement funnel (dedupe, venue limits, accept)."""
+    """Order-manager reconcile funnel (target → keep/cancel/place → venue limits → accept)."""
 
-    dedupe_skipped: int = 0
-    venue_rejection_counts: dict[str, int] = field(default_factory=dict)
-    after_dedupe: ActionStageReport = field(default_factory=ActionStageReport)
+    target: ActionStageReport = field(default_factory=ActionStageReport)
+    kept: ActionStageReport = field(default_factory=ActionStageReport)
+    canceled: ActionStageReport = field(default_factory=ActionStageReport)
+    to_place: ActionStageReport = field(default_factory=ActionStageReport)
     limit_valid: ActionStageReport = field(default_factory=ActionStageReport)
     accepted: ActionStageReport = field(default_factory=ActionStageReport)
+    venue_rejection_counts: dict[str, int] = field(default_factory=dict)
+    cancel_count: int = 0
     placed: bool = False
 
     def merge(self, other: ExecutionSyncReport) -> ExecutionSyncReport:
@@ -86,11 +93,14 @@ class ExecutionSyncReport:
         for key, count in other.venue_rejection_counts.items():
             merged_rejections[key] = merged_rejections.get(key, 0) + int(count)
         return ExecutionSyncReport(
-            dedupe_skipped=self.dedupe_skipped + other.dedupe_skipped,
-            venue_rejection_counts=merged_rejections,
-            after_dedupe=_merge_stage_reports(self.after_dedupe, other.after_dedupe),
+            target=_merge_stage_reports(self.target, other.target),
+            kept=_merge_stage_reports(self.kept, other.kept),
+            canceled=_merge_stage_reports(self.canceled, other.canceled),
+            to_place=_merge_stage_reports(self.to_place, other.to_place),
             limit_valid=_merge_stage_reports(self.limit_valid, other.limit_valid),
             accepted=_merge_stage_reports(self.accepted, other.accepted),
+            venue_rejection_counts=merged_rejections,
+            cancel_count=self.cancel_count + other.cancel_count,
             placed=self.placed or other.placed,
         )
 
@@ -130,6 +140,12 @@ def stage_report_with_rejections(
         sell_notional=base.sell_notional,
         rejection_counts=dict(rejection_counts),
     )
+
+
+def summarize_open_orders(open_orders: list) -> ActionStageReport:
+    """Summarize live open orders (for canceled-stage diagnostics)."""
+    orders = [o.order for o in open_orders]
+    return summarize_orders(orders)
 
 
 def _merge_stage_reports(left: ActionStageReport, right: ActionStageReport) -> ActionStageReport:

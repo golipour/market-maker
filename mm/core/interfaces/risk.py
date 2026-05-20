@@ -17,8 +17,8 @@ class AbstractRiskEngine(ABC):
         self, actions: list[Action], state: TradingState, event: MarketEvent
     ) -> RiskResult:
         approved = self.validate(actions, state, event)
-        proposed_orders = sum(len(a.orders_to_create) for a in actions)
-        approved_orders = sum(len(a.orders_to_create) for a in approved)
+        proposed_orders = sum(len(a.orders) for a in actions)
+        approved_orders = sum(len(a.orders) for a in approved)
         rejection_counts: dict[str, int] = {}
         if len(approved) < len(actions):
             rejection_counts["actions_filtered"] = len(actions) - len(approved)

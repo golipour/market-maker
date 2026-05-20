@@ -19,11 +19,12 @@ class RecordingOrderManager(AbstractOrderManager):
 
     async def sync_with_report(self, actions: list[Action]) -> ExecutionSyncReport:
         self.synced.append(actions)
-        orders = tuple(order for action in actions for order in action.orders_to_create)
+        orders = tuple(order for action in actions for order in action.orders)
+        summary = summarize_orders(orders)
         return ExecutionSyncReport(
-            after_dedupe=summarize_orders(orders),
-            limit_valid=summarize_orders(orders),
-            accepted=summarize_orders(orders),
+            target=summary,
+            kept=summary,
+            limit_valid=summary,
+            accepted=summary,
             placed=True,
         )
-

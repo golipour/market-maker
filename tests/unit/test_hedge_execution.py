@@ -150,7 +150,7 @@ async def test_primary_fill_places_hedge_market_order_when_enabled() -> None:
     diagnostic = await asyncio.wait_for(diag_q.get(), timeout=1.0)
     assert diagnostic["status"] == "submitted"
     assert len(hedge_manager.synced) == 1
-    placed = hedge_manager.synced[0][0].orders_to_create[0]
+    placed = hedge_manager.synced[0][0].orders[0]
     assert placed.exchange == "wallex"
     assert placed.side == "buy"
     assert placed.order_type == "market"

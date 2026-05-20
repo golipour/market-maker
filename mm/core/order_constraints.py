@@ -236,7 +236,7 @@ def _ladder_side_orders(
                 side=side,
                 price=float(price),
                 qty=float(qty),
-                client_order_id=f"{actor_id}:{side}:{event.t_end_ms}:{idx}",
+                client_order_id=f"{actor_id}:{side}:{idx}",
             )
         )
     return out

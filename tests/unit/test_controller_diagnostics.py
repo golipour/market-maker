@@ -183,7 +183,7 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
             symbol=frame.primary.symbol,
             t_end_ms=frame.primary.t_end_ms,
             frame_step=frame_step,
-            action=Action(actor_id="test-runner", orders_to_create=(order,)),
+            action=Action(actor_id="test-runner", orders=(order,)),
             mid=100.0,
             inventory=5.0,
             cash=1000.0,

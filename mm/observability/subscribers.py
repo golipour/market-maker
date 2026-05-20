@@ -255,7 +255,7 @@ class RuntimeObservabilitySubscriber:
         labels = {"actor_id": action.actor_id, "topic": topic}
         gauge(
             obs_schema.MM_STRATEGY_ACTION_ORDER_COUNT,
-            float(len(action.orders_to_create)),
+            float(len(action.orders)),
             labels=labels,
             help="Orders requested by strategy action",
         )

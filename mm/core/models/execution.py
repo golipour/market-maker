@@ -19,9 +19,10 @@ if msgspec is not None:
 
 
     class Action(msgspec.Struct, frozen=True):
+        """Declarative target resting orders for one actor (execution reconciles to live book)."""
+
         actor_id: str
-        orders_to_create: Tuple[Order, ...] = ()
-        orders_to_cancel: Tuple[str, ...] = ()
+        orders: Tuple[Order, ...] = ()
 
 
     class Fill(msgspec.Struct, frozen=True):
@@ -50,9 +51,10 @@ else:
 
     @dataclass(frozen=True, slots=True)
     class Action:
+        """Declarative target resting orders for one actor (execution reconciles to live book)."""
+
         actor_id: str
-        orders_to_create: Tuple[Order, ...] = ()
-        orders_to_cancel: Tuple[str, ...] = ()
+        orders: Tuple[Order, ...] = ()
 
 
     @dataclass(frozen=True, slots=True)
@@ -77,4 +79,3 @@ class TradingState:
     inventory: float = 0.0
     open_orders: dict[str, Order] = field(default_factory=dict)
     model_data: dict[str, object] = field(default_factory=dict)
-

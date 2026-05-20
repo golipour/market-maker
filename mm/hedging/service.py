@@ -263,7 +263,7 @@ class HedgeExecutionService:
             )
             return
 
-        action = Action(actor_id=self.config.actor_id, orders_to_create=(hedge_order,))
+        action = Action(actor_id=self.config.actor_id, orders=(hedge_order,))
         try:
             report = await route_actions_to_managers_with_report([action], self.order_managers)
             placed = report.accepted.order_count > 0

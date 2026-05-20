@@ -256,8 +256,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
         return {
             "type": "StrategyAction",
             "actor_id": event.actor_id,
-            "create_count": len(event.orders_to_create),
-            "cancel_count": len(event.orders_to_cancel),
+            "create_count": len(event.orders),
             "orders": [
                 {
                     "exchange": order.exchange,
@@ -268,7 +267,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
                     "notional": order.price * order.qty,
                     "client_order_id": order.client_order_id,
                 }
-                for order in event.orders_to_create[:10]
+                for order in event.orders[:10]
             ],
             "unit_policy": "price=quote_per_base, qty=base, notional=quote",
         }

@@ -40,7 +40,7 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
         [
             Action(
                 actor_id="actor-1",
-                orders_to_create=(
+                orders=(
                     Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1"),
                 ),
             )
