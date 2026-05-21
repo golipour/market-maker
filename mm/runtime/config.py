@@ -729,16 +729,6 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "when true with positive quote_size_target_per_side, L_i are softmax mixture weights "
                 "normalized so D(spread_max)-D(0) equals the target (architectural size constraint)"
             ),
-            "spread_ref_quantity": (
-                "minimum effective cumulative depth at first sigmoid center per side (base units)"
-            ),
-            "spread_max_at_ref": (
-                "maximum x0_1_bid + x0_1_ask (quote-per-base spread at first centers)"
-            ),
-            "spread_ref_constrain": (
-                "when true with positive spread_ref_quantity and spread_max_at_ref, reparameterize "
-                "first centers and floor L1 for architectural spread-at-reference constraint"
-            ),
             "hard_project_quote_size_target": (
                 "when true with positive quote_size_target_per_side, rescales depth parameters toward that target "
                 "(ignored when quote_size_softmax_L is true)"

@@ -51563,3 +51563,116 @@
 {"ts_ms":1779295110012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295110000,"hedge_status":"ready","hedge_lag_ms":0}
 {"ts_ms":1779295120011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295120000,"hedge_status":"ready","hedge_lag_ms":0}
 {"ts_ms":1779295130011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295130000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295140016,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295140000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295150014,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295150000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295157655,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295160010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295160000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295163502,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"orderbook_stream","error":"ConnectionError","message":"('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"}
+{"ts_ms":1779295170010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295170000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295180017,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295180000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295190011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295190000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295200011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295200000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295210010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295210000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295219786,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295220012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295220000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295230010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295230000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295240012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295240000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295250011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295250000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295260011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295260000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295270016,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295270000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295270873,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295280011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295280000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295290017,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295290000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295300013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295300000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295310013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295310000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295320010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295320000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295330013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295330000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295340012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295340000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295350170,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295350000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295360010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295360000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295370013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295370000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295380010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295380000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295390011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295390000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295400012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295400000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295410012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295410000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295420011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295420000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295430010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295430000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295440010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295440000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295442650,"event":"runtime_error","topic":"market:errors:wallex:USDT_IRT","source":"trade_stream","error":"HTTPError","message":"504 Server Error: Gateway Timeout for url: https://api.wallex.ir/v1/trades?symbol=USDTTMN"}
+{"ts_ms":1779295450013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295450000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295460010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295460000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295470013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295470000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295472500,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"orderbook_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295480010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295480000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295490010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295490000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295497664,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"orderbook_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295500013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295500000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295510013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295510000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295520011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295520000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295530013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295530000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295540013,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295540000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295548757,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295550010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295550000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295560012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295560000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295570011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295570000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295580011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295580000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295580329,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"orderbook_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295599822,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":20}
+{"ts_ms":1779295599854,"event":"postgres_event_writer_ready","database_url_configured":true}
+{"ts_ms":1779295599856,"event":"postgres_event_writer_started","topics":["market:events:nobitex:USDT_IRT:10000","market:events:wallex:USDT_IRT:10000","strategy:frames:nobitex:USDT_IRT:10000","strategy:actions","strategy:decisions","strategy:diagnostics:mpc-controller","execution:orders:nobitex","execution:orders:wallex","execution:state:nobitex","execution:state:wallex","private:state:nobitex:snapshot","private:state:wallex:snapshot","private:state:nobitex:balances","private:state:wallex:balances","private:state:nobitex:open_orders","private:state:wallex:open_orders","private:state:nobitex:fills","private:state:wallex:fills","hedge:intents:hedge-executor","hedge:diagnostics:hedge-executor"],"batch_size":100,"ready":true}
+{"ts_ms":1779295632100,"event":"mpc_optimizer_timing","batch_sec":0.0014335960004245862,"train_sec":0.9160699759995623,"total_sec":0.9175035719999869,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295632154,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295630000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295632158,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295630000,"order_count":6,"latency_ms":2093.76316,"observe_only":false,"decision_hash":"52c0cc665073541ff31b193759fa356f1bac4fbcc86310191ef31174ab6d339d"}
+{"ts_ms":1779295632163,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295640908,"event":"mpc_optimizer_timing","batch_sec":0.001102218000596622,"train_sec":0.893695895003475,"total_sec":0.8947981130040716,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295640913,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295640000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295640915,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295640000,"order_count":8,"latency_ms":900.001051,"observe_only":false,"decision_hash":"33bcb486ff9c81e271f521f453d8dcdeca726331989f45cd2219ccb55e554b0f"}
+{"ts_ms":1779295651338,"event":"mpc_optimizer_timing","batch_sec":0.0009084200028155465,"train_sec":0.9754842390029808,"total_sec":0.9763926590057963,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295651344,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295650000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295651345,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295650000,"order_count":7,"latency_ms":1330.774548,"observe_only":false,"decision_hash":"9ff84966344bea4ca90908a6b950d6f2c8ab6c8b5937a662f904cbadb4b495ad"}
+{"ts_ms":1779295660975,"event":"mpc_optimizer_timing","batch_sec":0.000873672997840913,"train_sec":0.9617749739991268,"total_sec":0.9626486469969677,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295660980,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295660000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295660981,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295660000,"order_count":7,"latency_ms":966.783514,"observe_only":false,"decision_hash":"2b103af147cbd038ae084bce6022f1665cf077b4762dabec0633f730e0e02f14"}
+{"ts_ms":1779295671024,"event":"mpc_optimizer_timing","batch_sec":0.0010639709980750922,"train_sec":1.0102570060007565,"total_sec":1.0113209769988316,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295671028,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295670000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295671029,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295670000,"order_count":3,"latency_ms":1015.154287,"observe_only":false,"decision_hash":"10c568a9ef3dabf14936b9866bac530e5ec8ada565a8331ecda1170a05476032"}
+{"ts_ms":1779295680986,"event":"mpc_optimizer_timing","batch_sec":0.000939823999942746,"train_sec":0.9738023039972177,"total_sec":0.9747421279971604,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295680990,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295680000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295680991,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295680000,"order_count":2,"latency_ms":978.516038,"observe_only":false,"decision_hash":"697ce95ae45798c696f931a7b4d349b0565b752aeea0ccc09cb11b9be07d71ac"}
+{"ts_ms":1779295691022,"event":"mpc_optimizer_timing","batch_sec":0.001018671002384508,"train_sec":1.0081945809979516,"total_sec":1.009213252000336,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295691027,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295690000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295691028,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295690000,"order_count":2,"latency_ms":1013.228576,"observe_only":false,"decision_hash":"ee871d79782e19e995fc70a663e5483db2b329d80ddcfe9dec6a6acf4ec5e400"}
+{"ts_ms":1779295692898,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295700984,"event":"mpc_optimizer_timing","batch_sec":0.0010596200008876622,"train_sec":0.9715077450018725,"total_sec":0.9725673650027602,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295700988,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295700000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295700989,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295700000,"order_count":2,"latency_ms":975.747529,"observe_only":false,"decision_hash":"f7d3121a06413974dd12be1b8f33a11dfa9ffbdbebfe52c9100d29bf81160486"}
+{"ts_ms":1779295710964,"event":"mpc_optimizer_timing","batch_sec":0.0010196059993177187,"train_sec":0.9503226039996662,"total_sec":0.9513422099989839,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295710969,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295710000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295710970,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295710000,"order_count":2,"latency_ms":956.044739,"observe_only":false,"decision_hash":"80c769d597869c699494c2c02cb2c5ba909c5f4c8d39ce3c536acbeb51a32ebf"}
+{"ts_ms":1779295720978,"event":"mpc_optimizer_timing","batch_sec":0.0010248229991702829,"train_sec":0.9657056800024293,"total_sec":0.9667305030015996,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295720986,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295720000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295720988,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295720000,"order_count":2,"latency_ms":970.93598,"observe_only":false,"decision_hash":"80c769d597869c699494c2c02cb2c5ba909c5f4c8d39ce3c536acbeb51a32ebf"}
+{"ts_ms":1779295730968,"event":"mpc_optimizer_timing","batch_sec":0.0008886859977792483,"train_sec":0.9554081210008007,"total_sec":0.95629680699858,"n_samples":64,"horizon":1,"best_epoch":49}
+{"ts_ms":1779295730973,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295730000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295730974,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295730000,"order_count":2,"latency_ms":960.38469,"observe_only":false,"decision_hash":"8027b7b2a5af3f8fc22ec89cf05be49318988e6daf650f55f77f858cd6276ea8"}
+{"ts_ms":1779295740012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295740000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295742835,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295750011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295750000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295760010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295760000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295770010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295770000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295775237,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295780012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295780000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295790012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295790000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295800011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295800000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295810010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295810000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295814748,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295820011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295820000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295830012,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295830000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295840011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295840000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295850011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295850000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295856004,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295860010,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295860000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295870011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295870000,"hedge_status":"ready","hedge_lag_ms":0}
+{"ts_ms":1779295872037,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"trade_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295876799,"event":"runtime_error","topic":"market:errors:nobitex:USDT_IRT","source":"orderbook_stream","error":"ReadTimeout","message":"HTTPSConnectionPool(host='apiv2.nobitex.ir', port=443): Read timed out. (read timeout=15.0)"}
+{"ts_ms":1779295880011,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779295880000,"hedge_status":"ready","hedge_lag_ms":0}
