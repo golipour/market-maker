@@ -12,7 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 import torch
 
-from mm.mpc.l_param import LParamConfig, sigmoid_action_from_flat_raw
+from mm.mpc.l_param import LParamConfig, sigmoid_action_from_flat_raw, validate_l_param_config
 from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
@@ -97,6 +97,7 @@ def _initial_action_uniform_marginal_qrange(
     quote_size_target_per_side: float | None,
     *,
     use_softmax_L: bool = False,
+    l_param: LParamConfig | None = None,
 ) -> np.ndarray | None:
     """
     Build an initial flat action (raw optimizer params) using a simple linear-range
@@ -142,11 +143,34 @@ def _initial_action_uniform_marginal_qrange(
         L_raw = np.array([_inv_softplus_np(v) for v in L_eff], dtype=np.float64)
     k_raw = np.array([_inv_softplus_np(v) for v in k_eff], dtype=np.float64)
 
+    if use_softmax_L and l_param is not None and l_param.spread_structured:
+        sm_f = float(spread_max)
+        u_init = 0.0
+        x0_raw = np.zeros(n, dtype=np.float64)
+        x0_raw[0] = u_init
+        if n > 1:
+            fracs = np.linspace(0.25, 0.85, n - 1)
+            for j, frac in enumerate(fracs):
+                frac = min(max(float(frac), 1e-4), 1.0 - 1e-4)
+                x0_raw[j + 1] = float(np.log(frac / (1.0 - frac)))
+        bid_part: list[float] = []
+        ask_part: list[float] = []
+        for i in range(n):
+            bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
+        for i in range(n):
+            ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i] if i > 0 else u_init)])
+        return np.array(bid_part + ask_part, dtype=np.float64)
+
+    if use_softmax_L:
+        x0_raw = np.zeros(n, dtype=np.float64)
+    else:
+        x0_raw = x0
+
     bid_part: list[float] = []
     ask_part: list[float] = []
     for i in range(n):
-        bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
-        ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0[i])])
+        bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
+        ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
     return np.array(bid_part + ask_part, dtype=np.float64)
 
 
@@ -825,6 +849,9 @@ class MonteCarloMPCTensorBatched:
         hard_project_quote_size_target: bool = False,
         hard_project_quote_size_range: bool = False,
         quote_size_softmax_L: bool = False,
+        quote_spread_target: float | int | None = None,
+        quote_spread_ref_depth: float | int | None = None,
+        quote_spread_k_epsilon: float | None = None,
     ):
         self.price_model = price_model
         self.market_flow_model = market_flow_model
@@ -901,12 +928,26 @@ class MonteCarloMPCTensorBatched:
         self.hard_project_quote_size_target = bool(hard_project_quote_size_target)
         self.hard_project_quote_size_range = bool(hard_project_quote_size_range)
         self.quote_size_softmax_L = bool(quote_size_softmax_L)
+        self.quote_spread_target = (
+            float(quote_spread_target) if quote_spread_target is not None else None
+        )
+        self.quote_spread_ref_depth = (
+            float(quote_spread_ref_depth) if quote_spread_ref_depth is not None else None
+        )
+        self.quote_spread_k_epsilon = (
+            float(quote_spread_k_epsilon)
+            if quote_spread_k_epsilon is not None
+            else 0.01
+        )
         if self.quote_size_softmax_L and (
             self.quote_size_target_per_side is None or float(self.quote_size_target_per_side) <= 0.0
         ):
             raise ValueError(
                 "quote_size_softmax_L requires positive quote_size_target_per_side"
             )
+        lp = self._l_param_config()
+        if lp is not None:
+            validate_l_param_config(lp)
         # Backward-compatible attribute names used internally and by existing tests/tools.
         self.reward_coef = self.expected_pnl_weight
         self.risk_coef = self.pnl_volatility_penalty_weight
@@ -965,9 +1006,13 @@ class MonteCarloMPCTensorBatched:
             use_softmax=True,
             quote_size_target=self.quote_size_target_per_side,
             spread_max=self.spread_max,
+            n_components=self.n_components,
             quote_size_min=self.quote_size_min_per_side,
             quote_size_max=self.quote_size_max_per_side,
             apply_quote_size_range=self.hard_project_quote_size_range,
+            quote_spread_target=self.quote_spread_target,
+            quote_spread_ref_depth=self.quote_spread_ref_depth,
+            quote_spread_k_epsilon=self.quote_spread_k_epsilon,
         )
 
     def _depth_call_kwargs(self) -> dict[str, Any]:
@@ -1047,6 +1092,7 @@ class MonteCarloMPCTensorBatched:
                 spread_max=self.spread_max,
                 quote_size_target_per_side=self.quote_size_target_per_side,
                 use_softmax_L=self.quote_size_softmax_L,
+                l_param=self._l_param_config(),
             )
             if one_action is None:
                 sm = self.spread_max

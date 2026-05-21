@@ -726,8 +726,19 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "inventory vs scale, size/spread vs targets, concentration in [0,1])"
             ),
             "quote_size_softmax_L": (
-                "when true with positive quote_size_target_per_side, L_i are softmax mixture weights "
-                "normalized so D(spread_max)-D(0) equals the target (architectural size constraint)"
+                "when true with positive quote_size_target_per_side, enables structural reparameterization: "
+                "x0 in [0,spread_max], D_eff(spread_max)=Q_total; with quote_spread_target and "
+                "quote_spread_ref_depth also enforces spread-center sum and depth at centers"
+            ),
+            "quote_spread_target": (
+                "total bid+ask distance between first sigmoid centers (quote units); "
+                "requires quote_spread_ref_depth and n_components>=2 when set with quote_size_softmax_L"
+            ),
+            "quote_spread_ref_depth": (
+                "minimum executable cumulative depth at each side's first center (base units)"
+            ),
+            "quote_spread_k_epsilon": (
+                "sharpness floor for spread-leg k1; smaller epsilon forces sharper step at center"
             ),
             "hard_project_quote_size_target": (
                 "when true with positive quote_size_target_per_side, rescales depth parameters toward that target "
