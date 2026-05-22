@@ -641,10 +641,28 @@ LIMIT 20""",
     )
 
 
+_MODEL_SCORE_ROW_TITLE = "Model scores (ControllerDiagnostics)"
+_MODEL_SCORE_PANEL_TITLES = frozenset(
+    {
+        "Model NLL",
+        "Rolling mean NLL (5 frames)",
+        "Standardized residuals",
+        "Score skip reasons",
+    }
+)
+
+
+def _is_model_score_panel(panel: dict[str, Any]) -> bool:
+    title = panel.get("title")
+    if panel.get("type") == "row" and title == _MODEL_SCORE_ROW_TITLE:
+        return True
+    return title in _MODEL_SCORE_PANEL_TITLES
+
+
 def patch_model_params_dashboard() -> None:
     path = OUT / "mm_strategy_model_params_pg.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    panels = data["panels"]
+    panels = [p for p in data["panels"] if not _is_model_score_panel(p)]
     y = max(p["gridPos"]["y"] + p["gridPos"]["h"] for p in panels)
 
     diag_filter = """
@@ -654,7 +672,7 @@ def patch_model_params_dashboard() -> None:
   AND e.symbol = '${symbol}'
   AND $__timeFilter(e.ts)"""
 
-    panels.append(_panel_row(100, y, "Model scores (ControllerDiagnostics)"))
+    panels.append(_panel_row(100, y, _MODEL_SCORE_ROW_TITLE))
     y += 1
     panels.append(
         _panel_sql_timeseries(
@@ -667,40 +685,6 @@ FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL
-ORDER BY 1""",
-        )
-    )
-    y += 8
-    panels.append(
-        _panel_sql_timeseries(
-            102,
-            y,
-            "Rolling mean NLL (5 frames)",
-            f"""SELECT "time", metric, value FROM (
-  SELECT e.ts AS "time", model AS metric,
-    AVG((e.payload #>> ARRAY['models', model, 'nll'])::double precision)
-      OVER (PARTITION BY model ORDER BY e.ts ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)) AS value
-  FROM mm_events e
-  CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
-  WHERE {diag_filter}
-    AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL
-) s
-WHERE value IS NOT NULL
-ORDER BY 1""",
-        )
-    )
-    y += 8
-    panels.append(
-        _panel_sql_timeseries(
-            103,
-            y,
-            "Standardized residuals",
-            f"""SELECT e.ts AS "time", model || '.z' AS metric,
-  (e.payload #>> ARRAY['models', model, 'standardized_residual'])::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['models', model, 'standardized_residual'] IS NOT NULL
 ORDER BY 1""",
         )
     )
