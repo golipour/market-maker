@@ -11,6 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from mm.mpc.l_param import LParamConfig, sigmoid_action_from_flat_raw, validate_l_param_config
 from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction, sigmoid_mixture_action_bounds
@@ -462,6 +463,38 @@ def _mid_from_book_best_levels_batched(
     return 0.5 * (best_bid + best_ask)
 
 
+_SOFT_FILL_ACTIVATIONS = frozenset({"sigmoid", "hardsigmoid"})
+
+
+def _normalize_soft_fill_activation(activation: str) -> str:
+    kind = str(activation).lower().strip()
+    if kind not in _SOFT_FILL_ACTIVATIONS:
+        supported = ", ".join(sorted(_SOFT_FILL_ACTIVATIONS))
+        raise ValueError(f"unsupported soft_fill_activation {activation!r}; expected one of: {supported}")
+    return kind
+
+
+def _soft_fill_fraction(
+    reach: torch.Tensor,
+    soft_temp: float,
+    activation: str = "sigmoid",
+) -> torch.Tensor:
+    """
+    Map normalized reach to a per-level consumption fraction in [0, 1].
+
+    ``soft_temp`` scales the input before the activation:
+    ``scaled_reach = reach / soft_temp``.
+
+    ``hardsigmoid`` is exactly zero when ``scaled_reach <= -3``, eliminating
+    asymptotic ghost fills from far-from-mid quote levels.
+    """
+    scaled = reach / max(float(soft_temp), 1e-12)
+    kind = _normalize_soft_fill_activation(activation)
+    if kind == "hardsigmoid":
+        return F.hardsigmoid(scaled)
+    return torch.sigmoid(scaled)
+
+
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
@@ -474,6 +507,7 @@ def soft_fill_batched(
     spread_grid: torch.Tensor,
     maker_fee: float,
     soft_temp: float = 1.0,
+    soft_fill_activation: str = "sigmoid",
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -535,8 +569,10 @@ def soft_fill_batched(
         reach_ask_raw / ask_pos_scale,
         reach_ask_raw / ask_neg_scale,
     )
-    consumed_bid_level = comb_bid_level * torch.sigmoid(reach_bid / soft_temp)
-    consumed_ask_level = comb_ask_level * torch.sigmoid(reach_ask / soft_temp)
+    fill_frac_bid = _soft_fill_fraction(reach_bid, soft_temp, soft_fill_activation)
+    fill_frac_ask = _soft_fill_fraction(reach_ask, soft_temp, soft_fill_activation)
+    consumed_bid_level = comb_bid_level * fill_frac_bid
+    consumed_ask_level = comb_ask_level * fill_frac_ask
 
     # Split consumed level volumes proportionally between market book and our quotes.
     bid_share_our = torch.where(
@@ -807,7 +843,8 @@ class MonteCarloMPCTensorBatched:
         horizon: int = 4,
         spread_max: float = 100.0,
         spread_step: float = 1.0,
-        soft_fill_temp: float = 1.0,
+        soft_fill_temp: float = 0.1,
+        soft_fill_activation: str = "sigmoid",
         adam_lr: float = 0.05,
         adam_epochs: int = 80,
         adam_grad_clip: float = 10.0,
@@ -864,6 +901,7 @@ class MonteCarloMPCTensorBatched:
         self.spread_step = max(1e-12, float(spread_step))
         self.grid_levels = _grid_levels(self.spread_max, self.spread_step)
         self.soft_fill_temp = soft_fill_temp
+        self.soft_fill_activation = _normalize_soft_fill_activation(soft_fill_activation)
         self.adam_lr = adam_lr
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
@@ -1379,6 +1417,7 @@ class MonteCarloMPCTensorBatched:
                         spread_grid,
                         maker_fee,
                         soft_temp=self.soft_fill_temp,
+                        soft_fill_activation=self.soft_fill_activation,
                         **depth_kw,
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
@@ -1587,6 +1626,8 @@ class MonteCarloMPCTensorBatched:
                 "fixed_mc_samples": self.fixed_mc_samples,
                 "spread_max": self.spread_max,
                 "spread_step": self.spread_step,
+                "soft_fill_temp": self.soft_fill_temp,
+                "soft_fill_activation": self.soft_fill_activation,
             },
             timing={
                 "sample_draw_sec": float(batch_time_sec),
@@ -1609,6 +1650,8 @@ class MonteCarloMPCTensorBatched:
                 "n_samples": self.n_samples,
                 "horizon": self.horizon,
                 "hedge_enabled": self.hedge_enabled,
+                "soft_fill_temp": self.soft_fill_temp,
+                "soft_fill_activation": self.soft_fill_activation,
             },
         )
         self._last_diagnostics = diagnostics

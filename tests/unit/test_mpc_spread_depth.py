@@ -9,6 +9,7 @@ from mm.mpc.mpc_tensor_batched import (
     MonteCarloMPCTensorBatched,
     _action_spread_at_depth,
     _desired_quote_size_per_side,
+    _soft_fill_fraction,
     soft_fill_batched,
 )
 from mm.mpc.mpc_state import SigmoidMixtureAction
@@ -227,3 +228,46 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
     # inflated by raw[0].
     assert math.isclose(expected_bid_quote, expected_ask_quote, rel_tol=1e-12)
     assert abs(float(inv_delta[0])) < 1e-6
+
+
+def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:
+    reach = torch.tensor([[-4.0, -1.0, 0.0, 1.0, 4.0]], dtype=torch.float64)
+    hard = _soft_fill_fraction(reach, soft_temp=1.0, activation="hardsigmoid")
+    soft = _soft_fill_fraction(reach, soft_temp=1.0, activation="sigmoid")
+
+    assert hard[0, 0].item() == 0.0
+    assert soft[0, 0].item() > 0.0
+    assert hard[0, -1].item() == 1.0
+
+
+def test_soft_fill_hardsigmoid_reduces_unreachable_level_fill_vs_sigmoid() -> None:
+    reach = torch.tensor([[-4.0, -3.0, 4.0]], dtype=torch.float64)
+    soft_temp = 1.0
+    hard = _soft_fill_fraction(reach, soft_temp, activation="hardsigmoid")
+    soft = _soft_fill_fraction(reach, soft_temp, activation="sigmoid")
+
+    assert hard[0, 0].item() == 0.0
+    assert soft[0, 0].item() > 0.0
+    assert hard[0, 1].item() == 0.0
+    assert soft[0, 1].item() > 0.0
+    assert hard[0, 2].item() == 1.0
+
+
+def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
+    from mm.core.models.real_execution import RealExecutionModel
+    from mm.mpc.market_order_flow_torch import TorchHurdleLogNormalModel
+    from mm.mpc.price_torch import TorchResidualPriceModel
+
+    flow = TorchHurdleLogNormalModel()
+    price = TorchResidualPriceModel(market_flow_model=flow)
+    exe = RealExecutionModel()
+    mpc = MonteCarloMPCTensorBatched(
+        price,
+        flow,
+        exe,
+        soft_fill_activation="hardsigmoid",
+    )
+    assert mpc.soft_fill_activation == "hardsigmoid"
+
+    with pytest.raises(ValueError, match="unsupported soft_fill_activation"):
+        MonteCarloMPCTensorBatched(price, flow, exe, soft_fill_activation="relu")
