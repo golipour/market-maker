@@ -510,7 +510,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 2,
+        "h": 4,
         "w": 24,
         "x": 0,
         "y": 23
@@ -560,7 +560,7 @@
         "h": 2,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 27
       },
       "id": 104,
       "options": {
@@ -666,6 +666,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 12,
+  "version": 13,
   "weekStart": ""
 }

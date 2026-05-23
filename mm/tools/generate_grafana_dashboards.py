@@ -16,14 +16,15 @@ PANEL_HEIGHT_SCALE = 0.5
 PANEL_MIN_HEIGHT = 2
 
 
-def _scale_panel_height(height: int) -> int:
+def _scale_panel_height(height: int, *, scale: float | None = None) -> int:
+    factor = PANEL_HEIGHT_SCALE if scale is None else scale
     if height <= 1:
         return height
-    return max(PANEL_MIN_HEIGHT, round(height * PANEL_HEIGHT_SCALE))
+    return max(PANEL_MIN_HEIGHT, round(height * factor))
 
 
-def compact_dashboard_panels(data: dict[str, Any]) -> dict[str, Any]:
-    """Halve panel heights and reflow y positions row-by-row."""
+def compact_dashboard_panels(data: dict[str, Any], *, height_scale: float | None = None) -> dict[str, Any]:
+    """Scale panel heights and reflow y positions row-by-row."""
 
     panels = data.get("panels") or []
     if not panels:
@@ -39,7 +40,7 @@ def compact_dashboard_panels(data: dict[str, Any]) -> dict[str, Any]:
         row_panels = rows[old_y]
         for panel in row_panels:
             grid = panel["gridPos"]
-            grid["h"] = _scale_panel_height(int(grid.get("h", 8)))
+            grid["h"] = _scale_panel_height(int(grid.get("h", 8)), scale=height_scale)
             grid["y"] = new_y
         new_y += max(int(panel["gridPos"]["h"]) for panel in row_panels)
 
@@ -60,9 +61,9 @@ def compact_all_dashboards() -> None:
         print("Compacted", path.name)
 
 
-def _panel_text(id_: int, y: int, content: str, title: str = "Notes") -> dict[str, Any]:
+def _panel_text(id_: int, y: int, content: str, title: str = "Notes", *, h: int = 4) -> dict[str, Any]:
     return {
-        "gridPos": {"h": _scale_panel_height(4), "w": 24, "x": 0, "y": y},
+        "gridPos": {"h": h, "w": 24, "x": 0, "y": y},
         "id": id_,
         "options": {"content": content, "mode": "markdown"},
         "title": title,
@@ -93,7 +94,7 @@ def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 4) -> dict
     }
 
 
-def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 4, w: int = 24, x: int = 0) -> dict[str, Any]:
+def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 8, w: int = 24, x: int = 0) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {"defaults": {"unit": "short", "decimals": 4}, "overrides": []},
@@ -168,7 +169,7 @@ def _panel_objective_contribution_fractions(
     y: int,
     *,
     diag_filter: str,
-    h: int = 4,
+    h: int = 8,
     w: int = 24,
     x: int = 0,
 ) -> dict[str, Any]:
@@ -223,7 +224,7 @@ def _panel_objective_component(
     diag_filter: str,
     x: int = 0,
     w: int = 12,
-    h: int = 3,
+    h: int = 6,
 ) -> dict[str, Any]:
     return _panel_sql_timeseries(
         id_,
@@ -276,7 +277,7 @@ FROM mm_events e
 WHERE {diag_filter}
 ORDER BY e.ts DESC
 LIMIT 1""",
-            h=3,
+            h=6,
         ),
         _panel_sql_timeseries(
             10,
@@ -320,6 +321,7 @@ WHERE {diag_filter}
 ORDER BY 1""",
             x=0,
             w=12,
+            h=6,
         ),
         _panel_sql_timeseries(
             15,
@@ -334,6 +336,7 @@ WHERE {diag_filter}
 ORDER BY 1""",
             x=12,
             w=12,
+            h=6,
         ),
         _panel_objective_contribution_fractions(
             18,
@@ -783,7 +786,11 @@ def main() -> None:
         return
 
     (OUT / "mm_controller_diagnostics_pg.json").write_text(
-        json.dumps(compact_dashboard_panels(controller_diagnostics_dashboard()), indent=2) + "\n",
+        json.dumps(
+            compact_dashboard_panels(controller_diagnostics_dashboard(), height_scale=1.0),
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     (OUT / "mm_portfolio_pg.json").write_text(
