@@ -18,6 +18,7 @@ from mm.diagnostics.models import (
     OptimizerDiagnostics,
     RiskDiagnostics,
     StateDiagnostics,
+    orderbook_snapshot_payload,
 )
 from mm.execution.plan import ActionPipelineReport, ActionStageReport, ExecutionSyncReport
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
@@ -179,6 +180,7 @@ class DecisionContext:
             risk=risk,
             execution_gates=execution_gates,
             warnings=tuple(warnings),
+            cleared_orderbook=orderbook_snapshot_payload(self.clean_frame.primary.orderbook),
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:

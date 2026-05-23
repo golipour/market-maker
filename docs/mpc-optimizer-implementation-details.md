@@ -128,8 +128,9 @@ effective_depth(spread) = max(0, raw_depth(spread) - raw_depth(0))
 This convention is used by:
 
 - soft fill simulation
-- quote-size penalty
+- quote-size penalty (when not structurally enforced)
 - quoted-spread penalty
+- structural softmax decode (`delta_i(s)` in `mm/mpc/l_param.py`)
 - optimizer action diagnostics
 - ladder order conversion
 
@@ -137,9 +138,9 @@ Reviewers should treat effective depth as the true cumulative order size. Raw de
 
 ## Positive Parameters And Bounds
 
-`L` and `k` are optimized in raw unconstrained tensor space and converted to positive values with `softplus`.
+In the **default** parameterization, `L` and `k` are optimized in raw unconstrained tensor space and converted to positive values with `softplus`.
 
-In the default parameterization, bounds are specified in effective positive parameter space:
+Default bounds are specified in effective positive parameter space:
 
 ```text
 L in [1e-6, L_max]
@@ -149,14 +150,21 @@ x0 in [-x0_max, x0_max]
 
 They are converted to raw optimizer-space bounds by `_bounds_effective_to_raw()`. Each closure clamps `x_torch` to raw bounds before rollout.
 
-When `quote_size_softmax_L=true`, `L` slots are interpreted as logits instead of softplus depth scales. In that mode, `L` bounds pass through as logit bounds and `mm.mpc.l_param` materializes effective `(L, k, x0)` values with structural quote-size constraints.
+When `quote_size_softmax_L=true`, the optimizer no longer treats raw `L`, `k`, and `x0` slots literally. Instead, `mm.mpc.l_param.materialize_side_*()` decodes raw flat params into effective `(L, k, x0)` with structural constraints. In that mode:
+
+- `L` slots are mostly **logits** (mixture weights or spread-scale), not softplus depth scales
+- `L` bounds pass through as logit bounds, typically `[-30, 30]`
+- `k` raw values still map through `softplus` (with a structural floor on spread-leg `k1`)
+- `x0` raw values are logits for sigmoid maps, not direct center spreads
 
 If no custom bounds are supplied:
 
 - default mode: `L_max` defaults to `1e5`, increased when quote size targets require it
-- `quote_size_softmax_L=true`: `L` logits use `[-30, 30]`
+- `quote_size_softmax_L=true`: per-component bounds `[L_logit, k_raw, x0_logit]` with logit ranges `[-30, 30]`, `k` in `[1e-6, 100]`, and `x0` logits unbounded within the same box
 - `k_max = 100`
-- `x0_max = spread_max`
+- `x0_max = spread_max` (default mode only; structural mode maps logits into `[0, spread_max]`)
+
+Hard quote-size projection (`hard_project_quote_size_target`, `hard_project_quote_size_range`) is **skipped** when `quote_size_softmax_L=true`; size is enforced by reparameterization instead.
 
 ## Initialization And Warm Start
 
@@ -264,7 +272,7 @@ The closure:
 
 1. Clears gradients.
 2. Clamps raw parameters to raw bounds.
-3. Optionally projects total quote size.
+3. Optionally projects total quote size (default mode only; skipped when `quote_size_softmax_L=true`).
 4. Draws or reuses Monte Carlo samples.
 5. Rolls out every sample for every horizon step.
 6. Computes terminal objective `J`.
@@ -486,14 +494,7 @@ The previous `quote_shape_uniformity_penalty_weight` name is treated as a compat
 
 ### Quote-Size Target
 
-`_action_size_penalty_qrange()` penalizes:
-
-```text
-|Q_bid(spread_max) - target| / target
-+ |Q_ask(spread_max) - target| / target
-```
-
-when objective normalization is enabled. Without normalization it falls back to squared error. `Q_side` is effective cumulative depth.
+`_action_size_penalty_qrange()` penalizes deviation of effective cumulative depth at `spread_max` from `quote_size_target_per_side`. When `quote_size_softmax_L=true`, this penalty is usually set to zero because size at `spread_max` is enforced structurally.
 
 ### Spread At Target Depth
 
@@ -513,7 +514,7 @@ This penalizes the controller curve being wider than the configured quoted-sprea
 
 ## Total Quantity Projection
 
-The optimizer supports optional hard projection toward a quote-size target:
+The optimizer supports optional hard projection toward a quote-size target in **default** mode:
 
 | Config | Meaning |
 | --- | --- |
@@ -524,24 +525,134 @@ The optimizer supports optional hard projection toward a quote-size target:
 
 Projection exists in both numpy and torch helper forms. It is applied before closure rollout and when building returned best/final action slices.
 
+When `quote_size_softmax_L=true`, projection is disabled and quote size is enforced structurally instead (see below).
+
 ## Structural Softmax L Parameterization
 
-When `quote_size_softmax_L=true`, raw `L` values are not direct depth scales. They are logits decoded by `LParamConfig`.
+When `quote_size_softmax_L=true` and `quote_size_target_per_side > 0`, the optimizer decodes raw flat params through `LParamConfig` in `mm/mpc/l_param.py`. Effective depth scales and centers are **computed**, not free variables.
 
-Without spread-structured settings:
+All constraints below use **executable** depth:
 
-- component centers `x0` are mapped into `[0, spread_max]`
-- `L` logits are softmax weights
-- effective `L` values are solved so `D_eff(spread_max) = quote_size_target_per_side`
+```text
+D_eff(s) = D(s) - D(0)
+         = sum_i L_i * delta_i(s)
 
-With `quote_spread_target` and `quote_spread_ref_depth`:
+delta_i(s) = sigmoid(k_i * (s - x0_i)) - sigmoid(-k_i * x0_i)
+```
 
-- first bid and ask centers are split by a softmax so their sum is `quote_spread_target`
-- the first component carries `quote_spread_ref_depth` at its center
-- remaining components fill the tail to the quote-size target at `spread_max`
-- `quote_spread_k_epsilon` sets a floor on the first component sharpness
+Implementation entry points:
 
-This mode embeds some quote-size and spread structure into the parameterization itself, instead of relying only on soft penalties or post-optimization projection.
+- `materialize_side_np()` / `materialize_side_torch()` — decode one side to `(L, k, x0)`
+- `sigmoid_action_from_flat_raw()` — build effective action for diagnostics and warm start output
+
+### Mode A — size only (no spread-structured config)
+
+Active when `quote_spread_target` or `quote_spread_ref_depth` is unset/zero.
+
+**Centers**
+
+```text
+x0_i = spread_max * sigmoid(raw_x0_i)     for all i, both sides
+```
+
+Every center lies in `[0, spread_max]`.
+
+**Depth at `spread_max`**
+
+```text
+w_i = softmax(l_i)
+L_i = Q_total * w_i / sum_j(w_j * delta_j(spread_max))
+```
+
+Result: `D_eff(spread_max) = Q_total` exactly for any `(k, x0, w)`.
+
+The optimizer learns logits `l_i` in the raw `L` slots and shape params `(k, x0)`.
+
+### Mode B — spread-structured (both spread config params set)
+
+Active when **both** are positive:
+
+- `quote_spread_target` — maximum allowed sum of first bid/ask centers (quote units)
+- `quote_spread_ref_depth` — minimum executable depth at each side's first center (base units)
+
+Requires `n_components >= 2` (spread leg + tail leg). Validated at optimizer construction:
+
+- `quote_spread_target <= spread_max`
+- `quote_spread_ref_depth <= quote_size_target_per_side`
+
+#### Raw parameter semantics (spread-structured)
+
+| Raw slot | Decoded meaning |
+| --- | --- |
+| bid `L1` (`flat[0]`) | `u_scale` — spread utilization logit |
+| bid `x0_1` (`flat[2]`) | `u_bid` — bid share logit |
+| ask `x0_1` (`flat[3n+2]`) | `u_ask` — ask share logit |
+| bid/ask `L2…Ln` | tail mixture logits |
+| bid/ask `k1` | spread-leg sharpness offset above `k1_min` |
+| bid/ask `k2…kn` | tail slopes via `softplus` |
+| bid/ask `x0_2…xn` | tail center logits mapped into `[x0_1, spread_max]` |
+
+#### Part 1 — spread center upper bound (not equality)
+
+First centers are **not** forced to sum to `quote_spread_target`. They are capped:
+
+```text
+scale = sigmoid(u_scale)                     in (0, 1)
+w     = softmax([u_bid, u_ask])
+
+x0_1_bid = scale * S_max * w_bid
+x0_1_ask = scale * S_max * w_ask
+```
+
+where `S_max = quote_spread_target`.
+
+Properties (always):
+
+- `x0_1_bid >= 0`, `x0_1_ask >= 0`
+- `x0_1_bid + x0_1_ask = scale * S_max <= S_max`
+- asymmetry from `u_bid - u_ask`
+- `scale -> 1` uses the full spread budget; smaller `scale` quotes tighter near mid
+
+Deeper centers on each side:
+
+```text
+x0_i = x0_1 + (spread_max - x0_1) * sigmoid(raw_x0_i)     for i >= 2
+```
+
+#### Part 2 — spread-leg sharpness floor
+
+Spread-leg `k1` has a structural minimum so component 1 rises sharply before its center:
+
+```text
+k1_min(x0_1) = -log(eps / (1 - eps)) / x0_1
+
+k1 = k1_min(x0_1) + softplus(raw_k1)
+```
+
+where `eps = quote_spread_k_epsilon` (default `0.01`).
+
+#### Part 3 — spread leg + tail leg depth budget
+
+Component 1 is the **spread leg**; components `2…n` are the **tail leg**.
+
+Tail mixture:
+
+```text
+v_i = softmax(l_i)     for i = 2..n
+```
+
+Coupled solve for `L1…Ln` enforces:
+
+- `D_eff(x0_1) >= quote_spread_ref_depth` at each side's first center
+- `D_eff(spread_max) = quote_size_target_per_side` exactly
+
+The spread leg pins center depth; the tail fills the remaining budget at `spread_max`. Tail components can add positive depth at the spread center, so the realized center depth is typically **at least** `quote_spread_ref_depth`, not necessarily equal.
+
+When spread-structured mode is active, prefer `quote_spread_penalty_weight=0`; spread width is already encoded structurally. The separate `quote_spread_target_bps` penalty still applies only if explicitly weighted — it measures quoted VWAP width at `quote_depth_target_for_spread`, not the first-center geometry.
+
+### Warm start note
+
+With `quote_size_softmax_L=true`, warm start stores **raw** flat params in `_last_raw_flat`, not effective `(L, k, x0)` values from the returned action. Effective actions are still materialized for diagnostics and order conversion.
 
 ## Returned Action
 
@@ -656,14 +767,14 @@ Action snapshot fields:
 | `hard_project_quote_size_target` | Hard rescaling toward quote-size target |
 | `quote_size_min_per_side`, `quote_size_max_per_side` | Hard size range bounds when enabled |
 | `hard_project_quote_size_range` | Hard clamp to size range |
-| `quote_size_softmax_L` | Structural softmax size parameterization |
+| `quote_size_softmax_L` | Enable structural reparameterization for quote size (and spread when spread config is set) |
 | `quote_shape_concentration_penalty_weight` | Marginal depth concentration penalty |
-| `quote_spread_penalty_weight` | Quoted-spread target penalty |
-| `quote_spread_target_bps` | Maximum target quoted width in basis points |
-| `quote_depth_target_for_spread` | Cumulative depth used for quoted spread VWAP |
-| `quote_spread_target` | Structural first-center sum in quote units when softmax L is enabled |
-| `quote_spread_ref_depth` | Structural depth at first centers when softmax L is enabled |
-| `quote_spread_k_epsilon` | Sharpness floor for structural first components |
+| `quote_spread_penalty_weight` | Soft quoted-spread penalty at reference depth (optional when structural spread is enabled) |
+| `quote_spread_target_bps` | Maximum target quoted VWAP width in basis points (soft penalty path) |
+| `quote_depth_target_for_spread` | Cumulative depth used for quoted spread VWAP in the soft penalty |
+| `quote_spread_target` | **Maximum** allowed `x0_1_bid + x0_1_ask` in quote units when spread-structured softmax is enabled |
+| `quote_spread_ref_depth` | Minimum `D_eff(x0_1)` at each side's first center when spread-structured softmax is enabled |
+| `quote_spread_k_epsilon` | Sharpness floor `eps` for spread-leg `k1` (default `0.01`) |
 | `objective_normalize_components` | Scale objective terms into dimensionless units |
 | `hedge_rollout_enabled` | Include simulated hedge trades in objective |
 | `hedge_reward_weight` | Weight of simulated hedge reward |
@@ -674,8 +785,8 @@ Action snapshot fields:
 
 Implemented safeguards:
 
-- softplus for positive `L` and `k`
-- optional softmax materialization for `L`
+- softplus for positive `k` in default mode
+- optional structural softmax materialization for effective `L` and bounded `x0` when `quote_size_softmax_L=true`
 - raw bound clamping every closure
 - NaN/Inf sanitization in terminal objective
 - objective normalization by wealth and inventory scales
@@ -700,7 +811,7 @@ The optimizer assumes:
 - unfilled own quotes are not carried into later simulated steps
 - primary inventory is marked to sell-side VWAP
 - hedge rollout, if enabled, is immediate and exact after simulated primary fills
-- venue constraints are handled after optimization, not inside the objective except through quote-size projection and configured penalties
+- venue constraints are handled after optimization, not inside the objective except through structural quote reparameterization (when enabled) or quote-size projection and configured penalties (default mode)
 
 These are modeling choices, not exchange facts. They should be validated against realized fill and PnL data.
 
@@ -735,18 +846,20 @@ When a quote looks wrong, inspect `ControllerDiagnostics.optimizer`:
 1. Check `objective.best.value` and `objective.improvement.best_minus_initial`.
 2. Check which component dominates `objective.best.components`.
 3. Compare `action.initial`, `action.final`, and `action.best`.
-4. Verify effective depth reaches intended `quote_size_target_per_side`.
-5. Check `rollout.hedge_enabled` matches expectations.
-6. Check `gradients.nonfinite_loss_count` and `gradients.nonfinite_grad_count`.
-7. Compare continuous action depth to action pipeline ladder totals.
-8. Check whether venue quantization or capping removed most of the curve.
-9. Check model scores under `ControllerDiagnostics.models`.
-10. Check risk and execution gate rejections after optimizer output.
+4. Verify effective depth reaches `quote_size_target_per_side` at `spread_max` (exact when `quote_size_softmax_L=true`).
+5. If spread-structured softmax is enabled, verify `x0_1_bid + x0_1_ask <= quote_spread_target` and center depth `>= quote_spread_ref_depth`.
+6. Check `rollout.hedge_enabled` matches expectations.
+7. Check `gradients.nonfinite_loss_count` and `gradients.nonfinite_grad_count`.
+8. Compare continuous action depth to action pipeline ladder totals.
+9. Check whether venue quantization or capping removed most of the curve.
+10. Check model scores under `ControllerDiagnostics.models`.
+11. Check risk and execution gate rejections after optimizer output.
 
 Useful files:
 
 | Concern | File |
 | --- | --- |
+| Structural quote decode | `mm/mpc/l_param.py` |
 | Optimizer implementation | `mm/mpc/mpc_tensor_batched.py` |
 | Optimizer diagnostics | `mm/mpc/optimizer_diagnostics.py` |
 | State/action types | `mm/mpc/mpc_state.py` |

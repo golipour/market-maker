@@ -91,6 +91,7 @@ def test_controller_diagnostics_payload_has_stable_shape() -> None:
         "risk",
         "execution_gates",
         "warnings",
+        "cleared_orderbook",
     }
     assert payload["execution_gates"]["executed"] is False
     assert payload["warnings"] == ["optimizer_failed"]
@@ -243,3 +244,53 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.frame.hedge_status == "ready"
     assert diag.frame.hedge_lag_ms == 12
     assert diag.frame.frame_age_ms == 1500
+    assert diag.cleared_orderbook["bids"] == [{"price": 100.0, "qty": 5.0}]
+    assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
+
+
+def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None:
+    from mm.application.orderbook_view import subtract_own_orders
+
+    frame = StrategyInputFrame(primary=_market_event())
+    clean_book = subtract_own_orders(
+        frame.primary.orderbook,
+        {
+            "o1": Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0, client_order_id="c1"),
+        },
+    )
+    clean_frame = StrategyInputFrame(
+        primary=MarketEvent(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            interval_ms=1000,
+            t_start_ms=1000,
+            t_end_ms=2000,
+            orderbook=clean_book,
+            trades=(),
+            buy_volume=1.0,
+            sell_volume=2.0,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=100.5,
+        )
+    )
+    runtime = MarketMakerRuntimeConfig(
+        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    from mm.application.trading_context import trading_state_from_frame
+
+    trading_state = trading_state_from_frame(
+        frame,
+        runtime.binding,
+        actor_id="test-runner",
+        open_orders={},
+    )
+    ctx = DecisionContext(
+        config=_minimal_config(),
+        frame=frame,
+        clean_frame=clean_frame,
+        trading_state=trading_state,
+        frame_step=1,
+    )
+    payload = ctx.to_diagnostics().as_payload()
+    assert payload["cleared_orderbook"]["bids"] == [{"price": 100.0, "qty": 3.0}]

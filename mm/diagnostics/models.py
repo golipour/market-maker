@@ -5,8 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from mm.core.models.market import RawOrderbook
+
 CONTROLLER_DIAGNOSTICS_TYPE = "ControllerDiagnostics"
 CONTROLLER_DIAGNOSTICS_VERSION = 1
+
+
+def orderbook_snapshot_payload(book: RawOrderbook | None) -> dict[str, Any]:
+    """JSON-friendly primary orderbook levels for diagnostics and Grafana."""
+
+    if book is None:
+        return {"bids": [], "asks": []}
+    return {
+        "exchange": book.exchange,
+        "symbol": book.symbol,
+        "timestamp_ms": book.timestamp_ms,
+        "bids": [{"price": float(level.price), "qty": float(level.qty)} for level in book.bids],
+        "asks": [{"price": float(level.price), "qty": float(level.qty)} for level in book.asks],
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +139,7 @@ class ControllerDiagnostics:
     risk: RiskDiagnostics = field(default_factory=RiskDiagnostics)
     execution_gates: ExecutionGateDiagnostics = field(default_factory=ExecutionGateDiagnostics)
     warnings: tuple[str, ...] = ()
+    cleared_orderbook: dict[str, Any] = field(default_factory=dict)
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -146,6 +163,7 @@ class ControllerDiagnostics:
                 "blocked_reasons": list(self.execution_gates.blocked_reasons),
             },
             "warnings": list(self.warnings),
+            "cleared_orderbook": dict(self.cleared_orderbook),
         }
 
 

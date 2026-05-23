@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Depth vs spread from mid: four pipeline stages, bid (green) and ask (red) on one chart each, fixed X in [-spread_max, +spread_max].",
+  "description": "Depth vs spread from mid: exchange orderbook, cleared orderbook (minus our resting orders), then MPC quote pipeline stages. Bid (green) and ask (red) on one chart each, fixed X in [-spread_max, +spread_max].",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**X-axis:** spread from mid (0), range **\u00b1 Spread max**.\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
+        "content": "**X-axis:** spread from mid (0), range **± Spread max**.\n\n**Chart 1 — Market orderbook:** raw exchange-visible book from the latest `MarketEvent` (includes our resting orders).\n\n**Chart 2 — Cleared orderbook:** primary book after subtracting our live orders (`ControllerDiagnostics.cleared_orderbook`, same view the MPC optimizer uses).\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -160,7 +160,7 @@
           "refId": "A"
         }
       ],
-      "title": "Market depth (cumulative)",
+      "title": "Market orderbook (cumulative)",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -284,6 +284,159 @@
         "w": 24,
         "x": 0,
         "y": 15
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${diagnostics_topic}' AND event_type = 'ControllerDiagnostics'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE(\n      NULLIF((payload->'state'->>'mid')::double precision, 0),\n      (\n        COALESCE((payload->'cleared_orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'cleared_orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n    ) AS mid,\n    ${spread_max}::double precision AS spread_max\n  FROM latest\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Cleared orderbook (cumulative)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 27
       },
       "id": 12,
       "options": {
@@ -436,7 +589,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 39
       },
       "id": 14,
       "options": {
@@ -589,7 +742,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 51
       },
       "id": 22,
       "options": {
@@ -706,6 +859,18 @@
         "label": "Decisions topic",
         "name": "controller_topic",
         "query": "strategy:decisions",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "label": "Diagnostics topic",
+        "name": "diagnostics_topic",
+        "query": "strategy:diagnostics:mpc-controller",
         "skipUrlSync": false,
         "type": "textbox"
       },
