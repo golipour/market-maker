@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Grafana dashboards for controller diagnostics, portfolio, and hedge execution."""
+"""Generate Grafana dashboards for controller diagnostics, primary action, portfolio, and hedge execution."""
 
 from __future__ import annotations
 
@@ -223,12 +223,24 @@ ORDER BY 1""",
                 "refId": "A",
             }
         ],
-        "title": "Objective contribution fractions — final (|weighted term| share)",
+        "title": "Objective contribution fractions",
         "type": "timeseries",
     }
 
 
 _OPTIMIZER_OBJECTIVE_STAGES = "ARRAY['initial','final']"
+
+_ACTION_PIPELINE_STAGES: tuple[tuple[str, str], ...] = (
+    ("ladder", "ladder"),
+    ("venue_quantized", "venue_quantized"),
+    ("capped", "capped"),
+    ("risk_approved", "risk_approved"),
+    ("target", "target"),
+    ("kept", "kept"),
+    ("canceled", "canceled"),
+    ("placed", "placed"),
+    ("venue_accepted", "venue_accepted"),
+)
 
 
 def _panel_objective_component(
@@ -259,8 +271,8 @@ ORDER BY 1""",
     )
 
 
-def controller_diagnostics_dashboard() -> dict[str, Any]:
-    diag_filter = """
+def _controller_diagnostics_filter() -> str:
+    return """
   e.topic = '${diagnostics_topic}'
   AND e.event_type = 'ControllerDiagnostics'
   AND e.exchange = '${exchange}'
@@ -268,135 +280,9 @@ def controller_diagnostics_dashboard() -> dict[str, Any]:
   AND e.actor_id = '${actor_id}'
   AND $__timeFilter(e.ts)"""
 
-    panels: list[dict[str, Any]] = [
-        _panel_text(
-            1,
-            0,
-            "**Source:** `mm_events` (`ControllerDiagnostics` on **Diagnostics topic**).\n\n"
-            "Covers optimizer objectives, action pipeline funnel, execution gates, and risk. "
-            "Set variables to match `controller` / persistence config.",
-        ),
-        _panel_sql_table(
-            2,
-            4,
-            "Latest controller status",
-            f"""SELECT
-  e.ts,
-  (e.payload->>'frame_step')::int AS frame_step,
-  e.payload #>> '{{frame,hedge_status}}' AS hedge_status,
-  (e.payload #>> '{{execution_gates,executed}}')::boolean AS executed,
-  e.payload #>> '{{execution_gates,blocked_reasons}}' AS blocked_reasons,
-  e.payload->'risk'->'rejection_counts' AS risk_rejection_counts,
-  (e.payload->'optimizer'->'timing'->>'total_sec')::double precision AS optimizer_total_sec,
-  (e.payload->'optimizer'->'timing'->>'best_epoch')::int AS best_epoch
-FROM mm_events e
-WHERE {diag_filter}
-ORDER BY e.ts DESC
-LIMIT 1""",
-            h=6,
-        ),
-        _panel_sql_timeseries(
-            10,
-            10,
-            "Objective value (initial / final)",
-            f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL
-ORDER BY 1""",
-        ),
-        _panel_row(11, 18, "Objective components"),
-        _panel_objective_component(
-            12,
-            19,
-            title="risk_adjusted_return",
-            component_key="risk_adjusted_return",
-            diag_filter=diag_filter,
-            x=0,
-        ),
-        _panel_objective_component(
-            13,
-            19,
-            title="inventory_capacity_penalty",
-            component_key="inventory_capacity_penalty",
-            diag_filter=diag_filter,
-            x=12,
-        ),
-        _panel_sql_timeseries(
-            14,
-            25,
-            "Expected total return (mean MC path return)",
-            f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL
-ORDER BY 1""",
-            x=0,
-            w=12,
-            h=6,
-        ),
-        _panel_sql_timeseries(
-            15,
-            25,
-            "Expected total reward (mean MC delta wealth)",
-            f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
-WHERE {diag_filter}
-  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL
-ORDER BY 1""",
-            x=12,
-            w=12,
-            h=6,
-        ),
-        _panel_objective_contribution_fractions(
-            18,
-            31,
-            diag_filter=diag_filter,
-        ),
-        _panel_sql_timeseries(
-            30,
-            39,
-            "Action pipeline — order count by stage",
-            f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #> ARRAY['action_pipeline',stage,'order_count'])::int::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY[
-  'ladder','venue_quantized','capped','risk_approved','target','kept','canceled','placed','venue_accepted'
-]) AS stage
-WHERE {diag_filter}
-ORDER BY 1""",
-        ),
-        _panel_sql_timeseries(
-            31,
-            53,
-            "Execution gate blocks (by reason)",
-            f"""SELECT e.ts AS "time", reason.value AS metric, 1::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL jsonb_array_elements_text(
-  COALESCE(e.payload->'execution_gates'->'blocked_reasons', '[]'::jsonb)
-) AS reason
-WHERE {diag_filter}
-ORDER BY 1""",
-        ),
-        _panel_sql_timeseries(
-            32,
-            61,
-            "Risk rejection counts",
-            f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
-FROM mm_events e
-CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'risk'->'rejection_counts', '{{}}'::jsonb)) kv
-WHERE {diag_filter}
-ORDER BY 1""",
-        ),
-    ]
 
-    templating = [
+def _controller_diagnostics_templating() -> list[dict[str, Any]]:
+    return [
         {
             "current": {"text": "mpc-controller", "value": "mpc-controller"},
             "label": "Actor ID",
@@ -437,13 +323,214 @@ ORDER BY 1""",
             "type": "textbox",
         },
     ]
+
+
+def controller_diagnostics_dashboard() -> dict[str, Any]:
+    diag_filter = _controller_diagnostics_filter()
+
+    panels: list[dict[str, Any]] = [
+        _panel_sql_timeseries(
+            10,
+            0,
+            "Objective value (initial / final)",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL
+ORDER BY 1""",
+        ),
+        _panel_objective_contribution_fractions(
+            11,
+            8,
+            diag_filter=diag_filter,
+        ),
+        _panel_objective_component(
+            15,
+            16,
+            title="risk_adjusted_return",
+            component_key="risk_adjusted_return",
+            diag_filter=diag_filter,
+            w=24,
+            h=8,
+        ),
+        _panel_objective_component(
+            12,
+            24,
+            title="inventory_capacity_penalty",
+            component_key="inventory_capacity_penalty",
+            diag_filter=diag_filter,
+            w=24,
+            h=8,
+        ),
+        _panel_sql_timeseries(
+            13,
+            32,
+            "Expected total return (mean MC path return)",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            14,
+            40,
+            "Expected total reward (mean MC delta wealth)",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL
+ORDER BY 1""",
+        ),
+    ]
+
     return _dashboard(
         title="MM controller diagnostics (PostgreSQL)",
         uid="mm-controller-diagnostics-pg",
-        description="ControllerDiagnostics from mm_events: optimizer, pipeline, risk, execution gates.",
+        description="ControllerDiagnostics optimizer objective metrics from mm_events.",
         tags=["market-maker", "postgres", "controller", "diagnostics"],
         panels=panels,
-        templating=templating,
+        templating=_controller_diagnostics_templating(),
+    )
+
+
+def _panel_action_pipeline_stage(
+    id_: int,
+    y: int,
+    *,
+    stage: str,
+    title: str,
+    diag_filter: str,
+    h: int = 6,
+) -> dict[str, Any]:
+    return _panel_sql_timeseries(
+        id_,
+        y,
+        title,
+        f"""SELECT e.ts AS "time",
+  (e.payload #> ARRAY['action_pipeline','{stage}','order_count'])::int::double precision AS value
+FROM mm_events e
+WHERE {diag_filter}
+ORDER BY 1""",
+        h=h,
+    )
+
+
+def _panel_action_pipeline_rejections(
+    id_: int,
+    y: int,
+    *,
+    stage: str,
+    title: str,
+    diag_filter: str,
+    rejection_counts_json: str | None = None,
+    h: int = 6,
+) -> dict[str, Any]:
+    counts_expr = (
+        rejection_counts_json
+        if rejection_counts_json is not None
+        else f"e.payload #> ARRAY['action_pipeline','{stage}','rejection_counts']"
+    )
+    return _panel_sql_timeseries(
+        id_,
+        y,
+        title,
+        f"""SELECT e.ts AS "time",
+  kv.key AS metric,
+  (kv.value)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE({counts_expr}, '{{}}'::jsonb)
+) AS kv
+WHERE {diag_filter}
+ORDER BY 1""",
+        h=h,
+    )
+
+
+def primary_action_dashboard() -> dict[str, Any]:
+    diag_filter = _controller_diagnostics_filter()
+
+    panels: list[dict[str, Any]] = [
+        _panel_text(
+            1,
+            0,
+            "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline` on **Diagnostics topic**).\n\n"
+            "One chart per execution funnel stage, top to bottom in pipeline order.",
+        ),
+    ]
+
+    y = 4
+    for index, (stage, title) in enumerate(_ACTION_PIPELINE_STAGES):
+        panels.append(
+            _panel_action_pipeline_stage(
+                10 + index,
+                y,
+                stage=stage,
+                title=f"Order count — {title}",
+                diag_filter=diag_filter,
+            )
+        )
+        y += 6
+
+    return _dashboard(
+        title="MM primary action (PostgreSQL)",
+        uid="mm-primary-action-pg",
+        description="Primary action pipeline funnel from ControllerDiagnostics in mm_events.",
+        tags=["market-maker", "postgres", "controller", "action"],
+        panels=panels,
+        templating=_controller_diagnostics_templating(),
+    )
+
+
+def primary_action_funnel_rejections_dashboard() -> dict[str, Any]:
+    diag_filter = _controller_diagnostics_filter()
+
+    panels: list[dict[str, Any]] = [
+        _panel_text(
+            1,
+            0,
+            "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\n"
+            "One chart per funnel stage; each line is a rejection reason count at that stage. "
+            "Risk uses `action_pipeline.risk_approved` with fallback to top-level `risk.rejection_counts`.",
+        ),
+    ]
+
+    y = 4
+    for index, (stage, title) in enumerate(_ACTION_PIPELINE_STAGES):
+        rejection_expr: str | None = None
+        if stage == "risk_approved":
+            rejection_expr = (
+                "COALESCE("
+                "e.payload #> ARRAY['action_pipeline','risk_approved','rejection_counts'], "
+                "e.payload->'risk'->'rejection_counts'"
+                ")"
+            )
+        panels.append(
+            _panel_action_pipeline_rejections(
+                20 + index,
+                y,
+                stage=stage,
+                title=f"Rejections — {title}",
+                diag_filter=diag_filter,
+                rejection_counts_json=rejection_expr,
+            )
+        )
+        y += 6
+
+    return _dashboard(
+        title="MM primary action funnel rejections (PostgreSQL)",
+        uid="mm-primary-action-rejections-pg",
+        description="Per-stage rejection reason counts from ControllerDiagnostics action_pipeline.",
+        tags=["market-maker", "postgres", "controller", "action", "rejections"],
+        panels=panels,
+        templating=_controller_diagnostics_templating(),
     )
 
 
@@ -835,6 +922,22 @@ def main() -> None:
     (OUT / "mm_controller_diagnostics_pg.json").write_text(
         json.dumps(
             compact_dashboard_panels(controller_diagnostics_dashboard(), height_scale=1.0),
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (OUT / "mm_primary_action_pg.json").write_text(
+        json.dumps(
+            compact_dashboard_panels(primary_action_dashboard(), height_scale=1.0),
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (OUT / "mm_primary_action_rejections_pg.json").write_text(
+        json.dumps(
+            compact_dashboard_panels(primary_action_funnel_rejections_dashboard(), height_scale=1.0),
             indent=2,
         )
         + "\n",

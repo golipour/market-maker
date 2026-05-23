@@ -99,7 +99,9 @@ Grafana provisioning:
 
 | UID / file | Purpose |
 |------------|---------|
-| `mm-controller-diagnostics-pg` | Optimizer objectives, action pipeline, risk, execution gates (`ControllerDiagnostics`) |
+| `mm-controller-diagnostics-pg` | Optimizer objective value, contribution fractions, inventory penalty, MC return/reward (`ControllerDiagnostics`) |
+| `mm-primary-action-pg` | Primary action pipeline order count by stage (`ControllerDiagnostics.action_pipeline`) |
+| `mm-primary-action-rejections-pg` | Per-stage rejection reason counts in the primary action funnel |
 | `mm-strategy-model-params-pg` | Model params from decisions + NLL / residuals from diagnostics |
 | `mm-portfolio-pg` | Inventory, cash, marked value, limits from diagnostics |
 | `mm-hedge-execution-pg` | Fill-driven hedge intents and execution outcomes |
