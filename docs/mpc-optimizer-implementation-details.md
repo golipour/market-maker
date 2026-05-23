@@ -129,7 +129,7 @@ This convention is used by:
 
 - soft fill simulation
 - quote-size penalty
-- spread-at-depth penalty
+- quoted-spread penalty
 - optimizer action diagnostics
 - ladder order conversion
 
@@ -139,7 +139,7 @@ Reviewers should treat effective depth as the true cumulative order size. Raw de
 
 `L` and `k` are optimized in raw unconstrained tensor space and converted to positive values with `softplus`.
 
-Bounds are specified in effective positive parameter space:
+In the default parameterization, bounds are specified in effective positive parameter space:
 
 ```text
 L in [1e-6, L_max]
@@ -149,9 +149,12 @@ x0 in [-x0_max, x0_max]
 
 They are converted to raw optimizer-space bounds by `_bounds_effective_to_raw()`. Each closure clamps `x_torch` to raw bounds before rollout.
 
+When `quote_size_softmax_L=true`, `L` slots are interpreted as logits instead of softplus depth scales. In that mode, `L` bounds pass through as logit bounds and `mm.mpc.l_param` materializes effective `(L, k, x0)` values with structural quote-size constraints.
+
 If no custom bounds are supplied:
 
-- `L_max` defaults to `1e5`, increased when quote size targets require it
+- default mode: `L_max` defaults to `1e5`, increased when quote size targets require it
+- `quote_size_softmax_L=true`: `L` logits use `[-30, 30]`
 - `k_max = 100`
 - `x0_max = spread_max`
 
@@ -174,6 +177,7 @@ Important implementation detail:
 - Even with `warm_start=True`, the code writes a freshly tiled action into `_x_torch` at the start of each optimize call.
 - If `warm_start=False`, Adam optimizer state is reset each call.
 - If `warm_start=True`, the previous best action is remembered, and Adam state can be retained when compatible.
+- With `quote_size_softmax_L=true`, initialization uses softmax-logit `L` parameters and may use spread-structured raw center parameters.
 
 ## Monte Carlo Samples
 
@@ -275,9 +279,9 @@ For each horizon step `h`:
 
 1. Select `action_h` from the horizon action tensor.
 2. Add quote-shape regularizers for this action:
-   - marginal-depth uniformity
+   - marginal-depth concentration
    - quote-size target
-   - spread-at-depth
+   - quoted spread at reference depth
 3. Read sampled market buy/sell flow and price residuals for step `h`.
 4. Build current mid from simulated best bid/ask levels.
 5. Build current primary buy/sell VWAPs.
@@ -303,6 +307,7 @@ Inputs:
 - spread grid
 - maker fee
 - soft fill temperature
+- soft fill activation, either `sigmoid` or `hardsigmoid`
 
 Process:
 
@@ -310,7 +315,7 @@ Process:
 2. Convert cumulative quote depth to marginal levels.
 3. Convert cumulative market book to marginal levels.
 4. Combine market levels and our quote levels.
-5. Soft-consume combined depth using a sigmoid reach function.
+5. Soft-consume combined depth using the configured reach activation.
 6. Split consumed depth between market liquidity and our quotes by level-size share.
 7. Remove only consumed market liquidity from the next market book.
 8. Convert our filled levels into cash and inventory deltas.
@@ -320,8 +325,13 @@ The reach logic is:
 ```text
 reach_bid_raw = sell_vol - combined_cumulative_bid_depth
 reach_ask_raw = buy_vol - combined_cumulative_ask_depth
-consumed_level = combined_level * sigmoid(normalized_reach / soft_fill_temp)
+scaled_reach = normalized_reach / soft_fill_temp
+fill_fraction = sigmoid(scaled_reach)      # default
+fill_fraction = hardsigmoid(scaled_reach)  # optional
+consumed_level = combined_level * fill_fraction
 ```
+
+`hardsigmoid` can eliminate asymptotic ghost fills from far-from-mid quote levels because it reaches exact zero for sufficiently negative scaled reach.
 
 Economic interpretation:
 
@@ -404,64 +414,102 @@ total_reward = sum(step_reward_main + hedge_reward_weight * hedge_reward)
 
 ```text
 J =
-  expected_pnl_weight * E[total_reward]
-  - inventory_target_penalty_weight * (E[terminal_inventory] - target_inventory)^2
-  - pnl_volatility_penalty_weight * Std(total_reward)
-  - quote_shape_uniformity_penalty_weight * uniformity_penalty
-  - quote_size_target_penalty_weight * size_penalty
-  - quote_spread_penalty_weight * spread_penalty
+  expected_pnl_weight * reward_term
+  - inventory_target_penalty_weight * inventory_target_term
+  - pnl_volatility_penalty_weight * volatility_term
+  - pnl_cvar_penalty_weight * soft_cvar_term
+  - quote_shape_concentration_penalty_weight * concentration_term
+  - quote_size_target_penalty_weight * size_term
+  - quote_spread_penalty_weight * spread_term
 ```
 
 Reported weighted objective components:
 
 | Component | Meaning |
 | --- | --- |
-| `expected_pnl` | `expected_pnl_weight * E[total_reward]` |
-| `inventory_target_penalty` | negative squared deviation from target inventory |
-| `pnl_volatility_penalty` | negative standard deviation penalty |
-| `quote_shape_uniformity_penalty` | negative marginal-depth shape penalty |
-| `quote_size_target_penalty` | negative total-size target penalty |
-| `quote_spread_penalty` | negative spread-at-depth penalty |
+| `expected_pnl` | weighted mean reward term |
+| `inventory_target_penalty` | negative inventory target miss term |
+| `pnl_volatility_penalty` | negative reward standard-deviation term |
+| `pnl_cvar_penalty` | negative soft lower-tail risk term |
+| `quote_shape_concentration_penalty` | negative marginal-depth concentration term |
+| `quote_size_target_penalty` | negative quote-size target term |
+| `quote_spread_penalty` | negative quoted-spread term |
 
 These components are designed to sum to `objective.value`.
 
+### Component Normalization
+
+When `objective_normalize_components=true`, the objective uses dimensionless terms:
+
+- reward, volatility, and soft CVaR are divided by `wealth_scale`
+- inventory target miss is divided by `inventory_scale`
+- size and spread penalties are computed as relative errors upstream
+- concentration is normalized into `[0, 1]`
+
+`wealth_scale = max(eps, abs(cash) + abs(inventory * sell_vwap))`.
+
+`inventory_scale = max(eps, abs(target_inventory), quote_size_target_per_side, 1)`.
+
+When normalization is disabled, reward and risk terms stay in quote units and inventory target penalty reverts to squared deviation.
+
+### Soft CVaR
+
+`objective_soft_cvar()` computes a differentiable lower-tail risk term:
+
+```text
+w_i = softmax(-temperature * reward_i)
+soft_tail_mean = sum_i w_i * reward_i
+soft_cvar = -soft_tail_mean
+```
+
+Low-reward paths receive more weight. The objective subtracts `pnl_cvar_penalty_weight * soft_cvar_term`.
+
 ## Quote Shape Regularizers
 
-### Marginal-Depth Uniformity
+### Marginal-Depth Concentration
 
-`_action_uniformity_l2_from_marginal_depth()`:
+`_action_concentration_penalty_from_marginal_depth()`:
 
 - computes effective cumulative depth on the spread grid
 - converts cumulative depth to marginal per-level depth
-- compares each side to a uniform target level
-- returns a square-rooted average L2 penalty
+- computes the Herfindahl index of per-level depth shares
+- optionally normalizes the index into `[0, 1]`
 
-Uniform target level:
+Interpretation:
 
 ```text
-q_uniform = quote_size_target_per_side / spread_max
+0 = depth spread uniformly across levels
+1 = depth concentrated in one level
 ```
+
+The previous `quote_shape_uniformity_penalty_weight` name is treated as a compatibility alias. New configs should use `quote_shape_concentration_penalty_weight`.
 
 ### Quote-Size Target
 
 `_action_size_penalty_qrange()` penalizes:
 
 ```text
-(Q_bid(spread_max) - target)^2 + (Q_ask(spread_max) - target)^2
+|Q_bid(spread_max) - target| / target
++ |Q_ask(spread_max) - target| / target
 ```
 
-where `Q_side` is effective cumulative depth.
+when objective normalization is enabled. Without normalization it falls back to squared error. `Q_side` is effective cumulative depth.
 
 ### Spread At Target Depth
 
 `_action_spread_at_depth()`:
 
-- evaluates effective depth over a dense spread grid
-- compares depth to `quote_depth_target_for_spread`
-- uses a soft argmin over absolute error
-- returns bid spread plus ask spread
+- evaluates quoted bid and ask depth VWAPs from the controller curve
+- fills `quote_depth_target_for_spread` base units on each side of the curve
+- computes quoted width in basis points:
 
-This penalizes placing the target cumulative quantity too far from mid.
+  ```text
+  spread_bps = (ask_depth_vwap - bid_depth_vwap) / mid * 10000
+  ```
+
+- returns one-sided relative excess over `quote_spread_target_bps` when normalization is enabled
+
+This penalizes the controller curve being wider than the configured quoted-spread target at the reference depth. It does not inspect the market BBO.
 
 ## Total Quantity Projection
 
@@ -476,6 +524,25 @@ The optimizer supports optional hard projection toward a quote-size target:
 
 Projection exists in both numpy and torch helper forms. It is applied before closure rollout and when building returned best/final action slices.
 
+## Structural Softmax L Parameterization
+
+When `quote_size_softmax_L=true`, raw `L` values are not direct depth scales. They are logits decoded by `LParamConfig`.
+
+Without spread-structured settings:
+
+- component centers `x0` are mapped into `[0, spread_max]`
+- `L` logits are softmax weights
+- effective `L` values are solved so `D_eff(spread_max) = quote_size_target_per_side`
+
+With `quote_spread_target` and `quote_spread_ref_depth`:
+
+- first bid and ask centers are split by a softmax so their sum is `quote_spread_target`
+- the first component carries `quote_spread_ref_depth` at its center
+- remaining components fill the tail to the quote-size target at `spread_max`
+- `quote_spread_k_epsilon` sets a floor on the first component sharpness
+
+This mode embeds some quote-size and spread structure into the parameterization itself, instead of relying only on soft penalties or post-optimization projection.
+
 ## Returned Action
 
 The returned action is the best first-step action:
@@ -487,10 +554,10 @@ best_x[:single_len]
 It is converted with:
 
 ```python
-SigmoidMixtureAction.from_flat_positive(...).as_effective()
+optimizer._flat_to_effective_action(...)
 ```
 
-So downstream `depth_bid()` and `depth_ask()` expose executable effective cumulative depth.
+In default mode this delegates to `SigmoidMixtureAction.from_flat_positive(...).as_effective()`. In `quote_size_softmax_L` mode it materializes the structured parameters through `sigmoid_action_from_flat_raw(...)`. In both cases downstream `depth_bid()` and `depth_ask()` expose executable effective cumulative depth.
 
 If `warm_start=True`, this best action is stored as `_last_action`.
 
@@ -533,6 +600,7 @@ Top-level payload:
 | `objective.final` | last closure objective snapshot |
 | `objective.best` | best objective snapshot |
 | `objective.improvement` | best/final minus initial |
+| `objective.contribution_fractions` | final-stage absolute contribution shares by component |
 | `action.initial` | initial effective depth and raw params |
 | `action.final` | final effective depth and raw params |
 | `action.best` | best effective depth and raw params |
@@ -547,6 +615,7 @@ Objective snapshot fields:
 | `value` | scalar objective `J` |
 | `loss` | `-J` |
 | `components` | weighted objective terms |
+| `contribution_fractions` | `abs(component) / sum(abs(components))` |
 | `expected_total_reward` | raw mean horizon reward before objective penalties |
 | `expected_next_reward` | raw mean first-step reward |
 | `main_reward_mean` | mean primary reward |
@@ -575,16 +644,27 @@ Action snapshot fields:
 | `spread_max` | Maximum spread domain for book/action projection |
 | `spread_step` | Spread grid resolution |
 | `soft_fill_temp` | Smoothness of fill transition |
+| `soft_fill_activation` | `sigmoid` or `hardsigmoid` fill fraction |
 | `expected_pnl_weight` | Weight on expected reward |
 | `pnl_volatility_penalty_weight` | Penalty on reward volatility |
+| `pnl_cvar_penalty_weight` | Penalty on soft lower-tail reward risk |
+| `cvar_softmax_temperature` | Sharpness of soft CVaR tail weighting |
 | `inventory_target_penalty_weight` | Penalty on expected terminal inventory target miss |
 | `target_inventory` | Desired terminal inventory |
 | `quote_size_target_per_side` | Target cumulative quote depth per side |
 | `quote_size_target_penalty_weight` | Soft size target penalty |
 | `hard_project_quote_size_target` | Hard rescaling toward quote-size target |
-| `quote_shape_uniformity_penalty_weight` | Marginal depth shape penalty |
-| `quote_spread_penalty_weight` | Spread-at-depth penalty |
-| `quote_depth_target_for_spread` | Cumulative depth used in spread penalty |
+| `quote_size_min_per_side`, `quote_size_max_per_side` | Hard size range bounds when enabled |
+| `hard_project_quote_size_range` | Hard clamp to size range |
+| `quote_size_softmax_L` | Structural softmax size parameterization |
+| `quote_shape_concentration_penalty_weight` | Marginal depth concentration penalty |
+| `quote_spread_penalty_weight` | Quoted-spread target penalty |
+| `quote_spread_target_bps` | Maximum target quoted width in basis points |
+| `quote_depth_target_for_spread` | Cumulative depth used for quoted spread VWAP |
+| `quote_spread_target` | Structural first-center sum in quote units when softmax L is enabled |
+| `quote_spread_ref_depth` | Structural depth at first centers when softmax L is enabled |
+| `quote_spread_k_epsilon` | Sharpness floor for structural first components |
+| `objective_normalize_components` | Scale objective terms into dimensionless units |
 | `hedge_rollout_enabled` | Include simulated hedge trades in objective |
 | `hedge_reward_weight` | Weight of simulated hedge reward |
 | `hedge_fee` / `execution_model.hedge_fee` | Fee used in hedge rollout |
@@ -595,8 +675,10 @@ Action snapshot fields:
 Implemented safeguards:
 
 - softplus for positive `L` and `k`
+- optional softmax materialization for `L`
 - raw bound clamping every closure
 - NaN/Inf sanitization in terminal objective
+- objective normalization by wealth and inventory scales
 - gradient clipping
 - nonfinite loss and gradient counters
 - minimum sigma in scoring/model code
@@ -604,8 +686,8 @@ Implemented safeguards:
 
 Remaining numerical review points:
 
-- `x_torch.data` is still used in some optimizer mutation paths.
-- Very large quote currencies can make reward scale large; penalty weights need unit-aware calibration.
+- Some optimizer mutation paths still assign through `x_torch.data`; projection paths mostly use `copy_()` under `torch.no_grad()`.
+- Very large quote currencies can make unnormalized rewards large; `objective_normalize_components=true` reduces but does not eliminate calibration needs.
 - `fixed_mc_samples=False` can make best/final objective comparisons noisy.
 - Soft-fill sigmoid temperature can create either overly smooth fills or near-discontinuous gradients.
 

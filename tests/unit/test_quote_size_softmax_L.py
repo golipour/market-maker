@@ -83,9 +83,9 @@ def test_sigmoid_action_from_flat_raw_uses_effective_L() -> None:
     assert math.isclose(action.effective_depth_bid(spread_max), q_target, rel_tol=1e-5)
 
 
-def test_spread_structured_centers_sum_to_target() -> None:
+def test_spread_structured_centers_bounded_by_max() -> None:
     spread_max = 100.0
-    s_target = 20.0
+    s_max = 20.0
     q_total = 3.0
     q_spread = 0.5
     n = 4
@@ -94,7 +94,7 @@ def test_spread_structured_centers_sum_to_target() -> None:
         quote_size_target=q_total,
         spread_max=spread_max,
         n_components=n,
-        quote_spread_target=s_target,
+        quote_spread_target=s_max,
         quote_spread_ref_depth=q_spread,
     )
     validate_l_param_config(l_param)
@@ -104,9 +104,16 @@ def test_spread_structured_centers_sum_to_target() -> None:
     assert flat is not None
     _, _, bid_x0 = materialize_side_np(flat, side_off=0, n_components=n, l_param=l_param)
     _, _, ask_x0 = materialize_side_np(flat, side_off=3 * n, n_components=n, l_param=l_param)
-    assert math.isclose(bid_x0[0] + ask_x0[0], s_target, rel_tol=1e-5)
+    assert bid_x0[0] + ask_x0[0] <= s_max + 1e-5
+    assert bid_x0[0] + ask_x0[0] > 0.0
     assert 0.0 <= bid_x0[0] <= spread_max
     assert 0.0 <= ask_x0[0] <= spread_max
+
+    flat_tight = flat.copy()
+    flat_tight[0] = -6.0
+    _, _, bid_t = materialize_side_np(flat_tight, side_off=0, n_components=n, l_param=l_param)
+    _, _, ask_t = materialize_side_np(flat_tight, side_off=3 * n, n_components=n, l_param=l_param)
+    assert bid_t[0] + ask_t[0] < bid_x0[0] + ask_x0[0]
 
 
 def test_spread_structured_depth_at_center_and_spread_max() -> None:

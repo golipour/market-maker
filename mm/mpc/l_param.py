@@ -21,7 +21,7 @@ class LParamConfig:
     Without spread targets: global softmax on ``L`` with ``δ(spread_max)`` normalization.
 
     With spread targets (``quote_spread_target`` and ``quote_spread_ref_depth``):
-    - first centers sum to ``quote_spread_target`` via a bid/ask softmax split
+    - first centers satisfy ``x0_1_bid + x0_1_ask <= quote_spread_target`` via a scaled softmax split
     - component 1 carries ``quote_spread_ref_depth`` at its center
     - tail components fill remaining depth to ``quote_size_target`` at ``spread_max``
     """
@@ -142,18 +142,28 @@ def component_delta_spread_range_np(
     return component_delta_at_np(k_eff, x0, spread_max)
 
 
-def _spread_center_logits_from_flat(flat: np.ndarray, n_components: int) -> tuple[float, float]:
-    n = n_components
-    return float(flat[2]), float(flat[3 * n + 2])
-
-
-def _spread_centers_from_logits(
-    u_bid: float,
-    u_ask: float,
-    spread_target: float,
+def _spread_centers_from_flat(
+    flat: np.ndarray,
+    n_components: int,
+    spread_max: float,
 ) -> tuple[float, float]:
+    """
+    Decode first bid/ask centers with an architectural upper bound on their sum.
+
+    ``u_scale`` lives in the bid-side first ``L`` slot (``flat[0]``). Then::
+
+        scale = sigmoid(u_scale) in (0, 1)
+        [x0_1_bid, x0_1_ask] = scale * spread_max * softmax([u_bid, u_ask])
+
+    so ``x0_1_bid + x0_1_ask <= spread_max`` always, with asymmetry from ``u_bid - u_ask``.
+    """
+    n = n_components
+    u_scale = float(flat[0])
+    u_bid = float(flat[2])
+    u_ask = float(flat[3 * n + 2])
+    scale = _sigmoid_np(u_scale)
     w = _softmax_np(np.array([u_bid, u_ask], dtype=np.float64))
-    centers = float(spread_target) * w
+    centers = scale * float(spread_max) * w
     return float(centers[0]), float(centers[1])
 
 
@@ -207,16 +217,14 @@ def materialize_side_np(
         L_eff = np.array([_softplus_np(v) for v in L_raw], dtype=np.float64)
         return L_eff, k_eff, x0_raw.copy()
 
-    u_bid, u_ask = _spread_center_logits_from_flat(flat, n)
-    x0_eff = np.zeros(n, dtype=np.float64)
-
     if l_param.spread_structured:
-        x0_bid_1, x0_ask_1 = _spread_centers_from_logits(
-            u_bid,
-            u_ask,
+        x0_bid_1, x0_ask_1 = _spread_centers_from_flat(
+            flat,
+            n,
             float(l_param.quote_spread_target),
         )
         x0_first = x0_bid_1 if side_off == 0 else x0_ask_1
+        x0_eff = np.zeros(n, dtype=np.float64)
         x0_eff[0] = x0_first
         for i in range(1, n):
             frac = _sigmoid_np(float(x0_raw[i]))
@@ -436,12 +444,13 @@ def materialize_side_torch(
 
     u_bid = params[2]
     u_ask = params[3 * n + 2]
-    u = torch.stack([u_bid, u_ask])
-    spread_w = torch.softmax(u, dim=0)
+    u_scale = params[0]
 
     if l_param.spread_structured:
-        spread_target = float(l_param.quote_spread_target)
-        centers = spread_target * spread_w
+        spread_cap = float(l_param.quote_spread_target)
+        scale = torch.sigmoid(u_scale)
+        spread_w = torch.softmax(torch.stack([u_bid, u_ask]), dim=0)
+        centers = scale * spread_cap * spread_w
         x0_first = centers[0] if side_off == 0 else centers[1]
         x0_eff = torch.zeros(n, dtype=params.dtype, device=params.device)
         x0_eff[0] = x0_first

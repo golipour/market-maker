@@ -163,6 +163,9 @@ ORDER BY 1""",
     }
 
 
+_OPTIMIZER_OBJECTIVE_STAGES = "ARRAY['initial','final']"
+
+
 def _panel_objective_component(
     id_: int,
     y: int,
@@ -181,7 +184,7 @@ def _panel_objective_component(
         f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}'])::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}'] IS NOT NULL
 ORDER BY 1""",
@@ -230,11 +233,11 @@ LIMIT 1""",
         _panel_sql_timeseries(
             10,
             10,
-            "Objective value (initial / final / best)",
+            "Objective value (initial / final)",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL
 ORDER BY 1""",

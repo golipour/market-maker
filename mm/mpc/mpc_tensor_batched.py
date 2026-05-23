@@ -145,10 +145,9 @@ def _initial_action_uniform_marginal_qrange(
     k_raw = np.array([_inv_softplus_np(v) for v in k_eff], dtype=np.float64)
 
     if use_softmax_L and l_param is not None and l_param.spread_structured:
-        sm_f = float(spread_max)
+        u_scale = 0.0
         u_init = 0.0
         x0_raw = np.zeros(n, dtype=np.float64)
-        x0_raw[0] = u_init
         if n > 1:
             fracs = np.linspace(0.25, 0.85, n - 1)
             for j, frac in enumerate(fracs):
@@ -156,10 +155,12 @@ def _initial_action_uniform_marginal_qrange(
                 x0_raw[j + 1] = float(np.log(frac / (1.0 - frac)))
         bid_part: list[float] = []
         ask_part: list[float] = []
-        for i in range(n):
+        bid_part.extend([u_scale, float(k_raw[0]), u_init])
+        for i in range(1, n):
             bid_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
-        for i in range(n):
-            ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i] if i > 0 else u_init)])
+        ask_part.extend([0.0, float(k_raw[0]), u_init])
+        for i in range(1, n):
+            ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
         return np.array(bid_part + ask_part, dtype=np.float64)
 
     if use_softmax_L:

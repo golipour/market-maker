@@ -60,7 +60,7 @@ Main wiring is in `mm.runtime.engine.build_runtime_components`.
 | Hedge service | `mm.hedging.service.HedgeExecutionService` | Optional fill-driven hedge orders |
 | Private reconcilers | `mm.private_state.reconciler.PrivateStateReconciler` | Wallet/open-order/fill state |
 | Execution reconcilers | `mm.execution.reconciler.ExecutionStateReconciler` | Mirror private state into `OrderManager` |
-| Order managers | `mm.execution.order_manager.OrderManager` | Dedupe, validation, cancel/place commands |
+| Order managers | `mm.execution.order_manager.OrderManager` | Target-order reconciliation, validation, cancel/place commands |
 | Persistence daemons | `mm.persistence.postgres`, `mm.persistence.parquet_writer` | Durable event envelopes |
 | Observability daemons | `mm.observability.subscribers` | Metrics, logs, traces |
 
@@ -173,7 +173,7 @@ For REST polling adapters, the reconciler uses a unified polling loop so balance
 `ExecutionStateReconciler` listens to private snapshots, open orders, order updates, and fills and applies them to the `OrderManager`. This gives the order manager an exchange-truth live-order view used for:
 
 - own-order subtraction before MPC
-- dedupe before placement
+- target-order reconciliation before placement
 - execution state telemetry
 - cancel-all admin commands
 
@@ -389,12 +389,13 @@ The optimizer maximizes terminal objective:
 
 ```text
 J =
-  expected_pnl_weight * E[total_reward]
-  - inventory_target_penalty_weight * (E[terminal_inventory] - target_inventory)^2
-  - pnl_volatility_penalty_weight * Std(total_reward)
-  - quote_shape_uniformity_penalty_weight * uniformity_penalty
-  - quote_size_target_penalty_weight * size_penalty
-  - quote_spread_penalty_weight * spread_penalty
+  expected_pnl_weight * reward_term
+  - inventory_target_penalty_weight * inventory_target_term
+  - pnl_volatility_penalty_weight * volatility_term
+  - pnl_cvar_penalty_weight * soft_cvar_term
+  - quote_shape_concentration_penalty_weight * concentration_term
+  - quote_size_target_penalty_weight * size_term
+  - quote_spread_penalty_weight * quoted_spread_term
 ```
 
 Primary wealth is marked using sell-side VWAP:
@@ -404,6 +405,12 @@ wealth = cash + inventory * sell_vwap
 ```
 
 If hedge rollout is enabled, simulated primary fills are assumed to be immediately offset on the hedge venue. This is a model assumption inside the objective; live execution requires the separate hedge service.
+
+When `objective_normalize_components=true`, reward, volatility, and CVaR are scaled by current absolute wealth, inventory target miss is scaled by an inventory scale, quote-size and quoted-spread penalties are relative terms, and concentration is normalized into `[0, 1]`. This makes objective weights more portable across quote currencies.
+
+The quote-shape term is now concentration-based rather than L2-to-uniformity-based. It uses a Herfindahl-style share concentration over marginal quote depth, where lower values mean depth is more evenly distributed across levels.
+
+The quoted-spread term computes bid/ask depth VWAPs from the controller curve at `quote_depth_target_for_spread`, converts the quoted width to bps, and penalizes excess over `quote_spread_target_bps`. It is a controller-curve spread, not the market BBO.
 
 ### Optimizer Diagnostics
 
@@ -415,6 +422,7 @@ If hedge rollout is enabled, simulated primary fills are assumed to be immediate
 | `timing` | sample draw, train, total seconds, best epoch |
 | `objective.initial/final/best` | objective value, loss, weighted components, reward means |
 | `objective.improvement` | best/final minus initial |
+| `objective.contribution_fractions` | final-stage absolute component contribution shares |
 | `action.initial/final/best` | effective depth curves and raw flat params |
 | `gradients` | nonfinite loss/grad counts |
 | `rollout` | sample count, horizon, hedge enabled, redirected log |
@@ -444,8 +452,10 @@ The resulting `ActionPipelineReport` contains:
 - venue-quantized totals
 - capped totals
 - later risk-approved totals
-- later execution-deduped totals
-- later venue-limit-valid totals
+- later execution target totals
+- later kept-live totals
+- later canceled-live totals
+- later placed/venue-limit-valid totals
 - later venue-accepted totals
 
 Every stage records order count, buy/sell quantity, buy/sell notional, and rejection counts.
@@ -494,24 +504,25 @@ If `controller.risk.enabled` is false, `PassThroughRiskEngine` approves all acti
 
 ## Execution Layer
 
-`route_actions_to_managers_with_report()` groups orders by exchange and calls each exchange `OrderManager`.
+`route_actions_to_managers_with_report()` groups declarative target orders by exchange and calls each exchange `OrderManager`.
 
 `OrderManager.sync_with_report()`:
 
 1. Publishes `ExecutionSyncRequested`.
-2. Cancels explicit order ids.
-3. Optionally cancels live orders missing from desired state if `cancel_missing=True`.
-4. Deduplicates desired orders already live by `(actor_id, client_order_id, exchange, symbol, side, price, qty, order_type)`.
-5. Applies venue limit validation from `order_passes_limits`.
-6. Publishes `OrderValidationRejected` events for invalid orders.
-7. Sends valid new orders to the exchange command adapter.
-8. Records accepted orders in local `live_orders`.
-9. Publishes `PlaceOrdersRequested`, `PlaceOrdersAccepted`, and `execution:state:{exchange}`.
-10. Returns `ExecutionSyncReport`.
+2. Scopes each `Action` by exchange and symbol.
+3. Reconciles the action's target orders against live open orders for the same actor.
+4. Keeps live orders within price/quantity tolerance.
+5. Cancels unmatched live orders in scope.
+6. Places unmatched target orders after venue limit validation.
+7. Publishes `OrderValidationRejected` events for invalid orders.
+8. Sends valid new orders to the exchange command adapter.
+9. Records accepted orders in local `live_orders`.
+10. Publishes cancel/place and `execution:state:{exchange}` events as applicable.
+11. Returns `ExecutionSyncReport`.
 
-In observe-only or warmup mode, the runner may call `preview_placement()` to fill diagnostics for dedupe and venue-limit-valid stages without sending orders.
+In observe-only or warmup mode, the runner may call `preview_placement()` to dry-run the same reconcile plan and fill target/kept/canceled/placed diagnostics without exchange cancel/place API calls.
 
-Current order-manager sync defaults to `cancel_missing=False` in runtime wiring, so quote replacement is additive unless explicit cancel actions or admin cancel-all are used.
+The old `cancel_missing`/explicit cancel action model has been replaced by declarative target-state reconciliation. An empty target for an actor/symbol scope cancels that actor's live orders in scope; otherwise unmatched live orders are canceled and unmatched targets are placed. Matching tolerance is configured by `ReconcileConfig.price_tol_bps` and `ReconcileConfig.qty_tol_rel`.
 
 ## Controller Diagnostics Contract
 
@@ -667,7 +678,8 @@ The following are important areas for an engineer or market-making expert to rev
 
 - Does keeping largest-quantity orders after capping preserve the intended spread shape?
 - Should orders that would cross the top of book or sit too close/far from reference be blocked?
-- Should the controller cancel/replace old quotes every frame (`cancel_missing=True`) or use explicit diffing?
+- Are reconcile tolerances (`price_tol_bps`, `qty_tol_rel`) strict enough to replace stale quotes without excessive churn?
+- Should empty target actions be allowed to cancel all actor/symbol live orders, or should cancellation require an explicit safety gate?
 - Are client order ids stable enough for idempotency, and do they fit venue length constraints?
 
 ### Risk
@@ -679,7 +691,7 @@ The following are important areas for an engineer or market-making expert to rev
 
 ### Execution
 
-- With `cancel_missing=False`, the strategy can accumulate live orders unless fills/private reconciliation and explicit cancel logic handle stale quotes.
+- Declarative target reconciliation should prevent stale quote accumulation, but aggressive tolerances can create cancel/replace churn and loose tolerances can leave stale quotes live.
 - Venue adapter failures are surfaced as exceptions/events, but retry/backoff policy is limited.
 - `preview_placement()` improves diagnostics under observe-only, but it cannot reveal adapter-side rejects.
 - OrderManager records accepted REST order ids optimistically; private reconciliation should be treated as exchange truth.
@@ -697,7 +709,7 @@ The following are important areas for an engineer or market-making expert to rev
 High-priority engineering improvements:
 
 1. Fix hedge inventory/cash fields in `ControllerDiagnostics.state`.
-2. Decide whether `cancel_missing` should be true for live market making or replace it with explicit quote diff/cancel policy.
+2. Tune reconcile tolerances and add guardrails for empty-target mass cancellations.
 3. Enforce hedge `max_slippage_bps` using fresh hedge book/VWAP before market hedge submission.
 4. Add price-band and no-crossing checks before venue submission.
 5. Add max open-order age and stale-quote cancellation.
