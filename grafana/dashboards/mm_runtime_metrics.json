@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "Prometheus metrics from mm runtime: frames, controller, order execution, latencies. Requires runtime metrics on host:8000 scraped by Prometheus (see docker/prometheus.yml).",
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -9,7 +11,12 @@
   "liveNow": true,
   "panels": [
     {
-      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
         "content": "**Source:** `mm/observability/subscribers.py` + in-process `/metrics` (`mm/observability/registry.py`).\n\n**If charts are empty:**\n1. **Scrape:** Prometheus targets `host.docker.internal:8000` (see `docker/prometheus.yml`). The **runtime must run on the host** with `metrics_enabled` / port **8000** (or set `MM_METRICS_PORT` and change Prometheus). In Prometheus UI → **Status → Targets**, `market_maker` should be **UP**.\n2. **Histogram rows** stay empty until you have **execution sync** traffic (`mm_order_sync_latency_ms_*`, `mm_frame_to_exec_*` buckets need observations).\n3. **Logs (Loki):** Relative `log_path` is resolved to the **repo** `logs/` directory so Alloy’s `./logs` mount sees lines. Restart runtime after upgrading.\n\n**Rates:** `rate(...[$__rate_interval])` — frames, decisions, sync rounds, venue place/cancel accept counts.\n\n**Latencies (histograms):** `mm_frame_to_exec_sync_latency_ms` = wall ms from `StrategyInputFrame.created_at_ms` to `ExecutionSyncRequested`; `mm_market_window_end_to_exec_sync_latency_ms` = `ExecutionSyncRequested.timestamp_ms` − primary `t_end_ms`; `mm_order_sync_latency_ms` = sync request timestamp → next `execution:state` snapshot timestamp.\n\n**Gauges (last scrape):** `mm_order_sync_create_count` / `mm_order_sync_cancel_count` (per sync batch), controller latency gauge, live orders.",
@@ -20,33 +27,58 @@
       "type": "text"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
             ]
           },
           "unit": "none"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 5 },
+      "gridPos": {
+        "h": 2,
+        "w": 8,
+        "x": 0,
+        "y": 2
+      },
       "id": 10,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "up{job=\"market_maker\"}",
           "instant": true,
@@ -58,25 +90,44 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 5 },
+      "gridPos": {
+        "h": 2,
+        "w": 8,
+        "x": 8,
+        "y": 2
+      },
       "id": 11,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(mm_strategy_frames_total)",
           "instant": true,
@@ -88,25 +139,44 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 5 },
+      "gridPos": {
+        "h": 2,
+        "w": 8,
+        "x": 16,
+        "y": 2
+      },
       "id": 12,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(mm_controller_decisions_total)",
           "instant": true,
@@ -118,24 +188,48 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
           "unit": "ops"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "id": 2,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_strategy_frames_total[$__rate_interval]))",
           "legendFormat": "frames/s",
@@ -143,7 +237,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_controller_decisions_total[$__rate_interval]))",
           "legendFormat": "decisions/s",
@@ -155,24 +252,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
           "unit": "ops"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "id": 3,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_order_sync_total[$__rate_interval]))",
           "legendFormat": "sync rounds/s",
@@ -180,7 +301,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_order_place_accepted_total[$__rate_interval]))",
           "legendFormat": "orders placed (accepted)/s",
@@ -188,7 +312,10 @@
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_order_cancel_accepted_total[$__rate_interval]))",
           "legendFormat": "orders cancelled (accepted)/s",
@@ -200,24 +327,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 8
+          },
           "unit": "ms"
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 17 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "id": 4,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_frame_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p50 frame→sync start",
@@ -225,7 +376,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_frame_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p95 frame→sync start",
@@ -233,7 +387,10 @@
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_market_window_end_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p50 t_end→sync start",
@@ -241,7 +398,10 @@
           "refId": "C"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_market_window_end_to_exec_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p95 t_end→sync start",
@@ -253,24 +413,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 8 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 8
+          },
           "unit": "ms"
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 17 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
       "id": 5,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.50, sum by (le) (rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p50 sync→snapshot",
@@ -278,7 +462,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum by (le) (rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
           "legendFormat": "p95 sync→snapshot",
@@ -290,24 +477,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
           "unit": "ms"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "id": 6,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "avg by (exchange, symbol, actor_id) (mm_controller_latency_ms)",
           "legendFormat": "{{exchange}}/{{symbol}} {{actor_id}}",
@@ -319,24 +530,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
           "unit": "short"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "id": 7,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "mm_execution_live_orders",
           "legendFormat": "{{exchange}} live",
@@ -344,7 +579,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "mm_order_sync_create_count",
           "legendFormat": "{{exchange}} create batch",
@@ -352,7 +590,10 @@
           "refId": "B"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "mm_order_sync_cancel_count",
           "legendFormat": "{{exchange}} cancel batch",
@@ -364,24 +605,48 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 10 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
           "unit": "ops"
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 34 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
       "id": 8,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_runtime_errors_total[$__rate_interval]))",
           "legendFormat": "runtime errors/s",
@@ -389,7 +654,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "sum(rate(mm_order_validation_rejected_total[$__rate_interval]))",
           "legendFormat": "validation rejected/s",
@@ -401,24 +669,47 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "drawStyle": "bars", "fillOpacity": 80 },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80
+          },
           "unit": "ops"
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 34 },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
       "id": 9,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus-mm" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
           "editorMode": "code",
           "expr": "topk(12, sum by (event_type) (rate(mm_execution_events_total[$__rate_interval])))",
           "legendFormat": "{{event_type}}",
@@ -433,13 +724,22 @@
   "refresh": "10s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["market-maker", "prometheus", "runtime"],
-  "templating": { "list": [] },
-  "time": { "from": "now-6h", "to": "now" },
+  "tags": [
+    "market-maker",
+    "prometheus",
+    "runtime"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "MM runtime metrics (Prometheus)",
   "uid": "mm-runtime-metrics",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

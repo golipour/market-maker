@@ -11,10 +11,58 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "grafana" / "dashboards"
 PG_DS = {"type": "postgres", "uid": "postgres-mm"}
 
+# Grafana grid row height scale (1 unit ≈ 30px). Halving makes more panels visible without scrolling.
+PANEL_HEIGHT_SCALE = 0.5
+PANEL_MIN_HEIGHT = 2
+
+
+def _scale_panel_height(height: int) -> int:
+    if height <= 1:
+        return height
+    return max(PANEL_MIN_HEIGHT, round(height * PANEL_HEIGHT_SCALE))
+
+
+def compact_dashboard_panels(data: dict[str, Any]) -> dict[str, Any]:
+    """Halve panel heights and reflow y positions row-by-row."""
+
+    panels = data.get("panels") or []
+    if not panels:
+        return data
+
+    rows: dict[int, list[dict[str, Any]]] = {}
+    for panel in panels:
+        grid = panel.setdefault("gridPos", {})
+        rows.setdefault(int(grid.get("y", 0)), []).append(panel)
+
+    new_y = 0
+    for old_y in sorted(rows):
+        row_panels = rows[old_y]
+        for panel in row_panels:
+            grid = panel["gridPos"]
+            grid["h"] = _scale_panel_height(int(grid.get("h", 8)))
+            grid["y"] = new_y
+        new_y += max(int(panel["gridPos"]["h"]) for panel in row_panels)
+
+    data["panels"] = panels
+    return data
+
+
+def compact_dashboard_file(path: Path) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    compact_dashboard_panels(data)
+    data["version"] = int(data.get("version", 1)) + 1
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def compact_all_dashboards() -> None:
+    for path in sorted(OUT.glob("*.json")):
+        compact_dashboard_file(path)
+        print("Compacted", path.name)
+
 
 def _panel_text(id_: int, y: int, content: str, title: str = "Notes") -> dict[str, Any]:
     return {
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": y},
+        "gridPos": {"h": _scale_panel_height(4), "w": 24, "x": 0, "y": y},
         "id": id_,
         "options": {"content": content, "mode": "markdown"},
         "title": title,
@@ -23,7 +71,7 @@ def _panel_text(id_: int, y: int, content: str, title: str = "Notes") -> dict[st
     }
 
 
-def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 8) -> dict[str, Any]:
+def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 4) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {"defaults": {"custom": {"align": "auto"}}, "overrides": []},
@@ -45,7 +93,7 @@ def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 8) -> dict
     }
 
 
-def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 8, w: int = 24, x: int = 0) -> dict[str, Any]:
+def _panel_sql_timeseries(id_: int, y: int, title: str, sql: str, h: int = 4, w: int = 24, x: int = 0) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {"defaults": {"unit": "short", "decimals": 4}, "overrides": []},
@@ -120,7 +168,7 @@ def _panel_objective_contribution_fractions(
     y: int,
     *,
     diag_filter: str,
-    h: int = 8,
+    h: int = 4,
     w: int = 24,
     x: int = 0,
 ) -> dict[str, Any]:
@@ -175,7 +223,7 @@ def _panel_objective_component(
     diag_filter: str,
     x: int = 0,
     w: int = 12,
-    h: int = 6,
+    h: int = 3,
 ) -> dict[str, Any]:
     return _panel_sql_timeseries(
         id_,
@@ -228,7 +276,7 @@ FROM mm_events e
 WHERE {diag_filter}
 ORDER BY e.ts DESC
 LIMIT 1""",
-            h=6,
+            h=3,
         ),
         _panel_sql_timeseries(
             10,
@@ -569,7 +617,7 @@ WHERE {hedge_diag}
   AND e.payload->>'status' IN ('rejected', 'failed', 'skipped')
 GROUP BY 1
 ORDER BY count DESC""",
-            h=8,
+            h=4,
         ),
         _panel_sql_table(
             13,
@@ -587,7 +635,7 @@ FROM mm_events e
 WHERE {hedge_diag}
 ORDER BY e.ts DESC
 LIMIT 20""",
-            h=10,
+            h=5,
         ),
     ]
     templating = [
@@ -725,22 +773,29 @@ ORDER BY count DESC""",
             }
         )
     data["panels"] = panels
+    compact_dashboard_panels(data)
     data["version"] = int(data.get("version", 1)) + 1
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def main() -> None:
+    import sys
+
     OUT.mkdir(parents=True, exist_ok=True)
+    if len(sys.argv) > 1 and sys.argv[1] == "compact":
+        compact_all_dashboards()
+        return
+
     (OUT / "mm_controller_diagnostics_pg.json").write_text(
-        json.dumps(controller_diagnostics_dashboard(), indent=2) + "\n",
+        json.dumps(compact_dashboard_panels(controller_diagnostics_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     (OUT / "mm_portfolio_pg.json").write_text(
-        json.dumps(portfolio_dashboard(), indent=2) + "\n",
+        json.dumps(compact_dashboard_panels(portfolio_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     (OUT / "mm_hedge_execution_pg.json").write_text(
-        json.dumps(hedge_execution_dashboard(), indent=2) + "\n",
+        json.dumps(compact_dashboard_panels(hedge_execution_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     patch_model_params_dashboard()

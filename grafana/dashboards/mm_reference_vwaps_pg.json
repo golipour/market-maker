@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "Primary and hedge buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``primary_buy_vwap`` / ``primary_sell_vwap`` / ``hedge_buy_vwap`` / ``hedge_sell_vwap`` on decisions.",
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -9,7 +11,12 @@
   "liveNow": true,
   "panels": [
     {
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
         "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Chart:** Primary and hedge buy/sell reference VWAPs on one time series.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
@@ -20,17 +27,41 @@
       "type": "text"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 4 }, "overrides": [] },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
       "id": 10,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -38,7 +69,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -46,7 +80,10 @@
           "refId": "B"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -54,7 +91,10 @@
           "refId": "C"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -69,24 +109,43 @@
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["market-maker", "postgres", "strategy", "vwap"],
+  "tags": [
+    "market-maker",
+    "postgres",
+    "strategy",
+    "vwap"
+  ],
   "templating": {
     "list": [
       {
-        "current": { "text": "nobitex", "value": "nobitex" },
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
         "hide": 0,
         "label": "Exchange",
         "name": "exchange",
         "options": [
-          { "selected": true, "text": "nobitex", "value": "nobitex" },
-          { "selected": false, "text": "wallex", "value": "wallex" }
+          {
+            "selected": true,
+            "text": "nobitex",
+            "value": "nobitex"
+          },
+          {
+            "selected": false,
+            "text": "wallex",
+            "value": "wallex"
+          }
         ],
         "query": "nobitex,wallex",
         "skipUrlSync": false,
         "type": "custom"
       },
       {
-        "current": { "text": "USDT_IRT", "value": "USDT_IRT" },
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
         "hide": 0,
         "label": "Symbol",
         "name": "symbol",
@@ -95,7 +154,10 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "strategy:decisions", "value": "strategy:decisions" },
+        "current": {
+          "text": "strategy:decisions",
+          "value": "strategy:decisions"
+        },
         "hide": 0,
         "label": "Decisions topic",
         "name": "decisions_topic",
@@ -105,11 +167,14 @@
       }
     ]
   },
-  "time": { "from": "now-24h", "to": "now" },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "MM VWAP (PostgreSQL)",
   "uid": "mm-reference-vwaps-pg",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

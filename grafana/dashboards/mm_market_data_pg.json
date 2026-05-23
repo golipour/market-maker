@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "Per-step market data from persisted MarketEvent rows: trade volume (buy/sell) and best bid/ask, for primary and hedge venues. Topic pattern: market:events:{exchange}:{symbol}:{interval_ms}.",
   "editable": true,
   "fiscalYearStartMonth": 0,
@@ -9,7 +11,12 @@
   "liveNow": true,
   "panels": [
     {
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
         "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'MarketEvent'`` on topics ``market:events:{exchange}:{symbol}:{interval_ms}``.\n\n**Layout:** For **primary** and **hedge**, stacked time-series panels share the dashboard time range (use **Shared crosshair** / zoom to align). Top row = **step trade volume** (``buy_volume`` / ``sell_volume``, base units, aggregated over ``[t_start_ms, t_end_ms]``). Bottom row = **best bid / best ask** from the step's materialized book (``orderbook.bids[0]`` / ``asks[0]``, quote per base).\n\nSet **Primary exchange**, **Hedge exchange**, **Symbol**, and **Interval ms** to match ``persistence.topics`` in your runtime config.",
@@ -21,14 +28,22 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
       "id": 2,
       "panels": [],
       "title": "Primary — $primary_exchange",
       "type": "row"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -42,24 +57,61 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "buy_volume" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "buy_volume"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "sell_volume" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "sell_volume"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
       "id": 10,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -67,7 +119,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -79,29 +134,72 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
-        "defaults": { "decimals": 2, "unit": "none" },
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "best_bid" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "best_bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "best_ask" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "best_ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
       "id": 11,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -109,7 +207,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -122,14 +223,22 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
       "id": 3,
       "panels": [],
       "title": "Hedge — $hedge_exchange",
       "type": "row"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -143,24 +252,61 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "buy_volume" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "buy_volume"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "sell_volume" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "sell_volume"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
       "id": 20,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -168,7 +314,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -180,29 +329,72 @@
       "type": "timeseries"
     },
     {
-      "datasource": { "type": "postgres", "uid": "postgres-mm" },
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
       "fieldConfig": {
-        "defaults": { "decimals": 2, "unit": "none" },
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "best_bid" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "best_bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              }
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "best_ask" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "best_ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
       "id": 21,
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
       "targets": [
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -210,7 +402,10 @@
           "refId": "A"
         },
         {
-          "datasource": { "type": "postgres", "uid": "postgres-mm" },
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
@@ -225,37 +420,66 @@
   "refresh": "5s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["market-maker", "postgres", "market-data"],
+  "tags": [
+    "market-maker",
+    "postgres",
+    "market-data"
+  ],
   "templating": {
     "list": [
       {
-        "current": { "text": "nobitex", "value": "nobitex" },
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
         "hide": 0,
         "label": "Primary exchange",
         "name": "primary_exchange",
         "options": [
-          { "selected": true, "text": "nobitex", "value": "nobitex" },
-          { "selected": false, "text": "wallex", "value": "wallex" }
+          {
+            "selected": true,
+            "text": "nobitex",
+            "value": "nobitex"
+          },
+          {
+            "selected": false,
+            "text": "wallex",
+            "value": "wallex"
+          }
         ],
         "query": "nobitex,wallex",
         "skipUrlSync": false,
         "type": "custom"
       },
       {
-        "current": { "text": "wallex", "value": "wallex" },
+        "current": {
+          "text": "wallex",
+          "value": "wallex"
+        },
         "hide": 0,
         "label": "Hedge exchange",
         "name": "hedge_exchange",
         "options": [
-          { "selected": false, "text": "nobitex", "value": "nobitex" },
-          { "selected": true, "text": "wallex", "value": "wallex" }
+          {
+            "selected": false,
+            "text": "nobitex",
+            "value": "nobitex"
+          },
+          {
+            "selected": true,
+            "text": "wallex",
+            "value": "wallex"
+          }
         ],
         "query": "nobitex,wallex",
         "skipUrlSync": false,
         "type": "custom"
       },
       {
-        "current": { "text": "USDT_IRT", "value": "USDT_IRT" },
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
         "hide": 0,
         "label": "Symbol",
         "name": "symbol",
@@ -264,7 +488,10 @@
         "type": "textbox"
       },
       {
-        "current": { "text": "10000", "value": "10000" },
+        "current": {
+          "text": "10000",
+          "value": "10000"
+        },
         "hide": 0,
         "label": "Interval ms",
         "name": "interval_ms",
@@ -274,11 +501,14 @@
       }
     ]
   },
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "MM market data (PostgreSQL)",
   "uid": "mm-market-data-pg",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
