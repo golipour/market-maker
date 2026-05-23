@@ -7,7 +7,7 @@ Terminal objective (two terms):
       + inventory_capacity_penalty
 
 where:
-  risk_adjusted_return = (-1/beta) * ln(mean_i exp(-beta * R_i))
+  risk_adjusted_return = min(R) - (1/beta) * ln(mean_i exp(-beta * (R_i - min(R))))
   inventory_capacity_penalty = -lambda_inv * mean_{i,t} ((I_{i,t} - I_target) / I_scale)^2
   R_i = horizon return per Monte Carlo path (dimensionless)
 """
@@ -108,19 +108,24 @@ def objective_mean(values: "Tensor") -> "Tensor":
 
 def objective_entropic_return(returns: "Tensor", *, beta: float) -> "Tensor":
     """
-    Risk-adjusted return: (-1/beta) * ln(mean_i exp(-beta * R_i)).
+    Risk-adjusted return (certainty equivalent):
 
-    Higher beta puts more weight on avoiding bad return paths while remaining differentiable.
+        CE = min(R) - (1/beta) * ln(mean_i exp(-beta * (R_i - min(R))))
+
+    Shifting by ``min(R)`` keeps every exponent <= 0, so ``exp`` stays in (0, 1]
+    and the formula matches ``(-1/beta) * ln(mean_i exp(-beta * R_i))`` without overflow.
     """
     torch = _get_torch()
     r = returns.view(-1)
     if r.numel() <= 0:
         return r.sum()
     b = max(1e-6, float(beta))
-    log_mean_exp = torch.logsumexp(-b * r, dim=0) - torch.log(
+    r_min = r.min()
+    shifted = r - r_min
+    log_mean_exp = torch.logsumexp(-b * shifted, dim=0) - torch.log(
         torch.tensor(float(r.numel()), dtype=r.dtype, device=r.device)
     )
-    return -log_mean_exp / b
+    return r_min - log_mean_exp / b
 
 
 def objective_inventory_capacity_penalty(

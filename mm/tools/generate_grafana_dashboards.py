@@ -48,6 +48,22 @@ def compact_dashboard_panels(data: dict[str, Any], *, height_scale: float | None
     return data
 
 
+def _apply_standard_panel_heights(panels: list[dict[str, Any]]) -> None:
+    """Set readable Grafana heights before reflow (1 grid unit ≈ 30px)."""
+
+    for panel in panels:
+        grid = panel.setdefault("gridPos", {})
+        ptype = panel.get("type")
+        if ptype == "row":
+            grid["h"] = 1
+        elif ptype == "text":
+            grid["h"] = 4
+        elif ptype == "table":
+            grid["h"] = 6
+        elif ptype == "timeseries":
+            grid["h"] = 8
+
+
 def compact_dashboard_file(path: Path) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     compact_dashboard_panels(data)
@@ -72,7 +88,7 @@ def _panel_text(id_: int, y: int, content: str, title: str = "Notes", *, h: int 
     }
 
 
-def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 4) -> dict[str, Any]:
+def _panel_sql_table(id_: int, y: int, title: str, sql: str, h: int = 6) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {"defaults": {"custom": {"align": "auto"}}, "overrides": []},
@@ -754,6 +770,7 @@ WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''
 GROUP BY 1, 2
 ORDER BY count DESC""",
+            h=6,
         )
     )
 
@@ -772,7 +789,8 @@ ORDER BY count DESC""",
             }
         )
     data["panels"] = panels
-    compact_dashboard_panels(data)
+    _apply_standard_panel_heights(panels)
+    compact_dashboard_panels(data, height_scale=1.0)
     data["version"] = int(data.get("version", 1)) + 1
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 

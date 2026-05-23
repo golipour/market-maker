@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from mm.mpc.reward_tensor import (
@@ -51,3 +52,21 @@ def test_entropic_return_gradients_flow() -> None:
     score.backward()
     assert returns.grad is not None
     assert torch.isfinite(returns.grad).all()
+
+
+def test_entropic_return_stable_for_extreme_negative_tail() -> None:
+    returns = torch.tensor([0.01, 0.02, -500.0, 0.03], dtype=torch.float64)
+    score = objective_entropic_return(returns, beta=50.0)
+    assert torch.isfinite(score)
+    assert abs(float(score.item())) < 1e6
+
+
+def test_entropic_return_matches_unshifted_formula_for_moderate_returns() -> None:
+    returns = torch.tensor([0.01, 0.02, -0.05, 0.03], dtype=torch.float64)
+    beta = 10.0
+    shifted = float(objective_entropic_return(returns, beta=beta).item())
+    naive_log_mean = torch.logsumexp(-beta * returns, dim=0) - torch.log(
+        torch.tensor(float(returns.numel()), dtype=returns.dtype)
+    )
+    naive = float((-naive_log_mean / beta).item())
+    assert shifted == pytest.approx(naive, rel=1e-9, abs=1e-12)
