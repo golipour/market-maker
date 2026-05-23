@@ -292,7 +292,6 @@ def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "quote_size_min_per_side": order_constraints.min_qty,
-        "quote_size_target_per_side": None,
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)

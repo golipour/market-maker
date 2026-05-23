@@ -121,7 +121,7 @@ def depth_bid_tensor(
     from mm.mpc.l_param import materialize_side_torch
 
     torch = _get_torch()
-    if l_param is not None and l_param.use_softmax:
+    if l_param is not None:
         L, k, x0 = materialize_side_torch(
             params, side_off=0, n_components=n_components, l_param=l_param
         )
@@ -164,7 +164,7 @@ def depth_ask_tensor(
 
     torch = _get_torch()
     base = 3 * n_components
-    if l_param is not None and l_param.use_softmax:
+    if l_param is not None:
         L, k, x0 = materialize_side_torch(
             params, side_off=base, n_components=n_components, l_param=l_param
         )
@@ -234,7 +234,7 @@ def depth_bid_derivative_tensor(
     from mm.mpc.l_param import materialize_side_torch
 
     torch = _get_torch()
-    if l_param is not None and l_param.use_softmax:
+    if l_param is not None:
         L, k, x0 = materialize_side_torch(
             params, side_off=0, n_components=n_components, l_param=l_param
         )
@@ -275,7 +275,7 @@ def depth_ask_derivative_tensor(
 
     torch = _get_torch()
     base = 3 * n_components
-    if l_param is not None and l_param.use_softmax:
+    if l_param is not None:
         L, k, x0 = materialize_side_torch(
             params, side_off=base, n_components=n_components, l_param=l_param
         )

@@ -57,6 +57,10 @@ def _minimal_config(*, actor_id: str = "test-runner") -> ControllerRuntimeConfig
         observe_only=True,
         action_start_after_steps=0,
         risk=RiskRuntimeConfig(enabled=True),
+        optimizer={
+            "quote_size_min_per_side": 1.0,
+            "quote_size_max_per_side": 10.0,
+        },
     )
 
 

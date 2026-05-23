@@ -12,78 +12,87 @@ if TYPE_CHECKING:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
 
 
+def action_param_len(n_components: int) -> int:
+    """Flat optimizer vector length: sigmoid mixture params plus per-side depth logits."""
+    return 6 * max(1, int(n_components)) + 2
+
+
+def depth_logit_index(*, side_off: int, n_components: int) -> int:
+    base = 6 * n_components
+    return base if side_off == 0 else base + 1
+
+
 @dataclass(frozen=True, slots=True)
 class LParamConfig:
     """
-    When ``use_softmax`` is true, raw optimizer params are decoded into effective
-    ``(L, k, x0)`` with structural constraints.
+    Raw optimizer params decode into effective ``(L, k, x0)`` with structural constraints.
 
-    Without spread targets: global softmax on ``L`` with ``δ(spread_max)`` normalization.
+    Without spread geometry: global softmax on ``L`` with ``δ(spread_max)`` normalization.
 
-    With spread targets (``quote_spread_target`` and ``quote_spread_ref_depth``):
-    - first centers satisfy ``x0_1_bid + x0_1_ask <= quote_spread_target`` via a scaled softmax split
-    - component 1 carries ``quote_spread_ref_depth`` at its center
-    - tail components fill remaining depth to ``quote_size_target`` at ``spread_max``
+    With spread geometry (``quote_spread_max`` and ``quote_spread_min_depth``):
+    - first centers satisfy ``x0_1_bid + x0_1_ask <= quote_spread_max`` via a scaled softmax split
+    - component 1 carries at least ``quote_spread_min_depth`` at its center
+    - tail components fill remaining depth up to a chosen total in
+      ``[quote_size_min, quote_size_max]`` at ``spread_max``
+
+    Total per-side depth at ``spread_max`` is selected by a depth logit:
+    ``quote_size_min + sigmoid(u_depth) * (quote_size_max - quote_size_min)``.
     """
 
-    use_softmax: bool
-    quote_size_target: float | None
+    quote_size_min: float
+    quote_size_max: float
     spread_max: float
     n_components: int = 1
-    quote_size_min: float | None = None
-    quote_size_max: float | None = None
-    apply_quote_size_range: bool = False
-    quote_spread_target: float | None = None
-    quote_spread_ref_depth: float | None = None
+    quote_spread_max: float | None = None
+    quote_spread_min_depth: float | None = None
     quote_spread_k_epsilon: float = 0.01
 
     @property
     def spread_structured(self) -> bool:
-        if not self.use_softmax:
+        if self.quote_spread_max is None or float(self.quote_spread_max) <= 0.0:
             return False
-        if self.quote_spread_target is None or float(self.quote_spread_target) <= 0.0:
-            return False
-        if self.quote_spread_ref_depth is None or float(self.quote_spread_ref_depth) <= 0.0:
+        if self.quote_spread_min_depth is None or float(self.quote_spread_min_depth) <= 0.0:
             return False
         return True
 
-    def effective_quote_size_target(self) -> float | None:
-        if not self.use_softmax:
-            return None
-        if self.quote_size_target is None or float(self.quote_size_target) <= 0.0:
-            return None
-        q = float(self.quote_size_target)
-        if not self.apply_quote_size_range:
-            return q
-        lo = (
-            float(self.quote_size_min)
-            if self.quote_size_min is not None
-            else -float("inf")
-        )
-        hi = (
-            float(self.quote_size_max)
-            if self.quote_size_max is not None
-            else float("inf")
-        )
-        return float(min(max(q, lo), hi))
+    def quote_size_midpoint(self) -> float:
+        return 0.5 * (float(self.quote_size_min) + float(self.quote_size_max))
+
+    def quote_size_from_depth_logit(self, u_depth: float) -> float:
+        lo = float(self.quote_size_min)
+        hi = float(self.quote_size_max)
+        return lo + _sigmoid_np(u_depth) * (hi - lo)
+
+    def quote_size_from_flat(self, flat: np.ndarray, *, side_off: int, n_components: int) -> float:
+        idx = depth_logit_index(side_off=side_off, n_components=n_components)
+        return self.quote_size_from_depth_logit(float(flat[idx]))
+
+    def quote_size_from_depth_logit_torch(self, u_depth: Any) -> Any:
+        torch = __import__("torch")
+        lo = torch.tensor(float(self.quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
+        hi = torch.tensor(float(self.quote_size_max), dtype=u_depth.dtype, device=u_depth.device)
+        return lo + torch.sigmoid(u_depth) * (hi - lo)
 
 
 def validate_l_param_config(l_param: LParamConfig) -> None:
-    if not l_param.use_softmax:
-        return
-    q_total = l_param.effective_quote_size_target()
-    if q_total is None or q_total <= 0.0:
-        raise ValueError("structured softmax requires positive quote_size_target_per_side")
+    lo = float(l_param.quote_size_min)
+    hi = float(l_param.quote_size_max)
+    if lo <= 0.0 or hi <= 0.0:
+        raise ValueError("quote_size_min_per_side and quote_size_max_per_side must be positive")
+    if lo > hi:
+        raise ValueError(
+            f"quote_size_min_per_side ({lo}) must be <= quote_size_max_per_side ({hi})"
+        )
     if l_param.spread_structured:
-        s_tgt = float(l_param.quote_spread_target or 0.0)
-        q_spread = float(l_param.quote_spread_ref_depth or 0.0)
-        if s_tgt > float(l_param.spread_max):
+        s_max = float(l_param.quote_spread_max or 0.0)
+        q_spread = float(l_param.quote_spread_min_depth or 0.0)
+        if s_max > float(l_param.spread_max):
             raise ValueError(
-                f"quote_spread_target ({s_tgt}) must be <= spread_max ({l_param.spread_max})"
+                f"quote_spread_max ({s_max}) must be <= spread_max ({l_param.spread_max})"
             )
-        if q_spread > q_total:
+        if q_spread > hi:
             raise ValueError(
-                f"quote_spread_ref_depth ({q_spread}) must be <= quote_size_target_per_side ({q_total})"
+                f"quote_spread_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
             )
         if int(l_param.n_components) < 2:
             raise ValueError(
@@ -145,7 +154,7 @@ def component_delta_spread_range_np(
 def _spread_centers_from_flat(
     flat: np.ndarray,
     n_components: int,
-    spread_max: float,
+    quote_spread_max: float,
 ) -> tuple[float, float]:
     """
     Decode first bid/ask centers with an architectural upper bound on their sum.
@@ -153,9 +162,7 @@ def _spread_centers_from_flat(
     ``u_scale`` lives in the bid-side first ``L`` slot (``flat[0]``). Then::
 
         scale = sigmoid(u_scale) in (0, 1)
-        [x0_1_bid, x0_1_ask] = scale * spread_max * softmax([u_bid, u_ask])
-
-    so ``x0_1_bid + x0_1_ask <= spread_max`` always, with asymmetry from ``u_bid - u_ask``.
+        [x0_1_bid, x0_1_ask] = scale * quote_spread_max * softmax([u_bid, u_ask])
     """
     n = n_components
     u_scale = float(flat[0])
@@ -163,7 +170,7 @@ def _spread_centers_from_flat(
     u_ask = float(flat[3 * n + 2])
     scale = _sigmoid_np(u_scale)
     w = _softmax_np(np.array([u_bid, u_ask], dtype=np.float64))
-    centers = scale * float(spread_max) * w
+    centers = scale * float(quote_spread_max) * w
     return float(centers[0]), float(centers[1])
 
 
@@ -212,16 +219,11 @@ def materialize_side_np(
     x0_raw = np.array([flat[side_off + 3 * i + 2] for i in range(n)], dtype=np.float64)
     spread_max = float(l_param.spread_max)
 
-    if not l_param.use_softmax:
-        k_eff = np.array([_softplus_np(v) for v in k_raw], dtype=np.float64)
-        L_eff = np.array([_softplus_np(v) for v in L_raw], dtype=np.float64)
-        return L_eff, k_eff, x0_raw.copy()
-
     if l_param.spread_structured:
         x0_bid_1, x0_ask_1 = _spread_centers_from_flat(
             flat,
             n,
-            float(l_param.quote_spread_target),
+            float(l_param.quote_spread_max),
         )
         x0_first = x0_bid_1 if side_off == 0 else x0_ask_1
         x0_eff = np.zeros(n, dtype=np.float64)
@@ -241,9 +243,9 @@ def materialize_side_np(
     else:
         k_eff = np.array([_softplus_np(float(v)) for v in k_raw], dtype=np.float64)
 
-    q_total = float(l_param.effective_quote_size_target() or 0.0)
+    q_total = l_param.quote_size_from_flat(flat, side_off=side_off, n_components=n)
     if l_param.spread_structured:
-        q_spread = float(l_param.quote_spread_ref_depth)
+        q_spread = float(l_param.quote_spread_min_depth)
         delta_at_center = component_delta_at_np(k_eff, x0_eff, float(x0_eff[0]))
         delta_at_max = component_delta_at_np(k_eff, x0_eff, spread_max)
         if n > 1:
@@ -279,10 +281,9 @@ def positive_L_numpy(
     l_param: LParamConfig | None,
     use_softplus: bool = True,
 ) -> np.ndarray:
-    if l_param is None or not l_param.use_softmax:
-        if use_softplus:
-            return np.array([_softplus_np(float(v)) for v in L_raw], dtype=np.float64)
-        return np.asarray(L_raw, dtype=np.float64)
+    del k_raw, x0_raw, use_softplus
+    if l_param is None:
+        raise ValueError("l_param is required for structured softmax decode")
     if flat is None:
         raise ValueError("flat action required for structured softmax decode")
     L_eff, _, _ = materialize_side_np(flat, side_off=side_off, n_components=len(L_raw), l_param=l_param)
@@ -295,25 +296,14 @@ def effective_qrange_from_flat_np(
     *,
     side_off: int,
     spread_max: float,
-    l_param: LParamConfig | None,
+    l_param: LParamConfig,
     use_softplus: bool = True,
 ) -> float:
-    if l_param is None or not l_param.use_softmax:
-        n = n_components
-        L_raw = np.array([flat[side_off + 3 * i] for i in range(n)], dtype=np.float64)
-        k_raw = np.array([flat[side_off + 3 * i + 1] for i in range(n)], dtype=np.float64)
-        x0 = np.array([flat[side_off + 3 * i + 2] for i in range(n)], dtype=np.float64)
-        k_eff = np.array([_softplus_np(float(v)) for v in k_raw], dtype=np.float64)
-        if use_softplus:
-            L_eff = np.array([_softplus_np(float(v)) for v in L_raw], dtype=np.float64)
-        else:
-            L_eff = L_raw
-        delta = component_delta_spread_range_np(k_eff, x0, spread_max)
-        return float(np.dot(L_eff, delta))
+    del use_softplus, spread_max
     L_eff, k_eff, x0_eff = materialize_side_np(
         flat, side_off=side_off, n_components=n_components, l_param=l_param
     )
-    delta = component_delta_spread_range_np(k_eff, x0_eff, spread_max)
+    delta = component_delta_spread_range_np(k_eff, x0_eff, l_param.spread_max)
     return float(np.dot(L_eff, delta))
 
 
@@ -336,27 +326,16 @@ def sigmoid_action_from_flat_raw(
     flat: tuple[float, ...] | list[float] | np.ndarray,
     n_components: int,
     *,
-    l_param: LParamConfig | None,
+    l_param: LParamConfig,
     use_softplus: bool = True,
 ) -> EffectiveSigmoidMixtureAction:
+    del use_softplus
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
 
     arr = np.asarray(flat, dtype=np.float64)
     n = n_components
-    if l_param is not None and l_param.use_softmax:
-        bid_L, bid_k, bid_x0 = materialize_side_np(arr, side_off=0, n_components=n, l_param=l_param)
-        ask_L, ask_k, ask_x0 = materialize_side_np(arr, side_off=3 * n, n_components=n, l_param=l_param)
-    else:
-        bid_k = np.array([_softplus_np(float(v)) for v in arr[1 : 3 * n : 3]], dtype=np.float64)
-        ask_k = np.array([_softplus_np(float(v)) for v in arr[3 * n + 1 : 6 * n : 3]], dtype=np.float64)
-        bid_x0 = arr[2 : 3 * n : 3]
-        ask_x0 = arr[3 * n + 2 : 6 * n : 3]
-        if use_softplus:
-            bid_L = np.array([_softplus_np(float(v)) for v in arr[0 : 3 * n : 3]], dtype=np.float64)
-            ask_L = np.array([_softplus_np(float(v)) for v in arr[3 * n : 6 * n : 3]], dtype=np.float64)
-        else:
-            bid_L = arr[0 : 3 * n : 3]
-            ask_L = arr[3 * n : 6 * n : 3]
+    bid_L, bid_k, bid_x0 = materialize_side_np(arr, side_off=0, n_components=n, l_param=l_param)
+    ask_L, ask_k, ask_x0 = materialize_side_np(arr, side_off=3 * n, n_components=n, l_param=l_param)
     return EffectiveSigmoidMixtureAction(
         bid_L=tuple(float(x) for x in bid_L),
         bid_k=tuple(float(x) for x in bid_k),
@@ -387,7 +366,7 @@ def component_delta_spread_range_torch(
 
 def _solve_spread_leg_L_torch(
     *,
-    q_total: float,
+    q_total: Any,
     q_spread: float,
     delta_center: Any,
     delta_max: Any,
@@ -432,22 +411,19 @@ def materialize_side_torch(
     x0_raw = params[side_off + 2 : side_off + 3 * n : 3]
     spread_max = float(l_param.spread_max)
 
-    if not l_param.use_softmax:
-        k_eff = torch.nn.functional.softplus(k_raw) + 1e-8
-        L_eff = torch.nn.functional.softplus(L_raw) + 1e-8
-        return L_eff, k_eff, x0_raw
-
-    if params.numel() < 6 * n:
+    min_len = action_param_len(n)
+    if params.numel() < min_len:
         raise ValueError(
-            f"structured softmax requires full action params (6*n={6 * n}), got {params.numel()}"
+            f"structured softmax requires action params len>={min_len}, got {params.numel()}"
         )
 
     u_bid = params[2]
     u_ask = params[3 * n + 2]
     u_scale = params[0]
+    u_depth = params[depth_logit_index(side_off=side_off, n_components=n)]
 
     if l_param.spread_structured:
-        spread_cap = float(l_param.quote_spread_target)
+        spread_cap = float(l_param.quote_spread_max)
         scale = torch.sigmoid(u_scale)
         spread_w = torch.softmax(torch.stack([u_bid, u_ask]), dim=0)
         centers = scale * spread_cap * spread_w
@@ -473,9 +449,9 @@ def materialize_side_torch(
     else:
         k_eff = torch.nn.functional.softplus(k_raw) + 1e-8
 
-    q_total = float(l_param.effective_quote_size_target() or 0.0)
+    q_total = l_param.quote_size_from_depth_logit_torch(u_depth)
     if l_param.spread_structured:
-        q_spread = float(l_param.quote_spread_ref_depth)
+        q_spread = float(l_param.quote_spread_min_depth)
         delta_at_center = component_delta_at_torch(k_eff, x0_eff, float(x0_eff[0].item()))
         delta_at_max = component_delta_at_torch(k_eff, x0_eff, spread_max)
         if n > 1:
@@ -495,7 +471,7 @@ def materialize_side_torch(
     w = torch.softmax(L_raw, dim=-1)
     delta = component_delta_spread_range_torch(k_eff, x0_eff, spread_max)
     z = (w * delta).sum().clamp(min=1e-12)
-    L_eff = float(q_total) * w / z
+    L_eff = q_total * w / z
     return L_eff, k_eff, x0_eff
 
 
@@ -509,10 +485,9 @@ def positive_L_torch(
     l_param: LParamConfig | None,
     use_softplus: bool = True,
 ) -> Any:
-    if l_param is None or not l_param.use_softmax:
-        if use_softplus:
-            return __import__("torch").nn.functional.softplus(L_raw) + 1e-8
-        return L_raw
+    del k_raw, x0_raw, use_softplus
+    if l_param is None:
+        raise ValueError("l_param is required for structured softmax decode")
     if params is None:
         raise ValueError("full params tensor required for structured softmax decode")
     L_eff, _, _ = materialize_side_torch(

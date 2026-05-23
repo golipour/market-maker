@@ -27,29 +27,32 @@ def test_optimizer_stores_objective_params() -> None:
         inventory_target_penalty_weight=4.0,
         target_inventory=5.0,
         target_inventory_multiplier=1.5,
-        quote_size_target_per_side=10.0,
+        quote_size_min_per_side=1.0,
+        quote_size_max_per_side=10.0,
         hedge_rollout_enabled=True,
     )
     assert mpc.return_risk_aversion_beta == 2.0
     assert mpc.inventory_target_penalty_weight == 4.0
     assert mpc.target_inventory == 5.0
     assert mpc.target_inventory_multiplier == 1.5
-    assert mpc.quote_size_target_per_side == 10.0
+    assert mpc.quote_size_min_per_side == 1.0
+    assert mpc.quote_size_max_per_side == 10.0
     assert mpc.inv_coef == 4.0
     assert mpc.target_inv == 5.0
     assert mpc.hedge_enabled is True
 
 
-def test_resolve_inventory_target_from_quote_size() -> None:
+def test_resolve_inventory_target_from_quote_size_range() -> None:
     mpc = MonteCarloMPCTensorBatched(
         object(),
         object(),
         object(),
-        quote_size_target_per_side=100.0,
+        quote_size_min_per_side=100.0,
+        quote_size_max_per_side=200.0,
         target_inventory_multiplier=1.5,
     )
-    assert mpc._resolve_inventory_target() == 150.0
-    assert mpc._resolve_inventory_scale() == 150.0
+    assert mpc._resolve_inventory_target() == 225.0
+    assert mpc._resolve_inventory_scale() == 225.0
 
 
 def test_terminal_objective_uses_clear_component_names() -> None:
@@ -73,9 +76,15 @@ def test_hedge_enabled_explicit_overrides_hedge_coef() -> None:
     opt = object()
     flow = object()
     exe = object()
-    on = MonteCarloMPCTensorBatched(opt, flow, exe, hedge_enabled=True, hedge_coef=0.0)
+    on = MonteCarloMPCTensorBatched(
+        opt, flow, exe, hedge_enabled=True, hedge_coef=0.0,
+        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+    )
     assert on.hedge_enabled is True
-    off = MonteCarloMPCTensorBatched(opt, flow, exe, hedge_enabled=False, hedge_coef=1.0)
+    off = MonteCarloMPCTensorBatched(
+        opt, flow, exe, hedge_enabled=False, hedge_coef=1.0,
+        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+    )
     assert off.hedge_enabled is False
 
 
@@ -83,8 +92,14 @@ def test_hedge_enabled_defaults_from_hedge_coef() -> None:
     opt = object()
     flow = object()
     exe = object()
-    assert MonteCarloMPCTensorBatched(opt, flow, exe, hedge_coef=0.0).hedge_enabled is False
-    assert MonteCarloMPCTensorBatched(opt, flow, exe, hedge_coef=0.01).hedge_enabled is True
+    assert MonteCarloMPCTensorBatched(
+        opt, flow, exe, hedge_coef=0.0,
+        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+    ).hedge_enabled is False
+    assert MonteCarloMPCTensorBatched(
+        opt, flow, exe, hedge_coef=0.01,
+        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+    ).hedge_enabled is True
 
 
 def test_effective_sigmoid_action_exposes_executable_depth() -> None:
@@ -106,9 +121,19 @@ def test_effective_sigmoid_action_exposes_executable_depth() -> None:
 
 
 def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
-    l_raw = math.log(math.exp(100.0) - 1.0)
-    k_raw = math.log(math.exp(1.0) - 1.0)
-    params = torch.tensor([l_raw, k_raw, 10.0, l_raw, k_raw, 10.0], dtype=torch.float64)
+    from mm.mpc.l_param import LParamConfig
+    from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange
+
+    l_param = LParamConfig(
+        quote_size_min=1.0,
+        quote_size_max=100.0,
+        spread_max=100.0,
+        n_components=1,
+    )
+    flat = _initial_action_uniform_marginal_qrange(1, 100.0, l_param=l_param)
+    flat[-2] = 30.0
+    flat[-1] = 30.0
+    params = torch.tensor(flat, dtype=torch.float64)
     spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 2), dtype=torch.float64)
     sell_vwap = torch.tensor([[100.0]], dtype=torch.float64)
@@ -128,12 +153,16 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
         spread_grid=spread_grid,
         maker_fee=0.0,
         soft_temp=0.01,
+        l_param=l_param,
     )
 
-    raw = depth_bid_tensor(params, torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64), 1)
-    expected_bid_quote = float(raw[2] - raw[0])
-    raw_ask = raw
-    expected_ask_quote = float(raw_ask[2] - raw_ask[0])
+    from mm.mpc.state_tensor import effective_depth_ask_tensor, effective_depth_bid_tensor
+
+    s_grid = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+    bid_eff = effective_depth_bid_tensor(params, s_grid, 1, l_param=l_param)
+    ask_eff = effective_depth_ask_tensor(params, s_grid, 1, l_param=l_param)
+    expected_bid_quote = float(bid_eff[2] - bid_eff[0])
+    expected_ask_quote = float(ask_eff[2] - ask_eff[0])
     assert math.isclose(expected_bid_quote, expected_ask_quote, rel_tol=1e-12)
     assert abs(float(inv_delta[0])) < 1e-6
 
@@ -174,8 +203,13 @@ def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
         flow,
         exe,
         soft_fill_activation="hardsigmoid",
+        quote_size_min_per_side=1.0,
+        quote_size_max_per_side=10.0,
     )
     assert mpc.soft_fill_activation == "hardsigmoid"
 
     with pytest.raises(ValueError, match="unsupported soft_fill_activation"):
-        MonteCarloMPCTensorBatched(price, flow, exe, soft_fill_activation="relu")
+        MonteCarloMPCTensorBatched(
+            price, flow, exe, soft_fill_activation="relu",
+            quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+        )

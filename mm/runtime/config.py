@@ -692,8 +692,9 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "quote_size_target_per_side sets baseline quote capacity and default inventory target "
-            "via target_inventory_multiplier when target_inventory is unset"
+            "quote_size_min_per_side and quote_size_max_per_side bound cumulative per-side "
+            "depth at spread_max; default inventory target uses their midpoint when "
+            "target_inventory is unset"
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -717,13 +718,22 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
             "target_inventory": (
                 "optional explicit inventory target in base units; "
-                "defaults to target_inventory_multiplier * quote_size_target_per_side"
+                "defaults to target_inventory_multiplier * midpoint(quote_size_min, quote_size_max)"
             ),
             "target_inventory_multiplier": (
-                "multiplier applied to quote_size_target_per_side when target_inventory is unset"
+                "multiplier applied to quote-size midpoint when target_inventory is unset"
             ),
-            "quote_size_target_per_side": (
-                "baseline quote capacity per side (base units); also drives default inventory target"
+            "quote_size_min_per_side": (
+                "minimum cumulative quote depth per side at spread_max (base units)"
+            ),
+            "quote_size_max_per_side": (
+                "maximum cumulative quote depth per side at spread_max (base units)"
+            ),
+            "quote_spread_max": (
+                "maximum allowed sum of first bid/ask spread centers (quote units)"
+            ),
+            "quote_spread_min_depth": (
+                "minimum executable depth at each side's first spread center (base units)"
             ),
         },
         "float_bridge": {

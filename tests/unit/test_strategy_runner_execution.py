@@ -47,6 +47,10 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
         "action_start_after_steps": 0,
         "placement_timeout_ms": 50,
         "risk": RiskRuntimeConfig(enabled=True),
+        "optimizer": {
+            "quote_size_min_per_side": 1.0,
+            "quote_size_max_per_side": 10.0,
+        },
     }
     base.update(overrides)
     return ControllerRuntimeConfig(**base)
