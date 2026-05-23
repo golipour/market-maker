@@ -28,11 +28,10 @@ def compute_contribution_fractions(
     eps: float = 1e-12,
 ) -> dict[str, float]:
     """
-    Share of each **weighted** objective term in the scalar ``J`` optimized at closure end.
+    Share of each weighted objective term in the scalar ``J`` optimized at closure end.
 
     Uses ``|component| / sum(|component|)`` where each ``component`` is already the
-    fully weighted term from ``terminal_objective`` (e.g. ``expected_pnl_weight * E[ΔW]/wealth``).
-    Signs are ignored so penalties and reward are comparable as magnitude shares.
+    fully weighted term from ``terminal_objective``.
     """
     abs_components = {str(k): abs(float(v)) for k, v in components.items()}
     total_abs = sum(abs_components.values()) + float(eps)
@@ -47,6 +46,7 @@ class EpochObjectiveMetrics:
     loss: float
     components: dict[str, float]
     expected_total_reward: float
+    expected_total_return: float
     expected_next_reward: float
     main_reward_mean: float
     hedge_reward_mean: float
@@ -58,6 +58,7 @@ class EpochObjectiveMetrics:
         objective_value: float,
         components: dict[str, Any],
         expected_total_reward: float,
+        expected_total_return: float,
         expected_next_reward: float,
         main_reward_mean: float,
         hedge_reward_mean: float,
@@ -69,6 +70,7 @@ class EpochObjectiveMetrics:
             loss=-obj,
             components=comps,
             expected_total_reward=_finite(expected_total_reward),
+            expected_total_return=_finite(expected_total_return),
             expected_next_reward=_finite(expected_next_reward),
             main_reward_mean=_finite(main_reward_mean),
             hedge_reward_mean=_finite(hedge_reward_mean),
@@ -81,6 +83,7 @@ class EpochObjectiveMetrics:
             components=dict(self.components),
             contribution_fractions=compute_contribution_fractions(self.components),
             expected_total_reward=self.expected_total_reward,
+            expected_total_return=self.expected_total_return,
             expected_next_reward=self.expected_next_reward,
             main_reward_mean=self.main_reward_mean,
             hedge_reward_mean=self.hedge_reward_mean,
@@ -96,6 +99,7 @@ def objective_snapshot_payload(snapshot: ObjectiveSnapshot | None) -> dict[str, 
         "components": dict(snapshot.components),
         "contribution_fractions": dict(snapshot.contribution_fractions),
         "expected_total_reward": snapshot.expected_total_reward,
+        "expected_total_return": snapshot.expected_total_return,
         "expected_next_reward": snapshot.expected_next_reward,
         "main_reward_mean": snapshot.main_reward_mean,
         "hedge_reward_mean": snapshot.hedge_reward_mean,
@@ -214,6 +218,7 @@ class OptimizerRunDiagnostics:
         return {
             "kind": self.config.get("kind", "monte_carlo_mpc_tensor_batched"),
             "last_expected_delta_wealth": best.get("expected_total_reward"),
+            "last_expected_return": best.get("expected_total_return"),
             "last_components": best.get("components"),
             "best_epoch": self.best_epoch,
             "timing": dict(self.timing),

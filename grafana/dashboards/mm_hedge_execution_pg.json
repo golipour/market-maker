@@ -39,7 +39,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 2
@@ -85,10 +85,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 6
+        "y": 4
       },
       "id": 11,
       "options": {
@@ -132,10 +132,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 6
       },
       "id": 12,
       "options": {
@@ -175,10 +175,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 8
       },
       "id": 13,
       "options": {
@@ -285,6 +285,6 @@
   "timezone": "browser",
   "title": "MM hedge execution (PostgreSQL)",
   "uid": "mm-hedge-execution-pg",
-  "version": 2,
+  "version": 1,
   "weekStart": ""
 }

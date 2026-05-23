@@ -50,46 +50,46 @@ def _minimal_state() -> State:
 
 def test_contribution_fractions_sum_to_one() -> None:
     components = {
-        "expected_pnl": 10.0,
-        "quote_spread_penalty": -8.0,
-        "inventory_target_penalty": -2.0,
+        "risk_adjusted_return": 10.0,
+        "inventory_capacity_penalty": -8.0,
     }
     fracs = compute_contribution_fractions(components)
-    assert fracs["expected_pnl"] == pytest.approx(0.5, rel=1e-9)
-    assert fracs["quote_spread_penalty"] == pytest.approx(0.4, rel=1e-9)
-    assert fracs["inventory_target_penalty"] == pytest.approx(0.1, rel=1e-9)
+    assert fracs["risk_adjusted_return"] == pytest.approx(0.5555555556, rel=1e-9)
+    assert fracs["inventory_capacity_penalty"] == pytest.approx(0.4444444444, rel=1e-9)
     assert sum(fracs.values()) == pytest.approx(1.0, rel=1e-9)
 
 
 def test_objective_snapshot_includes_contribution_fractions() -> None:
     metrics = EpochObjectiveMetrics.from_tensors(
         objective_value=5.0,
-        components={"expected_pnl": 5.0, "quote_spread_penalty": -5.0},
+        components={"risk_adjusted_return": 5.0, "inventory_capacity_penalty": -5.0},
         expected_total_reward=0.0,
+        expected_total_return=0.0,
         expected_next_reward=0.0,
         main_reward_mean=0.0,
         hedge_reward_mean=0.0,
     )
     snap = metrics.to_snapshot()
-    assert snap.contribution_fractions["expected_pnl"] == pytest.approx(0.5)
-    assert snap.contribution_fractions["quote_spread_penalty"] == pytest.approx(0.5)
+    assert snap.contribution_fractions["risk_adjusted_return"] == pytest.approx(0.5)
+    assert snap.contribution_fractions["inventory_capacity_penalty"] == pytest.approx(0.5)
 
 
 def test_objective_components_sum_equals_value() -> None:
-    delta_w = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
-    inv = torch.tensor([0.0, 1.0, -1.0], dtype=torch.float64)
+    returns = torch.tensor([0.01, 0.02, -0.01], dtype=torch.float64)
+    inv_path = torch.tensor([[0.0], [1.0], [2.0]], dtype=torch.float64)
     objective, components = terminal_objective(
-        delta_w,
-        inv,
-        expected_pnl_weight=1.0,
+        returns,
+        inv_path,
+        return_risk_aversion_beta=5.0,
         inventory_target_penalty_weight=0.1,
-        target_inventory=0.0,
-        pnl_volatility_penalty_weight=0.05,
+        target_inventory=1.0,
+        inventory_scale=1.0,
     )
     metrics = EpochObjectiveMetrics.from_tensors(
         objective_value=float(objective.item()),
         components={k: float(v.item()) for k, v in components.items()},
         expected_total_reward=2.0,
+        expected_total_return=0.01,
         expected_next_reward=1.0,
         main_reward_mean=2.0,
         hedge_reward_mean=0.0,
@@ -113,10 +113,6 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
         warm_start=False,
         device="cpu",
         inventory_target_penalty_weight=0.0,
-        pnl_volatility_penalty_weight=0.0,
-        quote_shape_concentration_penalty_weight=0.0,
-        quote_size_target_penalty_weight=0.0,
-        quote_spread_penalty_weight=0.0,
     )
     action, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     payload = diagnostics.to_payload()
@@ -127,6 +123,8 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
     assert float(best["value"]) >= float(initial["value"]) - 1e-9
     comp_sum = sum(float(v) for v in best["components"].values())
     assert comp_sum == pytest.approx(float(best["value"]), rel=1e-5)
+    assert set(best["components"]) == {"risk_adjusted_return", "inventory_capacity_penalty"}
+    assert best["expected_total_return"] is not None
     fracs = best.get("contribution_fractions") or {}
     assert fracs
     assert sum(float(v) for v in fracs.values()) == pytest.approx(1.0, rel=1e-5)

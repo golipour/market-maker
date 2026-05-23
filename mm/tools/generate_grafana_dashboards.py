@@ -294,59 +294,55 @@ ORDER BY 1""",
         _panel_objective_component(
             12,
             19,
-            title="expected_pnl",
-            component_key="expected_pnl",
+            title="risk_adjusted_return",
+            component_key="risk_adjusted_return",
             diag_filter=diag_filter,
             x=0,
         ),
         _panel_objective_component(
             13,
             19,
-            title="inventory_target_penalty",
-            component_key="inventory_target_penalty",
+            title="inventory_capacity_penalty",
+            component_key="inventory_capacity_penalty",
             diag_filter=diag_filter,
             x=12,
         ),
-        _panel_objective_component(
+        _panel_sql_timeseries(
             14,
             25,
-            title="pnl_volatility_penalty",
-            component_key="pnl_volatility_penalty",
-            diag_filter=diag_filter,
+            "Expected total return (mean MC path return)",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL
+ORDER BY 1""",
             x=0,
+            w=12,
         ),
-        _panel_objective_component(
+        _panel_sql_timeseries(
             15,
             25,
-            title="quote_shape_concentration_penalty",
-            component_key="quote_shape_concentration_penalty",
-            diag_filter=diag_filter,
+            "Expected total reward (mean MC delta wealth)",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL
+ORDER BY 1""",
             x=12,
-        ),
-        _panel_objective_component(
-            16,
-            31,
-            title="quote_size_target_penalty",
-            component_key="quote_size_target_penalty",
-            diag_filter=diag_filter,
-            x=0,
-        ),
-        _panel_objective_component(
-            17,
-            31,
-            title="quote_spread_penalty",
-            component_key="quote_spread_penalty",
-            diag_filter=diag_filter,
-            x=12,
+            w=12,
         ),
         _panel_objective_contribution_fractions(
             18,
-            37,
+            31,
             diag_filter=diag_filter,
         ),
         _panel_sql_timeseries(
             30,
-            45,
+            39,
             "Action pipeline — order count by stage",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #> ARRAY['action_pipeline',stage,'order_count'])::int::double precision AS value

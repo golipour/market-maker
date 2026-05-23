@@ -40,7 +40,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 2
@@ -82,10 +82,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 4
       },
       "id": 10,
       "options": {
@@ -121,7 +121,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 6
       },
       "id": 11,
       "panels": [],
@@ -141,10 +141,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 12,
         "x": 0,
-        "y": 10
+        "y": 7
       },
       "id": 12,
       "options": {
@@ -167,11 +167,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','expected_pnl'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','expected_pnl'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "expected_pnl",
+      "title": "risk_adjusted_return",
       "type": "timeseries"
     },
     {
@@ -187,10 +187,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 12,
         "x": 12,
-        "y": 10
+        "y": 7
       },
       "id": 13,
       "options": {
@@ -213,11 +213,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_target_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_target_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "inventory_target_penalty",
+      "title": "inventory_capacity_penalty",
       "type": "timeseries"
     },
     {
@@ -233,10 +233,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 9
       },
       "id": 14,
       "options": {
@@ -259,11 +259,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','pnl_volatility_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','pnl_volatility_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "pnl_volatility_penalty",
+      "title": "Expected total return (mean MC path return)",
       "type": "timeseries"
     },
     {
@@ -279,10 +279,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 3,
+        "h": 2,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 9
       },
       "id": 15,
       "options": {
@@ -305,103 +305,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_shape_concentration_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_shape_concentration_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "quote_shape_concentration_penalty",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "id": 16,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_size_target_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_size_target_penalty'] IS NOT NULL\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "quote_size_target_penalty",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 3,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "id": 17,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_spread_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','quote_spread_penalty'] IS NOT NULL\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "quote_spread_penalty",
+      "title": "Expected total reward (mean MC delta wealth)",
       "type": "timeseries"
     },
     {
@@ -419,10 +327,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 11
       },
       "id": 18,
       "options": {
@@ -449,7 +357,7 @@
           "refId": "A"
         }
       ],
-      "title": "Objective contribution fractions — final (|weighted term| share)",
+      "title": "Objective contribution fractions \u2014 final (|weighted term| share)",
       "type": "timeseries"
     },
     {
@@ -465,10 +373,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 13
       },
       "id": 30,
       "options": {
@@ -495,7 +403,7 @@
           "refId": "A"
         }
       ],
-      "title": "Action pipeline — order count by stage",
+      "title": "Action pipeline \u2014 order count by stage",
       "type": "timeseries"
     },
     {
@@ -511,10 +419,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 15
       },
       "id": 31,
       "options": {
@@ -557,10 +465,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 17
       },
       "id": 32,
       "options": {
@@ -674,6 +582,6 @@
   "timezone": "browser",
   "title": "MM controller diagnostics (PostgreSQL)",
   "uid": "mm-controller-diagnostics-pg",
-  "version": 2,
+  "version": 1,
   "weekStart": ""
 }

@@ -692,8 +692,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.quote_depth_target_for_spread is cumulative base-asset quantity for the spread penalty "
-            "(see MPC _action_spread_at_depth); not exchange lot size."
+            "quote_size_target_per_side sets baseline quote capacity and default inventory target "
+            "via target_inventory_multiplier when target_inventory is unset"
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -708,55 +708,22 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "cancel orphans, place unmatched targets"
             ),
         },
-        "optimizer_risk_terms": {
-            "pnl_volatility_penalty_weight": "penalty on Std(total_reward) across MC paths",
-            "pnl_cvar_penalty_weight": (
-                "penalty on soft lower-tail CVaR of total_reward (softmax weights on worst paths)"
+        "optimizer_objective": {
+            "return_risk_aversion_beta": (
+                "risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i))) over MC path returns"
             ),
-            "cvar_softmax_temperature": (
-                "softmax temperature for soft CVaR; higher focuses more on worst MC samples"
+            "inventory_target_penalty_weight": (
+                "lambda_inv weight on normalized quadratic inventory capacity penalty"
             ),
-        },
-        "optimizer_inventory_and_depth_targets": {
-            "target_inventory": "desired inventory level for inventory_target_penalty_weight (base units)",
+            "target_inventory": (
+                "optional explicit inventory target in base units; "
+                "defaults to target_inventory_multiplier * quote_size_target_per_side"
+            ),
+            "target_inventory_multiplier": (
+                "multiplier applied to quote_size_target_per_side when target_inventory is unset"
+            ),
             "quote_size_target_per_side": (
-                "target cumulative quoted depth over [0, spread_max] per side (base units)"
-            ),
-            "quote_spread_target_bps": (
-                "target quoted width in basis points: (ask_depth_vwap - bid_depth_vwap) / mid * 10^4 "
-                "at quote_depth_target_for_spread on the controller curve (not market BBO)"
-            ),
-            "quote_depth_target_for_spread": (
-                "cumulative base depth per side for bid/ask depth VWAP when computing spread_bps"
-            ),
-            "objective_normalize_components": (
-                "when true, objective terms are dimensionless (PnL/CVaR/vol vs wealth, "
-                "inventory vs scale, size/spread vs targets, concentration in [0,1])"
-            ),
-            "quote_size_softmax_L": (
-                "when true with positive quote_size_target_per_side, enables structural reparameterization: "
-                "x0 in [0,spread_max], D_eff(spread_max)=Q_total; with quote_spread_target and "
-                "quote_spread_ref_depth also enforces spread-center upper bound and depth at centers"
-            ),
-            "quote_spread_target": (
-                "maximum allowed bid+ask distance between first sigmoid centers (quote units); "
-                "actual sum is scale*target with scale=sigmoid(u_scale) in (0,1); "
-                "requires quote_spread_ref_depth and n_components>=2 when set with quote_size_softmax_L"
-            ),
-            "quote_spread_ref_depth": (
-                "minimum executable cumulative depth at each side's first center (base units)"
-            ),
-            "quote_spread_k_epsilon": (
-                "sharpness floor for spread-leg k1; smaller epsilon forces sharper step at center"
-            ),
-            "hard_project_quote_size_target": (
-                "when true with positive quote_size_target_per_side, rescales depth parameters toward that target "
-                "(ignored when quote_size_softmax_L is true)"
-            ),
-            "quote_size_min_per_side": "lower bound on cumulative quoted depth per side (base units)",
-            "quote_size_max_per_side": "upper bound on cumulative quoted depth per side (base units)",
-            "hard_project_quote_size_range": (
-                "when true with min and/or max set, clamps projected depth into the configured range"
+                "baseline quote capacity per side (base units); also drives default inventory target"
             ),
         },
         "float_bridge": {
