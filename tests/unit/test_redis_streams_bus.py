@@ -23,7 +23,7 @@ async def test_redis_streams_bus_preserves_typed_local_delivery(monkeypatch) -> 
     snapshot = PrivateStateSnapshot(
         exchange="wallex",
         timestamp_ms=1,
-        balances={"BTC": Balance("wallex", "BTC", 1.0, 0.0, 1)},
+        balances={"BTC": Balance("wallex", "BTC", 1.0, 0.0, 1.0, 1)},
         open_orders={},
     )
 
@@ -48,7 +48,7 @@ async def test_redis_streams_bus_skips_zero_balance_stream_writes() -> None:
     bus = RedisStreamsBus(stream_prefix="test")
     bus._redis = FakeRedis()
     queue = bus.subscribe_queue("private:state:wallex:balances")
-    balance = Balance("wallex", "ZERO", 0.0, 0.0, 1)
+    balance = Balance("wallex", "ZERO", 0.0, 0.0, 0.0, 1)
 
     await bus.publish("private:state:wallex:balances", balance)
 

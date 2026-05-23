@@ -14,6 +14,7 @@ if msgspec is not None:
         asset: str
         free: float
         locked: float
+        total: float
         timestamp_ms: int
 
 
@@ -45,6 +46,7 @@ else:
         asset: str
         free: float
         locked: float
+        total: float
         timestamp_ms: int
 
 

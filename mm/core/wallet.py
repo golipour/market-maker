@@ -1,0 +1,220 @@
+"""Wallet leg totals: available (free), locked, exchange total, and open-order collateral."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Mapping
+
+from mm.core.models.execution import Order
+from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
+
+_BALANCE_EPS = 1e-12
+
+
+def make_balance(
+    exchange: str,
+    asset: str,
+    free: float,
+    locked: float,
+    timestamp_ms: int,
+    *,
+    total: float | None = None,
+) -> Balance:
+    """Build a ``Balance`` with ``total`` defaulting to ``free + locked``."""
+
+    free_f = float(free)
+    locked_f = float(locked)
+    total_f = float(total) if total is not None else free_f + locked_f
+    return Balance(
+        exchange=exchange,
+        asset=asset,
+        free=free_f,
+        locked=locked_f,
+        total=total_f,
+        timestamp_ms=int(timestamp_ms),
+    )
+
+
+def reported_wallet_total(balance: Balance | None) -> float:
+    """Exchange-reported total for one asset leg (prefers ``total``, else ``free + locked``)."""
+
+    if balance is None:
+        return 0.0
+    total = float(balance.total)
+    if total > _BALANCE_EPS:
+        return total
+    return float(balance.free) + float(balance.locked)
+
+
+def order_collateral_from_open_orders(
+    open_orders: Mapping[str, OpenOrder] | None,
+    *,
+    trading_symbol: str,
+    base_asset: str,
+    quote_asset: str,
+) -> tuple[float, float]:
+    """
+    Collateral reserved in resting orders when the venue does not reflect it in ``locked``.
+
+    Sell orders lock base ``remaining_qty``; buy orders lock quote ``price * remaining_qty``.
+    """
+
+    if not open_orders:
+        return 0.0, 0.0
+    symbol = trading_symbol.strip()
+    base_key = base_asset.strip()
+    quote_key = quote_asset.strip()
+    base_locked = 0.0
+    quote_locked = 0.0
+    for open_order in open_orders.values():
+        order = open_order.order
+        if symbol and order.symbol.strip() != symbol:
+            continue
+        remaining = max(0.0, float(open_order.remaining_qty))
+        if remaining <= 0.0:
+            continue
+        side = str(order.side).lower().strip()
+        if side == "sell":
+            base_locked += remaining
+        elif side == "buy":
+            quote_locked += max(0.0, float(order.price)) * remaining
+    return base_locked, quote_locked
+
+
+def effective_leg_total(
+    balance: Balance | None,
+    *,
+    order_locked: float = 0.0,
+) -> float:
+    """
+    Total economic balance for one asset leg.
+
+    Uses exchange ``total`` when present, includes wallet ``locked``, and lifts collateral
+    implied by open orders when ``locked`` under-reports resting orders.
+    """
+
+    order_locked_f = max(0.0, float(order_locked))
+    if balance is None:
+        return order_locked_f
+    free = float(balance.free)
+    locked = float(balance.locked)
+    wallet_total = reported_wallet_total(balance)
+    return max(wallet_total, free + max(locked, order_locked_f))
+
+
+@dataclass(frozen=True, slots=True)
+class WalletLegView:
+    asset: str
+    free: float
+    locked: float
+    total: float
+    order_locked: float
+    effective_total: float
+
+    def as_dict(self) -> dict[str, float | str]:
+        return {
+            "asset": self.asset,
+            "free": self.free,
+            "locked": self.locked,
+            "total": self.total,
+            "order_locked": self.order_locked,
+            "effective_total": self.effective_total,
+        }
+
+
+def wallet_leg_view(
+    balance: Balance | None,
+    *,
+    asset: str,
+    order_locked: float = 0.0,
+) -> WalletLegView:
+    free = float(balance.free) if balance is not None else 0.0
+    locked = float(balance.locked) if balance is not None else 0.0
+    total = reported_wallet_total(balance)
+    effective = effective_leg_total(balance, order_locked=order_locked)
+    return WalletLegView(
+        asset=asset,
+        free=free,
+        locked=locked,
+        total=total,
+        order_locked=max(0.0, float(order_locked)),
+        effective_total=effective,
+    )
+
+
+def inventory_cash_from_snapshot(
+    snapshot: PrivateStateSnapshot | None,
+    base_asset: str,
+    quote_asset: str,
+    *,
+    trading_symbol: str = "",
+) -> tuple[float, float]:
+    """Primary economic inventory (base) and cash (quote) using total wallet legs."""
+
+    if snapshot is None:
+        return 0.0, 0.0
+    base_order_locked, quote_order_locked = order_collateral_from_open_orders(
+        snapshot.open_orders,
+        trading_symbol=trading_symbol,
+        base_asset=base_asset,
+        quote_asset=quote_asset,
+    )
+    base = snapshot.balances.get(base_asset)
+    quote = snapshot.balances.get(quote_asset)
+    inventory = effective_leg_total(base, order_locked=base_order_locked)
+    cash = effective_leg_total(quote, order_locked=quote_order_locked)
+    return float(inventory), float(cash)
+
+
+def wallet_pair_from_snapshot(
+    snapshot: PrivateStateSnapshot | None,
+    base_asset: str,
+    quote_asset: str,
+    *,
+    trading_symbol: str = "",
+) -> tuple[WalletLegView, WalletLegView]:
+    if snapshot is None:
+        empty_base = wallet_leg_view(None, asset=base_asset)
+        empty_quote = wallet_leg_view(None, asset=quote_asset)
+        return empty_base, empty_quote
+    base_order_locked, quote_order_locked = order_collateral_from_open_orders(
+        snapshot.open_orders,
+        trading_symbol=trading_symbol,
+        base_asset=base_asset,
+        quote_asset=quote_asset,
+    )
+    base = wallet_leg_view(
+        snapshot.balances.get(base_asset),
+        asset=base_asset,
+        order_locked=base_order_locked,
+    )
+    quote = wallet_leg_view(
+        snapshot.balances.get(quote_asset),
+        asset=quote_asset,
+        order_locked=quote_order_locked,
+    )
+    return base, quote
+
+
+def portfolio_wealth(
+    cash: float,
+    inventory: float,
+    mark_price: float,
+    *,
+    min_wealth: float = 1e-8,
+) -> float:
+    """Mark portfolio wealth for return normalization: cash + inventory * mark."""
+
+    wealth = float(cash) + float(inventory) * float(mark_price)
+    return max(float(min_wealth), wealth)
+
+
+def balance_event_payload(balance: Balance) -> dict[str, float | str | int]:
+    return {
+        "exchange": balance.exchange,
+        "asset": balance.asset,
+        "free": float(balance.free),
+        "locked": float(balance.locked),
+        "total": float(balance.total),
+        "timestamp_ms": int(balance.timestamp_ms),
+    }

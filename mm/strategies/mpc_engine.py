@@ -21,6 +21,7 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
+from mm.core.wallet import inventory_cash_from_snapshot
 from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
@@ -353,7 +354,12 @@ def _state_from_frame(
         for level in frame.primary.orderbook.asks
         if (spread := level.price - primary_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
-    primary_inventory, primary_cash = _inventory_cash(frame.primary_private, binding.primary.base_asset, binding.primary.quote_asset)
+    primary_inventory, primary_cash = inventory_cash_from_snapshot(
+        frame.primary_private,
+        binding.primary.base_asset,
+        binding.primary.quote_asset,
+        trading_symbol=binding.primary.symbol,
+    )
     buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.primary.orderbook, target_depth=vwap_depth)
     hedge_buy_vwap = hedge_sell_vwap = None
     hedge_inventory = 0.0
@@ -366,10 +372,11 @@ def _state_from_frame(
         except ValueError:
             hedge_buy_vwap = hedge_sell_vwap = None
     if frame.hedge_private is not None and binding.hedge is not None:
-        hedge_inventory, hedge_cash = _inventory_cash(
+        hedge_inventory, hedge_cash = inventory_cash_from_snapshot(
             frame.hedge_private,
             binding.hedge.base_asset,
             binding.hedge.quote_asset,
+            trading_symbol=binding.hedge.symbol,
         )
     return State(
         mid=primary_mid,
@@ -510,17 +517,6 @@ def _raw_depth_at_zero(sigmoid_action: Any, side: str) -> float:
         return float(raw(0.0))
     except Exception:
         return 0.0
-
-
-def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
-    """Inventory/cash from wallet balances."""
-    if snapshot is None:
-        return 0.0, 0.0
-    base = snapshot.balances.get(base_asset)
-    quote = snapshot.balances.get(quote_asset)
-    inventory = (base.free + base.locked) if base is not None else 0.0
-    cash = (quote.free + quote.locked) if quote is not None else 0.0
-    return float(inventory), float(cash)
 
 
 def order_summary_dict(order: Order) -> dict[str, Any]:

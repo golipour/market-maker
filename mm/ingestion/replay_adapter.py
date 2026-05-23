@@ -8,6 +8,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
+from mm.core.wallet import make_balance
 from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.persistence.replay import read_envelopes
 
@@ -69,12 +70,13 @@ def private_snapshot_from_payload(payload: Any) -> PrivateStateSnapshot | None:
             if isinstance(row, Balance):
                 balances[akey] = row
             elif isinstance(row, dict):
-                balances[akey] = Balance(
+                balances[akey] = make_balance(
                     exchange=str(row.get("exchange", ex)),
                     asset=str(row.get("asset", akey)),
                     free=float(row.get("free", 0.0)),
                     locked=float(row.get("locked", 0.0)),
                     timestamp_ms=int(row.get("timestamp_ms", ts)),
+                    total=float(row["total"]) if row.get("total") is not None else None,
                 )
         return PrivateStateSnapshot(
             exchange=ex,

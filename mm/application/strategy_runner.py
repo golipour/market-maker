@@ -116,6 +116,7 @@ class StrategyRunner:
             trading_state=trading_state,
             frame_step=self._frame_step,
             run_id=self.run_id,
+            binding=self.binding,
         )
         approved: list[Action] = []
 

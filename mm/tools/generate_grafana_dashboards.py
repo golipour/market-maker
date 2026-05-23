@@ -460,7 +460,8 @@ def portfolio_dashboard() -> dict[str, Any]:
             1,
             0,
             "**Source:** `ControllerDiagnostics.state` and `risk.limits`.\n\n"
-            "Inventory/cash from diagnostics frames; limits from configured hard risk.",
+            "Inventory/cash and wallet legs use **effective totals** (exchange total, wallet locked, "
+            "and open-order collateral when locked under-reports). Limits from configured hard risk.",
         ),
         _panel_sql_timeseries(
             10,
@@ -497,23 +498,51 @@ ORDER BY 1""",
             20,
             "Marked portfolio value (approx)",
             f"""SELECT e.ts AS "time", 'primary_marked' AS metric,
-  ((e.payload #>> '{{state,primary_cash}}')::double precision
-   + (e.payload #>> '{{state,primary_inventory}}')::double precision
-     * COALESCE((e.payload #>> '{{state,primary_sell_vwap}}')::double precision, 0)) AS value
+  COALESCE((e.payload #>> '{{state,primary_wealth}}')::double precision,
+    (e.payload #>> '{{state,primary_cash}}')::double precision
+     + (e.payload #>> '{{state,primary_inventory}}')::double precision
+       * COALESCE((e.payload #>> '{{state,primary_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'hedge_marked',
-  ((e.payload #>> '{{state,hedge_cash}}')::double precision
-   + (e.payload #>> '{{state,hedge_inventory}}')::double precision
-     * COALESCE((e.payload #>> '{{state,hedge_sell_vwap}}')::double precision, 0)) AS value
+  COALESCE((e.payload #>> '{{state,hedge_wealth}}')::double precision,
+    (e.payload #>> '{{state,hedge_cash}}')::double precision
+     + (e.payload #>> '{{state,hedge_inventory}}')::double precision
+       * COALESCE((e.payload #>> '{{state,hedge_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
         ),
         _panel_sql_timeseries(
-            13,
+            15,
             28,
+            "Primary quote wallet (free / locked / total / effective)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['state','primary_quote_wallet', leg])::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+) AS legs(metric, leg)
+WHERE {diag_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            16,
+            36,
+            "Primary base wallet (free / locked / total / effective)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['state','primary_base_wallet', leg])::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+) AS legs(metric, leg)
+WHERE {diag_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            13,
+            44,
             "Inventory limits (primary)",
             f"""SELECT e.ts AS "time", lim AS metric, v AS value
 FROM mm_events e
@@ -527,7 +556,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             14,
-            36,
+            52,
             "Combined inventory exposure",
             f"""SELECT e.ts AS "time", 'primary_plus_hedge' AS metric,
   ((e.payload #>> '{{state,primary_inventory}}')::double precision

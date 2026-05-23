@@ -15,6 +15,7 @@ from typing import Any
 from mm.core.models.execution import Action, Fill
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
+from mm.core.wallet import balance_event_payload
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.capabilities import get_exchange_capabilities
@@ -178,11 +179,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
     if isinstance(event, Balance):
         return {
             "type": "Balance",
-            "exchange": event.exchange,
-            "asset": event.asset,
-            "free": event.free,
-            "locked": event.locked,
-            "timestamp_ms": event.timestamp_ms,
+            **balance_event_payload(event),
         }
     if isinstance(event, OpenOrder):
         instrument = build_instrument_spec(event.order.exchange, event.order.symbol)

@@ -45,6 +45,7 @@ class FakePrivateStateAdapter(AbstractPrivateStateAdapter):
                     asset="BTC",
                     free=1.0,
                     locked=0.25,
+                    total=1.25,
                     timestamp_ms=1000,
                 )
             },
@@ -189,9 +190,9 @@ def test_rest_private_state_normalize_balances_normalizes_irt_aliases() -> None:
 
 def test_private_state_store_apply_balance_pops_zero() -> None:
     store = PrivateStateStore("wallex")
-    store.apply_balance(Balance("wallex", "BTC", 1.0, 0.0, 1))
+    store.apply_balance(Balance("wallex", "BTC", 1.0, 0.0, 1.0, 1))
     assert "BTC" in store.snapshot().balances
-    store.apply_balance(Balance("wallex", "BTC", 0.0, 0.0, 2))
+    store.apply_balance(Balance("wallex", "BTC", 0.0, 0.0, 0.0, 2))
     assert "BTC" not in store.snapshot().balances
 
 
@@ -233,11 +234,11 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
 
 def test_private_state_store_keeps_economy_assets_explicit_zero() -> None:
     store = PrivateStateStore("nobitex", trading_symbol="BTC_IRT")
-    store.apply_balance(Balance("nobitex", "BTC", 1.0, 0.0, 1))
+    store.apply_balance(Balance("nobitex", "BTC", 1.0, 0.0, 1.0, 1))
     snap = store.snapshot()
     assert snap.balances["BTC"].free == pytest.approx(1.0)
     assert snap.balances["IRT"].free == pytest.approx(0.0)
-    store.apply_balance(Balance("nobitex", "IRT", 0.0, 0.0, 2))
+    store.apply_balance(Balance("nobitex", "IRT", 0.0, 0.0, 0.0, 2))
     snap2 = store.snapshot()
     assert "IRT" in snap2.balances
     assert snap2.balances["IRT"].free == pytest.approx(0.0)

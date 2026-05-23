@@ -17,6 +17,7 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.risk_limits import HedgeVenueRiskLimits
 from mm.hedging.models import HedgeExecutionDiagnostic, HedgeIntent
 from mm.hedging.risk import validate_hedge_market_order
+from mm.core.wallet import inventory_cash_from_snapshot
 from mm.runtime.config import HedgingRuntimeConfig, MarketMakerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
 
@@ -38,16 +39,6 @@ def _hedge_side_for_primary_fill(primary_side: str) -> str:
 
 def _fill_dedupe_key(fill: Fill) -> str:
     return f"{fill.exchange_order_id}:{fill.timestamp_ms}:{fill.qty}:{fill.side}"
-
-
-def _inventory_cash(snapshot: PrivateStateSnapshot | None, base_asset: str, quote_asset: str) -> tuple[float, float]:
-    if snapshot is None:
-        return 0.0, 0.0
-    base = snapshot.balances.get(base_asset)
-    quote = snapshot.balances.get(quote_asset)
-    inventory = (base.free + base.locked) if base is not None else 0.0
-    cash = (quote.free + quote.locked) if quote is not None else 0.0
-    return float(inventory), float(cash)
 
 
 @dataclass(slots=True)
@@ -237,10 +228,11 @@ class HedgeExecutionService:
             client_order_id=f"hedge-{uuid.uuid4().hex[:16]}",
         )
 
-        hedge_inventory, hedge_cash = _inventory_cash(
+        hedge_inventory, hedge_cash = inventory_cash_from_snapshot(
             self._latest_hedge_private,
             hedge_spec.base_asset,
             hedge_spec.quote_asset,
+            trading_symbol=hedge_spec.symbol,
         )
         ok, reason = validate_hedge_market_order(
             hedge_order,

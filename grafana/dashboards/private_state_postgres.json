@@ -291,11 +291,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  exchange AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'USDT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
+          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision) AS value,\n  (exchange || ' free') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'USDT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nUNION ALL\nSELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'locked')::double precision) AS value,\n  (exchange || ' locked') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'USDT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nUNION ALL\nSELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG(COALESCE(NULLIF((payload->>'total')::double precision, 0),\n    (payload->>'free')::double precision + (payload->>'locked')::double precision)) AS value,\n  (exchange || ' total') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'USDT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "USDT balance (free + locked) — stable / inventory leg",
+      "title": "USDT balance (free / locked / total) — stable / inventory leg",
       "type": "timeseries"
     },
     {
@@ -334,11 +334,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  exchange AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'IRT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
+          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision) AS value,\n  (exchange || ' free') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'IRT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nUNION ALL\nSELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'locked')::double precision) AS value,\n  (exchange || ' locked') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'IRT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nUNION ALL\nSELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG(COALESCE(NULLIF((payload->>'total')::double precision, 0),\n    (payload->>'free')::double precision + (payload->>'locked')::double precision)) AS value,\n  (exchange || ' total') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' = 'IRT'\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "IRT balance (free + locked) — quote / cash leg",
+      "title": "IRT balance (free / locked / total) — quote / cash leg",
       "type": "timeseries"
     },
     {
@@ -377,7 +377,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG((payload->>'free')::double precision + (payload->>'locked')::double precision) AS value,\n  (exchange || ' ' || (payload->>'asset')) AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' IN (${asset:sqlstring})\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange, (payload->>'asset')\nORDER BY 1",
+          "rawSql": "SELECT\n  $__timeGroupAlias(ts, $__interval),\n  AVG(COALESCE(NULLIF((payload->>'total')::double precision, 0),\n    (payload->>'free')::double precision + (payload->>'locked')::double precision)) AS value,\n  (exchange || ' ' || (payload->>'asset') || ' total') AS metric\nFROM mm_events\nWHERE topic LIKE 'private:state:%:balances'\n  AND exchange IN (${exchange:sqlstring})\n  AND payload->>'asset' IN (${asset:sqlstring})\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange, (payload->>'asset')\nORDER BY 1",
           "refId": "A"
         }
       ],

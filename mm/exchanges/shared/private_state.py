@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from mm.core.asset_aliases import canonical_asset_code
+from mm.core.wallet import make_balance
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.instrument import split_symbol
 from mm.core.models.execution import Fill, Order
@@ -62,7 +63,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
     async def balance_stream(self) -> AsyncIterator[Balance]:
         """Not used for REST polling: ``PrivateStateReconciler`` applies full snapshots on a single timer."""
         if False:  # pragma: no cover
-            yield Balance(self.exchange, "_", 0.0, 0.0, 0)
+            yield make_balance(self.exchange, "_", 0.0, 0.0, 0)
 
     async def open_order_stream(self) -> AsyncIterator[OpenOrder]:
         """Not used for REST polling: ``PrivateStateReconciler`` applies full snapshots on a single timer."""
@@ -116,17 +117,17 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             locked = _safe_float(bucket.get("locked", 0.0))
             total = _safe_float(bucket.get("total", free + locked))
             locked = max(0.0, locked)
-            if abs(free) + abs(locked) <= _BALANCE_TOTAL_EPS:
+            if max(abs(free), abs(locked), abs(total)) <= _BALANCE_TOTAL_EPS:
                 if asset_key not in economy:
                     continue
-            balances[asset_key] = Balance(
-                exchange=self.exchange,
-                asset=asset_key,
-                free=free,
-                locked=locked,
-                timestamp_ms=timestamp_ms,
+            balances[asset_key] = make_balance(
+                self.exchange,
+                asset_key,
+                free,
+                locked,
+                timestamp_ms,
+                total=total,
             )
-            _ = total
         _inject_missing_economy_balances(self.exchange, balances, economy, timestamp_ms)
         return balances
 
@@ -251,11 +252,12 @@ def _inject_missing_economy_balances(
 ) -> None:
     for asset in economy:
         if asset not in balances:
-            balances[asset] = Balance(
+            balances[asset] = make_balance(
                 exchange=exchange,
                 asset=asset,
                 free=0.0,
                 locked=0.0,
                 timestamp_ms=timestamp_ms,
+                total=0.0,
             )
 

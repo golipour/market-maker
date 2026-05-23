@@ -116,16 +116,23 @@ class RedisStreamsBus(AbstractEventBus):
         return f"{self.stream_prefix}.{normalized}"
 
 
+def _balance_is_zero(balance: Balance) -> bool:
+    total = float(balance.total)
+    if abs(total) > 1e-12:
+        return False
+    return float(balance.free) == 0.0 and float(balance.locked) == 0.0
+
+
 def _compact_stream_event(topic: str, event: Any) -> Any | None:
     if topic.endswith(":balances") and isinstance(event, Balance):
-        if float(event.free) == 0.0 and float(event.locked) == 0.0:
+        if _balance_is_zero(event):
             return None
         return event
     if topic.endswith(":snapshot") and isinstance(event, PrivateStateSnapshot):
         balances = {
             asset: balance
             for asset, balance in event.balances.items()
-            if float(balance.free) != 0.0 or float(balance.locked) != 0.0
+            if not _balance_is_zero(balance)
         }
         return {
             "type": "PrivateStateSnapshotSummary",

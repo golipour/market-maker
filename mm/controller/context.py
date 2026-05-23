@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mm.core.models.execution import Action, TradingState
+from mm.core.models.instrument import SymbolBinding
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.models import (
@@ -21,6 +22,7 @@ from mm.diagnostics.models import (
     orderbook_snapshot_payload,
 )
 from mm.execution.plan import ActionPipelineReport, ActionStageReport, ExecutionSyncReport
+from mm.core.wallet import inventory_cash_from_snapshot, portfolio_wealth, wallet_pair_from_snapshot
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 
 
@@ -62,6 +64,7 @@ class DecisionContext:
     trading_state: TradingState
     frame_step: int
     run_id: str = ""
+    binding: SymbolBinding | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     latency_ms: float = 0.0
 
@@ -191,21 +194,77 @@ class DecisionContext:
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:
+        primary_base, primary_quote = self._primary_wallet_legs()
+        hedge_base, hedge_quote = self._hedge_wallet_legs()
         if decision is not None:
-            return StateDiagnostics(
-                mid=decision.mid,
-                primary_inventory=decision.inventory,
-                primary_cash=decision.cash,
-                hedge_inventory=0.0,
-                hedge_cash=0.0,
-                primary_buy_vwap=decision.primary_buy_vwap,
-                primary_sell_vwap=decision.primary_sell_vwap,
-                hedge_buy_vwap=decision.hedge_buy_vwap,
-                hedge_sell_vwap=decision.hedge_sell_vwap,
-            )
+            primary_inventory = decision.inventory
+            primary_cash = decision.cash
+            mid = decision.mid
+            primary_buy_vwap = decision.primary_buy_vwap
+            primary_sell_vwap = decision.primary_sell_vwap
+            hedge_buy_vwap = decision.hedge_buy_vwap
+            hedge_sell_vwap = decision.hedge_sell_vwap
+        else:
+            primary_inventory = self.trading_state.inventory
+            primary_cash = self.trading_state.cash
+            mid = 0.0
+            primary_buy_vwap = 0.0
+            primary_sell_vwap = 0.0
+            hedge_buy_vwap = None
+            hedge_sell_vwap = None
+        hedge_inventory, hedge_cash = self._hedge_inventory_cash()
+        primary_wealth = portfolio_wealth(primary_cash, primary_inventory, primary_sell_vwap or mid)
+        hedge_wealth: float | None = None
+        if hedge_sell_vwap is not None:
+            hedge_wealth = portfolio_wealth(hedge_cash, hedge_inventory, hedge_sell_vwap)
         return StateDiagnostics(
-            primary_inventory=self.trading_state.inventory,
-            primary_cash=self.trading_state.cash,
+            mid=mid,
+            primary_inventory=primary_inventory,
+            primary_cash=primary_cash,
+            hedge_inventory=hedge_inventory,
+            hedge_cash=hedge_cash,
+            primary_buy_vwap=primary_buy_vwap,
+            primary_sell_vwap=primary_sell_vwap,
+            hedge_buy_vwap=hedge_buy_vwap,
+            hedge_sell_vwap=hedge_sell_vwap,
+            primary_base_wallet=primary_base.as_dict(),
+            primary_quote_wallet=primary_quote.as_dict(),
+            hedge_base_wallet=hedge_base.as_dict(),
+            hedge_quote_wallet=hedge_quote.as_dict(),
+            primary_wealth=primary_wealth,
+            hedge_wealth=hedge_wealth,
+        )
+
+    def _primary_wallet_legs(self):
+        if self.binding is None:
+            empty = wallet_pair_from_snapshot(None, "", "")
+            return empty[0], empty[1]
+        return wallet_pair_from_snapshot(
+            self.frame.primary_private,
+            self.binding.primary.base_asset,
+            self.binding.primary.quote_asset,
+            trading_symbol=self.binding.primary.symbol,
+        )
+
+    def _hedge_wallet_legs(self):
+        if self.binding is None or self.binding.hedge is None:
+            empty = wallet_pair_from_snapshot(None, "", "")
+            return empty[0], empty[1]
+        return wallet_pair_from_snapshot(
+            self.frame.hedge_private,
+            self.binding.hedge.base_asset,
+            self.binding.hedge.quote_asset,
+            trading_symbol=self.binding.hedge.symbol,
+        )
+
+    def _hedge_inventory_cash(self) -> tuple[float, float]:
+        if self.binding is None or self.binding.hedge is None:
+            return 0.0, 0.0
+        return inventory_cash_from_snapshot(
+            self.frame.hedge_private,
+            self.binding.hedge.base_asset,
+            self.binding.hedge.quote_asset,
+            trading_symbol=self.binding.hedge.symbol,
         )
 
     def _model_scores(self, decision: StrategyDecision | None) -> dict[str, ModelScore]:

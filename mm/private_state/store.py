@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from mm.core.wallet import make_balance, reported_wallet_total
 from mm.core.asset_aliases import canonical_asset_code
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import split_symbol
@@ -37,12 +38,13 @@ class PrivateStateStore:
     def _ensure_economy_balances(self, balances: dict[str, Balance], *, timestamp_ms: int) -> None:
         for asset in self._economy_assets:
             if asset not in balances:
-                balances[asset] = Balance(
-                    exchange=self.exchange,
-                    asset=asset,
-                    free=0.0,
-                    locked=0.0,
-                    timestamp_ms=timestamp_ms,
+                balances[asset] = make_balance(
+                    self.exchange,
+                    asset,
+                    0.0,
+                    0.0,
+                    timestamp_ms,
+                    total=0.0,
                 )
 
     def apply_snapshot(self, snapshot: PrivateStateSnapshot) -> PrivateStateSnapshot:
@@ -55,24 +57,27 @@ class PrivateStateStore:
     def apply_balance(self, balance: Balance) -> PrivateStateSnapshot:
         self._timestamp_ms = max(self._timestamp_ms, int(balance.timestamp_ms))
         key = canonical_asset_code(balance.asset)
-        if abs(float(balance.free)) + abs(float(balance.locked)) <= _BALANCE_TOTAL_EPS:
+        total = reported_wallet_total(balance)
+        if total <= _BALANCE_TOTAL_EPS:
             if key in self._economy_assets:
-                self._balances[key] = Balance(
-                    exchange=self.exchange,
-                    asset=key,
-                    free=0.0,
-                    locked=0.0,
-                    timestamp_ms=int(balance.timestamp_ms),
+                self._balances[key] = make_balance(
+                    self.exchange,
+                    key,
+                    0.0,
+                    0.0,
+                    int(balance.timestamp_ms),
+                    total=0.0,
                 )
             else:
                 self._balances.pop(key, None)
         else:
-            self._balances[key] = Balance(
-                exchange=self.exchange,
-                asset=key,
-                free=float(balance.free),
-                locked=float(balance.locked),
-                timestamp_ms=int(balance.timestamp_ms),
+            self._balances[key] = make_balance(
+                self.exchange,
+                key,
+                float(balance.free),
+                float(balance.locked),
+                int(balance.timestamp_ms),
+                total=float(balance.total),
             )
         self._ensure_economy_balances(self._balances, timestamp_ms=self._timestamp_ms)
         return self.snapshot()

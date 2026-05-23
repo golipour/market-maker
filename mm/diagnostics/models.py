@@ -104,6 +104,12 @@ class StateDiagnostics:
     primary_sell_vwap: float = 0.0
     hedge_buy_vwap: float | None = None
     hedge_sell_vwap: float | None = None
+    primary_base_wallet: dict[str, Any] = field(default_factory=dict)
+    primary_quote_wallet: dict[str, Any] = field(default_factory=dict)
+    hedge_base_wallet: dict[str, Any] = field(default_factory=dict)
+    hedge_quote_wallet: dict[str, Any] = field(default_factory=dict)
+    primary_wealth: float = 0.0
+    hedge_wealth: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +195,12 @@ def _state_payload(state: StateDiagnostics) -> dict[str, Any]:
         "primary_sell_vwap": state.primary_sell_vwap,
         "hedge_buy_vwap": state.hedge_buy_vwap,
         "hedge_sell_vwap": state.hedge_sell_vwap,
+        "primary_base_wallet": dict(state.primary_base_wallet),
+        "primary_quote_wallet": dict(state.primary_quote_wallet),
+        "hedge_base_wallet": dict(state.hedge_base_wallet),
+        "hedge_quote_wallet": dict(state.hedge_quote_wallet),
+        "primary_wealth": state.primary_wealth,
+        "hedge_wealth": state.hedge_wealth,
     }
 
 

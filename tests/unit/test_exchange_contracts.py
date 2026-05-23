@@ -41,7 +41,14 @@ def test_unsupported_exchange_fails_before_runtime_wiring():
 
 
 def test_private_state_models_use_float_domain_values():
-    balance = Balance(exchange="nobitex", asset="BTC", free=1.25, locked=0.5, timestamp_ms=1000)
+    balance = Balance(
+        exchange="nobitex",
+        asset="BTC",
+        free=1.25,
+        locked=0.5,
+        total=1.75,
+        timestamp_ms=1000,
+    )
     snapshot = PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={"BTC": balance})
 
     assert snapshot.balances["BTC"].free == 1.25

@@ -129,8 +129,8 @@ async def test_primary_fill_places_hedge_market_order_when_enabled() -> None:
         exchange="wallex",
         timestamp_ms=1_000,
         balances={
-            "USDT": Balance("wallex", "USDT", 100.0, 0.0, 1_000),
-            "IRT": Balance("wallex", "IRT", 500_000_000.0, 0.0, 1_000),
+            "USDT": Balance("wallex", "USDT", 100.0, 0.0, 100.0, 1_000),
+            "IRT": Balance("wallex", "IRT", 500_000_000.0, 0.0, 500_000_000.0, 1_000),
         },
     )
 

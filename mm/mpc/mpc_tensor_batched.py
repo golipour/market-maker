@@ -19,7 +19,8 @@ from mm.mpc.l_param import (
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
 )
-from mm.mpc.mpc_state import State, Action, OrderbookRelative, SigmoidMixtureAction
+from mm.mpc.mpc_state import State
+from mm.core.wallet import portfolio_wealth
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
     effective_depth_bid_tensor,
@@ -583,7 +584,7 @@ class MonteCarloMPCTensorBatched:
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
         sell_vwap_0 = float(state.sell_vwap)
-        wealth_0 = max(1e-8, cash_0 + inv_0 * sell_vwap_0)
+        wealth_0 = portfolio_wealth(cash_0, inv_0, sell_vwap_0)
         obj_inventory_target = self._resolve_inventory_target()
         obj_inventory_scale = self._resolve_inventory_scale()
 
