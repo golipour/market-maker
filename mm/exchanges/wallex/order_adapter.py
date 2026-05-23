@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
+from mm.exchanges.shared.execution import map_in_thread_pool
 from mm.exchanges.shared.order_response import order_id_from_response
 from mm.exchanges.wallex import private_rest
 
@@ -14,14 +14,25 @@ from mm.exchanges.wallex import private_rest
 class WallexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
     """Limit place/cancel via ``mm.exchanges.wallex.private_rest``."""
 
-    def __init__(self, symbol: str, *, api_token: str | None):
+    def __init__(
+        self,
+        symbol: str,
+        *,
+        api_token: str | None,
+        max_concurrency: int = 8,
+    ):
         self.symbol = symbol
         self.api_token = api_token
+        self._max_concurrency = max(1, int(max_concurrency))
 
     async def place_orders(self, orders: list[Order]) -> list[str]:
+        responses = await map_in_thread_pool(
+            self._place_one,
+            orders,
+            max_concurrency=self._max_concurrency,
+        )
         out_ids: list[str] = []
-        for order in orders:
-            response = await asyncio.to_thread(self._place_one, order)
+        for response in responses:
             oid = order_id_from_response(response)
             if not response.get("success", False) or not oid:
                 message = response.get("message") or response.get("msg") or response
@@ -30,8 +41,12 @@ class WallexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
         return out_ids
 
     async def cancel_orders(self, order_ids: list[str]) -> None:
-        for order_id in order_ids:
-            response = await asyncio.to_thread(self._cancel_one, order_id)
+        responses = await map_in_thread_pool(
+            self._cancel_one,
+            order_ids,
+            max_concurrency=self._max_concurrency,
+        )
+        for response in responses:
             if not response.get("success", False):
                 message = response.get("message") or response.get("msg") or response
                 raise RuntimeError(f"cancel order failed on wallex: {message}")

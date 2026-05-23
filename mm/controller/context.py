@@ -75,10 +75,16 @@ class DecisionContext:
     risk_exposure_before: dict[str, float] = field(default_factory=dict)
     risk_exposure_after: dict[str, float] = field(default_factory=dict)
     action_pipeline_report: ActionPipelineReport | None = None
+    extra_warnings: list[str] = field(default_factory=list)
 
     def record_controller_error(self, exc: BaseException) -> None:
         self.controller_error = f"{type(exc).__name__}: {exc}"
         self.decision = None
+
+    def record_warning(self, message: str) -> None:
+        text = message.strip()
+        if text:
+            self.extra_warnings.append(text)
 
     def record_decision(self, decision: StrategyDecision) -> None:
         self.decision = decision
@@ -141,6 +147,7 @@ class DecisionContext:
         warnings: list[str] = []
         if self.controller_error:
             warnings.append(self.controller_error)
+        warnings.extend(self.extra_warnings)
 
         frame_diag = FrameDiagnostics(
             hedge_status=self.frame.hedge_status,

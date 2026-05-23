@@ -7,8 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from mm.application.action_routing import route_actions_to_managers, route_actions_to_managers_with_report
-from mm.execution.plan import stage_report_with_rejections
+from mm.application.action_routing import route_actions_to_managers_with_report
+from mm.execution.plan import ExecutionSyncReport, stage_report_with_rejections
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
 from mm.bus.base import AbstractEventBus
@@ -19,6 +19,7 @@ from mm.core.models.execution import Action
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
+from mm.observability import log_event
 from mm.risk.engine import RuntimeRiskEngine
 from mm.runtime.config import ControllerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
@@ -36,7 +37,7 @@ class StrategyRunner:
     3. ``MpcStrategyEngine.decide`` on the clean frame.
     4. ``AbstractRiskEngine.validate_frame`` on the proposed action.
     5. Publish decision + approved action; ``route_actions_to_managers`` when allowed.
-    6. Publish ``ControllerDiagnostics`` (one per frame, including controller errors).
+    6. Publish ``ControllerDiagnostics`` once per frame in ``finally`` (including errors).
     """
 
     config: ControllerRuntimeConfig
@@ -76,7 +77,20 @@ class StrategyRunner:
         try:
             while not self._stopped.is_set():
                 frame = await self.frame_queue.get()
-                await self.on_frame(frame)
+                try:
+                    await self.on_frame(frame)
+                except Exception as exc:
+                    log_event(
+                        "strategy_runner_frame_error",
+                        {
+                            "actor_id": self.config.actor_id,
+                            "exchange": frame.primary.exchange,
+                            "symbol": frame.primary.symbol,
+                            "t_end_ms": frame.primary.t_end_ms,
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    )
         except asyncio.CancelledError:
             raise
 
@@ -103,112 +117,161 @@ class StrategyRunner:
             frame_step=self._frame_step,
             run_id=self.run_id,
         )
+        approved: list[Action] = []
 
         try:
-            decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
-            ctx.record_decision(decision)
-        except Exception as exc:
-            ctx.record_controller_error(exc)
-            await self._publish(
-                self.config.normalized_decisions_topic,
-                {
-                    "type": "ControllerError",
-                    "actor_id": self.config.actor_id,
-                    "exchange": frame.primary.exchange,
-                    "symbol": frame.primary.symbol,
-                    "t_end_ms": frame.primary.t_end_ms,
-                    "error": type(exc).__name__,
-                    "message": str(exc),
-                },
+            try:
+                decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
+                ctx.record_decision(decision)
+            except Exception as exc:
+                ctx.record_controller_error(exc)
+                await self._publish(
+                    self.config.normalized_decisions_topic,
+                    {
+                        "type": "ControllerError",
+                        "actor_id": self.config.actor_id,
+                        "exchange": frame.primary.exchange,
+                        "symbol": frame.primary.symbol,
+                        "t_end_ms": frame.primary.t_end_ms,
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+                return approved
+
+            proposed = [decision.action]
+            risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
+            approved = risk_result.approved_list
+            approved_orders = tuple(order for action in approved for order in action.orders)
+            ctx.record_risk_result(
+                proposed,
+                approved,
+                rejection_counts=dict(risk_result.rejection_counts),
+                exposure_before=dict(risk_result.exposure_before),
+                exposure_after=dict(risk_result.exposure_after),
             )
+            ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
+            if len(approved) < len(proposed) and self.bus is not None:
+                await self.bus.publish(
+                    "risk:events",
+                    {
+                        "type": "RiskActionsFiltered",
+                        "actor_id": self.config.actor_id,
+                        "exchange": frame.primary.exchange,
+                        "symbol": frame.primary.symbol,
+                        "t_end_ms": frame.primary.t_end_ms,
+                        "proposed_actions": len(proposed),
+                        "approved_actions": len(approved),
+                    },
+                )
+
+            observe_only_control = (
+                self.control_plane is not None and self.control_plane.state.observe_only
+            )
+            executed = self._should_execute_live(approved)
+            blocked = execution_blocked_reasons(
+                config=self.config,
+                frame_step=self._frame_step,
+                approved=approved,
+                observe_only_control=observe_only_control,
+                primary_manager_present=self.order_managers.get(self._last_primary_exchange) is not None,
+            )
+            if executed:
+                blocked = []
+            ctx.record_execution_gates(executed=executed, blocked_reasons=blocked)
+
+            executed_orders: tuple[dict, ...] = ()
+            if executed:
+                executed_orders = tuple(
+                    order_summary_dict(order)
+                    for action in approved
+                    for order in action.orders
+                )
+
+            await self._publish_decision(decision, executed_orders=executed_orders)
+            for action in approved:
+                await self._publish(self.config.normalized_action_topic, action)
+
+            execution_report: ExecutionSyncReport | None = None
+            sync_executed = executed
+            if approved:
+                if executed:
+                    execution_report = await self._sync_with_timeout(approved, ctx)
+                    if execution_report is None:
+                        sync_executed = False
+                else:
+                    primary_manager = self.order_managers.get(self._last_primary_exchange)
+                    preview = getattr(primary_manager, "preview_placement", None) if primary_manager else None
+                    if preview is not None:
+                        execution_report = preview(approved)
+            if execution_report is not None:
+                ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
+
+            if self.bus is not None:
+                await self.bus.publish(
+                    f"strategy:journal:{self.config.actor_id}",
+                    {
+                        "actor_id": self.config.actor_id,
+                        "exchange": frame.primary.exchange,
+                        "symbol": frame.primary.symbol,
+                        "t_end_ms": frame.primary.t_end_ms,
+                        "hedge_status": frame.hedge_status,
+                        "proposed_actions": len(proposed),
+                        "approved_actions": len(approved),
+                        "executed": sync_executed,
+                        "latency_ms": (time.monotonic_ns() - t0) / 1_000_000,
+                    },
+                )
+            return approved
+        finally:
             ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
-            return []
 
-        proposed = [decision.action]
-        risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
-        approved = risk_result.approved_list
-        approved_orders = tuple(order for action in approved for order in action.orders)
-        ctx.record_risk_result(
-            proposed,
-            approved,
-            rejection_counts=dict(risk_result.rejection_counts),
-            exposure_before=dict(risk_result.exposure_before),
-            exposure_after=dict(risk_result.exposure_after),
-        )
-        ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
-        if len(approved) < len(proposed) and self.bus is not None:
-            await self.bus.publish(
-                "risk:events",
-                {
-                    "type": "RiskActionsFiltered",
-                    "actor_id": self.config.actor_id,
-                    "exchange": frame.primary.exchange,
-                    "symbol": frame.primary.symbol,
-                    "t_end_ms": frame.primary.t_end_ms,
-                    "proposed_actions": len(proposed),
-                    "approved_actions": len(approved),
-                },
+    async def _sync_with_timeout(
+        self,
+        approved: list[Action],
+        ctx: DecisionContext,
+    ) -> ExecutionSyncReport | None:
+        timeout_ms = int(self.config.placement_timeout_ms)
+        try:
+            coro = route_actions_to_managers_with_report(approved, self.order_managers)
+            if timeout_ms <= 0:
+                return await coro
+            return await asyncio.wait_for(coro, timeout=timeout_ms / 1000.0)
+        except asyncio.TimeoutError:
+            message = f"ExecutionSyncTimeout: exceeded {timeout_ms}ms placement_timeout_ms"
+            ctx.record_warning(message)
+            ctx.record_execution_gates(
+                executed=False,
+                blocked_reasons=[*ctx.blocked_reasons, "execution_sync_timeout"],
             )
-
-        observe_only_control = (
-            self.control_plane is not None and self.control_plane.state.observe_only
-        )
-        executed = self._should_execute_live(approved)
-        blocked = execution_blocked_reasons(
-            config=self.config,
-            frame_step=self._frame_step,
-            approved=approved,
-            observe_only_control=observe_only_control,
-            primary_manager_present=self.order_managers.get(self._last_primary_exchange) is not None,
-        )
-        if executed:
-            blocked = []
-        ctx.record_execution_gates(executed=executed, blocked_reasons=blocked)
-
-        executed_orders: tuple[dict, ...] = ()
-        if executed:
-            executed_orders = tuple(
-                order_summary_dict(order)
-                for action in approved
-                for order in action.orders
+            await self._publish_execution_error(ctx, message)
+            return None
+        except Exception as exc:
+            message = f"ExecutionSyncError: {type(exc).__name__}: {exc}"
+            ctx.record_warning(message)
+            ctx.record_execution_gates(
+                executed=False,
+                blocked_reasons=[*ctx.blocked_reasons, "execution_sync_error"],
             )
+            await self._publish_execution_error(ctx, message)
+            return None
 
-        await self._publish_decision(decision, executed_orders=executed_orders)
-        for action in approved:
-            await self._publish(self.config.normalized_action_topic, action)
-
-        execution_report = None
-        if approved:
-            if executed:
-                execution_report = await route_actions_to_managers_with_report(approved, self.order_managers)
-            else:
-                primary_manager = self.order_managers.get(self._last_primary_exchange)
-                preview = getattr(primary_manager, "preview_placement", None) if primary_manager else None
-                if preview is not None:
-                    execution_report = preview(approved)
-        if execution_report is not None:
-            ctx.apply_execution_to_pipeline(execution_report, executed=executed)
-
-        ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
-        await self._publish_diagnostics(ctx)
-
-        if self.bus is not None:
-            await self.bus.publish(
-                f"strategy:journal:{self.config.actor_id}",
-                {
-                    "actor_id": self.config.actor_id,
-                    "exchange": frame.primary.exchange,
-                    "symbol": frame.primary.symbol,
-                    "t_end_ms": frame.primary.t_end_ms,
-                    "hedge_status": frame.hedge_status,
-                    "proposed_actions": len(proposed),
-                    "approved_actions": len(approved),
-                    "executed": executed,
-                    "latency_ms": ctx.latency_ms,
-                },
-            )
-        return approved
+    async def _publish_execution_error(self, ctx: DecisionContext, message: str) -> None:
+        if self.bus is None:
+            return
+        await self.bus.publish(
+            "execution:errors",
+            {
+                "type": "ExecutionSyncFailed",
+                "actor_id": self.config.actor_id,
+                "exchange": ctx.frame.primary.exchange,
+                "symbol": ctx.frame.primary.symbol,
+                "t_end_ms": ctx.frame.t_end_ms,
+                "frame_step": ctx.frame_step,
+                "message": message,
+            },
+        )
 
     def _sync_control_plane_to_risk(self) -> None:
         if self.control_plane is None:

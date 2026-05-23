@@ -85,6 +85,22 @@ async def test_persistence_enabled_with_database_url_builds_postgres_writer(monk
     assert [type(daemon).__name__ for daemon in runtime.persistence_daemons] == ["PostgresEventWriter"]
 
 
+def test_controller_placement_settings_from_mapping() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
+            "controller": {
+                "enabled": True,
+                "placement_timeout_ms": 2500,
+                "placement_max_concurrency": 4,
+            },
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.placement_timeout_ms == 2500
+    assert config.controller.placement_max_concurrency == 4
+
+
 def test_controller_action_start_after_steps_from_mapping() -> None:
     config = runtime_config_from_mapping(
         {

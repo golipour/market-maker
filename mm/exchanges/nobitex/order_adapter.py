@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
 from mm.exchanges.nobitex import private_rest
+from mm.exchanges.shared.execution import map_in_thread_pool
 from mm.exchanges.shared.order_response import order_id_from_response
 
 
 class NobitexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
     """Limit place/cancel via ``mm.exchanges.nobitex.private_rest``."""
 
-    def __init__(self, symbol: str, *, api_token: str | None):
+    def __init__(
+        self,
+        symbol: str,
+        *,
+        api_token: str | None,
+        max_concurrency: int = 8,
+    ):
         self.symbol = symbol
         self.api_token = api_token
+        self._max_concurrency = max(1, int(max_concurrency))
 
     async def place_orders(self, orders: list[Order]) -> list[str]:
+        responses = await map_in_thread_pool(
+            self._place_one,
+            orders,
+            max_concurrency=self._max_concurrency,
+        )
         out_ids: list[str] = []
-        for order in orders:
-            response = await asyncio.to_thread(self._place_one, order)
+        for response in responses:
             oid = order_id_from_response(response)
             status = str(response.get("status", response.get("state", "")) or "").lower()
             if not oid or status in {"failed", "error", "rejected"}:
@@ -31,8 +42,12 @@ class NobitexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
         return out_ids
 
     async def cancel_orders(self, order_ids: list[str]) -> None:
-        for order_id in order_ids:
-            response = await asyncio.to_thread(self._cancel_one, order_id)
+        responses = await map_in_thread_pool(
+            self._cancel_one,
+            order_ids,
+            max_concurrency=self._max_concurrency,
+        )
+        for response in responses:
             status = str(response.get("status", response.get("state", "")) or "").lower()
             if status in {"failed", "error", "rejected"}:
                 message = response.get("message") or response.get("msg") or response

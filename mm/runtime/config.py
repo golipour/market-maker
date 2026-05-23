@@ -255,6 +255,10 @@ class ControllerRuntimeConfig:
     observe_only: bool = True
     # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
     action_start_after_steps: int = 0
+    # Max wall time for live order sync per frame; keeps diagnostics cadence within interval_ms.
+    placement_timeout_ms: int = 3000
+    # Max concurrent REST place/cancel calls per exchange adapter batch.
+    placement_max_concurrency: int = 8
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
     diagnostics_topic: str | None = None
@@ -534,6 +538,8 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         actor_id=str(payload.get("actor_id", "mpc-controller")),
         observe_only=bool(payload.get("observe_only", True)),
         action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
+        placement_timeout_ms=max(0, int(payload.get("placement_timeout_ms", 3000))),
+        placement_max_concurrency=max(1, int(payload.get("placement_max_concurrency", 8))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
         diagnostics_topic=(
@@ -663,6 +669,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "actor_id": config.actor_id,
         "observe_only": config.observe_only,
         "action_start_after_steps": config.action_start_after_steps,
+        "placement_timeout_ms": config.placement_timeout_ms,
+        "placement_max_concurrency": config.placement_max_concurrency,
         "decisions_topic": config.normalized_decisions_topic,
         "action_topic": config.normalized_action_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),

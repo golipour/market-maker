@@ -180,13 +180,23 @@ def select_order_command_adapter(
     symbol: str,
     *,
     api_token: str | None,
+    placement_max_concurrency: int = 8,
 ) -> OrderCommandAdapterSelection:
     exchange_key = exchange.lower().strip()
     capabilities = resolve_order_command_transport(exchange_key)
+    max_concurrency = max(1, int(placement_max_concurrency))
     if exchange_key == "nobitex":
-        adapter = NobitexRestOrderCommandAdapter(symbol, api_token=api_token)
+        adapter = NobitexRestOrderCommandAdapter(
+            symbol,
+            api_token=api_token,
+            max_concurrency=max_concurrency,
+        )
     elif exchange_key == "wallex":
-        adapter = WallexRestOrderCommandAdapter(symbol, api_token=api_token)
+        adapter = WallexRestOrderCommandAdapter(
+            symbol,
+            api_token=api_token,
+            max_concurrency=max_concurrency,
+        )
     else:
         raise ValueError(f"unsupported exchange for REST order commands: {exchange_key!r}")
     return OrderCommandAdapterSelection(

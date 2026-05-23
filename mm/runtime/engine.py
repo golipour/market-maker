@@ -196,10 +196,14 @@ async def build_runtime_components(
             hedge_private_queue = snapshot_queue
 
         if private_config.enable_execution:
+            placement_max_concurrency = 8
+            if config.controller is not None:
+                placement_max_concurrency = config.controller.placement_max_concurrency
             order_selection = select_order_command_adapter(
                 source.normalized_exchange(),
                 source.symbol,
                 api_token=api_token,
+                placement_max_concurrency=placement_max_concurrency,
             )
             order_command_selections[source.role] = order_selection
             manager = order_managers.get(source.normalized_exchange())

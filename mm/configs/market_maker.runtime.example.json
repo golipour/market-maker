@@ -82,6 +82,8 @@
     "enabled": true,
     "observe_only": false,
     "action_start_after_steps": 10,
+    "placement_timeout_ms": 3000,
+    "placement_max_concurrency": 8,
     "actor_id": "mpc-controller",
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
