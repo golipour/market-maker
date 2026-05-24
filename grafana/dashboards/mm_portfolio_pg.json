@@ -571,7 +571,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['risk','exposure_' || stage, key])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['before','after']) AS stage\nCROSS JOIN (\n  VALUES ('consolidated_base_inventory'), ('consolidated_quote_wealth')\n) AS keys(key)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['risk','exposure_' || stage, key] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage || '_' || key AS metric,\n  (e.payload #>> exposure_path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('before', 'consolidated_base_inventory'),\n    ('before', 'consolidated_quote_wealth'),\n    ('after', 'consolidated_base_inventory'),\n    ('after', 'consolidated_quote_wealth')\n) AS legs(stage, key)\nCROSS JOIN LATERAL (\n  SELECT ARRAY['risk', 'exposure_' || stage, key] AS exposure_path\n) AS paths\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> exposure_path IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],

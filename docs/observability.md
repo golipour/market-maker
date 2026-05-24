@@ -104,8 +104,8 @@ Grafana provisioning:
 | UID / file | Purpose |
 |------------|---------|
 | `mm-controller-diagnostics-pg` | Optimizer objective, joint inventory penalties, MC return/reward, joint expected fills (`ControllerDiagnostics`) |
-| `mm-local-action-pg` | Target-book execution funnel order counts by stage (`ControllerDiagnostics.action_pipeline`) |
-| `mm-local-action-rejections-pg` | Per-stage rejection reason counts (frame / target-book / rules / router taxonomy) |
+| `mm-local-action-pg` | Joint target book → net-delta risk → ledger execution plan (`ControllerDiagnostics` + `JointTargetBook`) |
+| `mm-local-action-rejections-pg` | Discretization, net-delta risk, rules gateway, and live-gate rejection reasons |
 | `mm-liquidity-sourcing-pg` | Frame sync readiness, venue execution gates, joint target books |
 | `mm-ledger-pg` | Ledger balances, locked/available collateral, live order counts, freshness |
 | `mm-strategy-model-params-pg` | Model params from decisions + NLL / skip reasons from diagnostics |

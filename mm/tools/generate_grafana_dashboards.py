@@ -230,18 +230,35 @@ ORDER BY 1""",
 
 _OPTIMIZER_OBJECTIVE_STAGES = "ARRAY['initial','final']"
 
-_ACTION_PIPELINE_STAGES: tuple[tuple[str, str], ...] = (
-    ("ladder", "ladder"),
-    ("venue_quantized", "venue_quantized"),
-    ("capped", "capped"),
-    ("target_book", "target_book"),
-    ("risk_approved_target", "risk_approved_target"),
-    ("planned_cancel", "planned_cancel"),
-    ("planned_place", "planned_place"),
-    ("rules_valid", "rules_valid"),
-    ("router_accepted", "router_accepted"),
-    ("kept", "kept"),
-)
+_DISCRETIZATION_STAGES = "ARRAY['ladder','venue_quantized','capped']"
+_EXECUTION_PLAN_STAGES = "ARRAY['kept','planned_cancel','planned_place','rules_valid','router_accepted']"
+
+
+def _panel_pipeline_order_counts(
+    id_: int,
+    y: int,
+    *,
+    title: str,
+    stages_sql: str,
+    diag_filter: str,
+    h: int = 6,
+    w: int = 24,
+    x: int = 0,
+) -> dict[str, Any]:
+    return _panel_sql_timeseries(
+        id_,
+        y,
+        title,
+        f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #> ARRAY['action_pipeline', stage, 'order_count'])::int::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({stages_sql}) AS stage
+WHERE {diag_filter}
+ORDER BY 1""",
+        h=h,
+        w=w,
+        x=x,
+    )
 
 
 def _panel_objective_component(
@@ -500,28 +517,6 @@ ORDER BY 1""",
     )
 
 
-def _panel_action_pipeline_stage(
-    id_: int,
-    y: int,
-    *,
-    stage: str,
-    title: str,
-    diag_filter: str,
-    h: int = 6,
-) -> dict[str, Any]:
-    return _panel_sql_timeseries(
-        id_,
-        y,
-        title,
-        f"""SELECT e.ts AS "time",
-  (e.payload #> ARRAY['action_pipeline','{stage}','order_count'])::int::double precision AS value
-FROM mm_events e
-WHERE {diag_filter}
-ORDER BY 1""",
-        h=h,
-    )
-
-
 def _panel_action_pipeline_rejections(
     id_: int,
     y: int,
@@ -555,36 +550,161 @@ ORDER BY 1""",
 
 
 def local_action_dashboard() -> dict[str, Any]:
+    """Execution pipeline: joint target books → risk → ledger diff → rules → router."""
+
     diag_filter = _controller_diagnostics_filter()
+    target_filter = _joint_target_book_filter()
 
     panels: list[dict[str, Any]] = [
         _panel_text(
             1,
             0,
-            "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline` on **Diagnostics topic**).\n\n"
-            "Target-book execution funnel: ladder → venue rules → target book → net-delta risk → "
-            "planned cancel/place → rules gateway → router accepted → kept.",
+            "**Sources:** `JointTargetBook`, `ControllerDiagnostics.action_pipeline`, `execution_gates`.\n\n"
+            "**Strategy:** MPC curves discretize into venue target books (local + optional global).\n"
+            "**Risk:** net-delta engine approves the joint target-book transition against the ledger.\n"
+            "**Execution:** per-venue planner diffs approved target vs ledger live orders → "
+            "keep / cancel / place → rules gateway → router.",
+        ),
+        _panel_row(2, 4, "Joint target books (strategy output)"),
+        _panel_sql_timeseries(
+            10,
+            5,
+            "Target book order count by venue",
+            f"""SELECT e.ts AS "time", 'local' AS metric,
+  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value
+FROM mm_events e
+WHERE {target_filter}
+UNION ALL
+SELECT e.ts, 'global',
+  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision
+FROM mm_events e
+WHERE {target_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            11,
+            5,
+            "Target book buy/sell qty by venue",
+            f"""SELECT e.ts AS "time",
+  books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,
+  SUM((books.ord->>'qty')::double precision) AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  SELECT 'local' AS venue, ord
+  FROM jsonb_array_elements(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)) AS ord
+  UNION ALL
+  SELECT 'global', ord
+  FROM jsonb_array_elements(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)) AS ord
+) AS books(venue, ord)
+WHERE {target_filter}
+GROUP BY 1, 2
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(3, 13, "Local curve discretization (MPC → orders)"),
+        _panel_pipeline_order_counts(
+            12,
+            14,
+            title="Discretization funnel (local venue only)",
+            stages_sql=_DISCRETIZATION_STAGES,
+            diag_filter=diag_filter,
+        ),
+        _panel_row(4, 22, "Net-delta risk"),
+        _panel_sql_timeseries(
+            13,
+            23,
+            "Risk-approved order count",
+            f"""SELECT e.ts AS "time", 'risk_approved' AS metric,
+  (e.payload #> ARRAY['action_pipeline','risk_approved_target','order_count'])::int::double precision AS value
+FROM mm_events e
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            14,
+            23,
+            "Risk approved flag",
+            f"""SELECT e.ts AS "time", 'approved' AS metric,
+  CASE WHEN COALESCE((e.payload->'risk'->>'approved')::boolean, true) THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(5, 31, "Execution plan (ledger diff, both venues merged)"),
+        _panel_pipeline_order_counts(
+            15,
+            32,
+            title="Planner output: keep / cancel / place / rules / router",
+            stages_sql=_EXECUTION_PLAN_STAGES,
+            diag_filter=diag_filter,
+            h=8,
+        ),
+        _panel_sql_timeseries(
+            16,
+            40,
+            "Execution plan notional (planned place buy/sell)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['action_pipeline','planned_place', field])::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES ('buy_notional', 'buy_notional'), ('sell_notional', 'sell_notional')
+) AS legs(metric, field)
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            17,
+            40,
+            "Orders kept vs canceled",
+            f"""SELECT e.ts AS "time", stage AS metric,
+  (e.payload #> ARRAY['action_pipeline', stage, 'order_count'])::int::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest(ARRAY['kept', 'planned_cancel']) AS stage
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(6, 48, "Live execution gates"),
+        _panel_sql_timeseries(
+            18,
+            49,
+            "Live sync executed",
+            f"""SELECT e.ts AS "time", 'executed' AS metric,
+  CASE WHEN COALESCE((e.payload->'execution_gates'->>'executed')::boolean, false) THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            19,
+            49,
+            "Venue gate live flags",
+            f"""SELECT e.ts AS "time", gate.key AS metric,
+  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload->'execution_gates'->'venue_gates', '{{}}'::jsonb)
+) AS gate(key, value)
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+            x=12,
         ),
     ]
 
-    y = 4
-    for index, (stage, title) in enumerate(_ACTION_PIPELINE_STAGES):
-        panels.append(
-            _panel_action_pipeline_stage(
-                10 + index,
-                y,
-                stage=stage,
-                title=f"Order count — {title}",
-                diag_filter=diag_filter,
-            )
-        )
-        y += 6
-
     return _dashboard(
-        title="MM local action (PostgreSQL)",
+        title="MM execution pipeline (PostgreSQL)",
         uid="mm-local-action-pg",
-        description="Local action pipeline funnel from ControllerDiagnostics in mm_events.",
-        tags=["market-maker", "postgres", "controller", "action"],
+        description="Joint target book → net-delta risk → ledger execution plan from ControllerDiagnostics.",
+        tags=["market-maker", "postgres", "controller", "execution", "target-book"],
         panels=panels,
         templating=_controller_diagnostics_templating(),
     )
@@ -593,47 +713,98 @@ def local_action_dashboard() -> dict[str, Any]:
 def local_action_funnel_rejections_dashboard() -> dict[str, Any]:
     diag_filter = _controller_diagnostics_filter()
 
+    risk_rejection_expr = (
+        "COALESCE("
+        "e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], "
+        "e.payload->'risk'->'rejection_counts'"
+        ")"
+    )
+
     panels: list[dict[str, Any]] = [
         _panel_text(
             1,
             0,
-            "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\n"
-            "One chart per funnel stage; each line is a rejection reason count at that stage. "
-            "Risk uses `action_pipeline.risk_approved_target` with fallback to top-level `risk.rejection_counts`.",
+            "**Source:** `ControllerDiagnostics` rejection counts and execution gate reasons.\n\n"
+            "**Discretization:** local curve → ladder → venue rules → capped.\n"
+            "**Target-book risk:** frame gates (stale data, warmup) and net-delta collateral limits.\n"
+            "**Rules gateway:** tick size, min qty, min notional.\n"
+            "**Live gates:** observe-only, venue paused, stale global market, etc.",
+        ),
+        _panel_row(2, 4, "Discretization rejections (local venue)"),
+        _panel_action_pipeline_rejections(
+            20,
+            5,
+            stage="venue_quantized",
+            title="Venue quantization rejections",
+            diag_filter=diag_filter,
+        ),
+        _panel_action_pipeline_rejections(
+            21,
+            11,
+            stage="capped",
+            title="Per-side cap rejections",
+            diag_filter=diag_filter,
+        ),
+        _panel_row(3, 17, "Target-book / net-delta risk rejections"),
+        _panel_action_pipeline_rejections(
+            22,
+            18,
+            stage="risk_approved_target",
+            title="Risk rejection counts",
+            diag_filter=diag_filter,
+            rejection_counts_json=risk_rejection_expr,
+            h=8,
+        ),
+        _panel_row(4, 26, "Exchange rules rejections"),
+        _panel_action_pipeline_rejections(
+            23,
+            27,
+            stage="rules_valid",
+            title="Rules gateway rejections",
+            diag_filter=diag_filter,
+            h=8,
+        ),
+        _panel_row(5, 35, "Live execution blocked reasons"),
+        _panel_sql_timeseries(
+            24,
+            36,
+            "Top-level blocked reasons (count per frame)",
+            f"""SELECT e.ts AS "time", reason AS metric, 1::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements_text(
+  COALESCE(e.payload->'execution_gates'->'blocked_reasons', '[]'::jsonb)
+) AS reason
+WHERE {diag_filter}
+ORDER BY 1""",
+            h=6,
+        ),
+        _panel_sql_table(
+            25,
+            42,
+            "Venue gate blocked reasons (latest frame)",
+            f"""SELECT gate.key AS exchange,
+  COALESCE(gate.value->>'role', '') AS role,
+  COALESCE(gate.value->>'live', '') AS live,
+  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)::text AS blocked_reasons
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload->'execution_gates'->'venue_gates', '{{}}'::jsonb)
+) AS gate(key, value)
+WHERE {diag_filter}
+ORDER BY e.ts DESC
+LIMIT 20""",
+            h=6,
         ),
     ]
 
-    y = 4
-    for index, (stage, title) in enumerate(_ACTION_PIPELINE_STAGES):
-        rejection_expr: str | None = None
-        if stage == "risk_approved_target":
-            rejection_expr = (
-                "COALESCE("
-                "e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], "
-                "e.payload->'risk'->'rejection_counts'"
-                ")"
-            )
-        panels.append(
-            _panel_action_pipeline_rejections(
-                20 + index,
-                y,
-                stage=stage,
-                title=f"Rejections — {title}",
-                diag_filter=diag_filter,
-                rejection_counts_json=rejection_expr,
-            )
-        )
-        y += 6
-
     return _dashboard(
-        title="MM local action funnel rejections (PostgreSQL)",
+        title="MM execution pipeline rejections (PostgreSQL)",
         uid="mm-local-action-rejections-pg",
-        description="Per-stage rejection reason counts from ControllerDiagnostics action_pipeline.",
-        tags=["market-maker", "postgres", "controller", "action", "rejections"],
+        description="Discretization, net-delta risk, rules, and live-gate rejection reasons.",
+        tags=["market-maker", "postgres", "controller", "execution", "rejections"],
         panels=panels,
         templating=_controller_diagnostics_templating(),
     )
-
 
 def portfolio_dashboard() -> dict[str, Any]:
     diag_filter = """

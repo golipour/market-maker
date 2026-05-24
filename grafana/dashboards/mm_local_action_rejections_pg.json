@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Per-stage rejection reason counts from ControllerDiagnostics action_pipeline.",
+  "description": "Discretization, net-delta risk, rules, and live-gate rejection reasons.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\nOne chart per funnel stage; each line is a rejection reason count at that stage. Risk uses `action_pipeline.risk_approved_target` with fallback to top-level `risk.rejection_counts`.",
+        "content": "**Source:** `ControllerDiagnostics` rejection counts and execution gate reasons.\n\n**Discretization:** local curve \u2192 ladder \u2192 venue rules \u2192 capped.\n**Target-book risk:** frame gates (stale data, warmup) and net-delta collateral limits.\n**Rules gateway:** tick size, min qty, min notional.\n**Live gates:** observe-only, venue paused, stale global market, etc.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -27,50 +27,17 @@
       "type": "text"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
+      "collapsed": false,
       "gridPos": {
-        "h": 6,
+        "h": 1,
         "w": 24,
         "x": 0,
         "y": 4
       },
-      "id": 20,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','ladder','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Rejections \u2014 ladder",
-      "type": "timeseries"
+      "id": 2,
+      "panels": [],
+      "title": "Discretization rejections (local venue)",
+      "type": "row"
     },
     {
       "datasource": {
@@ -88,9 +55,9 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 10
+        "y": 5
       },
-      "id": 21,
+      "id": 20,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -115,7 +82,7 @@
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 venue_quantized",
+      "title": "Venue quantization rejections",
       "type": "timeseries"
     },
     {
@@ -134,9 +101,9 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 11
       },
-      "id": 22,
+      "id": 21,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -161,8 +128,21 @@
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 capped",
+      "title": "Per-side cap rejections",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Target-book / net-delta risk rejections",
+      "type": "row"
     },
     {
       "datasource": {
@@ -177,58 +157,12 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
+        "h": 8,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 18
       },
-      "id": 23,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','target_book','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Rejections \u2014 target_book",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 28
-      },
-      "id": 24,
+      "id": 22,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -253,8 +187,21 @@
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 risk_approved_target",
+      "title": "Risk rejection counts",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Exchange rules rejections",
+      "type": "row"
     },
     {
       "datasource": {
@@ -269,104 +216,12 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
+        "h": 8,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 27
       },
-      "id": 25,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','planned_cancel','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Rejections \u2014 planned_cancel",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 40
-      },
-      "id": 26,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','planned_place','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Rejections \u2014 planned_place",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 4
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 46
-      },
-      "id": 27,
+      "id": 23,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -391,8 +246,21 @@
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 rules_valid",
+      "title": "Rules gateway rejections",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 5,
+      "panels": [],
+      "title": "Live execution blocked reasons",
+      "type": "row"
     },
     {
       "datasource": {
@@ -410,9 +278,9 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 36
       },
-      "id": 28,
+      "id": 24,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -433,11 +301,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", reason AS metric, 1::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_array_elements_text(\n  COALESCE(e.payload->'execution_gates'->'blocked_reasons', '[]'::jsonb)\n) AS reason\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 router_accepted",
+      "title": "Top-level blocked reasons (count per frame)",
       "type": "timeseries"
     },
     {
@@ -447,8 +315,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 4
+          "custom": {
+            "align": "auto"
+          }
         },
         "overrides": []
       },
@@ -456,19 +325,15 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 42
       },
-      "id": 29,
+      "id": 25,
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
+        "showHeader": true
       },
       "targets": [
         {
@@ -477,14 +342,14 @@
             "uid": "postgres-mm"
           },
           "editorMode": "code",
-          "format": "time_series",
+          "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','kept','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT gate.key AS exchange,\n  COALESCE(gate.value->>'role', '') AS role,\n  COALESCE(gate.value->>'live', '') AS live,\n  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)::text AS blocked_reasons\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload->'execution_gates'->'venue_gates', '{}'::jsonb)\n) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY e.ts DESC\nLIMIT 20",
           "refId": "A"
         }
       ],
-      "title": "Rejections \u2014 kept",
-      "type": "timeseries"
+      "title": "Venue gate blocked reasons (latest frame)",
+      "type": "table"
     }
   ],
   "refresh": "10s",
@@ -494,7 +359,7 @@
     "market-maker",
     "postgres",
     "controller",
-    "action",
+    "execution",
     "rejections"
   ],
   "templating": {
@@ -569,7 +434,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "MM local action funnel rejections (PostgreSQL)",
+  "title": "MM execution pipeline rejections (PostgreSQL)",
   "uid": "mm-local-action-rejections-pg",
   "version": 1,
   "weekStart": ""
