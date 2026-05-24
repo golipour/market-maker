@@ -9,6 +9,7 @@ import json
 import math
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from mm.core.order_constraints import (
@@ -122,7 +123,7 @@ class MpcStrategyEngine:
                 params_after=self._market_flow_model.get_params(),
                 updated=True,
             )
-        _update_residual_mid_price_model(self._price_model, self._previous_frame, frame)
+        _update_residual_price_model(self._price_model, self._previous_frame, frame)
         if self._price_model is not None and "price" in model_scores and hasattr(self._price_model, "get_params"):
             refresh_score_params_after(
                 model_scores,
@@ -400,46 +401,51 @@ def _update_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
     model.update(None, _market_flow_step_tuple(frame))
 
 
-def _update_residual_mid_price_model(
+def _update_residual_price_model(
     model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame
 ) -> None:
-    """EWMA on primary **mid** changes (``TorchResidualPriceModel`` side state); not orderbook VWAP."""
+    """EWMA on true primary VWAP residuals after market-flow-only book evolution."""
 
     if model is None or previous is None:
         return
-    try:
-        prev_mid = mid_from_orderbook(previous.primary.orderbook)
-        curr_mid = mid_from_orderbook(current.primary.orderbook)
-    except ValueError:
+    if not hasattr(model, "update"):
         return
-    delta = float(curr_mid - prev_mid)
-    gamma = float(getattr(model, "_gamma", 0.95))
-    gamma = max(1e-6, min(1.0, gamma))
-    alpha = 1.0 - gamma
-    sigma_min = float(getattr(model, "_sigma_min", 1e-6))
-    mu_buy = gamma * float(getattr(model, "_mu_buy", 0.0)) + alpha * delta
-    mu_sell = gamma * float(getattr(model, "_mu_sell", 0.0)) + alpha * delta
-    sigma2_buy = gamma * float(getattr(model, "_sigma2_buy", 1.0)) + alpha * (delta - mu_buy) ** 2
-    sigma2_sell = gamma * float(getattr(model, "_sigma2_sell", 1.0)) + alpha * (delta - mu_sell) ** 2
-    model._mu_buy = float(mu_buy)
-    model._mu_sell = float(mu_sell)
-    model._sigma2_buy = float(max(sigma_min * sigma_min, sigma2_buy))
-    model._sigma2_sell = float(max(sigma_min * sigma_min, sigma2_sell))
-    model._last_residual = delta
-    sigma_buy = math.sqrt(model._sigma2_buy)
-    sigma_sell = math.sqrt(model._sigma2_sell)
-    if hasattr(model, "mu_buy_hist"):
-        model.mu_buy_hist.append(float(mu_buy))
-    if hasattr(model, "mu_sell_hist"):
-        model.mu_sell_hist.append(float(mu_sell))
-    if hasattr(model, "sigma_buy_hist"):
-        model.sigma_buy_hist.append(float(sigma_buy))
-    if hasattr(model, "sigma_sell_hist"):
-        model.sigma_sell_hist.append(float(sigma_sell))
-    if hasattr(model, "residual_mu_hist"):
-        model.residual_mu_hist.append(float(0.5 * (mu_buy + mu_sell)))
-    if hasattr(model, "residual_sigma_hist"):
-        model.residual_sigma_hist.append(float(math.sqrt(0.5 * (sigma_buy * sigma_buy + sigma_sell * sigma_sell))))
+    prev_step = _price_model_step(previous.primary)
+    curr_step = _price_model_step(current.primary)
+    try:
+        model.update(prev_step, curr_step)
+    except (ValueError, ZeroDivisionError, TypeError):
+        return
+
+
+def _price_model_step(event: MarketEvent) -> tuple[Any, ...]:
+    """Tuple shape expected by ``TorchResidualPriceModel.update``."""
+
+    return (
+        event.t_end_ms,
+        _orderbook_with_mid(event),
+        event.buy_volume,
+        event.sell_volume,
+        0.0,
+        0.0,
+        0.0,
+        (),
+        (),
+        None,
+        None,
+        None,
+        None,
+        0.0,
+        0.0,
+    )
+
+
+def _orderbook_with_mid(event: MarketEvent) -> Any:
+    return SimpleNamespace(
+        bids=event.orderbook.bids,
+        asks=event.orderbook.asks,
+        mid=mid_from_orderbook(event.orderbook),
+    )
 
 
 def _continuous_action_depth_series(

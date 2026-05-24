@@ -56,6 +56,70 @@ def test_primary_mid_delta_skips_invalid_sigma() -> None:
     assert result.nll is None
 
 
+def test_strategy_price_model_update_uses_true_vwap_residuals() -> None:
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+    from mm.core.models.strategy import StrategyInputFrame
+    from mm.strategies.mpc_engine import _update_residual_price_model
+
+    prev_book = RawOrderbook(
+        exchange="nobitex",
+        symbol="USDT_IRT",
+        timestamp_ms=1000,
+        bids=(PriceLevel(99.0, 10.0),),
+        asks=(PriceLevel(101.0, 10.0),),
+        is_snapshot=True,
+    )
+    curr_book = RawOrderbook(
+        exchange="nobitex",
+        symbol="USDT_IRT",
+        timestamp_ms=2000,
+        bids=(PriceLevel(99.0, 10.0),),
+        asks=(PriceLevel(103.0, 10.0),),
+        is_snapshot=True,
+    )
+    previous = StrategyInputFrame(
+        primary=MarketEvent(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            interval_ms=1000,
+            t_start_ms=0,
+            t_end_ms=1000,
+            orderbook=prev_book,
+            trades=(),
+            buy_volume=0.0,
+            sell_volume=0.0,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=100.0,
+        )
+    )
+    current = StrategyInputFrame(
+        primary=MarketEvent(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            interval_ms=1000,
+            t_start_ms=1000,
+            t_end_ms=2000,
+            orderbook=curr_book,
+            trades=(),
+            buy_volume=5.0,
+            sell_volume=0.0,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=101.0,
+        )
+    )
+    model = TorchResidualPriceModel(residual_decay=0.5, residual_sigma=1.0, vwap_depth=1.0)
+
+    _update_residual_price_model(model, previous, current)
+
+    params = model.get_params()
+    assert params["mu_buy"] == pytest.approx(1.0)
+    assert params["mu_sell"] == pytest.approx(0.0)
+    assert model.computed_buy_price_hist[-1] == pytest.approx(101.0)
+    assert model.realized_buy_price_hist[-1] == pytest.approx(103.0)
+
+
 def test_hedge_vwap_delta_nll_deterministic() -> None:
     params = {
         "mu_delta_buy": 0.5,
