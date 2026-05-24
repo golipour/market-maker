@@ -67,6 +67,7 @@
       "strategy:actions",
       "strategy:decisions",
       "strategy:diagnostics:mpc-controller",
+      "strategy:target_books:mpc-controller",
       "execution:orders:nobitex",
       "execution:orders:wallex",
       "execution:state:nobitex",

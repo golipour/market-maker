@@ -331,7 +331,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_orders',\n  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.topic = '${target_books_topic}'\n  AND e.symbol = '${symbol}'\n  AND COALESCE(e.actor_id, e.payload->>'actor_id') = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_orders',\n  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.topic = '${target_books_topic}'\n  AND e.symbol = '${symbol}'\n  AND COALESCE(e.actor_id, e.payload->>'actor_id') = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -377,7 +377,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", COALESCE(e.payload->>'mode', 'unknown') AS metric,\n  CASE WHEN e.payload->>'mode' = 'liquidity_sourcing' THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", COALESCE(e.payload->>'mode', 'unknown') AS metric,\n  CASE WHEN e.payload->>'mode' = 'liquidity_sourcing' THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.topic = '${target_books_topic}'\n  AND e.symbol = '${symbol}'\n  AND COALESCE(e.actor_id, e.payload->>'actor_id') = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -423,7 +423,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,\n  SUM((books.ord->>'qty')::double precision) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  SELECT 'local' AS venue, ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)) AS ord\n  UNION ALL\n  SELECT 'global', ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)) AS ord\n) AS books(venue, ord)\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,\n  SUM((books.ord->>'qty')::double precision) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  SELECT 'local' AS venue, ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)) AS ord\n  UNION ALL\n  SELECT 'global', ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)) AS ord\n) AS books(venue, ord)\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.topic = '${target_books_topic}'\n  AND e.symbol = '${symbol}'\n  AND COALESCE(e.actor_id, e.payload->>'actor_id') = '${actor_id}'\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -491,6 +491,16 @@
         "label": "Diagnostics topic",
         "name": "diagnostics_topic",
         "query": "strategy:diagnostics:mpc-controller",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "label": "Target books topic",
+        "name": "target_books_topic",
+        "query": "strategy:target_books:mpc-controller",
         "type": "textbox"
       },
       {

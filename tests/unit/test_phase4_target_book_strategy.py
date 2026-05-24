@@ -188,7 +188,7 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
         lambda config, binding, **kwargs: _FakeController(),
     )
     monkeypatch.setattr("mm.strategies.mpc_engine.score_frame_models", lambda **kwargs: {})
-    monkeypatch.setattr("mm.strategies.mpc_engine._update_hedge_vwap_price_model", lambda *args: None)
+    monkeypatch.setattr("mm.strategies.mpc_engine._update_hedge_vwap_price_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("mm.strategies.mpc_engine._update_market_flow_model", lambda *args: None)
     monkeypatch.setattr("mm.strategies.mpc_engine._update_residual_price_model", lambda *args: None)
     monkeypatch.setattr(

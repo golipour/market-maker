@@ -174,6 +174,36 @@ def test_joint_optimizer_runs_with_consolidated_wealth() -> None:
     assert isinstance(joint._last_joint_action, JointSigmoidMixtureAction)
 
 
+def test_build_controller_uses_global_price_model_not_local_residual() -> None:
+    from mm.mpc.global_price_torch import GlobalGaussianPriceModel
+    from mm.runtime.config import (
+        ControllerRuntimeConfig,
+        LiquiditySourcingRuntimeConfig,
+        MarketDataSourceConfig,
+        MarketMakerRuntimeConfig,
+    )
+    from mm.strategies.mpc_engine import _build_controller
+
+    sourcing = LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing")
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
+        controller=ControllerRuntimeConfig(
+            enabled=True,
+            global_price_model={"kind": "legacy", "decay": 0.95},
+            price_model={"kind": "residual", "residual_decay": 0.95},
+            optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+        ),
+        liquidity_sourcing=sourcing,
+    )
+    controller = _build_controller(
+        runtime.controller,
+        runtime.binding,
+        liquidity_sourcing=sourcing,
+    )
+
+    assert isinstance(controller.global_price_model, GlobalGaussianPriceModel)
+
+
 def test_joint_optimizer_can_emit_nonzero_global_curve() -> None:
     state = _minimal_state(global_active=True)
     joint = _build_optimizer(liquidity_sourcing_enabled=True)

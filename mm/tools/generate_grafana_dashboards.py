@@ -250,7 +250,7 @@ def _panel_pipeline_order_counts(
         y,
         title,
         f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #> ARRAY['action_pipeline', stage, 'order_count'])::int::double precision AS value
+  COALESCE((e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision, 0) AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({stages_sql}) AS stage
 WHERE {diag_filter}
@@ -344,8 +344,9 @@ def _ledger_filter() -> str:
 def _joint_target_book_filter() -> str:
     return """
   e.event_type = 'JointTargetBook'
+  AND e.topic = '${target_books_topic}'
   AND e.symbol = '${symbol}'
-  AND e.actor_id = '${actor_id}'
+  AND COALESCE(e.actor_id, e.payload->>'actor_id') = '${actor_id}'
   AND $__timeFilter(e.ts)"""
 
 
@@ -381,6 +382,13 @@ def _controller_diagnostics_templating() -> list[dict[str, Any]]:
             "label": "Diagnostics topic",
             "name": "diagnostics_topic",
             "query": "strategy:diagnostics:mpc-controller",
+            "type": "textbox",
+        },
+        {
+            "current": {"text": "strategy:target_books:mpc-controller", "value": "strategy:target_books:mpc-controller"},
+            "label": "Target books topic",
+            "name": "target_books_topic",
+            "query": "strategy:target_books:mpc-controller",
             "type": "textbox",
         },
         {
@@ -559,11 +567,9 @@ def local_action_dashboard() -> dict[str, Any]:
         _panel_text(
             1,
             0,
-            "**Sources:** `JointTargetBook`, `ControllerDiagnostics.action_pipeline`, `execution_gates`.\n\n"
-            "**Strategy:** MPC curves discretize into venue target books (local + optional global).\n"
-            "**Risk:** net-delta engine approves the joint target-book transition against the ledger.\n"
-            "**Execution:** per-venue planner diffs approved target vs ledger live orders → "
-            "keep / cancel / place → rules gateway → router.",
+            "**Sources:** `JointTargetBook` on **Target books topic**, plus `ControllerDiagnostics.action_pipeline`.\n\n"
+            "If target-book charts are empty, verify **Target books topic** is in `persistence.topics` "
+            "and check **Controller warnings** for strategy errors (empty pipeline stages mean `decide()` failed).",
         ),
         _panel_row(2, 4, "Joint target books (strategy output)"),
         _panel_sql_timeseries(
@@ -603,21 +609,44 @@ ORDER BY 1""",
             w=12,
             x=12,
         ),
-        _panel_row(3, 13, "Local curve discretization (MPC → orders)"),
+        _panel_sql_timeseries(
+            20,
+            13,
+            "Target book order count (diagnostics fallback)",
+            f"""SELECT e.ts AS "time", 'target_book_total' AS metric,
+  COALESCE((e.payload #>> ARRAY['action_pipeline','target_book','order_count'])::double precision, 0) AS value
+FROM mm_events e
+WHERE {diag_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_table(
+            21,
+            21,
+            "Controller warnings (latest)",
+            f"""SELECT e.ts AS ts,
+  COALESCE(e.payload->'warnings'->>0, '') AS warning
+FROM mm_events e
+WHERE {diag_filter}
+  AND jsonb_array_length(COALESCE(e.payload->'warnings', '[]'::jsonb)) > 0
+ORDER BY e.ts DESC
+LIMIT 20""",
+            h=6,
+        ),
+        _panel_row(3, 27, "Local curve discretization (MPC → orders)"),
         _panel_pipeline_order_counts(
             12,
-            14,
+            28,
             title="Discretization funnel (local venue only)",
             stages_sql=_DISCRETIZATION_STAGES,
             diag_filter=diag_filter,
         ),
-        _panel_row(4, 22, "Net-delta risk"),
+        _panel_row(4, 36, "Net-delta risk"),
         _panel_sql_timeseries(
             13,
-            23,
+            37,
             "Risk-approved order count",
             f"""SELECT e.ts AS "time", 'risk_approved' AS metric,
-  (e.payload #> ARRAY['action_pipeline','risk_approved_target','order_count'])::int::double precision AS value
+  COALESCE((e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'])::double precision, 0) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -625,7 +654,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             14,
-            23,
+            37,
             "Risk approved flag",
             f"""SELECT e.ts AS "time", 'approved' AS metric,
   CASE WHEN COALESCE((e.payload->'risk'->>'approved')::boolean, true) THEN 1 ELSE 0 END::double precision AS value
@@ -635,10 +664,10 @@ ORDER BY 1""",
             w=12,
             x=12,
         ),
-        _panel_row(5, 31, "Execution plan (ledger diff, both venues merged)"),
+        _panel_row(5, 45, "Execution plan (ledger diff, both venues merged)"),
         _panel_pipeline_order_counts(
             15,
-            32,
+            46,
             title="Planner output: keep / cancel / place / rules / router",
             stages_sql=_EXECUTION_PLAN_STAGES,
             diag_filter=diag_filter,
@@ -663,7 +692,7 @@ ORDER BY 1""",
             40,
             "Orders kept vs canceled",
             f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #> ARRAY['action_pipeline', stage, 'order_count'])::int::double precision AS value
+  COALESCE((e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision, 0) AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['kept', 'planned_cancel']) AS stage
 WHERE {diag_filter}

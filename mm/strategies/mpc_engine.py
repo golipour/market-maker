@@ -125,7 +125,12 @@ class MpcStrategyEngine:
             price_kind=price_kind,
             global_price_kind=hedge_kind,
         )
-        _update_hedge_vwap_price_model(self._global_price_model, state)
+        _update_hedge_vwap_price_model(
+            self._global_price_model,
+            state,
+            previous=self._previous_frame,
+            current=frame,
+        )
         if (
             self._global_price_model is not None
             and "global_price" in model_scores
@@ -326,9 +331,9 @@ def _build_controller(
     reference_global_price_model = _build_global_price_model(config.global_price_model)
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
     global_flow_cfg = (config.optimizer or {}).get("global_market_flow_model") or config.market_flow_model
-    global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.price_model
+    global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.global_price_model
     global_flow_model = _build_market_flow_model(global_flow_cfg)
-    sourcing_global_price_model = _build_price_model(
+    sourcing_global_price_model = _build_sourcing_global_price_model(
         global_price_cfg,
         market_flow_model=global_flow_model,
         vwap_depth=config.vwap_depth,
@@ -388,6 +393,24 @@ def _build_price_model(
     return TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
 
 
+def _build_sourcing_global_price_model(
+    cfg: dict[str, Any] | None,
+    *,
+    market_flow_model: Any,
+    vwap_depth: float | None,
+) -> Any | None:
+    """Build the global price model used for liquidity-sourcing MPC and diagnostics."""
+
+    if not cfg:
+        return None
+    kind = str(cfg.get("kind", "legacy")).lower().strip()
+    if kind in ("none", "null", "disabled"):
+        return None
+    if kind == "residual":
+        return _build_price_model(cfg, market_flow_model=market_flow_model, vwap_depth=vwap_depth)
+    return _build_global_price_model(cfg)
+
+
 def _global_active_for_frame(
     frame: StrategyInputFrame,
     sourcing: LiquiditySourcingRuntimeConfig,
@@ -444,14 +467,43 @@ def _build_global_price_model(cfg: dict[str, Any] | None) -> Any:
     raise ValueError(f"unsupported global_price_model kind: {kind}")
 
 
-def _update_hedge_vwap_price_model(model: Any, state: State) -> None:
-    """Feed hedge Gaussian / delta models with VWAP refs already on ``State``."""
+def _update_hedge_vwap_price_model(
+    model: Any,
+    state: State,
+    *,
+    previous: StrategyInputFrame | None = None,
+    current: StrategyInputFrame | None = None,
+) -> None:
+    """Update the configured global price model from frame VWAP observations."""
 
     if model is None or not hasattr(model, "update"):
         return
-    if state.global_buy_vwap is None or state.global_sell_vwap is None:
+    if hasattr(model, "sample_deltas"):
+        if state.global_buy_vwap is None or state.global_sell_vwap is None:
+            return
+        model.update(float(state.global_buy_vwap), float(state.global_sell_vwap))
         return
-    model.update(float(state.global_buy_vwap), float(state.global_sell_vwap))
+    if previous is not None and current is not None:
+        _update_global_residual_price_model(model, previous, current)
+
+
+def _update_global_residual_price_model(
+    model: Any,
+    previous: StrategyInputFrame,
+    current: StrategyInputFrame,
+) -> None:
+    """EWMA on global VWAP residuals when the global model is ``TorchResidualPriceModel``."""
+
+    if previous.global_ is None or current.global_ is None:
+        return
+    if not hasattr(model, "update"):
+        return
+    prev_step = _price_model_step(previous.global_)
+    curr_step = _price_model_step(current.global_)
+    try:
+        model.update(prev_step, curr_step)
+    except (ValueError, ZeroDivisionError, TypeError):
+        return
 
 
 def _state_from_frame(

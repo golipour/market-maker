@@ -538,6 +538,16 @@
       },
       {
         "current": {
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "label": "Target books topic",
+        "name": "target_books_topic",
+        "query": "strategy:target_books:mpc-controller",
+        "type": "textbox"
+      },
+      {
+        "current": {
           "text": "10000",
           "value": "10000"
         },
