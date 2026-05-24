@@ -131,6 +131,147 @@ def joint_ledger_from_frame(
     )
 
 
+from mm.runtime.config import LiquiditySourcingRuntimeConfig
+
+
+def _reference_price_from_frame(
+    frame: StrategyInputFrame,
+    *,
+    reference_venue: str = "global",
+) -> float:
+    if reference_venue == "global" and frame.hedge is not None:
+        return float(frame.hedge.microprice)
+    return float(frame.primary.microprice)
+
+
+def _venue_private_ready(
+    ledger: VenueLedger | None,
+    *,
+    max_private_age_ms: int,
+    now_ms: int,
+) -> bool:
+    if ledger is None or ledger.last_snapshot_ms <= 0:
+        return False
+    if max_private_age_ms <= 0:
+        return True
+    age_ms = max(0, now_ms - int(ledger.last_snapshot_ms))
+    return age_ms <= max_private_age_ms
+
+
+def build_frame_sync_status(
+    frame: StrategyInputFrame,
+    *,
+    ledger: JointLedgerSnapshot | None,
+    binding: SymbolBinding,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig,
+    now_ms: int,
+    max_local_private_age_ms: int = 120_000,
+    max_global_private_age_ms: int = 120_000,
+) -> FrameSyncStatus:
+    """Compute runtime synchronization readiness for a joint strategy frame."""
+
+    has_global_venue = binding.hedge is not None
+    sourcing_active = (
+        liquidity_sourcing.enabled and liquidity_sourcing.mode == "liquidity_sourcing"
+    )
+    global_market_required = sourcing_active and has_global_venue
+
+    local_market_ready = True
+    if global_market_required:
+        global_market_ready = frame.hedge is not None and frame.hedge_status == "ready"
+    elif has_global_venue:
+        global_market_ready = frame.hedge_status in {"ready", "disabled", "missing", "stale"}
+    else:
+        global_market_ready = True
+
+    local_private_ready = _venue_private_ready(
+        ledger.local if ledger is not None else None,
+        max_private_age_ms=max_local_private_age_ms,
+        now_ms=now_ms,
+    )
+
+    if not has_global_venue:
+        global_private_ready = True
+    elif sourcing_active and liquidity_sourcing.require_global_private:
+        global_private_ready = _venue_private_ready(
+            ledger.global_ if ledger is not None else None,
+            max_private_age_ms=max_global_private_age_ms,
+            now_ms=now_ms,
+        )
+    elif sourcing_active:
+        global_ledger = ledger.global_ if ledger is not None else None
+        global_private_ready = (
+            global_ledger is None
+            or global_ledger.last_snapshot_ms <= 0
+            or _venue_private_ready(
+                global_ledger,
+                max_private_age_ms=max_global_private_age_ms,
+                now_ms=now_ms,
+            )
+        )
+    else:
+        global_private_ready = True
+
+    ledger_fresh = ledger.freshness.ledger_fresh if ledger is not None else False
+
+    return FrameSyncStatus(
+        local_market_ready=local_market_ready,
+        global_market_ready=global_market_ready,
+        local_private_ready=local_private_ready,
+        global_private_ready=global_private_ready,
+        ledger_fresh=ledger_fresh,
+        latency_skew_ms=frame.hedge_lag_ms,
+        hedge_status=frame.hedge_status,
+    )
+
+
+def joint_strategy_frame_from_legacy(
+    frame: StrategyInputFrame,
+    binding: SymbolBinding,
+    *,
+    ledger: JointLedgerSnapshot | None,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig,
+    now_ms: int | None = None,
+    max_local_private_age_ms: int = 120_000,
+    max_global_private_age_ms: int = 120_000,
+) -> JointStrategyFrame:
+    """Build a ledger-backed joint frame from aligned market events."""
+
+    created_at_ms = int(now_ms if now_ms is not None else frame.created_at_ms)
+    mode: LiquiditySourcingMode = (
+        "liquidity_sourcing"
+        if liquidity_sourcing.enabled and liquidity_sourcing.mode == "liquidity_sourcing"
+        else "single_venue"
+    )
+    if ledger is None:
+        ledger = joint_ledger_from_frame(
+            frame,
+            binding,
+            reference_price=_reference_price_from_frame(
+                frame,
+                reference_venue=liquidity_sourcing.reference_venue,
+            ),
+            created_at_ms=created_at_ms,
+        )
+    sync_status = build_frame_sync_status(
+        frame,
+        ledger=ledger,
+        binding=binding,
+        liquidity_sourcing=liquidity_sourcing,
+        now_ms=created_at_ms,
+        max_local_private_age_ms=max_local_private_age_ms,
+        max_global_private_age_ms=max_global_private_age_ms,
+    )
+    return JointStrategyFrame(
+        local_market=frame.primary,
+        global_market=frame.hedge,
+        ledger=ledger,
+        mode=mode,
+        sync_status=sync_status,
+        created_at_ms=created_at_ms,
+    )
+
+
 def strategy_input_frame_to_joint_strategy_frame(
     frame: StrategyInputFrame,
     binding: SymbolBinding,
@@ -146,14 +287,16 @@ def strategy_input_frame_to_joint_strategy_frame(
         else "single_venue"
     )
     ledger = joint_ledger_from_frame(frame, binding, created_at_ms=frame.created_at_ms)
-    sync_status = FrameSyncStatus(
-        local_market_ready=True,
-        global_market_ready=frame.hedge is not None and frame.hedge_status == "ready",
-        local_private_ready=frame.primary_private is not None,
-        global_private_ready=frame.hedge_private is not None,
-        ledger_fresh=ledger.freshness.ledger_fresh,
-        latency_skew_ms=frame.hedge_lag_ms,
-        hedge_status=frame.hedge_status,
+    liquidity_config = LiquiditySourcingRuntimeConfig(
+        enabled=liquidity_sourcing_enabled,
+        mode=liquidity_sourcing_mode,
+    )
+    sync_status = build_frame_sync_status(
+        frame,
+        ledger=ledger,
+        binding=binding,
+        liquidity_sourcing=liquidity_config,
+        now_ms=frame.created_at_ms,
     )
     return JointStrategyFrame(
         local_market=frame.primary,

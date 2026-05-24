@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from mm.aggregation.scheduler import IntervalScheduler
 from mm.application.frame_assembler import StrategyInputFrameAssembler
+from mm.application.joint_frame_assembler import JointStrategyFrameAssembler
 from mm.application.decision_service import build_strategy_runner
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
@@ -41,7 +42,7 @@ class RuntimeComponents:
     bus: AbstractEventBus
     scheduler: IntervalScheduler
     engines: dict[SourceRole, SymbolEngine]
-    frame_assembler: StrategyInputFrameAssembler
+    frame_assembler: JointStrategyFrameAssembler
     public_market_selections: dict[SourceRole, PublicMarketDataAdapterSelection]
     private_state_selections: dict[SourceRole, PrivateStateAdapterSelection] = field(default_factory=dict)
     order_command_selections: dict[SourceRole, OrderCommandAdapterSelection] = field(default_factory=dict)
@@ -231,15 +232,37 @@ async def build_runtime_components(
     topics = _runtime_topics(config)
     primary_topic = topics.primary_market_events
     hedge_topic = topics.hedge_market_events
-    frame_assembler = StrategyInputFrameAssembler(
+    legacy_frame_assembler = StrategyInputFrameAssembler(
         primary_queue=runtime_bus.subscribe_queue(primary_topic),
         hedge_queue=runtime_bus.subscribe_queue(hedge_topic) if hedge_topic is not None else None,
         primary_private_queue=primary_private_queue,
         hedge_private_queue=hedge_private_queue,
-        bus=runtime_bus,
-        output_topic=config.frame_topic,
         max_hedge_lag_ms=config.max_hedge_lag_ms,
         hedge_grace_ms=config.hedge_grace_ms,
+    )
+
+    ledger_service = build_portfolio_ledger_service(
+        config,
+        bus=runtime_bus,
+        order_managers=order_managers,
+    )
+
+    max_local_private_age_ms = 120_000
+    max_global_private_age_ms = 120_000
+    if config.controller is not None:
+        max_local_private_age_ms = config.controller.risk.primary.max_private_state_age_ms
+        max_global_private_age_ms = config.controller.risk.hedge.max_private_state_age_ms
+
+    frame_assembler = JointStrategyFrameAssembler(
+        legacy_assembler=legacy_frame_assembler,
+        binding=config.binding,
+        liquidity_sourcing=config.liquidity_sourcing,
+        bus=runtime_bus,
+        legacy_output_topic=config.frame_topic,
+        joint_output_topic=config.joint_frame_topic,
+        ledger_service=ledger_service,
+        max_local_private_age_ms=max_local_private_age_ms,
+        max_global_private_age_ms=max_global_private_age_ms,
     )
 
     control_plane = RuntimeControlPlane(bus=runtime_bus)
@@ -257,12 +280,6 @@ async def build_runtime_components(
         bus=runtime_bus,
         order_managers=order_managers,
         control_plane=control_plane,
-    )
-
-    ledger_service = build_portfolio_ledger_service(
-        config,
-        bus=runtime_bus,
-        order_managers=order_managers,
     )
 
     persistence_daemons = _build_persistence_daemons(config, runtime_bus)
@@ -367,6 +384,8 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
     topics = _runtime_topics(config)
     observed_topics = [
         topics.strategy_frame,
+        config.joint_frame_topic,
+        RuntimeTopics.ledger_snapshot(),
         topics.strategy_decisions,
         topics.strategy_actions,
         RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
@@ -389,6 +408,8 @@ def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, 
     topics = [
         runtime_topics.primary_market_events,
         runtime_topics.strategy_frame,
+        config.joint_frame_topic,
+        RuntimeTopics.ledger_snapshot(),
         runtime_topics.strategy_actions,
         RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
         RuntimeTopics.execution_state(config.primary.normalized_exchange()),

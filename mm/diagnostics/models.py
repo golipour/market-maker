@@ -91,6 +91,7 @@ class FrameDiagnostics:
     frame_age_ms: int | None = None
     primary_private_age_ms: int | None = None
     hedge_private_age_ms: int | None = None
+    sync_status: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +182,7 @@ def _frame_payload(frame: FrameDiagnostics) -> dict[str, Any]:
         "frame_age_ms": frame.frame_age_ms,
         "primary_private_age_ms": frame.primary_private_age_ms,
         "hedge_private_age_ms": frame.hedge_private_age_ms,
+        "sync_status": dict(frame.sync_status),
     }
 
 

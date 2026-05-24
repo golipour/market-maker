@@ -44,8 +44,17 @@ class StrategyInputFrameAssembler:
         self._stopped = asyncio.Event()
 
     async def start(self) -> None:
+        """Start hedge/private listeners and the primary publish loop."""
+
         self._stopped.clear()
-        self._tasks = [asyncio.create_task(self._run_primary())]
+        await self.start_listeners()
+        self._tasks.append(asyncio.create_task(self._run_primary()))
+
+    async def start_listeners(self) -> None:
+        """Start hedge and private snapshot listeners without the publish loop."""
+
+        self._stopped.clear()
+        self._tasks = []
         if self.hedge_queue is not None:
             self._tasks.append(asyncio.create_task(self._run_hedge()))
         if self.primary_private_queue is not None:

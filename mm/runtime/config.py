@@ -381,6 +381,10 @@ class MarketMakerRuntimeConfig:
         return f"strategy:frames:{self.primary.normalized_exchange()}:{self.primary.symbol}:{self.interval_ms}"
 
     @property
+    def joint_frame_topic(self) -> str:
+        return f"strategy:joint:frames:{self.primary.normalized_exchange()}:{self.primary.symbol}:{self.interval_ms}"
+
+    @property
     def sources(self) -> tuple[MarketDataSourceConfig, ...]:
         if self.hedge is None:
             return (self.primary,)
@@ -414,6 +418,11 @@ class MarketMakerRuntimeConfig:
                 "hedge_is_anchor": True,
                 "max_hedge_lag_ms": self.max_hedge_lag_ms,
                 "hedge_grace_ms": self.hedge_grace_ms,
+            },
+            "joint_strategy_frame": {
+                "topic": self.joint_frame_topic,
+                "ledger_topic": "ledger:snapshot",
+                "note": "Ledger-backed frame with sync_status; legacy strategy:frames topic remains during migration",
             },
             "instrument_units": self.binding.as_contract(),
             "controller": (

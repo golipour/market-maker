@@ -32,6 +32,25 @@ def _private_age_ms(snapshot: PrivateStateSnapshot | None, *, now_ms: int) -> in
     return max(0, now_ms - int(snapshot.timestamp_ms))
 
 
+def _legacy_frame_sync_status(frame: StrategyInputFrame) -> dict[str, Any]:
+    """Expose latency skew and readiness separately from risk rejection counts."""
+
+    has_hedge = frame.has_hedge
+    return {
+        "local_market_ready": True,
+        "global_market_ready": (
+            frame.hedge_status == "ready"
+            or frame.hedge_status == "disabled"
+            or not has_hedge
+        ),
+        "local_private_ready": frame.primary_private is not None,
+        "global_private_ready": frame.hedge_private is not None or not has_hedge,
+        "ledger_fresh": frame.primary_private is not None,
+        "latency_skew_ms": frame.hedge_lag_ms,
+        "hedge_status": frame.hedge_status,
+    }
+
+
 def _order_stage_summary(orders: tuple[Any, ...]) -> dict[str, Any]:
     buy_qty = sell_qty = 0.0
     buy_notional = sell_notional = 0.0
@@ -162,6 +181,7 @@ class DecisionContext:
             ),
             primary_private_age_ms=_private_age_ms(self.frame.primary_private, now_ms=self.now_ms),
             hedge_private_age_ms=_private_age_ms(self.frame.hedge_private, now_ms=self.now_ms),
+            sync_status=_legacy_frame_sync_status(self.frame),
         )
 
         state = self._state_diagnostics(decision)

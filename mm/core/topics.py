@@ -62,3 +62,15 @@ class RuntimeTopics:
     @staticmethod
     def private_snapshot(exchange: str) -> str:
         return f"private:state:{exchange.lower().strip()}:snapshot"
+
+    @staticmethod
+    def ledger_snapshot() -> str:
+        return "ledger:snapshot"
+
+    @staticmethod
+    def ledger_snapshot_for(exchange: str) -> str:
+        return f"ledger:snapshot:{exchange.lower().strip()}"
+
+    @staticmethod
+    def joint_strategy_frame(exchange: str, symbol: str, interval_ms: int) -> str:
+        return f"strategy:joint:frames:{exchange.lower().strip()}:{symbol}:{interval_ms}"

@@ -5,6 +5,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.execution import Action
+from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.strategy import StrategyInputFrame
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability import schema as obs_schema
@@ -46,6 +47,9 @@ class RuntimeObservabilitySubscriber:
             raise
 
     def observe(self, topic: str, event: Any) -> None:
+        if isinstance(event, JointStrategyFrame):
+            self._observe_joint_strategy_frame(topic, event)
+            return
         if isinstance(event, StrategyInputFrame):
             self._observe_strategy_input_frame(topic, event)
             return
@@ -109,6 +113,57 @@ class RuntimeObservabilitySubscriber:
                     "hedge_lag_ms": frame.hedge_lag_ms,
                 },
             )
+
+    def _observe_joint_strategy_frame(self, topic: str, frame: JointStrategyFrame) -> None:
+        primary = frame.local_market
+        sync = frame.sync_status
+        labels = {
+            "exchange": primary.exchange,
+            "symbol": primary.symbol,
+            "mode": frame.mode,
+            "hedge_status": sync.hedge_status,
+        }
+        _ = topic
+        counter_inc(
+            "mm_joint_strategy_frames_total",
+            labels=labels,
+            help="Ledger-backed joint strategy frames assembled",
+        )
+        if sync.latency_skew_ms is not None:
+            gauge(
+                "mm_latency_skew_ms",
+                float(sync.latency_skew_ms),
+                labels=labels,
+                help="Local/global market event latency skew",
+            )
+        gauge(
+            "mm_frame_local_market_ready",
+            1.0 if sync.local_market_ready else 0.0,
+            labels=labels,
+            help="Local market readiness for joint frame",
+        )
+        gauge(
+            "mm_frame_global_market_ready",
+            1.0 if sync.global_market_ready else 0.0,
+            labels=labels,
+            help="Global market readiness for joint frame",
+        )
+        gauge(
+            "mm_frame_ledger_fresh",
+            1.0 if sync.ledger_fresh else 0.0,
+            labels=labels,
+            help="Joint ledger freshness for frame assembly",
+        )
+        log_event(
+            "joint_strategy_frame",
+            {
+                "exchange": primary.exchange,
+                "symbol": primary.symbol,
+                "t_end_ms": primary.t_end_ms,
+                "mode": frame.mode,
+                "sync_status": sync.as_payload(),
+            },
+        )
 
     def _observe_execution_sync_requested(self, payload: dict[str, Any]) -> None:
         ex = str(payload.get("exchange", "")).strip()
