@@ -244,3 +244,12 @@ class State:
     hedge_sell_vwap: float | None = None
     hedge_inventory: float = 0.0
     hedge_cash: float = 0.0
+    global_ob_rel: OrderbookRelative | None = None
+    global_buy_vol: float = 0.0
+    global_sell_vol: float = 0.0
+    global_inventory: float = 0.0
+    global_cash: float = 0.0
+    global_buy_vwap: float = 0.0
+    global_sell_vwap: float = 0.0
+    reference_price: float = 0.0
+    global_active: bool = False

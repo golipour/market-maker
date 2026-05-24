@@ -295,6 +295,7 @@ def soft_fill_batched(
     soft_fill_activation: str = "sigmoid",
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
+    depth_scale: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Batched soft transition using combined (book + quoted) depth:
@@ -330,8 +331,9 @@ def soft_fill_batched(
     book_ask_level = torch.clamp(book_cum_ask - book_ask_prev, min=0.0)
 
     # Combine market book and our quotes on each level.
-    our_bid_level = marg_bid.unsqueeze(0).expand_as(book_bid_level)
-    our_ask_level = marg_ask.unsqueeze(0).expand_as(book_ask_level)
+    scale = max(0.0, float(depth_scale))
+    our_bid_level = marg_bid.unsqueeze(0).expand_as(book_bid_level) * scale
+    our_ask_level = marg_ask.unsqueeze(0).expand_as(book_ask_level) * scale
     comb_bid_level = book_bid_level + our_bid_level
     comb_ask_level = book_ask_level + our_ask_level
 
@@ -438,6 +440,9 @@ class MonteCarloMPCTensorBatched:
         target_inventory: float | None = None,
         target_inventory_multiplier: float = 1.5,
         hedge_rollout_enabled: bool | None = None,
+        liquidity_sourcing_enabled: bool = False,
+        global_market_flow_model: Any = None,
+        global_price_model: Any = None,
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
         quote_spread_max: float | int | None = None,
@@ -491,6 +496,9 @@ class MonteCarloMPCTensorBatched:
             self.hedge_enabled = bool(float(hedge_coef) != 0.0)
         self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
         self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
+        self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
+        self.global_market_flow_model = global_market_flow_model
+        self.global_price_model = global_price_model
         self.quote_spread_max = (
             float(quote_spread_max) if quote_spread_max is not None else None
         )
@@ -517,6 +525,8 @@ class MonteCarloMPCTensorBatched:
         self._last_main_reward_mean_initial: float = 0.0
         self._last_hedge_reward_mean_initial: float = 0.0
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
+        self._last_global_sigmoid_action: SigmoidMixtureAction | None = None
+        self._last_joint_action: Any = None
         self._last_diagnostics: OptimizerRunDiagnostics | None = None
         self._x_torch: Any = None
         self._optimizer: Any = None
@@ -567,6 +577,10 @@ class MonteCarloMPCTensorBatched:
         return action
 
     def optimize_with_diagnostics(self, state: State) -> tuple[SigmoidMixtureAction, OptimizerRunDiagnostics]:
+        if self.liquidity_sourcing_enabled:
+            from mm.mpc.joint_optimizer import optimize_joint_with_diagnostics
+
+            return optimize_joint_with_diagnostics(self, state)
         torch_mod = _get_torch()
         if isinstance(self.device, str) and self.device.lower() == "cpu":
             _device = torch_mod.device("cpu")

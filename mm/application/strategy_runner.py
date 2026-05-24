@@ -60,7 +60,11 @@ class StrategyRunner:
     _last_primary_exchange: str = field(default="", init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._engine = MpcStrategyEngine(config=self.config, binding=self.binding)
+        self._engine = MpcStrategyEngine(
+            config=self.config,
+            binding=self.binding,
+            liquidity_sourcing=self.liquidity_sourcing,
+        )
         self._diagnostics = DiagnosticsPublisher(
             self.bus,
             topic=self.config.normalized_diagnostics_topic,

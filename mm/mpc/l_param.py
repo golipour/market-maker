@@ -17,6 +17,11 @@ def action_param_len(n_components: int) -> int:
     return 6 * max(1, int(n_components)) + 2
 
 
+def joint_action_param_len(n_components: int) -> int:
+    """Flat optimizer vector length for local + global sigmoid curves."""
+    return 2 * action_param_len(n_components)
+
+
 def depth_logit_index(*, side_off: int, n_components: int) -> int:
     base = 6 * n_components
     return base if side_off == 0 else base + 1

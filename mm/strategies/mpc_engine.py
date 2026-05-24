@@ -24,9 +24,10 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
 from mm.core.wallet import inventory_cash_from_snapshot
 from mm.models.scoring import refresh_score_params_after, score_frame_models
+from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
 from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
-from mm.runtime.config import ControllerRuntimeConfig
+from mm.runtime.config import ControllerRuntimeConfig, LiquiditySourcingRuntimeConfig
 from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     joint_target_book_to_legacy_action,
@@ -72,6 +73,9 @@ class MpcStrategyEngine:
 
     config: ControllerRuntimeConfig
     binding: SymbolBinding
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
+        default_factory=LiquiditySourcingRuntimeConfig
+    )
     _controller: Any = field(init=False, repr=False)
     _market_flow_model: Any = field(init=False, repr=False)
     _price_model: Any = field(init=False, repr=False)
@@ -79,7 +83,11 @@ class MpcStrategyEngine:
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._controller = _build_controller(self.config, self.binding)
+        self._controller = _build_controller(
+            self.config,
+            self.binding,
+            liquidity_sourcing=self.liquidity_sourcing,
+        )
         self._market_flow_model = getattr(self._controller, "market_flow_model", None)
         self._price_model = getattr(self._controller, "price_model", None)
         self._hedge_price_model = getattr(self._controller, "hedge_price_model", None)
@@ -91,7 +99,13 @@ class MpcStrategyEngine:
             self.binding,
             self.config.orderbook_grid.spread_max,
             price_model=self._price_model,
+            liquidity_sourcing=self.liquidity_sourcing,
         )
+        if self.liquidity_sourcing.enabled:
+            state = enrich_state_for_joint(
+                state,
+                global_active=_global_active_for_frame(frame, self.liquidity_sourcing),
+            )
         flow_kind = str((self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"))
         price_kind = str((self.config.price_model or {}).get("kind", "residual"))
         hedge_kind = str((self.config.hedge_price_model or {}).get("kind", "legacy"))
@@ -119,6 +133,9 @@ class MpcStrategyEngine:
                 updated=True,
             )
         _update_market_flow_model(self._market_flow_model, frame)
+        global_flow_model = getattr(self._controller, "global_market_flow_model", None)
+        if global_flow_model is not None:
+            _update_global_market_flow_model(global_flow_model, frame)
         if self._market_flow_model is not None and "market_flow" in model_scores and hasattr(
             self._market_flow_model, "get_params"
         ):
@@ -149,6 +166,19 @@ class MpcStrategyEngine:
             mid=float(state.mid),
             orderbook_grid=self.config.orderbook_grid,
         )
+        sourcing_mode = (
+            "liquidity_sourcing"
+            if self.liquidity_sourcing.enabled and self.liquidity_sourcing.mode == "liquidity_sourcing"
+            else "single_venue"
+        )
+        global_sigmoid = getattr(self._controller, "_last_global_sigmoid_action", None)
+        global_event = frame.hedge if sourcing_mode == "liquidity_sourcing" else None
+        global_constraints = None
+        if global_event is not None and self.binding.hedge is not None:
+            global_constraints = OrderConstraints.from_spec(
+                self.binding.hedge,
+                max_orders_per_side=self.config.max_orders_per_side,
+            )
         joint_target_book, action_pipeline, ladder, _local_orders = build_joint_target_book_from_sigmoid(
             actor_id=self.config.actor_id,
             local_event=frame.primary,
@@ -156,6 +186,10 @@ class MpcStrategyEngine:
             orderbook_grid=self.config.orderbook_grid,
             local_constraints=order_constraints,
             continuous=continuous_depth,
+            mode=sourcing_mode,
+            global_event=global_event,
+            global_constraints=global_constraints,
+            global_sigmoid_action=global_sigmoid,
         )
         action = joint_target_book_to_legacy_action(joint_target_book)
         order_summaries = tuple(_order_summary(order) for order in action.orders)
@@ -237,42 +271,21 @@ class MpcStrategyEngine:
         )
 
 
-def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -> Any:
+def _build_controller(
+    config: ControllerRuntimeConfig,
+    binding: SymbolBinding,
+    *,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
+) -> Any:
     from mm.core.models.real_execution import RealExecutionModel
-    from mm.mpc.market_order_flow_torch import (
-        TorchDiscreteGammaModel,
-        TorchHurdleGammaModel,
-        TorchHurdleLogNormalModel,
-        TorchHurdleWeibullModel,
-        TorchWeibullModel,
-    )
     from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
-    from mm.mpc.price_torch import TorchResidualPriceModel
 
-    flow_cfg = dict(config.market_flow_model or {})
-    flow_kind = str(flow_cfg.pop("kind", "hurdle_lognormal")).lower()
-    if flow_kind == "gamma":
-        market_flow_model = TorchDiscreteGammaModel(**flow_cfg)
-    elif flow_kind == "weibull":
-        market_flow_model = TorchWeibullModel(**flow_cfg)
-    elif flow_kind == "hurdle_gamma":
-        market_flow_model = TorchHurdleGammaModel(**flow_cfg)
-    elif flow_kind == "hurdle_weibull":
-        market_flow_model = TorchHurdleWeibullModel(**flow_cfg)
-    elif flow_kind == "hurdle_lognormal":
-        market_flow_model = TorchHurdleLogNormalModel(**flow_cfg)
-    else:
-        raise ValueError(f"unsupported market_flow_model kind: {flow_kind}")
-
-    price_cfg = dict(config.price_model or {})
-    price_kind = str(price_cfg.pop("kind", "residual")).lower()
-    if price_kind != "residual":
-        raise ValueError(f"unsupported price_model kind: {price_kind}")
-    nested_vwap = price_cfg.pop("vwap_depth", None)
-    vwap_depth = config.vwap_depth if config.vwap_depth is not None else nested_vwap
-    if vwap_depth is not None:
-        price_cfg["vwap_depth"] = float(vwap_depth)
-    price_model = TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
+    market_flow_model = _build_market_flow_model(config.market_flow_model)
+    price_model = _build_price_model(
+        config.price_model,
+        market_flow_model=market_flow_model,
+        vwap_depth=config.vwap_depth,
+    )
 
     execution_cfg = dict(config.execution_model or {})
     execution_kind = str(execution_cfg.pop("kind", "real")).lower()
@@ -304,12 +317,106 @@ def _build_controller(config: ControllerRuntimeConfig, binding: SymbolBinding) -
     }
     optimizer_defaults.update(optimizer_cfg)
     hedge_price_model = _build_hedge_price_model(config.hedge_price_model)
+    sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
+    global_flow_cfg = (config.optimizer or {}).get("global_market_flow_model") or config.market_flow_model
+    global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.price_model
+    global_flow_model = _build_market_flow_model(global_flow_cfg)
+    global_price_model = _build_price_model(
+        global_price_cfg,
+        market_flow_model=global_flow_model,
+        vwap_depth=config.vwap_depth,
+    )
     return MonteCarloMPCTensorBatched(
         price_model=price_model,
         market_flow_model=market_flow_model,
         execution_model=execution_model,
         hedge_price_model=hedge_price_model,
+        liquidity_sourcing_enabled=sourcing.enabled,
+        global_market_flow_model=global_flow_model if sourcing.enabled else None,
+        global_price_model=global_price_model if sourcing.enabled else None,
         **optimizer_defaults,
+    )
+
+
+def _build_market_flow_model(cfg: dict[str, Any] | None) -> Any:
+    from mm.mpc.market_order_flow_torch import (
+        TorchDiscreteGammaModel,
+        TorchHurdleGammaModel,
+        TorchHurdleLogNormalModel,
+        TorchHurdleWeibullModel,
+        TorchWeibullModel,
+    )
+
+    flow_cfg = dict(cfg or {})
+    flow_kind = str(flow_cfg.pop("kind", "hurdle_lognormal")).lower()
+    if flow_kind == "gamma":
+        return TorchDiscreteGammaModel(**flow_cfg)
+    if flow_kind == "weibull":
+        return TorchWeibullModel(**flow_cfg)
+    if flow_kind == "hurdle_gamma":
+        return TorchHurdleGammaModel(**flow_cfg)
+    if flow_kind == "hurdle_weibull":
+        return TorchHurdleWeibullModel(**flow_cfg)
+    if flow_kind == "hurdle_lognormal":
+        return TorchHurdleLogNormalModel(**flow_cfg)
+    raise ValueError(f"unsupported market_flow_model kind: {flow_kind}")
+
+
+def _build_price_model(
+    cfg: dict[str, Any] | None,
+    *,
+    market_flow_model: Any,
+    vwap_depth: float | None,
+) -> Any:
+    from mm.mpc.price_torch import TorchResidualPriceModel
+
+    price_cfg = dict(cfg or {})
+    price_kind = str(price_cfg.pop("kind", "residual")).lower()
+    if price_kind != "residual":
+        raise ValueError(f"unsupported price_model kind: {price_kind}")
+    nested_vwap = price_cfg.pop("vwap_depth", None)
+    resolved_vwap = vwap_depth if vwap_depth is not None else nested_vwap
+    if resolved_vwap is not None:
+        price_cfg["vwap_depth"] = float(resolved_vwap)
+    return TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
+
+
+def _global_active_for_frame(
+    frame: StrategyInputFrame,
+    sourcing: LiquiditySourcingRuntimeConfig,
+) -> bool:
+    if not sourcing.enabled:
+        return False
+    if sourcing.mode != "liquidity_sourcing":
+        return False
+    return frame.hedge is not None and frame.hedge_status in (None, "ready", "stale")
+
+
+def _update_global_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
+    if frame.hedge is None or not hasattr(model, "update"):
+        return
+    model.update(None, _global_market_flow_step_tuple(frame))
+
+
+def _global_market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
+    hedge = frame.hedge
+    assert hedge is not None
+    return (
+        hedge.t_end_ms,
+        None,
+        hedge.buy_volume,
+        hedge.sell_volume,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        None,
+        None,
+        None,
+        None,
+        0.0,
+        0.0,
     )
 
 
@@ -346,9 +453,11 @@ def _state_from_frame(
     spread_max: float,
     *,
     price_model: Any | None,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
 ) -> State:
     from mm.mpc.mpc_state import OrderbookRelative
 
+    sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
     vwap_depth = _vwap_target_depth(price_model)
     primary_mid = mid_from_orderbook(frame.primary.orderbook)
     bids = tuple(
@@ -371,11 +480,23 @@ def _state_from_frame(
     hedge_buy_vwap = hedge_sell_vwap = None
     hedge_inventory = 0.0
     hedge_cash = 0.0
+    global_ob_rel = None
+    global_buy_vol = 0.0
+    global_sell_vol = 0.0
+    global_inventory = 0.0
+    global_cash = 0.0
+    global_buy_vwap = 0.0
+    global_sell_vwap = 0.0
     if frame.hedge is not None:
+        global_ob_rel = ob_rel_from_market_event(frame.hedge.orderbook, spread_max=spread_max)
+        global_buy_vol = float(frame.hedge.buy_volume)
+        global_sell_vol = float(frame.hedge.sell_volume)
         try:
             hedge_buy_vwap, hedge_sell_vwap = vwap_from_raw_orderbook(
                 frame.hedge.orderbook, target_depth=vwap_depth
             )
+            global_buy_vwap = float(hedge_buy_vwap)
+            global_sell_vwap = float(hedge_sell_vwap)
         except ValueError:
             hedge_buy_vwap = hedge_sell_vwap = None
     if frame.hedge_private is not None and binding.hedge is not None:
@@ -385,6 +506,10 @@ def _state_from_frame(
             binding.hedge.quote_asset,
             trading_symbol=binding.hedge.symbol,
         )
+        global_inventory = hedge_inventory
+        global_cash = hedge_cash
+    reference_price = float(global_sell_vwap or sell_vwap)
+    global_active = _global_active_for_frame(frame, sourcing)
     return State(
         mid=primary_mid,
         ob_rel=OrderbookRelative(bids=bids, asks=asks),
@@ -398,6 +523,15 @@ def _state_from_frame(
         hedge_sell_vwap=hedge_sell_vwap,
         hedge_inventory=hedge_inventory,
         hedge_cash=hedge_cash,
+        global_ob_rel=global_ob_rel,
+        global_buy_vol=global_buy_vol,
+        global_sell_vol=global_sell_vol,
+        global_inventory=global_inventory,
+        global_cash=global_cash,
+        global_buy_vwap=global_buy_vwap,
+        global_sell_vwap=global_sell_vwap,
+        reference_price=reference_price,
+        global_active=global_active,
     )
 
 
