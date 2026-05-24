@@ -58985,3 +58985,8 @@
 {"ts_ms":1779612722278,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":8}
 {"ts_ms":1779612722281,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":8}
 {"ts_ms":1779612762358,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779613454385,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779613490314,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779613490315,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":8}
+{"ts_ms":1779613490318,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":8}
+{"ts_ms":1779613530390,"event":"persistence_disabled","reason":"config"}

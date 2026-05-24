@@ -229,6 +229,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 | `action_start_after_steps` | MPC runs from frame 1; sync only after N frames |
 | `enabled: false` | No strategy runner |
 | `risk.enabled: false` | Pass-through risk (no hard gates) |
+| `risk.engine` | `order_level` (default, legacy per-order gate) or `net_delta` (target-book transition against ledger) |
 | `risk.primary` | Hard gates for primary quote orders (see below) |
 | `risk.hedge` | Hard gates for hedge venue / private freshness when hedge is active |
 

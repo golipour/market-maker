@@ -403,6 +403,7 @@ def _order_stage_summary_from_dicts(orders: tuple[dict[str, Any], ...]) -> dict[
 def _risk_limits_payload(limits: RiskRuntimeConfig) -> dict[str, Any]:
     return {
         "enabled": limits.enabled,
+        "engine": limits.engine,
         "primary": limits.primary.as_dict(),
         "hedge": limits.hedge.as_dict(),
     }

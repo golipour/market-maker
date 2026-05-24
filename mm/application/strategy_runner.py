@@ -20,8 +20,9 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
-from mm.risk.engine import RuntimeRiskEngine
-from mm.runtime.config import ControllerRuntimeConfig
+from mm.core.adapters.joint import joint_ledger_from_frame
+from mm.risk.net_delta import NetDeltaRiskEngine
+from mm.runtime.config import ControllerRuntimeConfig, LiquiditySourcingRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
 from mm.strategies.mpc_engine import MpcStrategyEngine, order_summary_dict
 
@@ -45,6 +46,9 @@ class StrategyRunner:
     frame_queue: asyncio.Queue[StrategyInputFrame]
     order_managers: dict[str, AbstractOrderManager]
     risk_engine: AbstractRiskEngine
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
+        default_factory=LiquiditySourcingRuntimeConfig
+    )
     bus: AbstractEventBus | None = None
     control_plane: RuntimeControlPlane | None = None
     run_id: str = ""
@@ -141,7 +145,25 @@ class StrategyRunner:
                 return approved
 
             proposed = [decision.action]
-            risk_result = self.risk_engine.validate_frame_with_result(proposed, trading_state, clean_frame)
+            live_execution = self._live_execution_intent()
+            if isinstance(self.risk_engine, NetDeltaRiskEngine):
+                ledger = joint_ledger_from_frame(
+                    clean_frame,
+                    self.binding,
+                    created_at_ms=clean_frame.created_at_ms,
+                )
+                risk_result = self.risk_engine.validate_frame_with_result(
+                    proposed,
+                    trading_state,
+                    clean_frame,
+                    joint_target_book=decision.joint_target_book,
+                    ledger=ledger,
+                    live_execution=live_execution,
+                )
+            else:
+                risk_result = self.risk_engine.validate_frame_with_result(
+                    proposed, trading_state, clean_frame
+                )
             approved = risk_result.approved_list
             approved_orders = tuple(order for action in approved for order in action.orders)
             ctx.record_risk_result(
@@ -289,8 +311,22 @@ class StrategyRunner:
     def _sync_control_plane_to_risk(self) -> None:
         if self.control_plane is None:
             return
-        if isinstance(self.risk_engine, RuntimeRiskEngine):
-            self.risk_engine.set_kill_switch(self.control_plane.state.kill_switch)
+        set_kill_switch = getattr(self.risk_engine, "set_kill_switch", None)
+        if callable(set_kill_switch):
+            set_kill_switch(self.control_plane.state.kill_switch)
+
+    def _live_execution_intent(self) -> bool:
+        """Whether live order sync would run if risk approves the target book."""
+
+        if self.config.observe_only:
+            return False
+        if self.control_plane is not None and self.control_plane.state.observe_only:
+            return False
+        if self._frame_step <= self.config.action_start_after_steps:
+            return False
+        if self.order_managers.get(self._last_primary_exchange) is None:
+            return False
+        return True
 
     def _should_execute_live(self, approved: list[Action]) -> bool:
         if not approved:

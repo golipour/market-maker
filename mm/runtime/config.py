@@ -223,11 +223,15 @@ class HedgingRuntimeConfig:
         return f"hedge:diagnostics:{actor}"
 
 
+RiskEngineKind = Literal["order_level", "net_delta"]
+
+
 @dataclass(frozen=True, slots=True)
 class RiskRuntimeConfig:
     """Hard pre-execution risk gates (separate from optimizer soft preferences)."""
 
     enabled: bool = True
+    engine: RiskEngineKind = "order_level"
     primary: VenueRiskLimits = field(default_factory=VenueRiskLimits)
     hedge: HedgeVenueRiskLimits = field(default_factory=HedgeVenueRiskLimits)
 
@@ -771,7 +775,15 @@ def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
     else:
         primary = _venue_risk_from_mapping(payload, legacy_flat=True)
     hedge = _hedge_risk_from_mapping(hedge_payload) if isinstance(hedge_payload, dict) else HedgeVenueRiskLimits()
-    return RiskRuntimeConfig(enabled=enabled, primary=primary, hedge=hedge)
+    engine_raw = str(payload.get("engine", "order_level")).strip().lower()
+    if engine_raw not in ("order_level", "net_delta"):
+        raise ValueError("controller.risk.engine must be 'order_level' or 'net_delta'")
+    return RiskRuntimeConfig(
+        enabled=enabled,
+        engine=engine_raw,  # type: ignore[arg-type]
+        primary=primary,
+        hedge=hedge,
+    )
 
 
 def _venue_risk_from_mapping(payload: dict[str, Any], *, legacy_flat: bool = False) -> VenueRiskLimits:
