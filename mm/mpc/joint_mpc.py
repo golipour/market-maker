@@ -60,8 +60,8 @@ def reference_price_from_state(state: State) -> float:
         return float(state.reference_price)
     if state.global_sell_vwap > 0.0:
         return float(state.global_sell_vwap)
-    if state.hedge_sell_vwap is not None and float(state.hedge_sell_vwap) > 0.0:
-        return float(state.hedge_sell_vwap)
+    if state.global_sell_vwap is not None and float(state.global_sell_vwap) > 0.0:
+        return float(state.global_sell_vwap)
     return float(state.sell_vwap)
 
 
@@ -199,9 +199,9 @@ def enrich_state_for_joint(
         cash=state.cash,
         buy_vwap=state.buy_vwap,
         sell_vwap=state.sell_vwap,
-        hedge_buy_vwap=state.hedge_buy_vwap,
-        hedge_sell_vwap=state.hedge_sell_vwap,
-        hedge_inventory=state.hedge_inventory,
+        global_buy_vwap=state.global_buy_vwap,
+        global_sell_vwap=state.global_sell_vwap,
+        global_inventory=state.global_inventory,
         hedge_cash=state.hedge_cash,
         global_ob_rel=state.global_ob_rel,
         global_buy_vol=state.global_buy_vol,

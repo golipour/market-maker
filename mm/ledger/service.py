@@ -92,14 +92,14 @@ class PortfolioLedgerService:
         self.order_managers = order_managers or {}
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self._local = VenueLedgerStateMachine(
-            config.primary.normalized_exchange(),
-            binding.primary,
+            config.local.normalized_exchange(),
+            binding.local,
         )
         self._global: VenueLedgerStateMachine | None = None
-        if config.hedge is not None and binding.hedge is not None:
+        if config.global_ is not None and binding.global_ is not None:
             self._global = VenueLedgerStateMachine(
-                config.hedge.normalized_exchange(),
-                binding.hedge,
+                config.global_.normalized_exchange(),
+                binding.global_,
             )
         self._tracked_exchanges = self._configured_exchanges()
         self._tasks: list[asyncio.Task] = []
@@ -182,18 +182,18 @@ class PortfolioLedgerService:
 
     def _ledger_for_exchange(self, exchange: str) -> VenueLedger | None:
         key = exchange.lower().strip()
-        if key == self.config.primary.normalized_exchange():
+        if key == self.config.local.normalized_exchange():
             return self.local_ledger
-        if self.config.hedge is not None and key == self.config.hedge.normalized_exchange():
+        if self.config.global_ is not None and key == self.config.global_.normalized_exchange():
             return self.global_ledger
         return None
 
     def _machine_for_exchange(self, exchange: str) -> VenueLedgerStateMachine | None:
         key = exchange.lower().strip()
-        if key == self.config.primary.normalized_exchange():
+        if key == self.config.local.normalized_exchange():
             return self._local
-        if self._global is not None and self.config.hedge is not None:
-            if key == self.config.hedge.normalized_exchange():
+        if self._global is not None and self.config.global_ is not None:
+            if key == self.config.global_.normalized_exchange():
                 return self._global
         return None
 

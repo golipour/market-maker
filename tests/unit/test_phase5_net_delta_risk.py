@@ -25,7 +25,7 @@ def _binding() -> SymbolBinding:
         base_asset="BTC",
         quote_asset="IRT",
     )
-    return SymbolBinding(primary=primary, hedge=None)
+    return SymbolBinding(local=primary, global_=None)
 
 
 def _market_event(*, t_end_ms: int = 1000) -> MarketEvent:
@@ -84,7 +84,7 @@ def _live_buy(
 
 def _venue_ledger_from_private(snapshot: PrivateStateSnapshot):
     ledger = joint_ledger_from_frame(
-        StrategyInputFrame(primary=_market_event(), primary_private=snapshot),
+        StrategyInputFrame(local=_market_event(), local_private=snapshot),
         _binding(),
         created_at_ms=1000,
     )
@@ -130,12 +130,11 @@ def test_additive_replacement_approves_under_net_delta_rejected_by_order_level()
         quote_locked=400.0,
         open_orders={"live-1": live},
     )
-    frame = StrategyInputFrame(primary=_market_event(), primary_private=snapshot)
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
     ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
 
     target = _target_book(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 5.0))
-    limits = RiskLimits(
-        primary=VenueRiskLimits(
+    limits = RiskLimits(local=VenueRiskLimits(
             min_cash=0.0,
             max_open_notional=550.0,
             max_market_data_age_ms=10_000,
@@ -206,12 +205,12 @@ def test_evaluate_venue_transition_rejects_insufficient_base_for_sells() -> None
 
 def test_frame_gate_kill_switch_rejects_entire_book() -> None:
     snapshot = _private_snapshot()
-    frame = StrategyInputFrame(primary=_market_event(), primary_private=snapshot)
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
     ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
     target = _target_book(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 1.0))
 
     engine = NetDeltaRiskEngine(
-        limits=RiskLimits(primary=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000)),
+        limits=RiskLimits(local=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000)),
         binding=_binding(),
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
         clock_ms=lambda: 1000,
@@ -224,12 +223,12 @@ def test_frame_gate_kill_switch_rejects_entire_book() -> None:
 
 def test_single_venue_does_not_require_global_private() -> None:
     snapshot = _private_snapshot()
-    frame = StrategyInputFrame(primary=_market_event(), primary_private=snapshot, hedge_status="missing")
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot, global_status="missing")
     ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
     target = _target_book(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 1.0))
 
     engine = NetDeltaRiskEngine(
-        limits=RiskLimits(primary=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000)),
+        limits=RiskLimits(local=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000)),
         binding=_binding(),
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=False, mode="single_venue"),
         clock_ms=lambda: 1000,
@@ -252,7 +251,7 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
         base_asset="BTC",
         quote_asset="IRT",
     )
-    binding = SymbolBinding(primary=primary, hedge=hedge)
+    binding = SymbolBinding(local=primary, global_=hedge)
 
     snapshot = _private_snapshot()
     hedge_event = MarketEvent(
@@ -269,12 +268,11 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
         imbalance=0.0,
         microprice=100.0,
     )
-    frame = StrategyInputFrame(
-        primary=_market_event(),
+    frame = StrategyInputFrame(local=_market_event(),
         hedge=hedge_event,
-        primary_private=snapshot,
-        hedge_private=None,
-        hedge_status="ready",
+        local_private=snapshot,
+        global_private=None,
+        global_status="ready",
     )
     ledger = joint_ledger_from_frame(frame, binding, created_at_ms=1000)
     target = JointTargetBook(
@@ -290,8 +288,7 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
     )
 
     engine = NetDeltaRiskEngine(
-        limits=RiskLimits(
-            primary=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000),
+        limits=RiskLimits(local=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000),
         ),
         binding=binding,
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
@@ -315,7 +312,7 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
         base_asset="BTC",
         quote_asset="IRT",
     )
-    binding = SymbolBinding(primary=primary, hedge=hedge)
+    binding = SymbolBinding(local=primary, global_=hedge)
 
     snapshot = _private_snapshot()
     hedge_event = MarketEvent(
@@ -332,12 +329,11 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
         imbalance=0.0,
         microprice=100.0,
     )
-    frame = StrategyInputFrame(
-        primary=_market_event(),
+    frame = StrategyInputFrame(local=_market_event(),
         hedge=hedge_event,
-        primary_private=snapshot,
-        hedge_private=None,
-        hedge_status="ready",
+        local_private=snapshot,
+        global_private=None,
+        global_status="ready",
     )
     ledger = joint_ledger_from_frame(frame, binding, created_at_ms=1000)
     target = JointTargetBook(
@@ -353,8 +349,7 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
     )
 
     engine = NetDeltaRiskEngine(
-        limits=RiskLimits(
-            primary=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000),
+        limits=RiskLimits(local=VenueRiskLimits(max_market_data_age_ms=10_000, max_private_state_age_ms=10_000),
         ),
         binding=binding,
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
@@ -366,13 +361,12 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
 
 def test_rejection_includes_transition_diagnostics() -> None:
     snapshot = _private_snapshot(quote_free=50.0)
-    frame = StrategyInputFrame(primary=_market_event(), primary_private=snapshot)
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
     ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
     target = _target_book(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 2.0))
 
     engine = NetDeltaRiskEngine(
-        limits=RiskLimits(
-            primary=VenueRiskLimits(
+        limits=RiskLimits(local=VenueRiskLimits(
                 min_cash=0.0,
                 max_market_data_age_ms=10_000,
                 max_private_state_age_ms=10_000,

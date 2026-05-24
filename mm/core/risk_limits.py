@@ -31,7 +31,7 @@ class VenueRiskLimits:
 
 
 @dataclass(frozen=True, slots=True)
-class HedgeVenueRiskLimits:
+class GlobalVenueRiskLimits:
     """Hard limits for hedge venue (live hedge orders in Phase 6)."""
 
     min_inventory: float = 0.0

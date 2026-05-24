@@ -41,19 +41,19 @@ def _private_age_ms(snapshot: PrivateStateSnapshot | None, *, now_ms: int) -> in
 def _legacy_frame_sync_status(frame: StrategyInputFrame) -> dict[str, Any]:
     """Expose latency skew and readiness separately from risk rejection counts."""
 
-    has_hedge = frame.has_hedge
+    has_global = frame.has_global
     return {
         "local_market_ready": True,
         "global_market_ready": (
-            frame.hedge_status == "ready"
-            or frame.hedge_status == "disabled"
-            or not has_hedge
+            frame.global_status == "ready"
+            or frame.global_status == "disabled"
+            or not has_global
         ),
-        "local_private_ready": frame.primary_private is not None,
-        "global_private_ready": frame.hedge_private is not None or not has_hedge,
-        "ledger_fresh": frame.primary_private is not None,
-        "latency_skew_ms": frame.hedge_lag_ms,
-        "hedge_status": frame.hedge_status,
+        "local_private_ready": frame.local_private is not None,
+        "global_private_ready": frame.global_private is not None or not has_global,
+        "ledger_fresh": frame.local_private is not None,
+        "latency_skew_ms": frame.global_lag_ms,
+        "global_status": frame.global_status,
     }
 
 
@@ -99,6 +99,7 @@ class DecisionContext:
     approved_actions: list[Action] = field(default_factory=list)
     executed: bool = False
     blocked_reasons: list[str] = field(default_factory=list)
+    venue_gates: dict[str, dict[str, Any]] = field(default_factory=dict)
     risk_rejection_counts: dict[str, int] = field(default_factory=dict)
     risk_exposure_before: dict[str, float] = field(default_factory=dict)
     risk_exposure_after: dict[str, float] = field(default_factory=dict)
@@ -159,9 +160,17 @@ class DecisionContext:
             executed=executed,
         )
 
-    def record_execution_gates(self, *, executed: bool, blocked_reasons: list[str]) -> None:
+    def record_execution_gates(
+        self,
+        *,
+        executed: bool,
+        blocked_reasons: list[str],
+        venue_gates: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.executed = executed
         self.blocked_reasons = list(blocked_reasons)
+        if venue_gates is not None:
+            self.venue_gates = dict(venue_gates)
 
     def to_diagnostics(self) -> ControllerDiagnostics:
         decision = self.decision
@@ -171,15 +180,15 @@ class DecisionContext:
         warnings.extend(self.extra_warnings)
 
         frame_diag = FrameDiagnostics(
-            hedge_status=self.frame.hedge_status,
-            hedge_lag_ms=self.frame.hedge_lag_ms,
+            global_status=self.frame.global_status,
+            global_lag_ms=self.frame.global_lag_ms,
             frame_age_ms=(
                 max(0, self.now_ms - self.frame.created_at_ms)
                 if self.frame.created_at_ms > 0
                 else None
             ),
-            primary_private_age_ms=_private_age_ms(self.frame.primary_private, now_ms=self.now_ms),
-            hedge_private_age_ms=_private_age_ms(self.frame.hedge_private, now_ms=self.now_ms),
+            local_private_age_ms=_private_age_ms(self.frame.local_private, now_ms=self.now_ms),
+            global_private_age_ms=_private_age_ms(self.frame.global_private, now_ms=self.now_ms),
             sync_status=_legacy_frame_sync_status(self.frame),
         )
 
@@ -191,12 +200,13 @@ class DecisionContext:
         execution_gates = ExecutionGateDiagnostics(
             executed=self.executed,
             blocked_reasons=tuple(self.blocked_reasons),
+            venue_gates=dict(self.venue_gates),
         )
 
         return ControllerDiagnostics(
             actor_id=self.config.actor_id,
-            exchange=self.frame.primary.exchange,
-            symbol=self.frame.primary.symbol,
+            exchange=self.frame.local.exchange,
+            symbol=self.frame.local.symbol,
             t_end_ms=self.frame.t_end_ms,
             frame_step=self.frame_step,
             created_at_ms=self.now_ms,
@@ -209,43 +219,43 @@ class DecisionContext:
             risk=risk,
             execution_gates=execution_gates,
             warnings=tuple(warnings),
-            cleared_orderbook=orderbook_snapshot_payload(self.clean_frame.primary.orderbook),
+            cleared_orderbook=orderbook_snapshot_payload(self.clean_frame.local.orderbook),
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:
         primary_base, primary_quote = self._primary_wallet_legs()
         hedge_base, hedge_quote = self._hedge_wallet_legs()
         if decision is not None:
-            primary_inventory = decision.inventory
+            local_inventory = decision.inventory
             primary_cash = decision.cash
             mid = decision.mid
-            primary_buy_vwap = decision.primary_buy_vwap
-            primary_sell_vwap = decision.primary_sell_vwap
-            hedge_buy_vwap = decision.hedge_buy_vwap
-            hedge_sell_vwap = decision.hedge_sell_vwap
+            local_buy_vwap = decision.local_buy_vwap
+            local_sell_vwap = decision.local_sell_vwap
+            global_buy_vwap = decision.global_buy_vwap
+            global_sell_vwap = decision.global_sell_vwap
         else:
-            primary_inventory = self.trading_state.inventory
+            local_inventory = self.trading_state.inventory
             primary_cash = self.trading_state.cash
             mid = 0.0
-            primary_buy_vwap = 0.0
-            primary_sell_vwap = 0.0
-            hedge_buy_vwap = None
-            hedge_sell_vwap = None
-        hedge_inventory, hedge_cash = self._hedge_inventory_cash()
-        primary_wealth = portfolio_wealth(primary_cash, primary_inventory, primary_sell_vwap or mid)
+            local_buy_vwap = 0.0
+            local_sell_vwap = 0.0
+            global_buy_vwap = None
+            global_sell_vwap = None
+        global_inventory, hedge_cash = self._global_inventory_cash()
+        primary_wealth = portfolio_wealth(primary_cash, local_inventory, local_sell_vwap or mid)
         hedge_wealth: float | None = None
-        if hedge_sell_vwap is not None:
-            hedge_wealth = portfolio_wealth(hedge_cash, hedge_inventory, hedge_sell_vwap)
+        if global_sell_vwap is not None:
+            hedge_wealth = portfolio_wealth(hedge_cash, global_inventory, global_sell_vwap)
         return StateDiagnostics(
             mid=mid,
-            primary_inventory=primary_inventory,
+            local_inventory=local_inventory,
             primary_cash=primary_cash,
-            hedge_inventory=hedge_inventory,
+            global_inventory=global_inventory,
             hedge_cash=hedge_cash,
-            primary_buy_vwap=primary_buy_vwap,
-            primary_sell_vwap=primary_sell_vwap,
-            hedge_buy_vwap=hedge_buy_vwap,
-            hedge_sell_vwap=hedge_sell_vwap,
+            local_buy_vwap=local_buy_vwap,
+            local_sell_vwap=local_sell_vwap,
+            global_buy_vwap=global_buy_vwap,
+            global_sell_vwap=global_sell_vwap,
             primary_base_wallet=primary_base.as_dict(),
             primary_quote_wallet=primary_quote.as_dict(),
             hedge_base_wallet=hedge_base.as_dict(),
@@ -259,31 +269,31 @@ class DecisionContext:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
         return wallet_pair_from_snapshot(
-            self.frame.primary_private,
-            self.binding.primary.base_asset,
-            self.binding.primary.quote_asset,
-            trading_symbol=self.binding.primary.symbol,
+            self.frame.local_private,
+            self.binding.local.base_asset,
+            self.binding.local.quote_asset,
+            trading_symbol=self.binding.local.symbol,
         )
 
     def _hedge_wallet_legs(self):
-        if self.binding is None or self.binding.hedge is None:
+        if self.binding is None or self.binding.global_ is None:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
         return wallet_pair_from_snapshot(
-            self.frame.hedge_private,
-            self.binding.hedge.base_asset,
-            self.binding.hedge.quote_asset,
-            trading_symbol=self.binding.hedge.symbol,
+            self.frame.global_private,
+            self.binding.global_.base_asset,
+            self.binding.global_.quote_asset,
+            trading_symbol=self.binding.global_.symbol,
         )
 
-    def _hedge_inventory_cash(self) -> tuple[float, float]:
-        if self.binding is None or self.binding.hedge is None:
+    def _global_inventory_cash(self) -> tuple[float, float]:
+        if self.binding is None or self.binding.global_ is None:
             return 0.0, 0.0
         return inventory_cash_from_snapshot(
-            self.frame.hedge_private,
-            self.binding.hedge.base_asset,
-            self.binding.hedge.quote_asset,
-            trading_symbol=self.binding.hedge.symbol,
+            self.frame.global_private,
+            self.binding.global_.base_asset,
+            self.binding.global_.quote_asset,
+            trading_symbol=self.binding.global_.symbol,
         )
 
     def _model_scores(self, decision: StrategyDecision | None) -> dict[str, ModelScore]:
@@ -404,8 +414,8 @@ def _risk_limits_payload(limits: RiskRuntimeConfig) -> dict[str, Any]:
     return {
         "enabled": limits.enabled,
         "engine": limits.engine,
-        "primary": limits.primary.as_dict(),
-        "hedge": limits.hedge.as_dict(),
+        "local": limits.local.as_dict(),
+        "global": limits.global_.as_dict(),
     }
 
 
@@ -415,7 +425,7 @@ def execution_blocked_reasons(
     frame_step: int,
     approved: list[Action],
     observe_only_control: bool,
-    primary_manager_present: bool,
+    local_manager_present: bool,
 ) -> list[str]:
     """Derive why live execution did not run (mirrors ``StrategyRunner._should_execute_live``)."""
 
@@ -428,7 +438,7 @@ def execution_blocked_reasons(
         reasons.append("observe_only_control")
     if frame_step <= config.action_start_after_steps:
         reasons.append("warmup")
-    if not primary_manager_present:
+    if not local_manager_present:
         reasons.append("no_manager")
     if approved and len(approved) < 1:
         reasons.append("risk_rejected")

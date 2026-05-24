@@ -9,34 +9,34 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.target_book import JointTargetBook
 from mm.execution.plan import ActionPipelineReport
 
-HedgeStatus = Literal["disabled", "ready", "missing", "stale"]
+GlobalMarketStatus = Literal["disabled", "ready", "missing", "stale"]
 
 
 @dataclass(frozen=True, slots=True)
 class StrategyInputFrame:
-    """Aligned strategy input for one primary decision window.
+    """Aligned strategy input for one local decision window.
 
-    ``hedge`` is intentionally optional. When no hedge exchange is configured,
-    or when the configured hedge stream is missing/stale for this primary
-    window, strategies receive ``None`` plus an explicit ``hedge_status``.
+    ``global_`` is intentionally optional. When no global exchange is configured,
+    or when the configured global stream is missing/stale for this local
+    window, strategies receive ``None`` plus an explicit ``global_status``.
     """
 
-    primary: MarketEvent
-    hedge: MarketEvent | None = None
-    primary_private: PrivateStateSnapshot | None = None
-    hedge_private: PrivateStateSnapshot | None = None
-    hedge_status: HedgeStatus = "disabled"
-    hedge_lag_ms: int | None = None
-    max_hedge_lag_ms: int = 0
+    local: MarketEvent
+    global_: MarketEvent | None = None
+    local_private: PrivateStateSnapshot | None = None
+    global_private: PrivateStateSnapshot | None = None
+    global_status: GlobalMarketStatus = "disabled"
+    global_lag_ms: int | None = None
+    max_global_lag_ms: int = 0
     created_at_ms: int = 0
 
     @property
-    def has_hedge(self) -> bool:
-        return self.hedge is not None and self.hedge_status == "ready"
+    def has_global(self) -> bool:
+        return self.global_ is not None and self.global_status == "ready"
 
     @property
     def t_end_ms(self) -> int:
-        return self.primary.t_end_ms
+        return self.local.t_end_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +45,7 @@ class ModelUpdateReport:
 
     market_flow: dict[str, Any] = field(default_factory=dict)
     price: dict[str, Any] = field(default_factory=dict)
-    hedge_price: dict[str, Any] = field(default_factory=dict)
+    global_price: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,13 +72,13 @@ class StrategyDecision:
     observe_only: bool = True
     action_start_after_steps: int = 0
     live_execution_skipped_warmup: bool = False
-    hedge_status: HedgeStatus = "disabled"
-    has_hedge: bool = False
+    global_status: GlobalMarketStatus = "disabled"
+    has_global: bool = False
     mid: float = 0.0
-    primary_buy_vwap: float = 0.0
-    primary_sell_vwap: float = 0.0
-    hedge_buy_vwap: float | None = None
-    hedge_sell_vwap: float | None = None
+    local_buy_vwap: float = 0.0
+    local_sell_vwap: float = 0.0
+    global_buy_vwap: float | None = None
+    global_sell_vwap: float | None = None
     inventory: float = 0.0
     cash: float = 0.0
     buy_volume: float = 0.0
@@ -110,13 +110,13 @@ class StrategyDecision:
             "frame_step": self.frame_step,
             "action_start_after_steps": self.action_start_after_steps,
             "live_execution_skipped_warmup": self.live_execution_skipped_warmup,
-            "hedge_status": self.hedge_status,
-            "has_hedge": self.has_hedge,
+            "global_status": self.global_status,
+            "has_global": self.has_global,
             "mid": self.mid,
-            "primary_buy_vwap": self.primary_buy_vwap,
-            "primary_sell_vwap": self.primary_sell_vwap,
-            "hedge_buy_vwap": self.hedge_buy_vwap,
-            "hedge_sell_vwap": self.hedge_sell_vwap,
+            "local_buy_vwap": self.local_buy_vwap,
+            "local_sell_vwap": self.local_sell_vwap,
+            "global_buy_vwap": self.global_buy_vwap,
+            "global_sell_vwap": self.global_sell_vwap,
             "inventory": self.inventory,
             "cash": self.cash,
             "buy_volume": self.buy_volume,
@@ -130,7 +130,7 @@ class StrategyDecision:
             "executed_orders": list(executed_orders if executed_orders is not None else ()),
             "price_model": self.model_updates.price,
             "market_flow_model": self.model_updates.market_flow,
-            "hedge_price_model": self.model_updates.hedge_price,
+            "global_price_model": self.model_updates.global_price,
             "optimizer": self.diagnostics.optimizer,
             "continuous_action_depth": self.diagnostics.continuous_action_depth,
             "orderbook_grid": self.diagnostics.orderbook_grid,

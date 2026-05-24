@@ -59,7 +59,7 @@ def test_subtract_own_orders_removes_and_reduces_matching_levels():
 
 
 def test_clean_strategy_frame_adjusts_primary_book():
-    frame = StrategyInputFrame(primary=market_event())
+    frame = StrategyInputFrame(local=market_event())
     open_orders = {"own-bid": Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0)}
     clean = clean_strategy_frame(frame, open_orders)
     assert clean.primary.orderbook.bids[0] == PriceLevel(100.0, 1.0)
@@ -123,8 +123,8 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
     seen_bid_qty: list[float] = []
 
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
-        seen_bid_qty.append(frame.primary.orderbook.bids[0].qty)
-        return _minimal_decision(frame.primary)
+        seen_bid_qty.append(frame.local.orderbook.bids[0].qty)
+        return _minimal_decision(frame.local)
 
     monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
 
@@ -143,8 +143,7 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
         }
     )
 
-    runtime_config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime_config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_minimal_config(),
@@ -154,7 +153,7 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
         risk_engine=PassThroughRiskEngine(),
         bus=bus,
     )
-    await runner.on_frame(StrategyInputFrame(primary=market_event()))
+    await runner.on_frame(StrategyInputFrame(local=market_event()))
 
     assert seen_bid_qty == [1.0]
 
@@ -162,22 +161,21 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
 @pytest.mark.asyncio
 async def test_strategy_runner_risk_blocks_execution(monkeypatch: pytest.MonkeyPatch):
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
-        return _minimal_decision(frame.primary)
+        return _minimal_decision(frame.local)
 
     monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
 
     manager = RecordingOrderManager()
     runner = StrategyRunner(
         config=_minimal_config(),
-        binding=MarketMakerRuntimeConfig(
-            primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+        binding=MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         ).binding,
         frame_queue=asyncio.Queue(),
         order_managers={"nobitex": manager},
         risk_engine=RejectAllRisk(),
         bus=None,
     )
-    approved = await runner.on_frame(StrategyInputFrame(primary=market_event()))
+    approved = await runner.on_frame(StrategyInputFrame(local=market_event()))
 
     assert approved == []
     assert manager.synced == []
@@ -187,54 +185,54 @@ async def test_strategy_runner_risk_blocks_execution(monkeypatch: pytest.MonkeyP
 async def test_frame_assembler_passes_none_when_hedge_is_not_configured():
     queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     await queue.put(market_event())
-    assembler = StrategyInputFrameAssembler(primary_queue=queue, hedge_grace_ms=0)
+    assembler = StrategyInputFrameAssembler(local_queue=queue, global_grace_ms=0)
 
     frame = await assembler.next_frame()
 
-    assert frame.primary.exchange == "nobitex"
-    assert frame.hedge is None
-    assert frame.hedge_status == "disabled"
-    assert frame.has_hedge is False
+    assert frame.local.exchange == "nobitex"
+    assert frame.global_ is None
+    assert frame.global_status == "disabled"
+    assert frame.has_global is False
 
 
 @pytest.mark.asyncio
 async def test_frame_assembler_aligns_fresh_hedge_event_to_primary():
-    primary_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
-    hedge_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
+    local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
+    global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     hedge_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
     primary_event = market_event()
-    await hedge_queue.put(hedge_event)
-    await primary_queue.put(primary_event)
+    await global_queue.put(hedge_event)
+    await local_queue.put(primary_event)
     assembler = StrategyInputFrameAssembler(
-        primary_queue=primary_queue,
-        hedge_queue=hedge_queue,
-        max_hedge_lag_ms=1000,
-        hedge_grace_ms=0,
+        local_queue=local_queue,
+        global_queue=global_queue,
+        max_global_lag_ms=1000,
+        global_grace_ms=0,
     )
     frame = await assembler.next_frame()
 
-    assert frame.hedge == hedge_event
-    assert frame.hedge_status == "ready"
-    assert frame.hedge_lag_ms == 0
+    assert frame.global_ == hedge_event
+    assert frame.global_status == "ready"
+    assert frame.global_lag_ms == 0
 
 
 @pytest.mark.asyncio
 async def test_frame_assembler_hides_stale_hedge_event():
-    primary_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
-    hedge_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
-    await hedge_queue.put(_event_for("wallex", "BTC_IRT", t_start_ms=0, t_end_ms=500))
-    await primary_queue.put(market_event())
+    local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
+    global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
+    await global_queue.put(_event_for("wallex", "BTC_IRT", t_start_ms=0, t_end_ms=500))
+    await local_queue.put(market_event())
     assembler = StrategyInputFrameAssembler(
-        primary_queue=primary_queue,
-        hedge_queue=hedge_queue,
-        max_hedge_lag_ms=1000,
-        hedge_grace_ms=0,
+        local_queue=local_queue,
+        global_queue=global_queue,
+        max_global_lag_ms=1000,
+        global_grace_ms=0,
     )
     frame = await assembler.next_frame()
 
-    assert frame.hedge is None
-    assert frame.hedge_status == "stale"
-    assert frame.hedge_lag_ms == 1500
+    assert frame.global_ is None
+    assert frame.global_status == "stale"
+    assert frame.global_lag_ms == 1500
 
 
 def _event_for(exchange: str, symbol: str, *, t_start_ms: int, t_end_ms: int) -> MarketEvent:

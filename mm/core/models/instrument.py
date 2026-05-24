@@ -60,28 +60,16 @@ class InstrumentSpec:
 
 @dataclass(frozen=True, slots=True)
 class SymbolBinding:
-    primary: InstrumentSpec
-    hedge: InstrumentSpec | None = None
+    local: InstrumentSpec
+    global_: InstrumentSpec | None = None
 
     @property
     def comparable(self) -> bool:
-        return self.hedge is None or self.primary.is_comparable_to(self.hedge)
-
-    @property
-    def local(self) -> InstrumentSpec:
-        """Neutral alias for ``primary``."""
-
-        return self.primary
-
-    @property
-    def global_spec(self) -> InstrumentSpec | None:
-        """Neutral alias for ``hedge``."""
-
-        return self.hedge
+        return self.global_ is None or self.local.is_comparable_to(self.global_)
 
     def as_contract(self) -> dict[str, object]:
         out: dict[str, object] = {
-            "primary": instrument_contract(self.primary),
+            "local": instrument_contract(self.local),
             "float_domain": {
                 "prices": "quote-per-base floats",
                 "quantities": "base-asset floats",
@@ -90,9 +78,9 @@ class SymbolBinding:
                 "rounding_boundary": "order command adapter only",
             },
         }
-        if self.hedge is not None:
-            out["hedge"] = instrument_contract(self.hedge)
-            out["comparison"] = self.primary.comparison_policy(self.hedge)
+        if self.global_ is not None:
+            out["global"] = instrument_contract(self.global_)
+            out["comparison"] = self.local.comparison_policy(self.global_)
         return out
 
 

@@ -29,7 +29,6 @@ from mm.env_loader import load_mm_env
 from mm.execution.reconcile import ReconcileConfig
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
 from mm.runtime.control import RuntimeControlPlane
-from mm.hedging.service import build_hedge_execution_service
 from mm.ledger.service import build_portfolio_ledger_service
 from mm.runtime.pipeline import build_symbol_engine
 
@@ -53,7 +52,6 @@ class RuntimeComponents:
     observability_daemons: tuple[object, ...] = ()
     control_plane: RuntimeControlPlane | None = None
     strategy_runner: object | None = None
-    hedge_execution_service: object | None = None
     ledger_service: object | None = None
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
@@ -72,8 +70,6 @@ class RuntimeComponents:
         await self.frame_assembler.start()
         if self.strategy_runner is not None:
             await self.strategy_runner.start()
-        if self.hedge_execution_service is not None:
-            await self.hedge_execution_service.start()
         if self.ledger_service is not None:
             await self.ledger_service.start()
         if self.control_plane is not None:
@@ -93,8 +89,6 @@ class RuntimeComponents:
             self._scheduler_task.cancel()
             await asyncio.gather(self._scheduler_task, return_exceptions=True)
             self._scheduler_task = None
-        if self.hedge_execution_service is not None:
-            await self.hedge_execution_service.stop()
         if self.ledger_service is not None:
             await self.ledger_service.stop()
         if self.strategy_runner is not None:
@@ -120,25 +114,25 @@ class RuntimeComponents:
         self._started = False
 
     def market_event_topic(self, role: SourceRole) -> str:
-        source = self.config.primary if role == "primary" else self.config.hedge
+        source = self.config.local if role == "local" else self.config.global_
         if source is None:
-            raise ValueError("hedge source is not configured")
+            raise ValueError("global source is not configured")
         return source.market_event_topic(self.config.interval_ms)
 
     def market_error_topic(self, role: SourceRole) -> str:
-        source = self.config.primary if role == "primary" else self.config.hedge
+        source = self.config.local if role == "local" else self.config.global_
         if source is None:
-            raise ValueError("hedge source is not configured")
+            raise ValueError("global source is not configured")
         return source.market_error_topic()
 
     def private_snapshot_topic(self, role: SourceRole) -> str:
-        source = self.config.primary if role == "primary" else self.config.hedge
+        source = self.config.local if role == "local" else self.config.global_
         if source is None:
             raise ValueError("source is not configured")
         return f"private:state:{source.normalized_exchange()}:snapshot"
 
     def execution_state_topic(self, role: SourceRole) -> str:
-        source = self.config.primary if role == "primary" else self.config.hedge
+        source = self.config.local if role == "local" else self.config.global_
         if source is None:
             raise ValueError("source is not configured")
         return f"execution:state:{source.normalized_exchange()}"
@@ -168,8 +162,8 @@ async def build_runtime_components(
         await engine.publish_on_intervals(scheduler, [config.interval_ms])
         engines[source.role] = engine
 
-    primary_private_queue = None
-    hedge_private_queue = None
+    local_private_queue = None
+    global_private_queue = None
     private_selections: dict[SourceRole, PrivateStateAdapterSelection] = {}
     order_command_selections: dict[SourceRole, OrderCommandAdapterSelection] = {}
     order_managers: dict[str, OrderManager] = {}
@@ -197,10 +191,10 @@ async def build_runtime_components(
             bus=runtime_bus,
         )
         snapshot_queue = runtime_bus.subscribe_queue(f"private:state:{source.normalized_exchange()}:snapshot")
-        if source.role == "primary":
-            primary_private_queue = snapshot_queue
+        if source.role == "local":
+            local_private_queue = snapshot_queue
         else:
-            hedge_private_queue = snapshot_queue
+            global_private_queue = snapshot_queue
 
         if private_config.enable_execution:
             placement_max_concurrency = 8
@@ -230,15 +224,15 @@ async def build_runtime_components(
             )
 
     topics = _runtime_topics(config)
-    primary_topic = topics.primary_market_events
-    hedge_topic = topics.hedge_market_events
-    legacy_frame_assembler = StrategyInputFrameAssembler(
-        primary_queue=runtime_bus.subscribe_queue(primary_topic),
-        hedge_queue=runtime_bus.subscribe_queue(hedge_topic) if hedge_topic is not None else None,
-        primary_private_queue=primary_private_queue,
-        hedge_private_queue=hedge_private_queue,
-        max_hedge_lag_ms=config.max_hedge_lag_ms,
-        hedge_grace_ms=config.hedge_grace_ms,
+    local_topic = topics.local_market_events
+    global_topic = topics.global_market_events
+    frame_assembler_inner = StrategyInputFrameAssembler(
+        local_queue=runtime_bus.subscribe_queue(local_topic),
+        global_queue=runtime_bus.subscribe_queue(global_topic) if global_topic is not None else None,
+        local_private_queue=local_private_queue,
+        global_private_queue=global_private_queue,
+        max_global_lag_ms=config.max_global_lag_ms,
+        global_grace_ms=config.global_grace_ms,
     )
 
     ledger_service = build_portfolio_ledger_service(
@@ -250,15 +244,14 @@ async def build_runtime_components(
     max_local_private_age_ms = 120_000
     max_global_private_age_ms = 120_000
     if config.controller is not None:
-        max_local_private_age_ms = config.controller.risk.primary.max_private_state_age_ms
-        max_global_private_age_ms = config.controller.risk.hedge.max_private_state_age_ms
+        max_local_private_age_ms = config.controller.risk.local.max_private_state_age_ms
+        max_global_private_age_ms = config.controller.risk.global_.max_private_state_age_ms
 
     frame_assembler = JointStrategyFrameAssembler(
-        legacy_assembler=legacy_frame_assembler,
+        legacy_assembler=frame_assembler_inner,
         binding=config.binding,
         liquidity_sourcing=config.liquidity_sourcing,
         bus=runtime_bus,
-        legacy_output_topic=config.frame_topic,
         joint_output_topic=config.joint_frame_topic,
         ledger_service=ledger_service,
         max_local_private_age_ms=max_local_private_age_ms,
@@ -270,14 +263,7 @@ async def build_runtime_components(
     strategy_runner = build_strategy_runner(
         config,
         bus=runtime_bus,
-        frame_topic=config.frame_topic,
-        order_managers=order_managers,
-        control_plane=control_plane,
-    )
-
-    hedge_execution_service = build_hedge_execution_service(
-        config,
-        bus=runtime_bus,
+        frame_topic=config.joint_frame_topic,
         order_managers=order_managers,
         control_plane=control_plane,
     )
@@ -301,7 +287,6 @@ async def build_runtime_components(
         observability_daemons=observability_daemons,
         control_plane=control_plane,
         strategy_runner=strategy_runner,
-        hedge_execution_service=hedge_execution_service,
         ledger_service=ledger_service,
     )
 
@@ -383,21 +368,20 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
 def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
     topics = _runtime_topics(config)
     observed_topics = [
-        topics.strategy_frame,
         config.joint_frame_topic,
         RuntimeTopics.ledger_snapshot(),
         topics.strategy_decisions,
         topics.strategy_actions,
-        RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
-        RuntimeTopics.execution_state(config.primary.normalized_exchange()),
-        config.primary.market_error_topic(),
+        RuntimeTopics.execution_orders(config.local.normalized_exchange()),
+        RuntimeTopics.execution_state(config.local.normalized_exchange()),
+        config.local.market_error_topic(),
     ]
-    if config.hedge is not None:
+    if config.global_ is not None:
         observed_topics.extend(
             [
-                RuntimeTopics.execution_orders(config.hedge.normalized_exchange()),
-                RuntimeTopics.execution_state(config.hedge.normalized_exchange()),
-                config.hedge.market_error_topic(),
+                RuntimeTopics.execution_orders(config.global_.normalized_exchange()),
+                RuntimeTopics.execution_state(config.global_.normalized_exchange()),
+                config.global_.market_error_topic(),
             ]
         )
     return (RuntimeObservabilitySubscriber(bus=bus, topics=tuple(observed_topics)),)
@@ -406,42 +390,37 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
 def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, ...]:
     runtime_topics = _runtime_topics(config)
     topics = [
-        runtime_topics.primary_market_events,
-        runtime_topics.strategy_frame,
+        runtime_topics.local_market_events,
         config.joint_frame_topic,
         RuntimeTopics.ledger_snapshot(),
         runtime_topics.strategy_actions,
-        RuntimeTopics.execution_orders(config.primary.normalized_exchange()),
-        RuntimeTopics.execution_state(config.primary.normalized_exchange()),
-        RuntimeTopics.private_snapshot(config.primary.normalized_exchange()),
+        RuntimeTopics.execution_orders(config.local.normalized_exchange()),
+        RuntimeTopics.execution_state(config.local.normalized_exchange()),
+        RuntimeTopics.private_snapshot(config.local.normalized_exchange()),
     ]
     if config.controller is not None:
         topics.append(runtime_topics.strategy_decisions)
         topics.append(config.controller.normalized_diagnostics_topic)
         topics.append(config.controller.normalized_target_books_topic)
-    if config.hedge is not None:
-        hedge_exchange = config.hedge.normalized_exchange()
+    if config.global_ is not None:
+        global_exchange = config.global_.normalized_exchange()
         topics.extend(
             [
-                config.hedge.market_event_topic(config.interval_ms),
-                RuntimeTopics.execution_orders(hedge_exchange),
-                RuntimeTopics.execution_state(hedge_exchange),
-                RuntimeTopics.private_snapshot(hedge_exchange),
-                f"private:state:{config.primary.normalized_exchange()}:fills",
+                config.global_.market_event_topic(config.interval_ms),
+                RuntimeTopics.execution_orders(global_exchange),
+                RuntimeTopics.execution_state(global_exchange),
+                RuntimeTopics.private_snapshot(global_exchange),
+                f"private:state:{config.local.normalized_exchange()}:fills",
             ]
         )
-    if config.hedging is not None and config.hedging.enabled:
-        topics.append(config.hedging.normalized_intents_topic)
-        topics.append(config.hedging.normalized_diagnostics_topic)
     return tuple(dict.fromkeys(topics))
 
 
 def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:
     return RuntimeTopics(
-        primary=config.primary,
-        hedge=config.hedge,
+        local=config.local,
+        global_=config.global_,
         interval_ms=config.interval_ms,
-        frame_topic=config.frame_topic,
         action_topic=config.controller.normalized_action_topic if config.controller is not None else "strategy:actions",
         decisions_topic=(
             config.controller.normalized_decisions_topic

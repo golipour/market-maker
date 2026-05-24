@@ -150,11 +150,10 @@ def test_apply_ledger_event_sequence_matches_store_replay() -> None:
 
 
 def test_build_joint_ledger_snapshot_consolidates_local_and_global() -> None:
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-        hedge=MarketDataSourceConfig(role="hedge", exchange="wallex", symbol="BTC_IRT"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
     )
-    local = VenueLedgerStateMachine("nobitex", config.binding.primary).apply_snapshot(
+    local = VenueLedgerStateMachine("nobitex", config.binding.local).apply_snapshot(
         PrivateStateSnapshot(
             exchange="nobitex",
             timestamp_ms=1000,
@@ -164,7 +163,7 @@ def test_build_joint_ledger_snapshot_consolidates_local_and_global() -> None:
             },
         )
     )
-    global_ = VenueLedgerStateMachine("wallex", config.binding.hedge).apply_snapshot(
+    global_ = VenueLedgerStateMachine("wallex", config.binding.global_).apply_snapshot(
         PrivateStateSnapshot(
             exchange="wallex",
             timestamp_ms=1000,
@@ -195,9 +194,8 @@ async def test_portfolio_ledger_service_publishes_snapshots_from_private_topics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-        primary_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
     )
     bus = InMemoryBus()
     venue_queue = bus.subscribe_queue("ledger:snapshot:nobitex")
@@ -226,9 +224,8 @@ async def test_portfolio_ledger_service_publishes_snapshots_from_private_topics(
 
 @pytest.mark.asyncio
 async def test_portfolio_ledger_service_consistency_diagnostic_detects_divergence() -> None:
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-        primary_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
     )
     bus = InMemoryBus()
     manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 1000)
@@ -268,9 +265,8 @@ async def test_portfolio_ledger_service_publishes_consistency_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-        primary_private=PrivateRuntimeConfig(
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(
             api_token_env="NOBITEX_API_TOKEN",
             enable_execution=True,
         ),

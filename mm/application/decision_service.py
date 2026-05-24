@@ -43,6 +43,7 @@ def build_strategy_runner(
             clock_ms=now_ms,
         ),
         liquidity_sourcing=config.liquidity_sourcing,
+        execution=config.execution,
         bus=bus,
         control_plane=control_plane,
         run_id=config.observability.run_id,

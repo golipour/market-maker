@@ -67,50 +67,50 @@ def joint_ledger_from_frame(
 ) -> JointLedgerSnapshot:
     """Build a joint ledger snapshot from legacy frame private state."""
 
-    local = venue_ledger_from_private_snapshot(frame.primary_private, binding.primary)
+    local = venue_ledger_from_private_snapshot(frame.local_private, binding.local)
     global_ledger = (
-        venue_ledger_from_private_snapshot(frame.hedge_private, binding.hedge)
-        if binding.hedge is not None
+        venue_ledger_from_private_snapshot(frame.global_private, binding.global_)
+        if binding.global_ is not None
         else None
     )
 
     local_inventory, local_cash = inventory_cash_from_snapshot(
-        frame.primary_private,
-        binding.primary.base_asset,
-        binding.primary.quote_asset,
-        trading_symbol=binding.primary.symbol,
+        frame.local_private,
+        binding.local.base_asset,
+        binding.local.quote_asset,
+        trading_symbol=binding.local.symbol,
     )
     global_inventory = 0.0
     global_cash = 0.0
-    if global_ledger is not None and binding.hedge is not None:
+    if global_ledger is not None and binding.global_ is not None:
         global_inventory, global_cash = inventory_cash_from_snapshot(
-            frame.hedge_private,
-            binding.hedge.base_asset,
-            binding.hedge.quote_asset,
-            trading_symbol=binding.hedge.symbol,
+            frame.global_private,
+            binding.global_.base_asset,
+            binding.global_.quote_asset,
+            trading_symbol=binding.global_.symbol,
         )
 
-    ref_price = float(reference_price if reference_price is not None else frame.primary.microprice)
+    ref_price = float(reference_price if reference_price is not None else frame.local.microprice)
     consolidated_base = local_inventory + global_inventory
     consolidated_quote = local_cash + global_cash
 
     now_ms = int(created_at_ms if created_at_ms is not None else frame.created_at_ms)
     local_private_age = (
-        max(0, now_ms - int(frame.primary_private.timestamp_ms))
-        if frame.primary_private is not None and now_ms > 0
+        max(0, now_ms - int(frame.local_private.timestamp_ms))
+        if frame.local_private is not None and now_ms > 0
         else None
     )
     global_private_age = (
-        max(0, now_ms - int(frame.hedge_private.timestamp_ms))
-        if frame.hedge_private is not None and now_ms > 0
+        max(0, now_ms - int(frame.global_private.timestamp_ms))
+        if frame.global_private is not None and now_ms > 0
         else None
     )
     local_market_age = (
-        max(0, now_ms - int(frame.primary.t_end_ms)) if now_ms > 0 else None
+        max(0, now_ms - int(frame.local.t_end_ms)) if now_ms > 0 else None
     )
     global_market_age = (
-        max(0, now_ms - int(frame.hedge.t_end_ms))
-        if frame.hedge is not None and now_ms > 0
+        max(0, now_ms - int(frame.global_.t_end_ms))
+        if frame.global_ is not None and now_ms > 0
         else None
     )
 
@@ -126,7 +126,7 @@ def joint_ledger_from_frame(
             global_private_age_ms=global_private_age,
             local_market_age_ms=local_market_age,
             global_market_age_ms=global_market_age,
-            ledger_fresh=frame.primary_private is not None,
+            ledger_fresh=frame.local_private is not None,
         ),
     )
 
@@ -139,9 +139,9 @@ def _reference_price_from_frame(
     *,
     reference_venue: str = "global",
 ) -> float:
-    if reference_venue == "global" and frame.hedge is not None:
-        return float(frame.hedge.microprice)
-    return float(frame.primary.microprice)
+    if reference_venue == "global" and frame.global_ is not None:
+        return float(frame.global_.microprice)
+    return float(frame.local.microprice)
 
 
 def _venue_private_ready(
@@ -170,7 +170,7 @@ def build_frame_sync_status(
 ) -> FrameSyncStatus:
     """Compute runtime synchronization readiness for a joint strategy frame."""
 
-    has_global_venue = binding.hedge is not None
+    has_global_venue = binding.global_ is not None
     sourcing_active = (
         liquidity_sourcing.enabled and liquidity_sourcing.mode == "liquidity_sourcing"
     )
@@ -178,9 +178,9 @@ def build_frame_sync_status(
 
     local_market_ready = True
     if global_market_required:
-        global_market_ready = frame.hedge is not None and frame.hedge_status == "ready"
+        global_market_ready = frame.global_ is not None and frame.global_status == "ready"
     elif has_global_venue:
-        global_market_ready = frame.hedge_status in {"ready", "disabled", "missing", "stale"}
+        global_market_ready = frame.global_status in {"ready", "disabled", "missing", "stale"}
     else:
         global_market_ready = True
 
@@ -220,8 +220,8 @@ def build_frame_sync_status(
         local_private_ready=local_private_ready,
         global_private_ready=global_private_ready,
         ledger_fresh=ledger_fresh,
-        latency_skew_ms=frame.hedge_lag_ms,
-        hedge_status=frame.hedge_status,
+        latency_skew_ms=frame.global_lag_ms,
+        global_status=frame.global_status,
     )
 
 
@@ -234,6 +234,7 @@ def joint_strategy_frame_from_legacy(
     now_ms: int | None = None,
     max_local_private_age_ms: int = 120_000,
     max_global_private_age_ms: int = 120_000,
+    input_frame: StrategyInputFrame | None = None,
 ) -> JointStrategyFrame:
     """Build a ledger-backed joint frame from aligned market events."""
 
@@ -263,12 +264,13 @@ def joint_strategy_frame_from_legacy(
         max_global_private_age_ms=max_global_private_age_ms,
     )
     return JointStrategyFrame(
-        local_market=frame.primary,
-        global_market=frame.hedge,
+        local_market=frame.local,
+        global_market=frame.global_,
         ledger=ledger,
         mode=mode,
         sync_status=sync_status,
         created_at_ms=created_at_ms,
+        input_frame=input_frame or frame,
     )
 
 
@@ -299,8 +301,8 @@ def strategy_input_frame_to_joint_strategy_frame(
         now_ms=frame.created_at_ms,
     )
     return JointStrategyFrame(
-        local_market=frame.primary,
-        global_market=frame.hedge,
+        local_market=frame.local,
+        global_market=frame.global_,
         ledger=ledger,
         mode=mode,
         sync_status=sync_status,

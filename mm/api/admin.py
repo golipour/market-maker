@@ -15,7 +15,13 @@ from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
 
 
 class AdminCommand(BaseModel):
-    command: str = Field(..., pattern="^(pause|resume|kill_switch|cancel_all|observe_only|reload_risk)$")
+    command: str = Field(
+        ...,
+        pattern=(
+            "^(pause|resume|kill_switch|cancel_all|observe_only|reload_risk|"
+            "pause_local|resume_local|pause_global|resume_global|cancel_actor_orders)$"
+        ),
+    )
     actor_id: str | None = None
     exchange: str | None = None
     enabled: bool | None = None

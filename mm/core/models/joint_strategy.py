@@ -7,7 +7,7 @@ from typing import Any
 
 from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.market import MarketEvent
-from mm.core.models.strategy import HedgeStatus
+from mm.core.models.strategy import GlobalMarketStatus
 from mm.core.models.target_book import LiquiditySourcingMode
 
 
@@ -21,7 +21,7 @@ class FrameSyncStatus:
     global_private_ready: bool = False
     ledger_fresh: bool = True
     latency_skew_ms: int | None = None
-    hedge_status: HedgeStatus = "disabled"
+    global_status: GlobalMarketStatus = "disabled"
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -31,7 +31,7 @@ class FrameSyncStatus:
             "global_private_ready": self.global_private_ready,
             "ledger_fresh": self.ledger_fresh,
             "latency_skew_ms": self.latency_skew_ms,
-            "hedge_status": self.hedge_status,
+            "global_status": self.global_status,
         }
 
 
@@ -45,6 +45,7 @@ class JointStrategyFrame:
     mode: LiquiditySourcingMode = "single_venue"
     sync_status: FrameSyncStatus = field(default_factory=FrameSyncStatus)
     created_at_ms: int = 0
+    input_frame: "StrategyInputFrame | None" = None
 
     @property
     def t_end_ms(self) -> int:

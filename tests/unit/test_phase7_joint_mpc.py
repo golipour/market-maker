@@ -71,7 +71,7 @@ def _build_optimizer(*, liquidity_sourcing_enabled: bool = False) -> MonteCarloM
         quote_size_max_per_side=2.0,
         device="cpu",
         fixed_mc_samples=True,
-        hedge_rollout_enabled=False,
+        hedge_rollout=False,
     )
 
 
@@ -170,7 +170,7 @@ def test_joint_optimizer_runs_with_consolidated_wealth() -> None:
     action, diagnostics = joint.optimize_with_diagnostics(state)
     assert action.n_components == 1
     assert diagnostics.rollout.get("consolidated_wealth") is True
-    assert diagnostics.rollout.get("hedge_rollout_enabled") is False
+    assert diagnostics.rollout.get("hedge_rollout") is False
     assert joint._last_joint_action is not None
     assert isinstance(joint._last_joint_action, JointSigmoidMixtureAction)
 

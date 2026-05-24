@@ -68,12 +68,12 @@ def test_venues_local_global_config_aliases() -> None:
     )
 
     assert config.local.normalized_exchange() == "nobitex"
-    assert config.global_source is not None
-    assert config.global_source.normalized_exchange() == "wallex"
-    assert config.primary is config.local
-    assert config.hedge is config.global_source
-    assert config.local_private is config.primary_private
-    assert config.global_private is config.hedge_private
+    assert config.global_venue is not None
+    assert config.global_venue.normalized_exchange() == "wallex"
+    assert config.local is config.local
+    assert config.global_ is config.global_venue
+    assert config.local_private is config.local_private
+    assert config.global_private is config.global_private
     assert config.config_warnings == ()
 
 
@@ -82,15 +82,15 @@ def test_legacy_primary_hedge_emits_config_warnings() -> None:
         {
             "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
             "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
-            "primary_private": {"api_token_env": "NOBITEX_API_TOKEN"},
-            "hedge_private": {"api_token_env": "WALLEX_API_TOKEN"},
+            "local_private": {"api_token_env": "NOBITEX_API_TOKEN"},
+            "global_private": {"api_token_env": "WALLEX_API_TOKEN"},
         }
     )
 
     assert "legacy key 'primary' accepted" in config.config_warnings[0]
     assert "legacy key 'hedge' accepted" in config.config_warnings[1]
     assert config.local.normalized_exchange() == "nobitex"
-    assert config.global_source is not None
+    assert config.global_venue is not None
 
 
 def test_liquidity_sourcing_config_defaults() -> None:
@@ -157,11 +157,10 @@ def test_example_config_unchanged_behavior_with_defaults() -> None:
 
 
 def test_joint_models_serialize_through_json() -> None:
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="USDT_IRT"),
-        hedge=MarketDataSourceConfig(role="hedge", exchange="wallex", symbol="USDT_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
+        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
     )
-    primary_private = PrivateStateSnapshot(
+    local_private = PrivateStateSnapshot(
         "nobitex",
         2000,
         balances={
@@ -169,12 +168,11 @@ def test_joint_models_serialize_through_json() -> None:
             "IRT": make_balance("nobitex", "IRT", 1_000_000.0, 0.0, 2000),
         },
     )
-    frame = StrategyInputFrame(
-        primary=_market_event(exchange="nobitex"),
+    frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
         hedge=_market_event(exchange="wallex"),
-        primary_private=primary_private,
-        hedge_status="ready",
-        hedge_lag_ms=50,
+        local_private=local_private,
+        global_status="ready",
+        global_lag_ms=50,
         created_at_ms=2100,
     )
 
@@ -189,10 +187,9 @@ def test_joint_models_serialize_through_json() -> None:
 
 
 def test_strategy_input_frame_adapter_respects_liquidity_sourcing_mode() -> None:
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="USDT_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
     )
-    frame = StrategyInputFrame(primary=_market_event())
+    frame = StrategyInputFrame(local=_market_event())
 
     joint_frame = strategy_input_frame_to_joint_strategy_frame(
         frame,

@@ -5,8 +5,8 @@ from mm.integrations.trade_stats import get_exchange_info
 
 cfg = load_runtime_config("mm/configs/market_maker.runtime.example.json")
 
-print("binding.primary (from config primary=nobitex):")
-print(cfg.binding.primary)
+print("binding.local (from config primary=nobitex):")
+print(cfg.binding.local)
 
 print("\nget_exchange_info(..., 'nobitex'):")
 print(get_exchange_info("USDT_IRT", "nobitex"))
@@ -15,5 +15,5 @@ print("\nget_exchange_info(..., 'wallex'):")
 print(get_exchange_info("USDT_IRT", "wallex"))
 
 if cfg.hedge is not None:
-    print("\nbinding.hedge (from config hedge):")
-    print(cfg.binding.hedge)
+    print("\nbinding.global (from config hedge):")
+    print(cfg.binding.global_)

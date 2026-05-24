@@ -275,10 +275,10 @@ def score_frame_models(
     state: State,
     market_flow_model: Any | None,
     price_model: Any | None,
-    hedge_price_model: Any | None,
+    global_price_model: Any | None,
     market_flow_kind: str,
     price_kind: str,
-    hedge_price_kind: str,
+    global_price_kind: str,
 ) -> dict[str, ModelScore]:
     """Score realized observations with pre-update params; caller runs updates after."""
 
@@ -287,8 +287,8 @@ def score_frame_models(
     if market_flow_model is not None and hasattr(market_flow_model, "get_params"):
         params_before = dict(market_flow_model.get_params())
         result = score_market_flow(
-            buy_volume=frame.primary.buy_volume,
-            sell_volume=frame.primary.sell_volume,
+            buy_volume=frame.local.buy_volume,
+            sell_volume=frame.local.sell_volume,
             params_before=params_before,
             kind=market_flow_kind,
         )
@@ -312,8 +312,8 @@ def score_frame_models(
             from mm.core.order_constraints import mid_from_orderbook
 
             try:
-                prev_mid = mid_from_orderbook(previous_frame.primary.orderbook)
-                curr_mid = mid_from_orderbook(frame.primary.orderbook)
+                prev_mid = mid_from_orderbook(previous_frame.local.orderbook)
+                curr_mid = mid_from_orderbook(frame.local.orderbook)
             except ValueError:
                 result = ScoreResult(skip_reason="missing_previous_frame", observation={})
             else:
@@ -328,16 +328,16 @@ def score_frame_models(
             updated=False,
         )
 
-    if hedge_price_model is not None and hasattr(hedge_price_model, "get_params"):
-        params_before = dict(hedge_price_model.get_params())
-        if state.hedge_buy_vwap is None or state.hedge_sell_vwap is None or not frame.has_hedge:
+    if global_price_model is not None and hasattr(global_price_model, "get_params"):
+        params_before = dict(global_price_model.get_params())
+        if state.global_buy_vwap is None or state.global_sell_vwap is None or not frame.has_global:
             result = ScoreResult(skip_reason="missing_hedge", observation={})
-        elif getattr(hedge_price_model, "_last_buy_obs", None) is None:
+        elif getattr(global_price_model, "_last_buy_obs", None) is None:
             result = ScoreResult(skip_reason="missing_previous_frame", observation={})
         else:
-            delta_buy = float(state.hedge_buy_vwap) - float(hedge_price_model._last_buy_obs)
-            delta_sell = float(state.hedge_sell_vwap) - float(hedge_price_model._last_sell_obs)
-            if hedge_price_kind == "gaussian":
+            delta_buy = float(state.global_buy_vwap) - float(global_price_model._last_buy_obs)
+            delta_sell = float(state.global_sell_vwap) - float(global_price_model._last_sell_obs)
+            if global_price_kind == "gaussian":
                 result = score_hedge_vwap_deltas(
                     delta_buy=delta_buy,
                     delta_sell=delta_sell,
@@ -354,9 +354,9 @@ def score_frame_models(
                     delta_sell=delta_sell,
                     params_before=params_before,
                 )
-        scores["hedge_price"] = _to_model_score(
-            model="hedge_price",
-            kind=hedge_price_kind,
+        scores["global_price"] = _to_model_score(
+            model="global_price",
+            kind=global_price_kind,
             params_before=params_before,
             params_after=params_before,
             result=result,

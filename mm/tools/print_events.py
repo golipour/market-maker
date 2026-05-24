@@ -143,23 +143,23 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "primary_best_ask": event.primary.orderbook.asks[0].price if event.primary.orderbook.asks else None,
             "primary_mid": primary_book_health["mid"],
             "primary_trade_count": len(event.primary.trades),
-            "hedge_status": event.hedge_status,
-            "has_hedge": event.has_hedge,
+            "global_status": event.global_status,
+            "has_global": event.has_global,
             "hedge_exchange": event.hedge.exchange if event.hedge is not None else None,
             "hedge_symbol": event.hedge.symbol if event.hedge is not None else None,
             "hedge_t_end_ms": event.hedge.t_end_ms if event.hedge is not None else None,
-            "hedge_lag_ms": event.hedge_lag_ms,
-            "max_hedge_lag_ms": event.max_hedge_lag_ms,
+            "global_lag_ms": event.global_lag_ms,
+            "max_global_lag_ms": event.max_global_lag_ms,
             "hedge_best_bid": event.hedge.orderbook.bids[0].price if event.hedge and event.hedge.orderbook.bids else None,
             "hedge_best_ask": event.hedge.orderbook.asks[0].price if event.hedge and event.hedge.orderbook.asks else None,
             "hedge_mid": hedge_book_health.get("mid"),
             "hedge_trade_count": len(event.hedge.trades) if event.hedge is not None else None,
-            "primary_private_snapshot": event.primary_private is not None,
-            "primary_balance_assets": sorted(event.primary_private.balances) if event.primary_private is not None else [],
+            "local_private_snapshot": event.local_private is not None,
+            "primary_balance_assets": sorted(event.local_private.balances) if event.local_private is not None else [],
             "primary_open_order_count": (
-                len(event.primary_private.open_orders) if event.primary_private is not None else None
+                len(event.local_private.open_orders) if event.local_private is not None else None
             ),
-            "hedge_private_snapshot": event.hedge_private is not None,
+            "global_private_snapshot": event.global_private is not None,
             "created_at_ms": event.created_at_ms,
             "frame_contract": (
                 "primary is always present; hedge is None unless a configured hedge exchange has a fresh aligned event"
@@ -346,13 +346,12 @@ async def run(args: argparse.Namespace) -> None:
     hedge_symbol = args.hedge_symbol or args.symbol
     api_token = resolve_api_token(exchange, args.private_api_token, args.private_api_token_env)
     hedge_api_token = (
-        resolve_api_token(hedge_exchange, args.hedge_private_api_token, args.hedge_private_api_token_env)
+        resolve_api_token(hedge_exchange, args.global_private_api_token, args.global_private_api_token_env)
         if hedge_exchange
         else None
     )
-    runtime_config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(
-            role="primary",
+    runtime_config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(
+            role="local",
             exchange=exchange,
             symbol=args.symbol,
             mode=mode,
@@ -362,7 +361,7 @@ async def run(args: argparse.Namespace) -> None:
         ),
         hedge=(
             MarketDataSourceConfig(
-                role="hedge",
+                role="global",
                 exchange=hedge_exchange,
                 symbol=hedge_symbol,
                 mode=hedge_mode,
@@ -374,18 +373,18 @@ async def run(args: argparse.Namespace) -> None:
             else None
         ),
         interval_ms=args.interval_ms,
-        max_hedge_lag_ms=args.max_hedge_lag_ms,
-        hedge_grace_ms=args.hedge_grace_ms,
-        primary_private=PrivateRuntimeConfig(
+        max_global_lag_ms=args.max_global_lag_ms,
+        global_grace_ms=args.global_grace_ms,
+        local_private=PrivateRuntimeConfig(
             mode=args.private_mode,
             api_token=api_token,
             poll_interval_ms=args.private_poll_ms,
         ),
-        hedge_private=(
+        global_private=(
             PrivateRuntimeConfig(
-                mode=args.hedge_private_mode,
+                mode=args.global_private_mode,
                 api_token=hedge_api_token,
-                poll_interval_ms=args.hedge_private_poll_ms,
+                poll_interval_ms=args.global_private_poll_ms,
             )
             if hedge_exchange
             else None
@@ -438,8 +437,8 @@ async def run(args: argparse.Namespace) -> None:
             "hedge_is_anchor": True,
             "symbol_policy": "same domain symbol as primary by default; no tick-size conversion is applied",
         }
-        contract["hedge_private_state"] = {
-            "requested_transport_mode": args.hedge_private_mode,
+        contract["global_private_state"] = {
+            "requested_transport_mode": args.global_private_mode,
             "selected_transport": runtime.private_state_selections["hedge"].mode
             if "hedge" in runtime.private_state_selections
             else None,
@@ -454,8 +453,8 @@ async def run(args: argparse.Namespace) -> None:
         "primary": "always present",
         "hedge": "None when --hedge-exchange is omitted, missing, or stale",
         "hedge_is_anchor": True,
-        "max_hedge_lag_ms": args.max_hedge_lag_ms,
-        "hedge_grace_ms": args.hedge_grace_ms,
+        "max_global_lag_ms": args.max_global_lag_ms,
+        "global_grace_ms": args.global_grace_ms,
     }
     print(json.dumps(contract, ensure_ascii=False))
 
@@ -491,35 +490,35 @@ async def run_print_loop(runtime: RuntimeComponents, args: argparse.Namespace) -
 def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list[tuple[str, asyncio.Queue]]:
     config = runtime.config
     bus = runtime.bus
-    primary_event_topic = config.primary.market_event_topic(config.interval_ms)
-    primary_error_topic = config.primary.market_error_topic()
+    primary_event_topic = config.local.market_event_topic(config.interval_ms)
+    primary_error_topic = config.local.market_error_topic()
     queues: list[tuple[str, asyncio.Queue]] = [
         (config.frame_topic, bus.subscribe_queue(config.frame_topic)),
         (primary_event_topic, bus.subscribe_queue(primary_event_topic)),
         (primary_error_topic, bus.subscribe_queue(primary_error_topic)),
     ]
-    if config.hedge is not None:
-        hedge_event_topic = config.hedge.market_event_topic(config.interval_ms)
-        hedge_error_topic = config.hedge.market_error_topic()
+    if config.global_ is not None:
+        hedge_event_topic = config.global_.market_event_topic(config.interval_ms)
+        hedge_error_topic = config.global_.market_error_topic()
         queues.extend([
             (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
             (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
         ])
     if include_raw:
-        trade_topic = config.primary.raw_trade_topic()
-        book_topic = config.primary.raw_orderbook_topic()
+        trade_topic = config.local.raw_trade_topic()
+        book_topic = config.local.raw_orderbook_topic()
         queues.extend([
             (trade_topic, bus.subscribe_queue(trade_topic)),
             (book_topic, bus.subscribe_queue(book_topic)),
         ])
-        if config.hedge is not None:
-            hedge_trade_topic = config.hedge.raw_trade_topic()
-            hedge_book_topic = config.hedge.raw_orderbook_topic()
+        if config.global_ is not None:
+            hedge_trade_topic = config.global_.raw_trade_topic()
+            hedge_book_topic = config.global_.raw_orderbook_topic()
             queues.extend([
                 (hedge_trade_topic, bus.subscribe_queue(hedge_trade_topic)),
                 (hedge_book_topic, bus.subscribe_queue(hedge_book_topic)),
             ])
-    for role, source in (("primary", config.primary), ("hedge", config.hedge)):
+    for role, source in (("primary", config.local), ("hedge", config.global_)):
         if source is None or role not in runtime.private_state_selections:
             continue
         exchange = source.normalized_exchange()

@@ -93,25 +93,25 @@ class ActionPipelineDiagnostics:
 
 @dataclass(frozen=True, slots=True)
 class FrameDiagnostics:
-    hedge_status: str = "disabled"
-    hedge_lag_ms: int | None = None
+    global_status: str = "disabled"
+    global_lag_ms: int | None = None
     frame_age_ms: int | None = None
-    primary_private_age_ms: int | None = None
-    hedge_private_age_ms: int | None = None
+    local_private_age_ms: int | None = None
+    global_private_age_ms: int | None = None
     sync_status: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class StateDiagnostics:
     mid: float = 0.0
-    primary_inventory: float = 0.0
+    local_inventory: float = 0.0
     primary_cash: float = 0.0
-    hedge_inventory: float = 0.0
+    global_inventory: float = 0.0
     hedge_cash: float = 0.0
-    primary_buy_vwap: float = 0.0
-    primary_sell_vwap: float = 0.0
-    hedge_buy_vwap: float | None = None
-    hedge_sell_vwap: float | None = None
+    local_buy_vwap: float = 0.0
+    local_sell_vwap: float = 0.0
+    global_buy_vwap: float | None = None
+    global_sell_vwap: float | None = None
     primary_base_wallet: dict[str, Any] = field(default_factory=dict)
     primary_quote_wallet: dict[str, Any] = field(default_factory=dict)
     hedge_base_wallet: dict[str, Any] = field(default_factory=dict)
@@ -133,6 +133,7 @@ class RiskDiagnostics:
 class ExecutionGateDiagnostics:
     executed: bool = False
     blocked_reasons: tuple[str, ...] = ()
+    venue_gates: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +177,7 @@ class ControllerDiagnostics:
             "execution_gates": {
                 "executed": self.execution_gates.executed,
                 "blocked_reasons": list(self.execution_gates.blocked_reasons),
+                "venue_gates": dict(self.execution_gates.venue_gates),
             },
             "warnings": list(self.warnings),
             "cleared_orderbook": dict(self.cleared_orderbook),
@@ -184,11 +186,11 @@ class ControllerDiagnostics:
 
 def _frame_payload(frame: FrameDiagnostics) -> dict[str, Any]:
     return {
-        "hedge_status": frame.hedge_status,
-        "hedge_lag_ms": frame.hedge_lag_ms,
+        "global_status": frame.global_status,
+        "global_lag_ms": frame.global_lag_ms,
         "frame_age_ms": frame.frame_age_ms,
-        "primary_private_age_ms": frame.primary_private_age_ms,
-        "hedge_private_age_ms": frame.hedge_private_age_ms,
+        "local_private_age_ms": frame.local_private_age_ms,
+        "global_private_age_ms": frame.global_private_age_ms,
         "sync_status": dict(frame.sync_status),
     }
 
@@ -196,14 +198,14 @@ def _frame_payload(frame: FrameDiagnostics) -> dict[str, Any]:
 def _state_payload(state: StateDiagnostics) -> dict[str, Any]:
     return {
         "mid": state.mid,
-        "primary_inventory": state.primary_inventory,
+        "local_inventory": state.local_inventory,
         "primary_cash": state.primary_cash,
-        "hedge_inventory": state.hedge_inventory,
+        "global_inventory": state.global_inventory,
         "hedge_cash": state.hedge_cash,
-        "primary_buy_vwap": state.primary_buy_vwap,
-        "primary_sell_vwap": state.primary_sell_vwap,
-        "hedge_buy_vwap": state.hedge_buy_vwap,
-        "hedge_sell_vwap": state.hedge_sell_vwap,
+        "local_buy_vwap": state.local_buy_vwap,
+        "local_sell_vwap": state.local_sell_vwap,
+        "global_buy_vwap": state.global_buy_vwap,
+        "global_sell_vwap": state.global_sell_vwap,
         "primary_base_wallet": dict(state.primary_base_wallet),
         "primary_quote_wallet": dict(state.primary_quote_wallet),
         "hedge_base_wallet": dict(state.hedge_base_wallet),

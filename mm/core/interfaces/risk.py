@@ -40,4 +40,4 @@ class AbstractRiskEngine(ABC):
         state: TradingState,
         frame: StrategyInputFrame,
     ) -> RiskResult:
-        return self.validate_with_result(actions, state, frame.primary)
+        return self.validate_with_result(actions, state, frame.local)

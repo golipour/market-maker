@@ -31,10 +31,10 @@ def trading_state_from_frame(
     """Build risk state from the latest frame private snapshot and live orders."""
 
     inventory, cash = inventory_cash_from_snapshot(
-        frame.primary_private,
-        binding.primary.base_asset,
-        binding.primary.quote_asset,
-        trading_symbol=binding.primary.symbol,
+        frame.local_private,
+        binding.local.base_asset,
+        binding.local.quote_asset,
+        trading_symbol=binding.local.symbol,
     )
     return TradingState(
         actor_id=actor_id,

@@ -14,7 +14,7 @@ def test_symbol_split_supports_domain_and_compact_symbols() -> None:
 def test_same_symbol_on_second_exchange_is_comparable_without_tick_conversion() -> None:
     primary = build_instrument_spec("nobitex", "BTC_IRT", price_step=1.0)
     hedge = build_instrument_spec("wallex", "BTC_IRT", price_step=10.0)
-    binding = SymbolBinding(primary=primary, hedge=hedge)
+    binding = SymbolBinding(local=primary, global_=hedge)
 
     contract = binding.as_contract()
 

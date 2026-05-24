@@ -166,8 +166,7 @@ def test_action_pipeline_phase4_stage_aliases() -> None:
 
 
 def test_default_persistence_topics_include_target_books() -> None:
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=ControllerRuntimeConfig(enabled=True, actor_id="mpc-controller"),
     )
     topics = _default_persistence_topics(runtime)
@@ -198,8 +197,7 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
         lambda spec, *, max_orders_per_side: _constraints(),
     )
 
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=ControllerRuntimeConfig(
             enabled=True,
             actor_id="mpc-controller",
@@ -208,7 +206,7 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
         ),
     )
     engine = MpcStrategyEngine(config=runtime.controller, binding=runtime.binding)
-    decision = engine.decide(StrategyInputFrame(primary=_market_event()), frame_step=1)
+    decision = engine.decide(StrategyInputFrame(local=_market_event()), frame_step=1)
 
     assert decision.joint_target_book is not None
     assert decision.joint_target_book.local.exchange == "nobitex"
@@ -228,9 +226,9 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         return StrategyDecision(
             actor_id="test-runner",
-            exchange=frame.primary.exchange,
-            symbol=frame.primary.symbol,
-            t_end_ms=frame.primary.t_end_ms,
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
             frame_step=frame_step,
             action=Action(actor_id="test-runner", orders=(order,)),
             joint_target_book=joint_book,
@@ -240,8 +238,7 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
 
     bus = InMemoryBus()
     target_queue = bus.subscribe_queue("strategy:target_books:test-runner")
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=ControllerRuntimeConfig(
@@ -258,7 +255,7 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     event = await asyncio.wait_for(target_queue.get(), timeout=1.0)
     assert event["type"] == "JointTargetBook"

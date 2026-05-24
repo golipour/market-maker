@@ -17,9 +17,9 @@ class MarketDataSourceLike(Protocol):
 class RuntimeTopics:
     """Central topic contract for one market-maker runtime."""
 
-    primary: MarketDataSourceLike
+    local: MarketDataSourceLike
     interval_ms: int
-    hedge: MarketDataSourceLike | None = None
+    global_: MarketDataSourceLike | None = None
     frame_topic: str | None = None
     action_topic: str = STRATEGY_ACTIONS_TOPIC
     decisions_topic: str = DEFAULT_STRATEGY_DECISIONS_TOPIC
@@ -29,7 +29,7 @@ class RuntimeTopics:
     def strategy_frame(self) -> str:
         if self.frame_topic:
             return self.frame_topic
-        return self.primary.market_event_topic(self.interval_ms).replace("market:events", "strategy:frames", 1)
+        return self.local.market_event_topic(self.interval_ms).replace("market:events", "strategy:frames", 1)
 
     @property
     def strategy_actions(self) -> str:
@@ -44,12 +44,12 @@ class RuntimeTopics:
         return self.diagnostics_topic
 
     @property
-    def primary_market_events(self) -> str:
-        return self.primary.market_event_topic(self.interval_ms)
+    def local_market_events(self) -> str:
+        return self.local.market_event_topic(self.interval_ms)
 
     @property
-    def hedge_market_events(self) -> str | None:
-        return self.hedge.market_event_topic(self.interval_ms) if self.hedge is not None else None
+    def global_market_events(self) -> str | None:
+        return self.global_.market_event_topic(self.interval_ms) if self.global_ is not None else None
 
     @staticmethod
     def execution_orders(exchange: str) -> str:

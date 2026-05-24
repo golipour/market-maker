@@ -121,15 +121,14 @@ def test_binding_merges_api_venue_then_config_fallback(monkeypatch) -> None:
     api_spec = build_instrument_spec("nobitex", "USDT_IRT", qty_step=0.001, min_qty=0.05)
     monkeypatch.setattr(mod, "instrument_spec_from_trade_stats", lambda ex, sym: api_spec)
 
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(
-            role="primary",
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(
+            role="local",
             exchange="nobitex",
             symbol="USDT_IRT",
             instrument=InstrumentPrecisionConfig(qty_step=0.01, min_qty=0.01),
         ),
     )
-    spec = config.binding.primary
+    spec = config.binding.local
     assert spec.qty_step == 0.001
     assert spec.min_qty == 0.05
 
@@ -143,14 +142,13 @@ def test_binding_config_fills_when_api_omits_fields(monkeypatch) -> None:
         "instrument_spec_from_trade_stats",
         lambda ex, sym: build_instrument_spec(ex, sym),
     )
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(
-            role="primary",
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(
+            role="local",
             exchange="nobitex",
             symbol="USDT_IRT",
             instrument=InstrumentPrecisionConfig(qty_step=0.01, min_qty=0.01),
         ),
     )
-    spec = config.binding.primary
+    spec = config.binding.local
     assert spec.qty_step == 0.01
     assert spec.min_qty == 0.01

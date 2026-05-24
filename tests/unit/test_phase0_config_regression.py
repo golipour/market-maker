@@ -1,4 +1,4 @@
-"""Phase 0 regression tests: lock current single-venue and primary+hedge config loading."""
+"""Phase 0 regression tests: lock venues.local/global config loading."""
 
 from __future__ import annotations
 
@@ -16,110 +16,120 @@ from mm.runtime.config import (
 EXAMPLE_CONFIG = Path(__file__).resolve().parents[2] / "mm/configs/market_maker.runtime.example.json"
 
 
-def test_single_venue_config_loads_without_hedge() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT", "mode": "rest"},
-            "interval_ms": 5000,
-            "controller": {"enabled": True, "actor_id": "mpc-controller"},
+def _venues_config(*, global_: bool = True) -> dict:
+    payload = {
+        "venues": {
+            "local": {"exchange": "nobitex", "symbol": "USDT_IRT", "mode": "rest"},
+        },
+        "interval_ms": 5000,
+    }
+    if global_:
+        payload["venues"]["global"] = {
+            "exchange": "wallex",
+            "symbol": "USDT_IRT",
+            "mode": "rest",
         }
-    )
+    return payload
 
-    assert config.hedge is None
-    assert config.primary.normalized_exchange() == "nobitex"
-    assert config.primary.symbol == "USDT_IRT"
-    assert config.frame_topic == "strategy:frames:nobitex:USDT_IRT:5000"
-    assert config.primary.market_event_topic(5000) == "market:events:nobitex:USDT_IRT:5000"
+
+def test_single_venue_config_loads_without_global() -> None:
+    config = runtime_config_from_mapping(_venues_config(global_=False))
+
+    assert config.global_ is None
+    assert config.local.normalized_exchange() == "nobitex"
+    assert config.local.symbol == "USDT_IRT"
+    assert config.joint_frame_topic == "strategy:joint:frames:nobitex:USDT_IRT:5000"
+    assert config.local.market_event_topic(5000) == "market:events:nobitex:USDT_IRT:5000"
 
     contract = config.as_contract()
-    assert contract["hedge"] is None
-    assert contract["strategy_input_frame"]["topic"] == config.frame_topic
-    assert contract["controller"]["enabled"] is True
+    assert contract["venues"]["global"] is None
+    assert contract["joint_strategy_frame"]["topic"] == config.joint_frame_topic
+    assert contract["controller"]["enabled"] is False
 
 
-def test_primary_plus_hedge_config_loads() -> None:
+def test_local_plus_global_config_loads() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT", "mode": "rest"},
-            "hedge": {"exchange": "wallex", "symbol": "USDT_IRT", "mode": "rest"},
+            **_venues_config(),
             "interval_ms": 10000,
-            "max_hedge_lag_ms": 2000,
-            "hedge_grace_ms": 250,
-            "primary_private": {"api_token_env": "NOBITEX_API_TOKEN", "enable_execution": True},
-            "hedge_private": {"api_token_env": "WALLEX_API_TOKEN", "enable_execution": True},
+            "max_global_lag_ms": 2000,
+            "global_grace_ms": 250,
+            "local_private": {"api_token_env": "NOBITEX_API_TOKEN", "enable_execution": True},
+            "global_private": {"api_token_env": "WALLEX_API_TOKEN", "enable_execution": True},
             "controller": {
                 "enabled": True,
                 "actor_id": "mpc-controller",
                 "reconcile": {"price_tol_bps": 10.0, "qty_tol_rel": 0.01},
             },
-            "hedging": {"enabled": False, "observe_only": True, "actor_id": "hedge-executor"},
         }
     )
 
-    assert config.hedge is not None
-    assert config.hedge.role == "hedge"
-    assert config.hedge.normalized_exchange() == "wallex"
-    assert config.hedge.market_event_topic(10000) == "market:events:wallex:USDT_IRT:10000"
-    assert config.max_hedge_lag_ms == 2000
-    assert config.hedge_grace_ms == 250
+    assert config.global_ is not None
+    assert config.global_.role == "global"
+    assert config.global_.normalized_exchange() == "wallex"
+    assert config.global_.market_event_topic(10000) == "market:events:wallex:USDT_IRT:10000"
+    assert config.max_global_lag_ms == 2000
+    assert config.global_grace_ms == 250
     assert config.controller is not None
     assert config.controller.reconcile.price_tol_bps == 10.0
-    assert config.hedging is not None
-    assert config.hedging.enabled is False
 
     contract = config.as_contract()
-    assert contract["hedge"]["exchange"] == "wallex"
-    assert contract["strategy_input_frame"]["hedge_is_anchor"] is True
-    assert contract["strategy_input_frame"]["max_hedge_lag_ms"] == 2000
+    assert contract["venues"]["global"]["exchange"] == "wallex"
+    assert contract["max_global_lag_ms"] == 2000
 
 
 def test_example_runtime_config_loads() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.primary.normalized_exchange() == "nobitex"
-    assert config.primary.symbol == "USDT_IRT"
-    assert config.hedge is not None
-    assert config.hedge.normalized_exchange() == "wallex"
+    assert config.local.normalized_exchange() == "nobitex"
+    assert config.local.symbol == "USDT_IRT"
+    assert config.global_ is not None
+    assert config.global_.normalized_exchange() == "wallex"
     assert config.interval_ms == 10000
     assert config.controller is not None
     assert config.controller.enabled is True
     assert config.controller.actor_id == "mpc-controller"
     assert config.controller.action_start_after_steps == 10
-    assert config.controller.optimizer is not None
-    assert config.controller.optimizer.get("hedge_rollout_enabled") is False
-    assert config.hedging is not None
-    assert config.hedging.enabled is False
+    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.global_live_orders is True
+    assert config.execution.local.planner == "reconcile"
+    assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
 
 
 def test_single_venue_runtime_config_dataclass() -> None:
     config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         interval_ms=1000,
     )
 
-    assert config.hedge is None
+    assert config.global_ is None
     assert config.binding.comparable is True
-    assert config.frame_topic == "strategy:frames:nobitex:BTC_IRT:1000"
+    assert config.joint_frame_topic == "strategy:joint:frames:nobitex:BTC_IRT:1000"
 
 
 @pytest.mark.parametrize(
-    ("mapping", "expected_frame_topic"),
+    ("mapping", "expected_joint_topic"),
     [
         (
-            {"primary": {"exchange": "nobitex", "symbol": "BTC_IRT"}, "interval_ms": 1000},
-            "strategy:frames:nobitex:BTC_IRT:1000",
+            {
+                "venues": {"local": {"exchange": "nobitex", "symbol": "BTC_IRT"}},
+                "interval_ms": 1000,
+            },
+            "strategy:joint:frames:nobitex:BTC_IRT:1000",
         ),
         (
             {
-                "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-                "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
+                "venues": {
+                    "local": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                    "global": {"exchange": "wallex", "symbol": "USDT_IRT"},
+                },
                 "interval_ms": 10000,
             },
-            "strategy:frames:nobitex:USDT_IRT:10000",
+            "strategy:joint:frames:nobitex:USDT_IRT:10000",
         ),
     ],
 )
-def test_config_frame_topic_derived_from_primary(mapping: dict, expected_frame_topic: str) -> None:
+def test_config_joint_frame_topic_derived_from_local(mapping: dict, expected_joint_topic: str) -> None:
     config = runtime_config_from_mapping(mapping)
-    assert config.frame_topic == expected_frame_topic
+    assert config.joint_frame_topic == expected_joint_topic

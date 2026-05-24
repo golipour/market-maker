@@ -11,7 +11,7 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
-from mm.core.risk_limits import HedgeVenueRiskLimits, VenueRiskLimits
+from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 
 
 class PassThroughRiskEngine(AbstractRiskEngine):
@@ -35,23 +35,23 @@ class PassThroughRiskEngine(AbstractRiskEngine):
         state: TradingState,
         frame: StrategyInputFrame,
     ) -> RiskResult:
-        return self.validate_with_result(actions, state, frame.primary)
+        return self.validate_with_result(actions, state, frame.local)
 
 
 @dataclass(frozen=True, slots=True)
 class RiskLimits:
     """Resolved hard limits for ``RuntimeRiskEngine``."""
 
-    primary: VenueRiskLimits = field(default_factory=VenueRiskLimits)
-    hedge: HedgeVenueRiskLimits = field(default_factory=HedgeVenueRiskLimits)
+    local: VenueRiskLimits = field(default_factory=VenueRiskLimits)
+    global_: GlobalVenueRiskLimits = field(default_factory=GlobalVenueRiskLimits)
 
     @property
     def max_inventory(self) -> float:
-        return self.primary.max_inventory
+        return self.local.max_inventory
 
     @property
     def max_data_age_ms(self) -> int:
-        return self.primary.max_market_data_age_ms
+        return self.local.max_market_data_age_ms
 
 
 class RuntimeRiskEngine(AbstractRiskEngine):
@@ -106,9 +106,9 @@ class RuntimeRiskEngine(AbstractRiskEngine):
         filtered, order_rejections, exposure_after = self._filter_actions(
             actions,
             state,
-            exchange=frame.primary.exchange,
-            symbol=frame.primary.symbol,
-            limits=self.limits.primary,
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            limits=self.limits.local,
         )
         rejection_counts.update(order_rejections)
         if len(filtered) < len(actions):
@@ -123,37 +123,37 @@ class RuntimeRiskEngine(AbstractRiskEngine):
     def validate_with_result(
         self, actions: list[Action], state: TradingState, event: MarketEvent
     ) -> RiskResult:
-        frame = StrategyInputFrame(primary=event)
+        frame = StrategyInputFrame(local=event)
         return self.validate_frame_with_result(actions, state, frame)
 
     def _frame_gate_reason(self, frame: StrategyInputFrame, *, now_ms: int) -> str | None:
-        primary = self.limits.primary
-        market_age_ms = now_ms - int(frame.primary.t_end_ms)
+        primary = self.limits.local
+        market_age_ms = now_ms - int(frame.local.t_end_ms)
         if market_age_ms > primary.max_market_data_age_ms:
             return "stale_market_data"
 
         priv_reason = _private_freshness_reason(
-            frame.primary_private,
+            frame.local_private,
             now_ms=now_ms,
             max_age_ms=primary.max_private_state_age_ms,
-            missing_reason="missing_primary_private",
-            stale_reason="stale_primary_private",
+            missing_reason="missing_local_private",
+            stale_reason="stale_local_private",
         )
         if priv_reason is not None:
             return priv_reason
 
-        if frame.has_hedge:
-            hedge = self.limits.hedge
-            if frame.hedge is not None:
-                hedge_market_age = now_ms - int(frame.hedge.t_end_ms)
+        if frame.has_global:
+            hedge = self.limits.global_
+            if frame.global_ is not None:
+                hedge_market_age = now_ms - int(frame.global_.t_end_ms)
                 if hedge_market_age > hedge.max_market_data_age_ms:
                     return "stale_hedge_market_data"
             hedge_priv_reason = _private_freshness_reason(
-                frame.hedge_private,
+                frame.global_private,
                 now_ms=now_ms,
                 max_age_ms=hedge.max_private_state_age_ms,
-                missing_reason="missing_hedge_private",
-                stale_reason="stale_hedge_private",
+                missing_reason="missing_global_private",
+                stale_reason="stale_global_private",
             )
             if hedge_priv_reason is not None:
                 return hedge_priv_reason

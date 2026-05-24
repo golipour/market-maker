@@ -401,7 +401,7 @@ class State:
     sell_ref: float = 0.0
     hedge_buy_ref: float | None = None
     hedge_sell_ref: float | None = None
-    hedge_inventory: int = 0
+    global_inventory: int = 0
     hedge_cash: float = 0.0
 
     @property
@@ -415,12 +415,12 @@ class State:
         return float(self.sell_ref)
 
     @property
-    def hedge_buy_vwap(self) -> float | None:
-        return self.hedge_buy_ref
+    def global_buy_vwap(self) -> float | None:
+        return self.global__buy_ref
 
     @property
-    def hedge_sell_vwap(self) -> float | None:
-        return self.hedge_sell_ref
+    def global_sell_vwap(self) -> float | None:
+        return self.global__sell_ref
 
 
 def state_from_ob_and_flow(
@@ -433,7 +433,7 @@ def state_from_ob_and_flow(
     cash: float = 0.0,
     hedge_buy_ref: float | None = None,
     hedge_sell_ref: float | None = None,
-    hedge_inventory: int = 0,
+    global_inventory: int = 0,
     hedge_cash: float = 0.0,
 ) -> State:
     """Build State from mid, orderbook levels (spread_ticks, qty), flow, and position."""
@@ -452,7 +452,7 @@ def state_from_ob_and_flow(
         sell_ref=mid,
         hedge_buy_ref=hedge_buy_ref,
         hedge_sell_ref=hedge_sell_ref,
-        hedge_inventory=int(hedge_inventory),
+        global_inventory=int(global_inventory),
         hedge_cash=float(hedge_cash),
     )
 
@@ -481,7 +481,7 @@ def state_from_orderbook(
     reference_depth_lots: float = 1000.0,
     hedge_buy_ref: float | None = None,
     hedge_sell_ref: float | None = None,
-    hedge_inventory: int = 0,
+    global_inventory: int = 0,
     hedge_cash: float = 0.0,
 ) -> State:
     """
@@ -504,7 +504,7 @@ def state_from_orderbook(
         sell_ref=sell_ref,
         hedge_buy_ref=hedge_buy_ref,
         hedge_sell_ref=hedge_sell_ref,
-        hedge_inventory=int(hedge_inventory),
+        global_inventory=int(global_inventory),
         hedge_cash=float(hedge_cash),
     )
 
@@ -532,7 +532,7 @@ def state_from_step(
         main_sell_ref,
         hedge_buy_ref,
         hedge_sell_ref,
-        hedge_inventory,
+        global_inventory,
         hedge_cash,
     ) = step
     mid = float(ob.mid)
@@ -548,6 +548,6 @@ def state_from_step(
         sell_ref=float(main_sell_ref),
         hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
         hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
-        hedge_inventory=int(hedge_inventory),
+        global_inventory=int(global_inventory),
         hedge_cash=float(hedge_cash),
     )

@@ -240,9 +240,9 @@ class State:
     cash: float = 0.0
     buy_vwap: float = 0.0
     sell_vwap: float = 0.0
-    hedge_buy_vwap: float | None = None
-    hedge_sell_vwap: float | None = None
-    hedge_inventory: float = 0.0
+    global_buy_vwap: float | None = None
+    global_sell_vwap: float | None = None
+    global_inventory: float = 0.0
     hedge_cash: float = 0.0
     global_ob_rel: OrderbookRelative | None = None
     global_buy_vol: float = 0.0

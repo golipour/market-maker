@@ -13,9 +13,9 @@ from mm.core.models.instrument import (
     instrument_precision_from_mapping,
     merge_instrument_spec,
 )
-from mm.core.risk_limits import HedgeVenueRiskLimits, VenueRiskLimits
+from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 
-SourceRole = Literal["primary", "hedge"]
+SourceRole = Literal["local", "global"]
 NeutralVenueRole = Literal["local", "global"]
 LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 ReferenceVenueRole = Literal["global", "local"]
@@ -185,6 +185,7 @@ class LiquiditySourcingRuntimeConfig:
     mode: LiquiditySourcingMode = "single_venue"
     reference_venue: ReferenceVenueRole = "global"
     require_global_private: bool = False
+    global_live_orders: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -192,38 +193,56 @@ class LiquiditySourcingRuntimeConfig:
             "mode": self.mode,
             "reference_venue": self.reference_venue,
             "require_global_private": self.require_global_private,
+            "global_live_orders": self.global_live_orders,
         }
 
 
+ExecutionPlannerKind = Literal["reconcile", "replace"]
+
+
 @dataclass(frozen=True, slots=True)
-class HedgingRuntimeConfig:
-    """Live fill-driven hedge execution (separate from MPC ``hedge_rollout_enabled``)."""
+class VenueExecutionConfig:
+    """Per-venue execution policy and source-venue placement caps."""
 
-    enabled: bool = False
-    actor_id: str = "hedge-executor"
-    observe_only: bool = True
-    intents_topic: str | None = None
-    diagnostics_topic: str | None = None
-    dedupe_window_ms: int = 300_000
+    planner: ExecutionPlannerKind = "reconcile"
+    observe_only: bool = False
+    max_order_qty: float | None = None
+    max_quote_distance: float | None = None
 
-    @property
-    def normalized_intents_topic(self) -> str:
-        explicit = (self.intents_topic or "").strip()
-        if explicit:
-            return explicit
-        actor = self.actor_id.strip() or "hedge-executor"
-        return f"hedge:intents:{actor}"
-
-    @property
-    def normalized_diagnostics_topic(self) -> str:
-        explicit = (self.diagnostics_topic or "").strip()
-        if explicit:
-            return explicit
-        actor = self.actor_id.strip() or "hedge-executor"
-        return f"hedge:diagnostics:{actor}"
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "planner": self.planner,
+            "observe_only": self.observe_only,
+        }
+        if self.max_order_qty is not None:
+            payload["max_order_qty"] = float(self.max_order_qty)
+        if self.max_quote_distance is not None:
+            payload["max_quote_distance"] = float(self.max_quote_distance)
+        return payload
 
 
-RiskEngineKind = Literal["order_level", "net_delta"]
+@dataclass(frozen=True, slots=True)
+class ExecutionRuntimeConfig:
+    """Per-venue execution planner selection and live/observe overrides."""
+
+    local: VenueExecutionConfig = field(default_factory=VenueExecutionConfig)
+    global_: VenueExecutionConfig = field(
+        default_factory=lambda: VenueExecutionConfig(planner="replace")
+    )
+
+    def for_role(self, role: NeutralVenueRole) -> VenueExecutionConfig:
+        return self.local if role == "local" else self.global_
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "local": self.local.as_dict(),
+            "global": self.global_.as_dict(),
+        }
+
+
+
+
+RiskEngineKind = Literal["net_delta"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,19 +250,19 @@ class RiskRuntimeConfig:
     """Hard pre-execution risk gates (separate from optimizer soft preferences)."""
 
     enabled: bool = True
-    engine: RiskEngineKind = "order_level"
-    primary: VenueRiskLimits = field(default_factory=VenueRiskLimits)
-    hedge: HedgeVenueRiskLimits = field(default_factory=HedgeVenueRiskLimits)
+    engine: RiskEngineKind = "net_delta"
+    local: VenueRiskLimits = field(default_factory=VenueRiskLimits)
+    global_: GlobalVenueRiskLimits = field(default_factory=GlobalVenueRiskLimits)
 
     @property
     def max_inventory(self) -> float:
         """Alias for legacy flat config and diagnostics."""
-        return self.primary.max_inventory
+        return self.local.max_inventory
 
     @property
     def max_data_age_ms(self) -> int:
         """Alias for legacy flat config."""
-        return self.primary.max_market_data_age_ms
+        return self.local.max_market_data_age_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,7 +312,7 @@ class ControllerRuntimeConfig:
     vwap_depth: float | None = None
     price_model: dict[str, Any] | None = None
     market_flow_model: dict[str, Any] | None = None
-    hedge_price_model: dict[str, Any] | None = None
+    global_price_model: dict[str, Any] | None = None
     execution_model: dict[str, Any] | None = None
     optimizer: dict[str, Any] | None = None
     risk: RiskRuntimeConfig = field(default_factory=RiskRuntimeConfig)
@@ -326,116 +345,76 @@ class ControllerRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class MarketMakerRuntimeConfig:
-    """Config-driven wiring for primary plus optional hedge runtime.
+    """Config-driven wiring for local plus optional global runtime venues."""
 
-    The hedge source is the only secondary source. It replaces the older
-    anchor/hedge split and is used both as reference data and, when private
-    credentials are configured, as an exchange that can expose private state.
-    """
-
-    primary: MarketDataSourceConfig
-    hedge: MarketDataSourceConfig | None = None
+    local: MarketDataSourceConfig
+    global_: MarketDataSourceConfig | None = None
     interval_ms: int = 5000
-    max_hedge_lag_ms: int = 2000
-    hedge_grace_ms: int = 250
-    primary_private: PrivateRuntimeConfig | None = None
-    hedge_private: PrivateRuntimeConfig | None = None
+    max_global_lag_ms: int = 2000
+    global_grace_ms: int = 250
+    local_private: PrivateRuntimeConfig | None = None
+    global_private: PrivateRuntimeConfig | None = None
     controller: ControllerRuntimeConfig | None = None
-    hedging: HedgingRuntimeConfig | None = None
     liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
         default_factory=LiquiditySourcingRuntimeConfig
     )
+    execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
     config_warnings: tuple[str, ...] = ()
     bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
     persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
     observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
 
     def __post_init__(self) -> None:
-        if self.primary.role != "primary":
-            raise ValueError("primary source role must be 'primary'")
-        if self.hedge is not None and self.hedge.role != "hedge":
-            raise ValueError("hedge source role must be 'hedge'")
+        if self.local.role != "local":
+            raise ValueError("local source role must be 'local'")
+        if self.global_ is not None and self.global_.role != "global":
+            raise ValueError("global source role must be 'global'")
         if self.interval_ms <= 0:
             raise ValueError("interval_ms must be positive")
 
     @property
-    def local(self) -> MarketDataSourceConfig:
-        """Neutral alias for ``primary``."""
-
-        return self.primary
-
-    @property
-    def global_source(self) -> MarketDataSourceConfig | None:
-        """Neutral alias for ``hedge``."""
-
-        return self.hedge
-
-    @property
-    def local_private(self) -> PrivateRuntimeConfig | None:
-        """Neutral alias for ``primary_private``."""
-
-        return self.primary_private
-
-    @property
-    def global_private(self) -> PrivateRuntimeConfig | None:
-        """Neutral alias for ``hedge_private``."""
-
-        return self.hedge_private
-
-    @property
     def binding(self) -> SymbolBinding:
         return SymbolBinding(
-            primary=_instrument_spec_for_source(self.primary),
-            hedge=_instrument_spec_for_source(self.hedge) if self.hedge is not None else None,
+            local=_instrument_spec_for_source(self.local),
+            global_=_instrument_spec_for_source(self.global_) if self.global_ is not None else None,
         )
 
     @property
     def frame_topic(self) -> str:
-        return f"strategy:frames:{self.primary.normalized_exchange()}:{self.primary.symbol}:{self.interval_ms}"
+        return f"strategy:frames:{self.local.normalized_exchange()}:{self.local.symbol}:{self.interval_ms}"
 
     @property
     def joint_frame_topic(self) -> str:
-        return f"strategy:joint:frames:{self.primary.normalized_exchange()}:{self.primary.symbol}:{self.interval_ms}"
+        return f"strategy:joint:frames:{self.local.normalized_exchange()}:{self.local.symbol}:{self.interval_ms}"
 
     @property
     def sources(self) -> tuple[MarketDataSourceConfig, ...]:
-        if self.hedge is None:
-            return (self.primary,)
-        return (self.primary, self.hedge)
+        if self.global_ is None:
+            return (self.local,)
+        return (self.local, self.global_)
 
     def private_config_for(self, role: SourceRole) -> PrivateRuntimeConfig | None:
-        if role == "primary":
-            return self.primary_private
-        return self.hedge_private
+        if role == "local":
+            return self.local_private
+        return self.global_private
 
     def as_contract(self) -> dict[str, Any]:
         return {
             "venues": {
-                "local": _source_contract(self.primary, self.interval_ms),
-                "global": _source_contract(self.hedge, self.interval_ms) if self.hedge else None,
+                "local": _source_contract(self.local, self.interval_ms),
+                "global": _source_contract(self.global_, self.interval_ms) if self.global_ else None,
             },
-            "primary": _source_contract(self.primary, self.interval_ms),
-            "hedge": _source_contract(self.hedge, self.interval_ms) if self.hedge else None,
-            "legacy_aliases": {
-                "primary": "maps to venues.local",
-                "hedge": "maps to venues.global",
-                "primary_private": "maps to local_private",
-                "hedge_private": "maps to global_private",
-            },
+            "local_private": _private_contract(self.local_private),
+            "global_private": _private_contract(self.global_private),
+            "interval_ms": self.interval_ms,
+            "max_global_lag_ms": self.max_global_lag_ms,
+            "global_grace_ms": self.global_grace_ms,
             "liquidity_sourcing": self.liquidity_sourcing.as_dict(),
+            "execution": self.execution.as_dict(),
             "config_warnings": list(self.config_warnings),
-            "strategy_input_frame": {
-                "topic": self.frame_topic,
-                "primary": "always present",
-                "hedge": "None when no hedge source is configured, missing, or stale",
-                "hedge_is_anchor": True,
-                "max_hedge_lag_ms": self.max_hedge_lag_ms,
-                "hedge_grace_ms": self.hedge_grace_ms,
-            },
             "joint_strategy_frame": {
                 "topic": self.joint_frame_topic,
                 "ledger_topic": "ledger:snapshot",
-                "note": "Ledger-backed frame with sync_status; legacy strategy:frames topic remains during migration",
             },
             "instrument_units": self.binding.as_contract(),
             "controller": (
@@ -469,6 +448,17 @@ class MarketMakerRuntimeConfig:
         }
 
 
+def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | None:
+    if private is None:
+        return None
+    return {
+        "mode": private.mode,
+        "poll_interval_ms": private.poll_interval_ms,
+        "enable_execution": private.enable_execution,
+        "enabled": private.enabled,
+    }
+
+
 def _source_contract(source: MarketDataSourceConfig | None, interval_ms: int) -> dict[str, Any] | None:
     if source is None:
         return None
@@ -498,93 +488,40 @@ def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
 
 
 def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeConfig:
-    primary_payload, hedge_payload, venue_warnings = _resolve_public_venue_payloads(payload)
-    primary_private_payload, hedge_private_payload, private_warnings = _resolve_private_venue_payloads(
-        payload
-    )
-    config_warnings = tuple(venue_warnings + private_warnings)
+    local_payload, global_payload = _resolve_public_venue_payloads(payload)
+    local_private_payload, global_private_payload = _resolve_private_venue_payloads(payload)
+    liquidity_sourcing = _liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing"))
     return MarketMakerRuntimeConfig(
-        primary=_source_from_mapping(primary_payload, role="primary"),
-        hedge=_source_from_mapping(hedge_payload, role="hedge") if isinstance(hedge_payload, dict) else None,
+        local=_source_from_mapping(local_payload, role="local"),
+        global_=_source_from_mapping(global_payload, role="global") if isinstance(global_payload, dict) else None,
         interval_ms=int(payload.get("interval_ms", 5000)),
-        max_hedge_lag_ms=int(payload.get("max_hedge_lag_ms", 2000)),
-        hedge_grace_ms=int(payload.get("hedge_grace_ms", 250)),
-        primary_private=_private_from_mapping(primary_private_payload),
-        hedge_private=_private_from_mapping(hedge_private_payload),
+        max_global_lag_ms=int(payload.get("max_global_lag_ms", 2000)),
+        global_grace_ms=int(payload.get("global_grace_ms", 250)),
+        local_private=_private_from_mapping(local_private_payload),
+        global_private=_private_from_mapping(global_private_payload),
         controller=_controller_from_mapping(payload.get("controller")),
-        hedging=_hedging_from_mapping(payload.get("hedging")),
-        liquidity_sourcing=_liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing")),
-        config_warnings=config_warnings,
+        liquidity_sourcing=liquidity_sourcing,
+        execution=_execution_from_mapping(payload.get("execution")),
+        config_warnings=(),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
     )
 
 
-def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any, list[str]]:
-    """Resolve local/global venue config with legacy primary/hedge aliases."""
-
-    warnings: list[str] = []
+def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any]:
     venues = payload.get("venues")
-    local_payload: dict[str, Any] | None = None
-    global_payload: dict[str, Any] | None = None
-    if isinstance(venues, dict):
-        local_payload = _venue_payload_from_mapping(venues.get("local"))
-        global_payload = _venue_payload_from_mapping(venues.get("global"))
-        if venues.get("primary") is not None:
-            warnings.append("venues.primary is ignored; use venues.local")
-        if venues.get("hedge") is not None:
-            warnings.append("venues.hedge is ignored; use venues.global")
-
-    top_local = _venue_payload_from_mapping(payload.get("local"))
-    top_global = _venue_payload_from_mapping(payload.get("global"))
-    legacy_primary = _venue_payload_from_mapping(payload.get("primary"))
-    legacy_hedge = _venue_payload_from_mapping(payload.get("hedge"))
-
+    if not isinstance(venues, dict):
+        raise ValueError("runtime config requires venues object with local venue")
+    local_payload = _venue_payload_from_mapping(venues.get("local"))
+    global_payload = _venue_payload_from_mapping(venues.get("global"))
     if local_payload is None:
-        local_payload = top_local or legacy_primary
-        if legacy_primary is not None and top_local is None:
-            warnings.append("legacy key 'primary' accepted; prefer venues.local")
-
-    if global_payload is None:
-        global_payload = top_global or legacy_hedge
-        if legacy_hedge is not None and top_global is None:
-            warnings.append("legacy key 'hedge' accepted; prefer venues.global")
-
-    if local_payload is None:
-        raise ValueError("runtime config requires venues.local or primary")
-    return local_payload, global_payload, warnings
+        raise ValueError("runtime config requires venues.local")
+    return local_payload, global_payload
 
 
-def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any, list[str]]:
-    warnings: list[str] = []
-    venues = payload.get("venues")
-    local_private: Any = None
-    global_private: Any = None
-    if isinstance(venues, dict):
-        local_private = venues.get("local_private")
-        global_private = venues.get("global_private")
-        if venues.get("primary_private") is not None:
-            warnings.append("venues.primary_private is ignored; use venues.local_private")
-        if venues.get("hedge_private") is not None:
-            warnings.append("venues.hedge_private is ignored; use venues.global_private")
-
-    top_local_private = payload.get("local_private")
-    top_global_private = payload.get("global_private")
-    legacy_primary_private = payload.get("primary_private")
-    legacy_hedge_private = payload.get("hedge_private")
-
-    if local_private is None:
-        local_private = top_local_private or legacy_primary_private
-        if legacy_primary_private is not None and top_local_private is None:
-            warnings.append("legacy key 'primary_private' accepted; prefer local_private")
-
-    if global_private is None:
-        global_private = top_global_private or legacy_hedge_private
-        if legacy_hedge_private is not None and top_global_private is None:
-            warnings.append("legacy key 'hedge_private' accepted; prefer global_private")
-
-    return local_private, global_private, warnings
+def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any]:
+    return payload.get("local_private"), payload.get("global_private")
 
 
 def _venue_payload_from_mapping(payload: Any) -> dict[str, Any] | None:
@@ -605,7 +542,34 @@ def _liquidity_sourcing_from_mapping(payload: Any) -> LiquiditySourcingRuntimeCo
         mode=mode,  # type: ignore[arg-type]
         reference_venue=reference_venue,  # type: ignore[arg-type]
         require_global_private=bool(payload.get("require_global_private", False)),
+        global_live_orders=bool(payload.get("global_live_orders", False)),
     )
+
+
+def _venue_execution_from_mapping(payload: Any, *, default_planner: ExecutionPlannerKind) -> VenueExecutionConfig:
+    if not isinstance(payload, dict):
+        return VenueExecutionConfig(planner=default_planner)
+    planner = str(payload.get("planner", default_planner)).strip().lower()
+    if planner not in ("reconcile", "replace"):
+        raise ValueError("execution planner must be 'reconcile' or 'replace'")
+    max_order_qty = payload.get("max_order_qty")
+    max_quote_distance = payload.get("max_quote_distance")
+    return VenueExecutionConfig(
+        planner=planner,  # type: ignore[arg-type]
+        observe_only=bool(payload.get("observe_only", False)),
+        max_order_qty=float(max_order_qty) if max_order_qty is not None else None,
+        max_quote_distance=float(max_quote_distance) if max_quote_distance is not None else None,
+    )
+
+
+def _execution_from_mapping(payload: Any) -> ExecutionRuntimeConfig:
+    if not isinstance(payload, dict):
+        return ExecutionRuntimeConfig()
+    return ExecutionRuntimeConfig(
+        local=_venue_execution_from_mapping(payload.get("local"), default_planner="reconcile"),
+        global_=_venue_execution_from_mapping(payload.get("global"), default_planner="replace"),
+    )
+
 
 
 def _instrument_spec_for_source(source: MarketDataSourceConfig):
@@ -730,7 +694,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         ),
         price_model=_dict_or_none(payload.get("price_model")),
         market_flow_model=_dict_or_none(payload.get("market_flow_model")),
-        hedge_price_model=_dict_or_none(payload.get("hedge_price_model")),
+        global_price_model=_dict_or_none(payload.get("global_price_model")),
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
         risk=_risk_from_mapping(payload.get("risk")),
@@ -747,42 +711,26 @@ def _reconcile_from_mapping(payload: Any) -> ReconcileRuntimeConfig:
     )
 
 
-def _hedging_from_mapping(payload: Any) -> HedgingRuntimeConfig | None:
-    if not isinstance(payload, dict):
-        return None
-    return HedgingRuntimeConfig(
-        enabled=bool(payload.get("enabled", False)),
-        actor_id=str(payload.get("actor_id", "hedge-executor")),
-        observe_only=bool(payload.get("observe_only", True)),
-        intents_topic=(
-            str(payload["intents_topic"]) if payload.get("intents_topic") is not None else None
-        ),
-        diagnostics_topic=(
-            str(payload["diagnostics_topic"]) if payload.get("diagnostics_topic") is not None else None
-        ),
-        dedupe_window_ms=max(1000, int(payload.get("dedupe_window_ms", 300_000))),
-    )
-
 
 def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
     if not isinstance(payload, dict):
         return RiskRuntimeConfig()
     enabled = bool(payload.get("enabled", True))
-    primary_payload = payload.get("primary")
-    hedge_payload = payload.get("hedge")
-    if isinstance(primary_payload, dict):
-        primary = _venue_risk_from_mapping(primary_payload)
+    local_payload = payload.get("local")
+    global_payload = payload.get("global")
+    if isinstance(local_payload, dict):
+        local = _venue_risk_from_mapping(local_payload)
     else:
-        primary = _venue_risk_from_mapping(payload, legacy_flat=True)
-    hedge = _hedge_risk_from_mapping(hedge_payload) if isinstance(hedge_payload, dict) else HedgeVenueRiskLimits()
-    engine_raw = str(payload.get("engine", "order_level")).strip().lower()
-    if engine_raw not in ("order_level", "net_delta"):
-        raise ValueError("controller.risk.engine must be 'order_level' or 'net_delta'")
+        local = _venue_risk_from_mapping(payload, legacy_flat=True)
+    global_limits = _global_risk_from_mapping(global_payload) if isinstance(global_payload, dict) else GlobalVenueRiskLimits()
+    engine_raw = str(payload.get("engine", "net_delta")).strip().lower()
+    if engine_raw != "net_delta":
+        raise ValueError("controller.risk.engine must be 'net_delta'")
     return RiskRuntimeConfig(
         enabled=enabled,
-        engine=engine_raw,  # type: ignore[arg-type]
-        primary=primary,
-        hedge=hedge,
+        engine="net_delta",
+        local=local,
+        global_=global_limits,
     )
 
 
@@ -809,13 +757,13 @@ def _venue_risk_from_mapping(payload: dict[str, Any], *, legacy_flat: bool = Fal
     )
 
 
-def _hedge_risk_from_mapping(payload: dict[str, Any] | None) -> HedgeVenueRiskLimits:
+def _global_risk_from_mapping(payload: dict[str, Any] | None) -> GlobalVenueRiskLimits:
     if not isinstance(payload, dict):
-        return HedgeVenueRiskLimits()
+        return GlobalVenueRiskLimits()
     min_inv = float(payload.get("min_inventory", 0.0))
     if min_inv < 0.0:
         min_inv = 0.0
-    return HedgeVenueRiskLimits(
+    return GlobalVenueRiskLimits(
         min_inventory=min_inv,
         max_inventory=float(payload.get("max_inventory", float("inf"))),
         min_cash=float(payload.get("min_cash", 0.0)),
@@ -868,10 +816,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "model_inputs": {
             "price_model": config.price_model or {"kind": "gaussian"},
             "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},
-            "hedge_price_model": config.hedge_price_model
+            "global_price_model": config.global_price_model
             or {
                 "kind": "legacy",
-                "note": "EWMA Gaussian deltas on hedge refs; set optimizer.hedge_rollout_enabled for rollouts",
+                "note": "EWMA Gaussian deltas on global refs",
             },
             "execution_model": config.execution_model or {"kind": "real"},
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
@@ -883,8 +831,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         ),
         "risk": {
             "enabled": config.risk.enabled,
-            "primary": config.risk.primary.as_dict(),
-            "hedge": config.risk.hedge.as_dict(),
+            "local": config.risk.local.as_dict(),
+            "global": config.risk.global_.as_dict(),
             "note": "hard gates only; inventory_target_penalty_weight lives under optimizer",
         },
         "reconcile": {

@@ -561,13 +561,13 @@ def portfolio_dashboard() -> dict[str, Any]:
             10,
             4,
             "Inventory (primary vs hedge)",
-            f"""SELECT e.ts AS "time", 'primary_inventory' AS metric,
-  (e.payload #>> '{{state,primary_inventory}}')::double precision AS value
+            f"""SELECT e.ts AS "time", 'local_inventory' AS metric,
+  (e.payload #>> '{{state,local_inventory}}')::double precision AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
-SELECT e.ts, 'hedge_inventory',
-  (e.payload #>> '{{state,hedge_inventory}}')::double precision
+SELECT e.ts, 'global_inventory',
+  (e.payload #>> '{{state,global_inventory}}')::double precision
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -594,16 +594,16 @@ ORDER BY 1""",
             f"""SELECT e.ts AS "time", 'primary_marked' AS metric,
   COALESCE((e.payload #>> '{{state,primary_wealth}}')::double precision,
     (e.payload #>> '{{state,primary_cash}}')::double precision
-     + (e.payload #>> '{{state,primary_inventory}}')::double precision
-       * COALESCE((e.payload #>> '{{state,primary_sell_vwap}}')::double precision, 0)) AS value
+     + (e.payload #>> '{{state,local_inventory}}')::double precision
+       * COALESCE((e.payload #>> '{{state,local_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'hedge_marked',
   COALESCE((e.payload #>> '{{state,hedge_wealth}}')::double precision,
     (e.payload #>> '{{state,hedge_cash}}')::double precision
-     + (e.payload #>> '{{state,hedge_inventory}}')::double precision
-       * COALESCE((e.payload #>> '{{state,hedge_sell_vwap}}')::double precision, 0)) AS value
+     + (e.payload #>> '{{state,global_inventory}}')::double precision
+       * COALESCE((e.payload #>> '{{state,global_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -653,8 +653,8 @@ ORDER BY 1""",
             52,
             "Combined inventory exposure",
             f"""SELECT e.ts AS "time", 'primary_plus_hedge' AS metric,
-  ((e.payload #>> '{{state,primary_inventory}}')::double precision
-   + (e.payload #>> '{{state,hedge_inventory}}')::double precision) AS value
+  ((e.payload #>> '{{state,local_inventory}}')::double precision
+   + (e.payload #>> '{{state,global_inventory}}')::double precision) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -707,7 +707,7 @@ ORDER BY 1""",
     )
 
 
-def hedge_execution_dashboard() -> dict[str, Any]:
+def hedge_exec_dashboard() -> dict[str, Any]:
     hedge_diag = """
   e.topic = '${hedge_diagnostics_topic}'
   AND e.event_type = 'HedgeExecutionDiagnostic'
@@ -720,7 +720,7 @@ def hedge_execution_dashboard() -> dict[str, Any]:
             1,
             0,
             "**Source:** `HedgeIntent` and `HedgeExecutionDiagnostic` on hedge topics.\n\n"
-            "Live fill-driven hedging (separate from MPC `hedge_rollout_enabled`).",
+            "Live fill-driven hedging (separate from MPC `hedge_rollout`).",
         ),
         _panel_sql_timeseries(
             10,
@@ -871,7 +871,7 @@ def patch_model_params_dashboard() -> None:
             f"""SELECT e.ts AS "time", model AS metric,
   (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
+CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL
 ORDER BY 1""",
@@ -887,7 +887,7 @@ ORDER BY 1""",
   COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,
   COUNT(*) AS count
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
+CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL
   AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''
@@ -954,8 +954,8 @@ def main() -> None:
         json.dumps(compact_dashboard_panels(portfolio_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
-    (OUT / "mm_hedge_execution_pg.json").write_text(
-        json.dumps(compact_dashboard_panels(hedge_execution_dashboard()), indent=2) + "\n",
+    (OUT / "mm_hedge_exec_pg.json").write_text(
+        json.dumps(compact_dashboard_panels(hedge_exec_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     patch_model_params_dashboard()

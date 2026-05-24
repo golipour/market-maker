@@ -16,7 +16,7 @@ from mm.core.models.market import MarketEvent
 from mm.core.models.private import OpenOrder
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
-from mm.core.risk_limits import HedgeVenueRiskLimits, VenueRiskLimits
+from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.core.wallet import order_collateral_from_open_orders
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
@@ -73,7 +73,7 @@ def _open_notional(orders: tuple[TargetOrder, ...]) -> float:
     return total
 
 
-def _hedge_limits_as_venue_limits(limits: HedgeVenueRiskLimits) -> VenueRiskLimits:
+def _hedge_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
     return VenueRiskLimits(
         min_inventory=limits.min_inventory,
         max_inventory=limits.max_inventory,
@@ -197,7 +197,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
     def validate_with_result(
         self, actions: list[Action], state: TradingState, event: MarketEvent
     ) -> RiskResult:
-        frame = StrategyInputFrame(primary=event)
+        frame = StrategyInputFrame(local=event)
         return self.validate_frame_with_result(actions, state, frame)
 
     def validate_frame_with_result(
@@ -209,6 +209,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         joint_target_book: JointTargetBook | None = None,
         ledger: JointLedgerSnapshot | None = None,
         live_execution: bool = False,
+        global_live_execution: bool | None = None,
     ) -> RiskResult:
         from mm.core.adapters.joint import action_to_joint_target_book, joint_ledger_from_frame
 
@@ -230,6 +231,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             ledger,
             frame,
             live_execution=live_execution,
+            global_live_execution=global_live_execution,
         )
         return target_book_result_to_risk_result(result, proposed_actions=actions)
 
@@ -240,6 +242,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         frame: StrategyInputFrame,
         *,
         live_execution: bool = False,
+        global_live_execution: bool | None = None,
     ) -> TargetBookRiskResult:
         order_count = _target_book_order_count(target_book)
         exposure_before = _ledger_exposure_dict(ledger)
@@ -259,6 +262,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             target_book=target_book,
             ledger=ledger,
             live_execution=live_execution,
+            global_live_execution=global_live_execution,
         )
         if frame_gate_reasons:
             rejection_counts = {reason: max(order_count, 1) for reason in frame_gate_reasons}
@@ -280,7 +284,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         local_ok, local_reasons, local_exposure = evaluate_venue_target_transition(
             ledger=ledger.local,
             target=target_book.local,
-            limits=self.limits.primary,
+            limits=self.limits.local,
         )
         venue_diagnostics["local"] = local_exposure.as_dict()
         for reason in local_reasons:
@@ -290,14 +294,29 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
 
         global_ok = True
         if target_book.global_ is not None and target_book.global_.orders:
-            if ledger.global_ is None:
+            global_stale = frame.global_ is None or frame.global_status not in {"ready"}
+            if not global_stale and frame.global_ is not None:
+                hedge_market_age = int(self.clock_ms()) - int(frame.global_.t_end_ms)
+                global_stale = hedge_market_age > self.limits.global_.max_market_data_age_ms
+            if global_stale:
+                stale_reason = (
+                    "stale_global_market_data"
+                    if frame.global_ is not None and frame.global_status == "ready"
+                    else "missing_global_market_data"
+                )
+                target_book_gate_reasons.append(stale_reason)
+                rejection_counts[stale_reason] = rejection_counts.get(stale_reason, 0) + len(
+                    target_book.global_.orders
+                )
+                global_ok = False
+            elif ledger.global_ is None:
                 target_book_gate_reasons.append("missing_global_ledger")
                 rejection_counts["missing_global_ledger"] = rejection_counts.get(
                     "missing_global_ledger", 0
                 ) + 1
                 global_ok = False
             else:
-                global_limits = _hedge_limits_as_venue_limits(self.limits.hedge)
+                global_limits = _hedge_limits_as_venue_limits(self.limits.global_)
                 global_ok, global_reasons, global_exposure = evaluate_venue_target_transition(
                     ledger=ledger.global_,
                     target=target_book.global_,
@@ -309,6 +328,36 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
                     target_book_gate_reasons.append(prefixed)
                     rejection_counts[prefixed] = rejection_counts.get(prefixed, 0) + 1
                     counter_inc("mm_risk_reject_total", labels={"reason": prefixed})
+
+        global_orders_rejected = (
+            target_book.global_ is not None
+            and bool(target_book.global_.orders)
+            and not global_ok
+        )
+        if local_ok and global_orders_rejected and not command_gate_reasons:
+            approved_book = JointTargetBook(
+                actor_id=target_book.actor_id,
+                local=target_book.local,
+                global_=VenueTargetBook(
+                    exchange=target_book.global_.exchange,
+                    symbol=target_book.global_.symbol,
+                    actor_id=target_book.global_.actor_id,
+                    orders=(),
+                    policy=target_book.global_.policy,
+                ),
+                mode=target_book.mode,
+                diagnostics=dict(target_book.diagnostics),
+            )
+            exposure_after = _target_exposure_dict(ledger, approved_book)
+            return TargetBookRiskResult(
+                approved=approved_book,
+                target_book_gate_reasons=tuple(target_book_gate_reasons),
+                command_gate_reasons=tuple(command_gate_reasons),
+                rejection_counts=rejection_counts,
+                exposure_before=exposure_before,
+                exposure_after=exposure_after,
+                transition_diagnostics=venue_diagnostics,
+            )
 
         if local_ok and global_ok and not command_gate_reasons:
             exposure_after = _target_exposure_dict(ledger, target_book)
@@ -336,12 +385,13 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         target_book: JointTargetBook,
         ledger: JointLedgerSnapshot,
         live_execution: bool,
+        global_live_execution: bool | None = None,
     ) -> list[str]:
         now_ms = int(self.clock_ms())
         reasons: list[str] = []
 
-        primary = self.limits.primary
-        market_age_ms = now_ms - int(frame.primary.t_end_ms)
+        primary = self.limits.local
+        market_age_ms = now_ms - int(frame.local.t_end_ms)
         if market_age_ms > primary.max_market_data_age_ms:
             reasons.append("stale_market_data")
 
@@ -349,8 +399,8 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             ledger.local,
             now_ms=now_ms,
             max_age_ms=primary.max_private_state_age_ms,
-            missing_reason="missing_primary_private",
-            stale_reason="stale_primary_private",
+            missing_reason="missing_local_private",
+            stale_reason="stale_local_private",
         )
         if local_private_reason is not None:
             reasons.append(local_private_reason)
@@ -359,7 +409,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             self.liquidity_sourcing.enabled
             and self.liquidity_sourcing.mode == "liquidity_sourcing"
         )
-        has_global_venue = self.binding.hedge is not None
+        has_global_venue = self.binding.global_ is not None
         global_orders = (
             target_book.global_ is not None and bool(target_book.global_.orders)
         )
@@ -367,15 +417,21 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         if not sourcing_active or not has_global_venue:
             return reasons
 
-        if frame.hedge is None or frame.hedge_status not in {"ready"}:
-            reasons.append("missing_global_market_data")
-        else:
-            hedge_market_age = now_ms - int(frame.hedge.t_end_ms)
-            if hedge_market_age > self.limits.hedge.max_market_data_age_ms:
-                reasons.append("stale_global_market_data")
+        if global_live_execution:
+            if frame.global_ is None or frame.global_status not in {"ready"}:
+                reasons.append("missing_global_market_data")
+            else:
+                hedge_market_age = now_ms - int(frame.global_.t_end_ms)
+                if hedge_market_age > self.limits.global_.max_market_data_age_ms:
+                    reasons.append("stale_global_market_data")
 
         require_global_private = False
-        if live_execution and global_orders:
+        global_live = (
+            global_live_execution
+            if global_live_execution is not None
+            else (live_execution and global_orders)
+        )
+        if global_live and global_orders:
             require_global_private = True
         elif self.liquidity_sourcing.require_global_private and global_orders:
             require_global_private = True
@@ -385,7 +441,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             global_private_reason = _ledger_private_freshness_reason(
                 global_ledger,
                 now_ms=now_ms,
-                max_age_ms=self.limits.hedge.max_private_state_age_ms,
+                max_age_ms=self.limits.global_.max_private_state_age_ms,
                 missing_reason="missing_global_private",
                 stale_reason="stale_global_private",
             )

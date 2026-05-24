@@ -17,9 +17,8 @@ from mm.tools.print_events import build_print_queues
 
 
 def test_runtime_config_uses_hedge_as_only_secondary_source() -> None:
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-        hedge=MarketDataSourceConfig(role="hedge", exchange="wallex", symbol="BTC_IRT"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
         interval_ms=1000,
     )
 
@@ -60,8 +59,7 @@ async def test_persistence_enabled_without_database_url_builds_no_writer(monkeyp
     monkeypatch.delenv("MM_DATABASE_URL", raising=False)
     monkeypatch.delenv("MM_PARQUET_ROOT", raising=False)
     monkeypatch.setattr("mm.runtime.engine.load_mm_env", lambda: False)
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         persistence=PersistenceRuntimeConfig(enabled=True),
     )
 
@@ -75,8 +73,7 @@ async def test_persistence_enabled_with_database_url_builds_postgres_writer(monk
     monkeypatch.setenv("MM_DATABASE_URL", "postgresql://example")
     monkeypatch.delenv("MM_PARQUET_ROOT", raising=False)
     monkeypatch.setattr("mm.runtime.engine.load_mm_env", lambda: False)
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         persistence=PersistenceRuntimeConfig(enabled=True),
     )
 
@@ -156,19 +153,17 @@ def test_controller_action_start_after_steps_clamps_negative() -> None:
 
 def test_runtime_config_rejects_anchor_like_secondary_roles() -> None:
     with pytest.raises(ValueError, match="hedge source role"):
-        MarketMakerRuntimeConfig(
-            primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
-            hedge=MarketDataSourceConfig(role="primary", exchange="wallex", symbol="BTC_IRT"),
+        MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+            hedge=MarketDataSourceConfig(role="local", exchange="wallex", symbol="BTC_IRT"),
         )
 
 
 @pytest.mark.asyncio
-async def test_runtime_builder_wires_primary_and_hedge_topics_without_starting_network() -> None:
-    config = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT", mode="rest"),
-        hedge=MarketDataSourceConfig(role="hedge", exchange="wallex", symbol="BTC_IRT", mode="websocket"),
+async def test_runtime_builder_wires_primary_and_global_topics_without_starting_network() -> None:
+    config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT", mode="rest"),
+        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT", mode="websocket"),
         interval_ms=1000,
-        primary_private=PrivateRuntimeConfig(api_token=None),
+        local_private=PrivateRuntimeConfig(api_token=None),
     )
 
     runtime = await build_runtime_components(config)

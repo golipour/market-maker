@@ -47,17 +47,16 @@ def test_risk_config_migration_from_flat_keys() -> None:
         }
     )
     assert config.controller is not None
-    assert config.controller.risk.primary.max_inventory == 500.0
-    assert config.controller.risk.primary.max_market_data_age_ms == 30_000
-    assert config.controller.risk.primary.min_inventory == 0.0
+    assert config.controller.risk.local.max_inventory == 500.0
+    assert config.controller.risk.local.max_market_data_age_ms == 30_000
+    assert config.controller.risk.local.min_inventory == 0.0
 
 
 def test_spot_rejects_sell_exceeding_inventory() -> None:
-    limits = RiskLimits(primary=VenueRiskLimits(min_inventory=0.0, max_inventory=100.0))
+    limits = RiskLimits(local=VenueRiskLimits(min_inventory=0.0, max_inventory=100.0))
     risk = RuntimeRiskEngine(limits=limits, clock_ms=lambda: 1000)
-    frame = StrategyInputFrame(
-        primary=_event(),
-        primary_private=_private(1000),
+    frame = StrategyInputFrame(local=_event(),
+        local_private=_private(1000),
     )
     action = Action(
         actor_id="a",
@@ -73,9 +72,9 @@ def test_spot_rejects_sell_exceeding_inventory() -> None:
 
 
 def test_rejects_buy_when_cash_too_low() -> None:
-    limits = RiskLimits(primary=VenueRiskLimits(min_cash=500.0, max_market_data_age_ms=10_000, max_private_state_age_ms=10_000))
+    limits = RiskLimits(local=VenueRiskLimits(min_cash=500.0, max_market_data_age_ms=10_000, max_private_state_age_ms=10_000))
     risk = RuntimeRiskEngine(limits=limits, clock_ms=lambda: 1000)
-    frame = StrategyInputFrame(primary=_event(), primary_private=_private(1000))
+    frame = StrategyInputFrame(local=_event(), local_private=_private(1000))
     action = Action(
         actor_id="a",
         orders=(Order("nobitex", "BTC_IRT", "buy", 100.0, 10.0),),
@@ -94,14 +93,13 @@ def test_diagnostics_expose_primary_and_hedge_limits() -> None:
         enabled=True,
         primary=VenueRiskLimits(max_inventory=42.0, min_inventory=0.0),
     )
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=ControllerRuntimeConfig(enabled=True, risk=risk_cfg),
     )
     ctx = DecisionContext(
         config=runtime.controller,  # type: ignore[arg-type]
-        frame=StrategyInputFrame(primary=_event()),
-        clean_frame=StrategyInputFrame(primary=_event()),
+        frame=StrategyInputFrame(local=_event()),
+        clean_frame=StrategyInputFrame(local=_event()),
         trading_state=TradingState(actor_id="a"),
         frame_step=1,
     )

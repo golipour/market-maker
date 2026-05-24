@@ -189,7 +189,7 @@ class ObservedStepExecutionModel:
         # Kept for compatibility: MPC reads execution_model.maker_fee / hedge_fee.
         self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
         if hedge_fee is not None:
-            self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
+            self.global__fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
 
     def state_after_step(
         self,
@@ -211,14 +211,14 @@ class ObservedStepExecutionModel:
             main_sell_ref,
             hedge_buy_ref,
             hedge_sell_ref,
-            hedge_inventory,
+            global_inventory,
             hedge_cash,
         ) = curr_step
         mid_curr = float(ob_curr.mid)
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         cash_f = float(cash_new)
         inv_i = int(inv_new)
-        hedge_inv_i = int(hedge_inventory)
+        hedge_inv_i = int(global_inventory)
         hedge_cash_f = float(hedge_cash)
 
         # Option B: liquidation-style mark-to-bid (sell-side representative price).
@@ -241,7 +241,7 @@ class ObservedStepExecutionModel:
         wealth_before = (
             main_wealth_before
             + float(getattr(prev_state, "hedge_cash", 0.0))
-            + int(getattr(prev_state, "hedge_inventory", 0)) * hedge_ref_prev
+            + int(getattr(prev_state, "global_inventory", 0)) * hedge_ref_prev
         )
         wealth_after = main_wealth_after + hedge_cash_f + hedge_inv_i * hedge_ref_next
         wealth_pnl = wealth_after - wealth_before
@@ -263,7 +263,7 @@ class ObservedStepExecutionModel:
             sell_ref=float(main_sell_ref),
             hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
             hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
-            hedge_inventory=hedge_inv_i,
+            global_inventory=hedge_inv_i,
             hedge_cash=hedge_cash_f,
         )
         return next_state, DeltaPnL(

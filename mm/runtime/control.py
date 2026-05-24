@@ -12,6 +12,7 @@ from mm.observability import counter_inc, gauge, log_event
 @dataclass(slots=True)
 class RuntimeControlState:
     paused_actors: set[str] = field(default_factory=set)
+    paused_venue_roles: set[str] = field(default_factory=set)
     observe_only: bool = False
     kill_switch: bool = False
 
@@ -54,6 +55,28 @@ class RuntimeControlPlane:
             self.state.kill_switch = bool(command.get("enabled", True))
         elif name == "observe_only":
             self.state.observe_only = bool(command.get("enabled", True))
+        elif name == "pause_local":
+            self.state.paused_venue_roles.add("local")
+        elif name == "resume_local":
+            self.state.paused_venue_roles.discard("local")
+        elif name == "pause_global":
+            self.state.paused_venue_roles.add("global")
+        elif name == "resume_global":
+            self.state.paused_venue_roles.discard("global")
+        elif name == "cancel_actor_orders":
+            exchange = command.get("exchange")
+            if exchange:
+                await self.bus.publish(
+                    f"execution:cancel_actor:{str(exchange).lower().strip()}",
+                    {
+                        "type": "CancelActorOrdersRequested",
+                        "command_id": command.get("command_id"),
+                        "exchange": str(exchange).lower().strip(),
+                        "actor_id": actor_id,
+                        "reason": command.get("reason", ""),
+                        "timestamp_ms": int(time.time() * 1000),
+                    },
+                )
         elif name == "cancel_all":
             await self.bus.publish(
                 f"execution:cancel_all:{command.get('exchange') or 'all'}",
@@ -73,6 +96,7 @@ class RuntimeControlPlane:
             "type": "RuntimeControlState",
             "command_id": command.get("command_id"),
             "paused_actors": sorted(self.state.paused_actors),
+            "paused_venue_roles": sorted(self.state.paused_venue_roles),
             "observe_only": self.state.observe_only,
             "kill_switch": self.state.kill_switch,
             "timestamp_ms": int(time.time() * 1000),

@@ -24,6 +24,7 @@ class ExecutionStateReconciler:
             asyncio.create_task(self._listen_order_updates()),
             asyncio.create_task(self._listen_fills()),
             asyncio.create_task(self._listen_cancel_all()),
+            asyncio.create_task(self._listen_cancel_actor()),
         ]
         await asyncio.sleep(0)
         await self.manager.publish_snapshot()
@@ -70,3 +71,16 @@ class ExecutionStateReconciler:
                 event = task.result()
                 if isinstance(event, dict):
                     await self.manager.cancel_all(reason=str(event.get("reason", "")))
+
+    async def _listen_cancel_actor(self) -> None:
+        queue = self.bus.subscribe_queue(f"execution:cancel_actor:{self.exchange}")
+        while True:
+            event = await queue.get()
+            if not isinstance(event, dict):
+                continue
+            actor_id = event.get("actor_id")
+            if not actor_id:
+                continue
+            cancel_actor = getattr(self.manager, "cancel_actor_orders", None)
+            if cancel_actor is not None:
+                await cancel_actor(str(actor_id), reason=str(event.get("reason", "")))

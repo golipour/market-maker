@@ -9,7 +9,7 @@ from mm.models.scoring import (
     score_market_flow,
     score_primary_mid_delta,
 )
-from mm.mpc.hedge_price_torch import HedgeGaussianPriceModel
+from mm.mpc.global_price_torch import HedgeGaussianPriceModel
 from mm.mpc.market_order_flow_torch import TorchHurdleLogNormalModel
 from mm.mpc.price_torch import TorchResidualPriceModel
 
@@ -77,8 +77,7 @@ def test_strategy_price_model_update_uses_true_vwap_residuals() -> None:
         asks=(PriceLevel(103.0, 10.0),),
         is_snapshot=True,
     )
-    previous = StrategyInputFrame(
-        primary=MarketEvent(
+    previous = StrategyInputFrame(local=MarketEvent(
             exchange="nobitex",
             symbol="USDT_IRT",
             interval_ms=1000,
@@ -93,8 +92,7 @@ def test_strategy_price_model_update_uses_true_vwap_residuals() -> None:
             microprice=100.0,
         )
     )
-    current = StrategyInputFrame(
-        primary=MarketEvent(
+    current = StrategyInputFrame(local=MarketEvent(
             exchange="nobitex",
             symbol="USDT_IRT",
             interval_ms=1000,
@@ -206,7 +204,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         imbalance=0.0,
         microprice=100.5,
     )
-    frame = StrategyInputFrame(primary=primary, hedge=hedge_event, hedge_status="ready")
+    frame = StrategyInputFrame(local=primary, global_=hedge_event, global_status="ready")
     state = State(
         mid=100.5,
         ob_rel=OrderbookRelative(bids=(), asks=()),
@@ -216,8 +214,8 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         cash=0.0,
         buy_vwap=100.0,
         sell_vwap=101.0,
-        hedge_buy_vwap=100.0,
-        hedge_sell_vwap=101.0,
+        global_buy_vwap=100.0,
+        global_sell_vwap=101.0,
     )
     scores = score_frame_models(
         frame=frame,
@@ -225,10 +223,10 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         state=state,
         market_flow_model=None,
         price_model=TorchResidualPriceModel(),
-        hedge_price_model=hedge,
+        global_price_model=hedge,
         market_flow_kind="hurdle_lognormal",
         price_kind="residual",
-        hedge_price_kind="legacy",
+        global_price_kind="legacy",
     )
     assert scores["price"].skip_reason == "missing_previous_frame"
-    assert scores["hedge_price"].skip_reason == "missing_previous_frame"
+    assert scores["global_price"].skip_reason == "missing_previous_frame"

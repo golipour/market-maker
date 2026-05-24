@@ -23,10 +23,10 @@ class RealExecutionModel:
         # Same clamp semantics as legacy observed-step model; MPC reads these attributes.
         self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
         if hedge_fee is not None:
-            self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
+            self.global__fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
 
     def __repr__(self) -> str:
         parts = [f"maker_fee={self.maker_fee!r}"]
         if hasattr(self, "hedge_fee"):
-            parts.append(f"hedge_fee={self.hedge_fee!r}")
+            parts.append(f"hedge_fee={self.global__fee!r}")
         return f"RealExecutionModel({', '.join(parts)})"

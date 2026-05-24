@@ -112,14 +112,13 @@ class _FailingOrderManager:
 async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary),
+        lambda self, frame, *, frame_step: _decision(frame.local),
     )
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = _SlowOrderManager(delay_s=0.2)
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_runner_config(placement_timeout_ms=50),
@@ -130,7 +129,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert diagnostics["type"] == "ControllerDiagnostics"
@@ -144,14 +143,13 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
 async def test_strategy_runner_publishes_diagnostics_after_sync_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary),
+        lambda self, frame, *, frame_step: _decision(frame.local),
     )
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = _FailingOrderManager()
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_runner_config(placement_timeout_ms=1000),
@@ -162,7 +160,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_error(monkeypatc
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert any("ExecutionSyncError" in warning for warning in diagnostics["warnings"])
@@ -176,15 +174,14 @@ async def test_strategy_runner_continues_after_sync_failure(monkeypatch: pytest.
 
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         calls["count"] += 1
-        return _decision(frame.primary)
+        return _decision(frame.local)
 
     monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = _FailingOrderManager()
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_runner_config(placement_timeout_ms=1000),
@@ -195,8 +192,8 @@ async def test_strategy_runner_continues_after_sync_failure(monkeypatch: pytest.
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     assert calls["count"] == 2
     assert manager.sync_calls == 2

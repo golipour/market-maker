@@ -413,7 +413,7 @@ class MonteCarloMPCTensorBatched:
         price_model: Any,
         market_flow_model: Any,
         execution_model: Any,
-        hedge_price_model: Any = None,
+        global_price_model: Any = None,
         n_components: int = 2,
         n_samples: int = 32,
         horizon: int = 4,
@@ -430,17 +430,13 @@ class MonteCarloMPCTensorBatched:
         fixed_mc_samples: bool = False,
         verbose: bool = False,
         inv_coef: float | None = None,
-        target_inv: float | None = None,
-        hedge_enabled: bool | None = None,
-        hedge_coef: float = 0.0,
+        target_inv: float | None = None,        hedge_coef: float = 0.0,
         hedge_fee: float = 0.0,
         hedge_reward_weight: float = 1.0,
         return_risk_aversion_beta: float = 1.0,
         inventory_target_penalty_weight: float | None = None,
         target_inventory: float | None = None,
-        target_inventory_multiplier: float = 1.5,
-        hedge_rollout_enabled: bool | None = None,
-        liquidity_sourcing_enabled: bool = False,
+        target_inventory_multiplier: float = 1.5,        liquidity_sourcing_enabled: bool = False,
         global_market_flow_model: Any = None,
         global_price_model: Any = None,
         quote_size_min_per_side: float | int | None = None,
@@ -452,7 +448,7 @@ class MonteCarloMPCTensorBatched:
         self.price_model = price_model
         self.market_flow_model = market_flow_model
         self.execution_model = execution_model
-        self.hedge_price_model = hedge_price_model
+        self.global_price_model = global_price_model
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
@@ -489,13 +485,9 @@ class MonteCarloMPCTensorBatched:
         explicit_target = _coalesce_param(target_inventory, target_inv, default=None)
         self.target_inventory = float(explicit_target) if explicit_target is not None else None
         self.target_inventory_multiplier = max(1e-6, float(target_inventory_multiplier))
-        hedge_flag = _coalesce_param(hedge_rollout_enabled, hedge_enabled, default=None)
-        if hedge_flag is not None:
-            self.hedge_enabled = bool(hedge_flag)
-        else:
-            self.hedge_enabled = bool(float(hedge_coef) != 0.0)
-        self.hedge_fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
-        self.hedge_reward_weight = max(0.0, float(hedge_reward_weight))
+        self.global_enabled = bool(float(hedge_coef) != 0.0)
+        self.global__fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
+        self.global__reward_weight = max(0.0, float(hedge_reward_weight))
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
         self.global_market_flow_model = global_market_flow_model
         self.global_price_model = global_price_model
@@ -650,7 +642,7 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
-        hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.hedge_fee)
+        hedge_fee_rollout = getattr(self.execution_model, "hedge_fee", self.global__fee)
         hedge_fee_rollout = max(0.0, min(1.0 - 1e-9, float(hedge_fee_rollout)))
         vwap_depth = target_depth_lots_from_price_model(self.price_model)
 
@@ -677,8 +669,8 @@ class MonteCarloMPCTensorBatched:
             else:
                 eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
                 eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-            if self.hedge_price_model is not None and hasattr(self.hedge_price_model, "sample_deltas"):
-                d_hedge_buy, d_hedge_sell = self.hedge_price_model.sample_deltas(
+            if self.global_price_model is not None and hasattr(self.global_price_model, "sample_deltas"):
+                d_hedge_buy, d_hedge_sell = self.global_price_model.sample_deltas(
                     sample_shape,
                     device=_device,
                     dtype=dtype,
@@ -758,21 +750,21 @@ class MonteCarloMPCTensorBatched:
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
                 mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
-                hedge_buy_vwap_t = torch_mod.full(
+                global_buy_vwap_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.hedge_buy_vwap if state.hedge_buy_vwap is not None else state.buy_vwap),
+                    float(state.global_buy_vwap if state.global_buy_vwap is not None else state.buy_vwap),
                     dtype=dtype,
                     device=_device,
                 )
-                hedge_sell_vwap_t = torch_mod.full(
+                global_sell_vwap_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(state.hedge_sell_vwap if state.hedge_sell_vwap is not None else state.sell_vwap),
+                    float(state.global_sell_vwap if state.global_sell_vwap is not None else state.sell_vwap),
                     dtype=dtype,
                     device=_device,
                 )
                 hedge_inv_t = torch_mod.full(
                     (self.n_samples, 1),
-                    float(getattr(state, "hedge_inventory", 0)),
+                    float(getattr(state, "global_inventory", 0)),
                     dtype=dtype,
                     device=_device,
                 )
@@ -862,26 +854,26 @@ class MonteCarloMPCTensorBatched:
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
                     inv_path[:, h] = inv_next.squeeze(1)
-                    if self.hedge_enabled:
+                    if self.global_enabled:
                         d_buy = d_hedge_buy[:, h : h + 1]
                         d_sell = d_hedge_sell[:, h : h + 1]
-                        hedge_buy_vwap_next = hedge_buy_vwap_t + d_buy
-                        hedge_sell_vwap_next = hedge_sell_vwap_t + d_sell
+                        global_buy_vwap_next = global_buy_vwap_t + d_buy
+                        global_sell_vwap_next = global_sell_vwap_t + d_sell
                         d_inv = inv_delta.unsqueeze(1)  # fee-adjusted executed inventory change
                         # Hedge trade at t+1 on hedge venue:
                         # - d_inv>0 (longer main) -> sell hedge inventory at hedge bid
                         # - d_inv<0 (shorter main) -> buy hedge inventory at hedge ask
                         trade_cash_hedge = torch_mod.where(
                             d_inv >= 0.0,
-                            d_inv * hedge_sell_vwap_next,
-                            d_inv * hedge_buy_vwap_next,
+                            d_inv * global_sell_vwap_next,
+                            d_inv * global_buy_vwap_next,
                         )
                         one_minus_hedge_fee = float(1.0 - hedge_fee_rollout)
                         hedge_cash_next = hedge_cash_t + trade_cash_hedge * one_minus_hedge_fee
                         hedge_inv_next = hedge_inv_t - d_inv
                     else:
-                        hedge_buy_vwap_next = hedge_buy_vwap_t
-                        hedge_sell_vwap_next = hedge_sell_vwap_t
+                        global_buy_vwap_next = global_buy_vwap_t
+                        global_sell_vwap_next = global_sell_vwap_t
                         hedge_cash_next = hedge_cash_t
                         hedge_inv_next = hedge_inv_t
                     mid_next = _mid_from_book_best_levels_batched(
@@ -906,11 +898,11 @@ class MonteCarloMPCTensorBatched:
                         sell_vwap_t, inv_t, cash_t, sell_vwap_next, inv_next, cash_next
                     )
                     hedge_reward = torch_mod.zeros_like(step_reward_main)
-                    if self.hedge_enabled:
-                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * hedge_sell_vwap_t
-                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * hedge_sell_vwap_next
+                    if self.global_enabled:
+                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * global_sell_vwap_t
+                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * global_sell_vwap_next
                         hedge_reward = (hedge_wealth_next - hedge_wealth_t).squeeze(1)
-                    step_reward = step_reward_main + float(self.hedge_reward_weight) * hedge_reward
+                    step_reward = step_reward_main + float(self.global__reward_weight) * hedge_reward
                     if h == 0:
                         step_reward_0 = step_reward
                     total_reward = total_reward + step_reward
@@ -920,8 +912,8 @@ class MonteCarloMPCTensorBatched:
                     mid_fallback_t = mid_next
                     inv_t = inv_next
                     cash_t = cash_next
-                    hedge_buy_vwap_t = hedge_buy_vwap_next
-                    hedge_sell_vwap_t = hedge_sell_vwap_next
+                    global_buy_vwap_t = global_buy_vwap_next
+                    global_sell_vwap_t = global_sell_vwap_next
                     hedge_cash_t = hedge_cash_next
                     hedge_inv_t = hedge_inv_next
 
@@ -1073,7 +1065,7 @@ class MonteCarloMPCTensorBatched:
             rollout={
                 "n_samples": self.n_samples,
                 "horizon": self.horizon,
-                "hedge_enabled": self.hedge_enabled,
+                "global_enabled": self.global_enabled,
                 "soft_fill_temp": self.soft_fill_temp,
                 "soft_fill_activation": self.soft_fill_activation,
             },

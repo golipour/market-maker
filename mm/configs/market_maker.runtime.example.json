@@ -1,23 +1,52 @@
 {
-  "primary": {
-    "exchange": "nobitex",
-    "symbol": "USDT_IRT",
-    "mode": "rest",
-    "depth_limit": 100,
-    "trades_limit": 200,
-    "poll_interval_ms": 1000
-  },
-  "hedge": {
-    "exchange": "wallex",
-    "symbol": "USDT_IRT",
-    "mode": "rest",
-    "depth_limit": 100,
-    "trades_limit": 200,
-    "poll_interval_ms": 1000
+  "venues": {
+    "local": {
+      "exchange": "nobitex",
+      "symbol": "USDT_IRT",
+      "mode": "rest",
+      "depth_limit": 100,
+      "trades_limit": 200,
+      "poll_interval_ms": 1000
+    },
+    "global": {
+      "exchange": "wallex",
+      "symbol": "USDT_IRT",
+      "mode": "rest",
+      "depth_limit": 100,
+      "trades_limit": 200,
+      "poll_interval_ms": 1000
+    }
   },
   "interval_ms": 10000,
-  "max_hedge_lag_ms": 2000,
-  "hedge_grace_ms": 250,
+  "max_global_lag_ms": 2000,
+  "global_grace_ms": 250,
+  "local_private": {
+    "mode": "rest",
+    "api_token_env": "NOBITEX_API_TOKEN",
+    "poll_interval_ms": 10000,
+    "enable_execution": true
+  },
+  "global_private": {
+    "mode": "rest",
+    "api_token_env": "WALLEX_API_TOKEN",
+    "poll_interval_ms": 10000,
+    "enable_execution": true
+  },
+  "liquidity_sourcing": {
+    "enabled": true,
+    "mode": "liquidity_sourcing",
+    "global_live_orders": true
+  },
+  "execution": {
+    "local": {
+      "planner": "reconcile"
+    },
+    "global": {
+      "planner": "replace",
+      "max_order_qty": 0.5,
+      "max_quote_distance": 10.0
+    }
+  },
   "bus": {
     "kind": "redis_streams",
     "redis_url": "redis://localhost:6379/0",
@@ -34,7 +63,7 @@
     "topics": [
       "market:events:nobitex:USDT_IRT:10000",
       "market:events:wallex:USDT_IRT:10000",
-      "strategy:frames:nobitex:USDT_IRT:10000",
+      "strategy:joint:frames:nobitex:USDT_IRT:10000",
       "strategy:actions",
       "strategy:decisions",
       "strategy:diagnostics:mpc-controller",
@@ -44,14 +73,7 @@
       "execution:state:wallex",
       "private:state:nobitex:snapshot",
       "private:state:wallex:snapshot",
-      "private:state:nobitex:balances",
-      "private:state:wallex:balances",
-      "private:state:nobitex:open_orders",
-      "private:state:wallex:open_orders",
-      "private:state:nobitex:fills",
-      "private:state:wallex:fills",
-      "hedge:intents:hedge-executor",
-      "hedge:diagnostics:hedge-executor"
+      "ledger:snapshot"
     ],
     "batch_size": 100,
     "flush_interval_ms": 1000
@@ -66,18 +88,6 @@
     "otel_enabled": false,
     "otlp_endpoint": "http://localhost:4318"
   },
-  "primary_private": {
-    "mode": "rest",
-    "api_token_env": "NOBITEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true
-  },
-  "hedge_private": {
-    "mode": "rest",
-    "api_token_env": "WALLEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true
-  },
   "controller": {
     "enabled": true,
     "observe_only": false,
@@ -91,14 +101,10 @@
       "spread_step": 20.0,
       "spread_max": 200.0
     },
-    "max_orders_per_side": 16,
-    "reconcile": {
-      "price_tol_bps": 10.0,
-      "qty_tol_rel": 0.01
-    },
     "risk": {
       "enabled": true,
-      "primary": {
+      "engine": "net_delta",
+      "local": {
         "min_inventory": 0.0,
         "max_inventory": 1000.0,
         "min_cash": 0.0,
@@ -107,7 +113,7 @@
         "max_market_data_age_ms": 60000,
         "max_private_state_age_ms": 120000
       },
-      "hedge": {
+      "global": {
         "min_inventory": 0.0,
         "max_inventory": 1000.0,
         "min_cash": 0.0,
@@ -130,7 +136,7 @@
       "init_mu": 0.0,
       "init_sigma": 1.0
     },
-    "hedge_price_model": {
+    "global_price_model": {
       "kind": "legacy",
       "decay": 0.95,
       "sigma_min_quote": 1.0
@@ -138,7 +144,7 @@
     "execution_model": {
       "kind": "real",
       "maker_fee": 0.0,
-      "hedge_fee": 0.0
+      "global_fee": 0.0
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
@@ -159,14 +165,7 @@
       "quote_spread_min_depth": 0.1,
       "quote_spread_k_epsilon": 0.01,
       "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid",
-      "hedge_rollout_enabled": false
+      "soft_fill_activation": "hardsigmoid"
     }
-  },
-  "hedging": {
-    "enabled": false,
-    "observe_only": true,
-    "actor_id": "hedge-executor",
-    "dedupe_window_ms": 300000
   }
 }

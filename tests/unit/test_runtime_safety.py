@@ -47,16 +47,15 @@ def test_runtime_risk_rejects_when_kill_switch_enabled() -> None:
 
 def test_runtime_risk_filters_inventory_breach() -> None:
     risk = RuntimeRiskEngine(
-        RiskLimits(primary=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
+        RiskLimits(local=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
         clock_ms=lambda: 1000,
     )
     frame_event = _event()
     approved = risk.validate_frame(
         [Action(actor_id="a1", orders=(Order("nobitex", "BTC_IRT", "buy", 1.0, 2.0),))],
         TradingState(actor_id="a1", cash=1_000_000.0),
-        StrategyInputFrame(
-            primary=frame_event,
-            primary_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
+        StrategyInputFrame(local=frame_event,
+            local_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
         ),
     )
 
@@ -65,7 +64,7 @@ def test_runtime_risk_filters_inventory_breach() -> None:
 
 def test_runtime_risk_rejects_stale_data() -> None:
     risk = RuntimeRiskEngine(
-        RiskLimits(primary=VenueRiskLimits(max_market_data_age_ms=10, max_private_state_age_ms=60_000)),
+        RiskLimits(local=VenueRiskLimits(max_market_data_age_ms=10, max_private_state_age_ms=60_000)),
         clock_ms=lambda: 2000,
     )
 

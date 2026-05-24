@@ -112,6 +112,66 @@ class OrderManager(AbstractOrderManager):
                 )
         return combined
 
+    def preview_venue_target_book(self, target: VenueTargetBook) -> ExecutionSyncReport:
+        plan = self._plan_for_venue_target(target)
+        scoped_desired = [
+            self._target_order_to_order(order) for order in target.orders
+        ]
+        return execution_plan_to_sync_report(
+            plan,
+            scoped_desired=scoped_desired,
+            live_orders=self._live_orders,
+            placed=False,
+        )
+
+    async def sync_venue_target_book(self, target: VenueTargetBook) -> ExecutionSyncReport:
+        async with self._lock:
+            return await self._sync_venue_target_locked(target)
+
+    async def _sync_venue_target_locked(self, target: VenueTargetBook) -> ExecutionSyncReport:
+        plan = self._plan_for_venue_target(target)
+        scoped_desired = [self._target_order_to_order(order) for order in target.orders]
+        accepted_orders: list[Order] = []
+        placed = False
+        live_snapshot = dict(self._live_orders)
+        if plan.cancel or plan.place:
+            router_result = await self._router.execute(plan)
+            accepted_orders = [order for _, order in router_result.placed]
+            placed = bool(router_result.placed)
+            self._apply_router_result(
+                Action(actor_id=target.actor_id, orders=tuple(scoped_desired)),
+                router_result,
+            )
+        return execution_plan_to_sync_report(
+            plan,
+            scoped_desired=scoped_desired,
+            live_orders=live_snapshot,
+            placed=placed,
+            accepted_orders=accepted_orders,
+        )
+
+    async def cancel_actor_orders(self, actor_id: str, *, reason: str = "") -> None:
+        actor = actor_id.strip()
+        order_ids = [
+            order_id
+            for order_id, open_order in self._live_orders.items()
+            if open_order.actor_id.strip() == actor
+        ]
+        if not order_ids:
+            return
+        await self._publish(
+            "execution:orders",
+            {
+                "type": "CancelActorOrdersRequested",
+                "exchange": self.exchange,
+                "actor_id": actor,
+                "reason": reason,
+                "count": len(order_ids),
+                "timestamp_ms": self.clock_ms(),
+            },
+        )
+        await self._cancel_order_ids(order_ids)
+
     def apply_private_snapshot(self, snapshot: PrivateStateSnapshot) -> ExecutionSnapshot:
         self._live_orders = {
             order_id: order
@@ -279,6 +339,9 @@ class OrderManager(AbstractOrderManager):
                 orders=(),
                 policy="reconcile",
             )
+        return self._plan_for_venue_target(target)
+
+    def _plan_for_venue_target(self, target: VenueTargetBook):
         ledger = VenueLedger(
             exchange=self.exchange,
             symbol=target.symbol,
@@ -289,7 +352,7 @@ class OrderManager(AbstractOrderManager):
         planner = select_planner(target.policy)
         raw_plan = planner.plan(target, ledger, config=self._reconcile_config)
         validated_plan = self._rules_gateway.validate(raw_plan)
-        validated_plan = ExecutionPlan(
+        return ExecutionPlan(
             exchange=validated_plan.exchange,
             symbol=validated_plan.symbol,
             actor_id=validated_plan.actor_id,
@@ -304,7 +367,20 @@ class OrderManager(AbstractOrderManager):
                 "planned_place_orders": tuple(command.order for command in raw_plan.place),
             },
         )
-        return validated_plan
+
+    @staticmethod
+    def _target_order_to_order(order) -> Order:
+        from mm.core.models.target_book import TargetOrder
+
+        assert isinstance(order, TargetOrder)
+        return Order(
+            exchange=order.exchange,
+            symbol=order.symbol,
+            side=order.side,
+            price=float(order.price),
+            qty=float(order.qty),
+            order_type=order.order_type,
+        )
 
     async def _publish_snapshot(self) -> None:
         await self._publish("execution:state", self.snapshot())

@@ -94,10 +94,10 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
     assert payload["actor_id"] == "mpc-controller"
     assert payload["order_count"] == 0
     assert payload["unit_policy"] == "prices=quote_per_base, quantities=base, cash/notional=quote"
-    assert payload["primary_buy_vwap"] == 0.0
-    assert payload["primary_sell_vwap"] == 0.0
-    assert payload["hedge_buy_vwap"] is None
-    assert payload["hedge_sell_vwap"] is None
+    assert payload["local_buy_vwap"] == 0.0
+    assert payload["local_sell_vwap"] == 0.0
+    assert payload["global_buy_vwap"] is None
+    assert payload["global_sell_vwap"] is None
     assert "economics" not in payload
     assert payload["ladder_orders"] == []
     assert payload["executed_orders"] == []
@@ -106,7 +106,7 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
 def test_mpc_market_flow_step_tuple_from_frame() -> None:
     from mm.core.models.strategy import StrategyInputFrame
 
-    frame = StrategyInputFrame(primary=_event())
+    frame = StrategyInputFrame(local=_event())
     step = mpc_engine._market_flow_step_tuple(frame)
 
     assert len(step) == 15

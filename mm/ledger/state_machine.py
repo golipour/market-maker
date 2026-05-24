@@ -61,7 +61,7 @@ def build_joint_ledger_snapshot(
     local_inventory, local_cash = _inventory_cash_from_venue_ledger(local)
     global_inventory = 0.0
     global_cash = 0.0
-    if global_ is not None and binding.hedge is not None:
+    if global_ is not None and binding.global_ is not None:
         global_inventory, global_cash = _inventory_cash_from_venue_ledger(global_)
 
     now_ms = int(created_at_ms if created_at_ms is not None else time.time() * 1000)

@@ -22,7 +22,7 @@ from mm.runtime.config import LiquiditySourcingRuntimeConfig
 
 
 class JointStrategyFrameAssembler:
-    """Publish legacy ``StrategyInputFrame`` and ledger-backed ``JointStrategyFrame``."""
+    """Publish ledger-backed ``JointStrategyFrame`` on the joint topic."""
 
     def __init__(
         self,
@@ -31,7 +31,6 @@ class JointStrategyFrameAssembler:
         binding: SymbolBinding,
         liquidity_sourcing: LiquiditySourcingRuntimeConfig,
         bus: AbstractEventBus | None = None,
-        legacy_output_topic: str | None = None,
         joint_output_topic: str | None = None,
         ledger_service: PortfolioLedgerService | None = None,
         ledger_queue: asyncio.Queue | None = None,
@@ -43,7 +42,6 @@ class JointStrategyFrameAssembler:
         self.binding = binding
         self.liquidity_sourcing = liquidity_sourcing
         self.bus = bus
-        self.legacy_output_topic = legacy_output_topic
         self.joint_output_topic = joint_output_topic
         self.ledger_service = ledger_service
         self.ledger_queue = ledger_queue
@@ -110,14 +108,13 @@ class JointStrategyFrameAssembler:
             now_ms=now_ms,
             max_local_private_age_ms=self.max_local_private_age_ms,
             max_global_private_age_ms=self.max_global_private_age_ms,
+            input_frame=legacy,
         )
 
     async def _run_publish(self) -> None:
         try:
             while not self._stopped.is_set():
                 legacy = await self.legacy_assembler.next_frame()
-                if self.bus is not None and self.legacy_output_topic:
-                    await self.bus.publish(self.legacy_output_topic, legacy)
                 joint = self.build_joint_frame(legacy)
                 if self.bus is not None and self.joint_output_topic:
                     await self.bus.publish(self.joint_output_topic, joint)
@@ -143,14 +140,14 @@ class JointStrategyFrameAssembler:
         now_ms: int,
     ) -> JointLedgerSnapshot:
         global_market_age = (
-            max(0, now_ms - int(legacy.hedge.t_end_ms))
-            if legacy.hedge is not None
+            max(0, now_ms - int(legacy.global_.t_end_ms))
+            if legacy.global_ is not None
             else None
         )
         freshness = LedgerFreshness(
             local_private_age_ms=ledger.freshness.local_private_age_ms,
             global_private_age_ms=ledger.freshness.global_private_age_ms,
-            local_market_age_ms=max(0, now_ms - int(legacy.primary.t_end_ms)),
+            local_market_age_ms=max(0, now_ms - int(legacy.local.t_end_ms)),
             global_market_age_ms=global_market_age,
             ledger_fresh=ledger.freshness.ledger_fresh,
         )

@@ -133,8 +133,7 @@ def test_normalized_diagnostics_topic_defaults_to_actor_id() -> None:
 
 
 def test_default_persistence_topics_include_diagnostics() -> None:
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=_minimal_config(actor_id="mpc-controller"),
         observability=ObservabilityRuntimeConfig(),
     )
@@ -153,8 +152,7 @@ async def test_strategy_runner_publishes_diagnostics_on_controller_error(
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_minimal_config(),
@@ -165,7 +163,7 @@ async def test_strategy_runner_publishes_diagnostics_on_controller_error(
         bus=bus,
         run_id="run-test",
     )
-    frame = StrategyInputFrame(primary=_market_event(), created_at_ms=1_500)
+    frame = StrategyInputFrame(local=_market_event(), created_at_ms=1_500)
     approved = await runner.on_frame(frame)
 
     assert approved == []
@@ -184,9 +182,9 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         return StrategyDecision(
             actor_id="test-runner",
-            exchange=frame.primary.exchange,
-            symbol=frame.primary.symbol,
-            t_end_ms=frame.primary.t_end_ms,
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
             frame_step=frame_step,
             action=Action(actor_id="test-runner", orders=(order,)),
             mid=100.0,
@@ -198,8 +196,7 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_minimal_config(),
@@ -209,24 +206,22 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
         risk_engine=PassThroughRiskEngine(),
         bus=bus,
     )
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await diag_queue.get()
     assert diagnostics["type"] == CONTROLLER_DIAGNOSTICS_TYPE
     assert diagnostics["state"]["mid"] == 100.0
-    assert diagnostics["state"]["primary_inventory"] == 5.0
+    assert diagnostics["state"]["local_inventory"] == 5.0
     assert "observe_only_config" in diagnostics["execution_gates"]["blocked_reasons"]
 
 
 def test_decision_context_maps_frame_fields() -> None:
-    frame = StrategyInputFrame(
-        primary=_market_event(),
-        hedge_status="ready",
-        hedge_lag_ms=12,
+    frame = StrategyInputFrame(local=_market_event(),
+        global_status="ready",
+        global_lag_ms=12,
         created_at_ms=1_000,
     )
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     from mm.application.trading_context import trading_state_from_frame
 
@@ -245,8 +240,8 @@ def test_decision_context_maps_frame_fields() -> None:
         now_ms=2_500,
     )
     diag = ctx.to_diagnostics()
-    assert diag.frame.hedge_status == "ready"
-    assert diag.frame.hedge_lag_ms == 12
+    assert diag.frame.global_status == "ready"
+    assert diag.frame.global_lag_ms == 12
     assert diag.frame.frame_age_ms == 1500
     assert diag.cleared_orderbook["bids"] == [{"price": 100.0, "qty": 5.0}]
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
@@ -255,15 +250,14 @@ def test_decision_context_maps_frame_fields() -> None:
 def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None:
     from mm.application.orderbook_view import subtract_own_orders
 
-    frame = StrategyInputFrame(primary=_market_event())
+    frame = StrategyInputFrame(local=_market_event())
     clean_book = subtract_own_orders(
-        frame.primary.orderbook,
+        frame.local.orderbook,
         {
             "o1": Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0, client_order_id="c1"),
         },
     )
-    clean_frame = StrategyInputFrame(
-        primary=MarketEvent(
+    clean_frame = StrategyInputFrame(local=MarketEvent(
             exchange="nobitex",
             symbol="BTC_IRT",
             interval_ms=1000,
@@ -278,8 +272,7 @@ def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None
             microprice=100.5,
         )
     )
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     from mm.application.trading_context import trading_state_from_frame
 

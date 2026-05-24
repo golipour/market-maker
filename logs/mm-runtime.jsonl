@@ -59003,3 +59003,12 @@
 {"ts_ms":1779614763451,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":8}
 {"ts_ms":1779614763453,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":8}
 {"ts_ms":1779614798559,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779615662834,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779615662907,"event":"mpc_optimizer_timing","batch_sec":0.0009961930009012576,"train_sec":0.013697356000193395,"total_sec":0.014693549001094652,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779615663048,"event":"mpc_joint_optimizer_timing","batch_sec":0.0016008330003387528,"train_sec":0.13391292699998303,"total_sec":0.13551376000032178,"global_active":true,"best_epoch":1}
+{"ts_ms":1779615663137,"event":"mpc_joint_optimizer_timing","batch_sec":0.008812865000436432,"train_sec":0.0693110299998807,"total_sec":0.07812389500031713,"global_active":true,"best_epoch":4}
+{"ts_ms":1779615713255,"event":"hedge_execution_disabled","reason":"liquidity_sourcing_live_active","message":"HedgeExecutionService disabled because live liquidity sourcing is enabled; set liquidity_sourcing.allow_legacy_hedging_with_sourcing for emergency use"}
+{"ts_ms":1779615768923,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779615768923,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":8}
+{"ts_ms":1779615768927,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":8}
+{"ts_ms":1779615803997,"event":"persistence_disabled","reason":"config"}

@@ -17,23 +17,21 @@ def clean_strategy_frame(
     """Return a frame whose primary/hedge books exclude the bot's live orders."""
 
     clean_primary = _replace_event_orderbook(
-        frame.primary,
-        subtract_own_orders(frame.primary.orderbook, open_orders),
+        frame.local,
+        subtract_own_orders(frame.local.orderbook, open_orders),
     )
     clean_hedge = None
-    if frame.hedge is not None:
+    if frame.global_ is not None:
         clean_hedge = _replace_event_orderbook(
-            frame.hedge,
-            subtract_own_orders(frame.hedge.orderbook, open_orders),
+            frame.global_,
+            subtract_own_orders(frame.global_.orderbook, open_orders),
         )
-    return StrategyInputFrame(
-        primary=clean_primary,
-        hedge=clean_hedge,
-        primary_private=frame.primary_private,
-        hedge_private=frame.hedge_private,
-        hedge_status=frame.hedge_status,
-        hedge_lag_ms=frame.hedge_lag_ms,
-        max_hedge_lag_ms=frame.max_hedge_lag_ms,
+    return StrategyInputFrame(local=clean_primary, global_=clean_hedge,
+        local_private=frame.local_private,
+        global_private=frame.global_private,
+        global_status=frame.global_status,
+        global_lag_ms=frame.global_lag_ms,
+        max_global_lag_ms=frame.max_global_lag_ms,
         created_at_ms=frame.created_at_ms,
     )
 

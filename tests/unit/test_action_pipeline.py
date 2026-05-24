@@ -44,7 +44,7 @@ def test_cap_orders_per_side_reports_capped_counts() -> None:
 
 def test_runtime_risk_validate_with_result_counts_inventory_rejects() -> None:
     risk = RuntimeRiskEngine(
-        limits=RiskLimits(primary=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
+        limits=RiskLimits(local=VenueRiskLimits(max_inventory=1.0, max_private_state_age_ms=60_000)),
         clock_ms=lambda: 1000,
     )
     action = Action(actor_id="a", orders=(_order("buy", 5.0),))
@@ -62,9 +62,8 @@ def test_runtime_risk_validate_with_result_counts_inventory_rejects() -> None:
         imbalance=0.0,
         microprice=0.0,
     )
-    frame = StrategyInputFrame(
-        primary=event,
-        primary_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
+    frame = StrategyInputFrame(local=event,
+        local_private=PrivateStateSnapshot(exchange="nobitex", timestamp_ms=1000, balances={}),
     )
     result = risk.validate_frame_with_result(
         [action], TradingState(actor_id="a", inventory=0.0, cash=1_000_000.0), frame

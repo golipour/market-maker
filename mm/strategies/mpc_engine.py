@@ -27,7 +27,11 @@ from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
 from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
-from mm.runtime.config import ControllerRuntimeConfig, LiquiditySourcingRuntimeConfig
+from mm.runtime.config import (
+    ControllerRuntimeConfig,
+    ExecutionRuntimeConfig,
+    LiquiditySourcingRuntimeConfig,
+)
 from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     joint_target_book_to_legacy_action,
@@ -45,10 +49,10 @@ def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
     """Tuple shape expected by ``mm.mpc`` market-flow ``update`` (stats-only path)."""
 
     return (
-        frame.primary.t_end_ms,
+        frame.local.t_end_ms,
         None,
-        frame.primary.buy_volume,
-        frame.primary.sell_volume,
+        frame.local.buy_volume,
+        frame.local.sell_volume,
         0.0,
         0.0,
         0.0,
@@ -76,10 +80,11 @@ class MpcStrategyEngine:
     liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
         default_factory=LiquiditySourcingRuntimeConfig
     )
+    execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
     _controller: Any = field(init=False, repr=False)
     _market_flow_model: Any = field(init=False, repr=False)
     _price_model: Any = field(init=False, repr=False)
-    _hedge_price_model: Any = field(init=False, repr=False)
+    _global_price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -90,7 +95,7 @@ class MpcStrategyEngine:
         )
         self._market_flow_model = getattr(self._controller, "market_flow_model", None)
         self._price_model = getattr(self._controller, "price_model", None)
-        self._hedge_price_model = getattr(self._controller, "hedge_price_model", None)
+        self._global_price_model = getattr(self._controller, "global_price_model", None)
 
     def decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         t0 = time.monotonic_ns()
@@ -108,28 +113,28 @@ class MpcStrategyEngine:
             )
         flow_kind = str((self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"))
         price_kind = str((self.config.price_model or {}).get("kind", "residual"))
-        hedge_kind = str((self.config.hedge_price_model or {}).get("kind", "legacy"))
+        hedge_kind = str((self.config.global_price_model or {}).get("kind", "legacy"))
         model_scores = score_frame_models(
             frame=frame,
             previous_frame=self._previous_frame,
             state=state,
             market_flow_model=self._market_flow_model,
             price_model=self._price_model,
-            hedge_price_model=self._hedge_price_model,
+            global_price_model=self._global_price_model,
             market_flow_kind=flow_kind,
             price_kind=price_kind,
-            hedge_price_kind=hedge_kind,
+            global_price_kind=hedge_kind,
         )
-        _update_hedge_vwap_price_model(self._hedge_price_model, state)
+        _update_hedge_vwap_price_model(self._global_price_model, state)
         if (
-            self._hedge_price_model is not None
-            and "hedge_price" in model_scores
-            and hasattr(self._hedge_price_model, "get_params")
+            self._global_price_model is not None
+            and "global_price" in model_scores
+            and hasattr(self._global_price_model, "get_params")
         ):
             refresh_score_params_after(
                 model_scores,
-                key="hedge_price",
-                params_after=self._hedge_price_model.get_params(),
+                key="global_price",
+                params_after=self._global_price_model.get_params(),
                 updated=True,
             )
         _update_market_flow_model(self._market_flow_model, frame)
@@ -158,7 +163,7 @@ class MpcStrategyEngine:
             sigmoid_action = self._controller.optimize(state)
         optimizer_run = getattr(self._controller, "last_diagnostics", None)
         order_constraints = local_constraints_from_spec(
-            self.binding.primary,
+            self.binding.local,
             max_orders_per_side=self.config.max_orders_per_side,
         )
         continuous_depth = _continuous_action_depth_series(
@@ -172,21 +177,23 @@ class MpcStrategyEngine:
             else "single_venue"
         )
         global_sigmoid = getattr(self._controller, "_last_global_sigmoid_action", None)
-        global_event = frame.hedge if sourcing_mode == "liquidity_sourcing" else None
+        global_event = frame.global_ if sourcing_mode == "liquidity_sourcing" else None
         global_constraints = None
-        if global_event is not None and self.binding.hedge is not None:
+        if global_event is not None and self.binding.global_ is not None:
             global_constraints = OrderConstraints.from_spec(
-                self.binding.hedge,
+                self.binding.global_,
                 max_orders_per_side=self.config.max_orders_per_side,
             )
         joint_target_book, action_pipeline, ladder, _local_orders = build_joint_target_book_from_sigmoid(
             actor_id=self.config.actor_id,
-            local_event=frame.primary,
+            local_event=frame.local,
             sigmoid_action=sigmoid_action,
             orderbook_grid=self.config.orderbook_grid,
             local_constraints=order_constraints,
             continuous=continuous_depth,
             mode=sourcing_mode,
+            local_policy=self.execution.local.planner,
+            global_policy=self.execution.global_.planner,
             global_event=global_event,
             global_constraints=global_constraints,
             global_sigmoid_action=global_sigmoid,
@@ -210,9 +217,9 @@ class MpcStrategyEngine:
             }
         decision = StrategyDecision(
             actor_id=self.config.actor_id,
-            exchange=frame.primary.exchange,
-            symbol=frame.primary.symbol,
-            t_end_ms=frame.primary.t_end_ms,
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
             frame_step=frame_step,
             action=action,
             joint_target_book=joint_target_book,
@@ -221,13 +228,13 @@ class MpcStrategyEngine:
             live_execution_skipped_warmup=(
                 not self.config.observe_only and frame_step <= self.config.action_start_after_steps
             ),
-            hedge_status=frame.hedge_status,
-            has_hedge=frame.has_hedge,
+            global_status=frame.global_status,
+            has_global=frame.has_global,
             mid=float(state.mid),
-            primary_buy_vwap=float(state.buy_vwap),
-            primary_sell_vwap=float(state.sell_vwap),
-            hedge_buy_vwap=state.hedge_buy_vwap,
-            hedge_sell_vwap=state.hedge_sell_vwap,
+            local_buy_vwap=float(state.buy_vwap),
+            local_sell_vwap=float(state.sell_vwap),
+            global_buy_vwap=state.global_buy_vwap,
+            global_sell_vwap=state.global_sell_vwap,
             inventory=float(state.inventory),
             cash=float(state.cash),
             buy_volume=float(state.buy_vol),
@@ -258,14 +265,14 @@ class MpcStrategyEngine:
                 "kind": (self.config.price_model or {}).get("kind", "residual"),
                 "params": self._price_model.get_params() if hasattr(self._price_model, "get_params") else {},
             },
-            hedge_price={
-                "kind": (self.config.hedge_price_model or {}).get("kind", "legacy"),
+            global_price={
+                "kind": (self.config.global_price_model or {}).get("kind", "legacy"),
                 "params": (
-                    self._hedge_price_model.get_params()
-                    if self._hedge_price_model is not None and hasattr(self._hedge_price_model, "get_params")
+                    self._global_price_model.get_params()
+                    if self._global_price_model is not None and hasattr(self._global_price_model, "get_params")
                     else {}
                 ),
-                "active_in_mpc": self._hedge_price_model is not None
+                "active_in_mpc": self._global_price_model is not None
                 and bool(getattr(self._controller, "hedge_enabled", False)),
             },
         )
@@ -303,7 +310,7 @@ def _build_controller(
     optimizer_cfg.pop("spread_max", None)
     optimizer_cfg.pop("spread_step", None)
     order_constraints = OrderConstraints.from_spec(
-        binding.primary,
+        binding.local,
         max_orders_per_side=config.max_orders_per_side,
     )
     optimizer_defaults = {
@@ -316,7 +323,7 @@ def _build_controller(
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)
-    hedge_price_model = _build_hedge_price_model(config.hedge_price_model)
+    global_price_model = _build_global_price_model(config.global_price_model)
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
     global_flow_cfg = (config.optimizer or {}).get("global_market_flow_model") or config.market_flow_model
     global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.price_model
@@ -330,7 +337,7 @@ def _build_controller(
         price_model=price_model,
         market_flow_model=market_flow_model,
         execution_model=execution_model,
-        hedge_price_model=hedge_price_model,
+        global_price_model=global_price_model,
         liquidity_sourcing_enabled=sourcing.enabled,
         global_market_flow_model=global_flow_model if sourcing.enabled else None,
         global_price_model=global_price_model if sourcing.enabled else None,
@@ -389,17 +396,17 @@ def _global_active_for_frame(
         return False
     if sourcing.mode != "liquidity_sourcing":
         return False
-    return frame.hedge is not None and frame.hedge_status in (None, "ready", "stale")
+    return frame.global_ is not None and frame.global_status in (None, "ready", "stale")
 
 
 def _update_global_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
-    if frame.hedge is None or not hasattr(model, "update"):
+    if frame.global_ is None or not hasattr(model, "update"):
         return
     model.update(None, _global_market_flow_step_tuple(frame))
 
 
 def _global_market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
-    hedge = frame.hedge
+    hedge = frame.global_
     assert hedge is not None
     return (
         hedge.t_end_ms,
@@ -420,8 +427,8 @@ def _global_market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]
     )
 
 
-def _build_hedge_price_model(cfg: dict[str, Any] | None) -> Any:
-    from mm.mpc.hedge_price_torch import GaussianHedgeDeltaModel, HedgeGaussianPriceModel
+def _build_global_price_model(cfg: dict[str, Any] | None) -> Any:
+    from mm.mpc.global_price_torch import GaussianHedgeDeltaModel, HedgeGaussianPriceModel
 
     if not cfg:
         return None
@@ -434,7 +441,7 @@ def _build_hedge_price_model(cfg: dict[str, Any] | None) -> Any:
     if kind == "gaussian":
         payload = {k: v for k, v in cfg.items() if k != "kind"}
         return GaussianHedgeDeltaModel(**payload)
-    raise ValueError(f"unsupported hedge_price_model kind: {kind}")
+    raise ValueError(f"unsupported global_price_model kind: {kind}")
 
 
 def _update_hedge_vwap_price_model(model: Any, state: State) -> None:
@@ -442,9 +449,9 @@ def _update_hedge_vwap_price_model(model: Any, state: State) -> None:
 
     if model is None or not hasattr(model, "update"):
         return
-    if state.hedge_buy_vwap is None or state.hedge_sell_vwap is None:
+    if state.global_buy_vwap is None or state.global_sell_vwap is None:
         return
-    model.update(float(state.hedge_buy_vwap), float(state.hedge_sell_vwap))
+    model.update(float(state.global_buy_vwap), float(state.global_sell_vwap))
 
 
 def _state_from_frame(
@@ -459,26 +466,26 @@ def _state_from_frame(
 
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
     vwap_depth = _vwap_target_depth(price_model)
-    primary_mid = mid_from_orderbook(frame.primary.orderbook)
+    primary_mid = mid_from_orderbook(frame.local.orderbook)
     bids = tuple(
         (spread, level.qty)
-        for level in frame.primary.orderbook.bids
+        for level in frame.local.orderbook.bids
         if (spread := primary_mid - level.price) >= 0 and spread <= spread_max and level.qty > 0
     )
     asks = tuple(
         (spread, level.qty)
-        for level in frame.primary.orderbook.asks
+        for level in frame.local.orderbook.asks
         if (spread := level.price - primary_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
-    primary_inventory, primary_cash = inventory_cash_from_snapshot(
-        frame.primary_private,
-        binding.primary.base_asset,
-        binding.primary.quote_asset,
-        trading_symbol=binding.primary.symbol,
+    local_inventory, primary_cash = inventory_cash_from_snapshot(
+        frame.local_private,
+        binding.local.base_asset,
+        binding.local.quote_asset,
+        trading_symbol=binding.local.symbol,
     )
-    buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.primary.orderbook, target_depth=vwap_depth)
-    hedge_buy_vwap = hedge_sell_vwap = None
-    hedge_inventory = 0.0
+    buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.local.orderbook, target_depth=vwap_depth)
+    global_buy_vwap = global_sell_vwap = None
+    global_inventory = 0.0
     hedge_cash = 0.0
     global_ob_rel = None
     global_buy_vol = 0.0
@@ -487,41 +494,41 @@ def _state_from_frame(
     global_cash = 0.0
     global_buy_vwap = 0.0
     global_sell_vwap = 0.0
-    if frame.hedge is not None:
-        global_ob_rel = ob_rel_from_market_event(frame.hedge.orderbook, spread_max=spread_max)
-        global_buy_vol = float(frame.hedge.buy_volume)
-        global_sell_vol = float(frame.hedge.sell_volume)
+    if frame.global_ is not None:
+        global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=spread_max)
+        global_buy_vol = float(frame.global_.buy_volume)
+        global_sell_vol = float(frame.global_.sell_volume)
         try:
-            hedge_buy_vwap, hedge_sell_vwap = vwap_from_raw_orderbook(
-                frame.hedge.orderbook, target_depth=vwap_depth
+            global_buy_vwap, global_sell_vwap = vwap_from_raw_orderbook(
+                frame.global_.orderbook, target_depth=vwap_depth
             )
-            global_buy_vwap = float(hedge_buy_vwap)
-            global_sell_vwap = float(hedge_sell_vwap)
+            global_buy_vwap = float(global_buy_vwap)
+            global_sell_vwap = float(global_sell_vwap)
         except ValueError:
-            hedge_buy_vwap = hedge_sell_vwap = None
-    if frame.hedge_private is not None and binding.hedge is not None:
-        hedge_inventory, hedge_cash = inventory_cash_from_snapshot(
-            frame.hedge_private,
-            binding.hedge.base_asset,
-            binding.hedge.quote_asset,
-            trading_symbol=binding.hedge.symbol,
+            global_buy_vwap = global_sell_vwap = None
+    if frame.global_private is not None and binding.global_ is not None:
+        global_inventory, hedge_cash = inventory_cash_from_snapshot(
+            frame.global_private,
+            binding.global_.base_asset,
+            binding.global_.quote_asset,
+            trading_symbol=binding.global_.symbol,
         )
-        global_inventory = hedge_inventory
+        global_inventory = global_inventory
         global_cash = hedge_cash
     reference_price = float(global_sell_vwap or sell_vwap)
     global_active = _global_active_for_frame(frame, sourcing)
     return State(
         mid=primary_mid,
         ob_rel=OrderbookRelative(bids=bids, asks=asks),
-        buy_vol=frame.primary.buy_volume,
-        sell_vol=frame.primary.sell_volume,
-        inventory=primary_inventory,
+        buy_vol=frame.local.buy_volume,
+        sell_vol=frame.local.sell_volume,
+        inventory=local_inventory,
         cash=primary_cash,
         buy_vwap=buy_vwap,
         sell_vwap=sell_vwap,
-        hedge_buy_vwap=hedge_buy_vwap,
-        hedge_sell_vwap=hedge_sell_vwap,
-        hedge_inventory=hedge_inventory,
+        global_buy_vwap=global_buy_vwap,
+        global_sell_vwap=global_sell_vwap,
+        global_inventory=global_inventory,
         hedge_cash=hedge_cash,
         global_ob_rel=global_ob_rel,
         global_buy_vol=global_buy_vol,

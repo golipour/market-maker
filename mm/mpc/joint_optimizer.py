@@ -574,7 +574,7 @@ def optimize_joint_with_diagnostics(
             "liquidity_sourcing": True,
             "global_active": global_active,
             "consolidated_wealth": True,
-            "hedge_rollout_enabled": False,
+            "global_rollout": False,
             "joint_diagnostics": dict(joint_diag_accum),
             "global_action_flat": list(global_flat),
         },

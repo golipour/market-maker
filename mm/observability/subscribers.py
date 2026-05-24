@@ -87,8 +87,8 @@ class RuntimeObservabilitySubscriber:
             self._observe_execution_snapshot_compat(exchange, live_order_count, timestamp_ms)
 
     def _observe_strategy_input_frame(self, topic: str, frame: StrategyInputFrame) -> None:
-        primary = frame.primary
-        labels = {"exchange": primary.exchange, "symbol": primary.symbol, "hedge_status": frame.hedge_status}
+        primary = frame.local
+        labels = {"exchange": primary.exchange, "symbol": primary.symbol, "global_status": frame.global_status}
         _ = topic
         with span("mm.frame_assembler.build", exchange=primary.exchange, symbol=primary.symbol):
             counter_inc(obs_schema.MM_STRATEGY_FRAMES_TOTAL, labels=labels, help="Strategy frames assembled")
@@ -96,10 +96,10 @@ class RuntimeObservabilitySubscriber:
                 int(primary.t_end_ms),
                 int(frame.created_at_ms),
             )
-            if frame.hedge_lag_ms is not None:
+            if frame.global_lag_ms is not None:
                 gauge(
-                    "mm_hedge_lag_ms",
-                    float(frame.hedge_lag_ms),
+                    "mm_global_lag_ms",
+                    float(frame.global_lag_ms),
                     labels=labels,
                     help="Selected hedge event lag",
                 )
@@ -109,8 +109,8 @@ class RuntimeObservabilitySubscriber:
                     "exchange": primary.exchange,
                     "symbol": primary.symbol,
                     "t_end_ms": primary.t_end_ms,
-                    "hedge_status": frame.hedge_status,
-                    "hedge_lag_ms": frame.hedge_lag_ms,
+                    "global_status": frame.global_status,
+                    "global_lag_ms": frame.global_lag_ms,
                 },
             )
 
@@ -121,7 +121,7 @@ class RuntimeObservabilitySubscriber:
             "exchange": primary.exchange,
             "symbol": primary.symbol,
             "mode": frame.mode,
-            "hedge_status": sync.hedge_status,
+            "global_status": sync.global_status,
         }
         _ = topic
         counter_inc(

@@ -66,8 +66,7 @@ def _runner(
     bus: InMemoryBus,
     control_plane: RuntimeControlPlane | None = None,
 ) -> StrategyRunner:
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     return StrategyRunner(
         config=config,
@@ -103,7 +102,7 @@ async def test_strategy_runner_observe_only_config_blocks_live_sync(
 ) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary, frame_step=frame_step),
+        lambda self, frame, *, frame_step: _decision(frame.local, frame_step=frame_step),
     )
 
     bus = InMemoryBus()
@@ -115,7 +114,7 @@ async def test_strategy_runner_observe_only_config_blocks_live_sync(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
@@ -129,7 +128,7 @@ async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
 ) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary, frame_step=frame_step),
+        lambda self, frame, *, frame_step: _decision(frame.local, frame_step=frame_step),
     )
 
     bus = InMemoryBus()
@@ -146,7 +145,7 @@ async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
         control_plane=control_plane,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
@@ -160,7 +159,7 @@ async def test_strategy_runner_warmup_blocks_live_sync_until_threshold(
 ) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary, frame_step=frame_step),
+        lambda self, frame, *, frame_step: _decision(frame.local, frame_step=frame_step),
     )
 
     bus = InMemoryBus()
@@ -172,9 +171,9 @@ async def test_strategy_runner_warmup_blocks_live_sync_until_threshold(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     assert len(manager.synced) == 1
 
@@ -196,7 +195,7 @@ async def test_strategy_runner_live_execution_syncs_when_gates_pass(
 ) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary, frame_step=frame_step),
+        lambda self, frame, *, frame_step: _decision(frame.local, frame_step=frame_step),
     )
 
     bus = InMemoryBus()
@@ -208,7 +207,7 @@ async def test_strategy_runner_live_execution_syncs_when_gates_pass(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert len(manager.synced) == 1
@@ -222,13 +221,12 @@ async def test_strategy_runner_no_manager_blocks_live_sync(
 ) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",
-        lambda self, frame, *, frame_step: _decision(frame.primary, frame_step=frame_step),
+        lambda self, frame, *, frame_step: _decision(frame.local, frame_step=frame_step),
     )
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
-    runtime = MarketMakerRuntimeConfig(
-        primary=MarketDataSourceConfig(role="primary", exchange="nobitex", symbol="BTC_IRT"),
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
         config=_runner_config(observe_only=False),
@@ -239,7 +237,7 @@ async def test_strategy_runner_no_manager_blocks_live_sync(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(primary=_market_event()))
+    await runner.on_frame(StrategyInputFrame(local=_market_event()))
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert diagnostics["execution_gates"]["executed"] is False

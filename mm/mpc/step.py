@@ -19,7 +19,7 @@ class Step(NamedTuple):
     private_fills_ask: tuple[tuple[int, int], ...]
     main_buy_vwap: float
     main_sell_vwap: float
-    hedge_buy_vwap: float | None
-    hedge_sell_vwap: float | None
-    hedge_inventory: int
+    global_buy_vwap: float | None
+    global_sell_vwap: float | None
+    global_inventory: int
     hedge_cash: int | float

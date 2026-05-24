@@ -7,7 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from mm.application.action_routing import route_actions_to_managers_with_report
+from mm.application.venue_execution import (
+    compute_venue_execution_gates,
+    prepare_execution_joint_book,
+    route_joint_target_book_with_report,
+)
 from mm.execution.plan import ExecutionSyncReport, stage_report_with_rejections
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
@@ -17,12 +21,17 @@ from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action
 from mm.core.models.instrument import SymbolBinding
+from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
 from mm.core.adapters.joint import joint_ledger_from_frame
 from mm.risk.net_delta import NetDeltaRiskEngine
-from mm.runtime.config import ControllerRuntimeConfig, LiquiditySourcingRuntimeConfig
+from mm.runtime.config import (
+    ControllerRuntimeConfig,
+    ExecutionRuntimeConfig,
+    LiquiditySourcingRuntimeConfig,
+)
 from mm.runtime.control import RuntimeControlPlane
 from mm.strategies.mpc_engine import MpcStrategyEngine, order_summary_dict
 
@@ -43,12 +52,13 @@ class StrategyRunner:
 
     config: ControllerRuntimeConfig
     binding: SymbolBinding
-    frame_queue: asyncio.Queue[StrategyInputFrame]
+    frame_queue: asyncio.Queue[JointStrategyFrame]
     order_managers: dict[str, AbstractOrderManager]
     risk_engine: AbstractRiskEngine
     liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
         default_factory=LiquiditySourcingRuntimeConfig
     )
+    execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
     bus: AbstractEventBus | None = None
     control_plane: RuntimeControlPlane | None = None
     run_id: str = ""
@@ -57,13 +67,14 @@ class StrategyRunner:
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
-    _last_primary_exchange: str = field(default="", init=False, repr=False)
+    _last_local_exchange: str = field(default="", init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._engine = MpcStrategyEngine(
             config=self.config,
             binding=self.binding,
             liquidity_sourcing=self.liquidity_sourcing,
+            execution=self.execution,
         )
         self._diagnostics = DiagnosticsPublisher(
             self.bus,
@@ -86,15 +97,15 @@ class StrategyRunner:
             while not self._stopped.is_set():
                 frame = await self.frame_queue.get()
                 try:
-                    await self.on_frame(frame)
+                    await self.on_joint_frame(frame)
                 except Exception as exc:
                     log_event(
                         "strategy_runner_frame_error",
                         {
                             "actor_id": self.config.actor_id,
-                            "exchange": frame.primary.exchange,
-                            "symbol": frame.primary.symbol,
-                            "t_end_ms": frame.primary.t_end_ms,
+                            "exchange": frame.local.exchange,
+                            "symbol": frame.local.symbol,
+                            "t_end_ms": frame.local.t_end_ms,
                             "error": type(exc).__name__,
                             "message": str(exc),
                         },
@@ -102,10 +113,16 @@ class StrategyRunner:
         except asyncio.CancelledError:
             raise
 
+    async def on_joint_frame(self, joint_frame: JointStrategyFrame) -> list[Action]:
+        frame = joint_frame.input_frame
+        if frame is None:
+            raise ValueError("JointStrategyFrame.input_frame is required for strategy pipeline")
+        return await self.on_frame(frame)
+
     async def on_frame(self, frame: StrategyInputFrame) -> list[Action]:
         t0 = time.monotonic_ns()
         self._frame_step += 1
-        self._last_primary_exchange = frame.primary.exchange.lower().strip()
+        self._last_local_exchange = frame.local.exchange.lower().strip()
         self._sync_control_plane_to_risk()
 
         open_orders = live_orders_from_managers(self.order_managers)
@@ -139,9 +156,9 @@ class StrategyRunner:
                     {
                         "type": "ControllerError",
                         "actor_id": self.config.actor_id,
-                        "exchange": frame.primary.exchange,
-                        "symbol": frame.primary.symbol,
-                        "t_end_ms": frame.primary.t_end_ms,
+                        "exchange": frame.local.exchange,
+                        "symbol": frame.local.symbol,
+                        "t_end_ms": frame.local.t_end_ms,
                         "error": type(exc).__name__,
                         "message": str(exc),
                     },
@@ -149,7 +166,43 @@ class StrategyRunner:
                 return approved
 
             proposed = [decision.action]
-            live_execution = self._live_execution_intent()
+            execution_book = decision.joint_target_book
+            if execution_book is not None:
+                execution_book = prepare_execution_joint_book(
+                    execution_book,
+                    execution=self.execution,
+                    liquidity_sourcing=self.liquidity_sourcing,
+                    frame=clean_frame,
+                    binding=self.binding,
+                )
+
+            intent_gates = compute_venue_execution_gates(
+                config=self.config,
+                execution=self.execution,
+                liquidity_sourcing=self.liquidity_sourcing,
+                binding=self.binding,
+                frame_step=self._frame_step,
+                joint_target_book=execution_book,
+                order_managers=self.order_managers,
+                control_plane=self.control_plane,
+                frame=clean_frame,
+                ignore_empty_book=True,
+            )
+            global_exchange = (
+                self.binding.global_.exchange.lower().strip()
+                if self.binding.global_ is not None
+                else ""
+            )
+            global_live_execution = bool(
+                global_exchange
+                and intent_gates.get(global_exchange) is not None
+                and intent_gates[global_exchange].live
+                and intent_gates[global_exchange].has_orders
+            )
+            live_execution = any(
+                gate.live and gate.has_orders for gate in intent_gates.values()
+            )
+
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
                 ledger = joint_ledger_from_frame(
                     clean_frame,
@@ -163,6 +216,7 @@ class StrategyRunner:
                     joint_target_book=decision.joint_target_book,
                     ledger=ledger,
                     live_execution=live_execution,
+                    global_live_execution=global_live_execution,
                 )
             else:
                 risk_result = self.risk_engine.validate_frame_with_result(
@@ -184,9 +238,9 @@ class StrategyRunner:
                     {
                         "type": "RiskActionsFiltered",
                         "actor_id": self.config.actor_id,
-                        "exchange": frame.primary.exchange,
-                        "symbol": frame.primary.symbol,
-                        "t_end_ms": frame.primary.t_end_ms,
+                        "exchange": frame.local.exchange,
+                        "symbol": frame.local.symbol,
+                        "t_end_ms": frame.local.t_end_ms,
                         "proposed_actions": len(proposed),
                         "approved_actions": len(approved),
                     },
@@ -195,17 +249,46 @@ class StrategyRunner:
             observe_only_control = (
                 self.control_plane is not None and self.control_plane.state.observe_only
             )
-            executed = self._should_execute_live(approved)
+            if execution_book is None:
+                raise ValueError("StrategyDecision.joint_target_book is required")
+            venue_gates = compute_venue_execution_gates(
+                config=self.config,
+                execution=self.execution,
+                liquidity_sourcing=self.liquidity_sourcing,
+                binding=self.binding,
+                frame_step=self._frame_step,
+                joint_target_book=execution_book,
+                order_managers=self.order_managers,
+                control_plane=self.control_plane,
+                frame=clean_frame,
+            )
+            executed = self._should_execute_live(approved, venue_gates=venue_gates)
             blocked = execution_blocked_reasons(
                 config=self.config,
                 frame_step=self._frame_step,
                 approved=approved,
                 observe_only_control=observe_only_control,
-                primary_manager_present=self.order_managers.get(self._last_primary_exchange) is not None,
+                local_manager_present=self.order_managers.get(self._last_local_exchange) is not None,
             )
             if executed:
                 blocked = []
-            ctx.record_execution_gates(executed=executed, blocked_reasons=blocked)
+            elif approved and venue_gates:
+                blocked = sorted(
+                    {
+                        *blocked,
+                        *(
+                            reason
+                            for gate in venue_gates.values()
+                            for reason in gate.blocked_reasons
+                            if reason != "no_orders" or gate.has_orders
+                        ),
+                    }
+                )
+            ctx.record_execution_gates(
+                executed=executed,
+                blocked_reasons=blocked,
+                venue_gates={exchange: gate.as_dict() for exchange, gate in venue_gates.items()},
+            )
 
             executed_orders: tuple[dict, ...] = ()
             if executed:
@@ -222,9 +305,9 @@ class StrategyRunner:
                     {
                         "type": "JointTargetBook",
                         **decision.joint_target_book.as_payload(),
-                        "exchange": frame.primary.exchange,
-                        "symbol": frame.primary.symbol,
-                        "t_end_ms": frame.primary.t_end_ms,
+                        "exchange": frame.local.exchange,
+                        "symbol": frame.local.symbol,
+                        "t_end_ms": frame.local.t_end_ms,
                         "frame_step": self._frame_step,
                     },
                 )
@@ -235,14 +318,20 @@ class StrategyRunner:
             sync_executed = executed
             if approved:
                 if executed:
-                    execution_report = await self._sync_with_timeout(approved, ctx)
+                    execution_report = await self._sync_joint_with_timeout(
+                        execution_book,
+                        venue_gates,
+                        ctx,
+                    )
                     if execution_report is None:
                         sync_executed = False
                 else:
-                    primary_manager = self.order_managers.get(self._last_primary_exchange)
-                    preview = getattr(primary_manager, "preview_placement", None) if primary_manager else None
-                    if preview is not None:
-                        execution_report = preview(approved)
+                    execution_report = await route_joint_target_book_with_report(
+                        execution_book,
+                        order_managers=self.order_managers,
+                        venue_gates=venue_gates,
+                        execute=False,
+                    )
             if execution_report is not None:
                 ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
 
@@ -251,10 +340,10 @@ class StrategyRunner:
                     f"strategy:journal:{self.config.actor_id}",
                     {
                         "actor_id": self.config.actor_id,
-                        "exchange": frame.primary.exchange,
-                        "symbol": frame.primary.symbol,
-                        "t_end_ms": frame.primary.t_end_ms,
-                        "hedge_status": frame.hedge_status,
+                        "exchange": frame.local.exchange,
+                        "symbol": frame.local.symbol,
+                        "t_end_ms": frame.local.t_end_ms,
+                        "global_status": frame.global_status,
                         "proposed_actions": len(proposed),
                         "approved_actions": len(approved),
                         "executed": sync_executed,
@@ -266,14 +355,20 @@ class StrategyRunner:
             ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
 
-    async def _sync_with_timeout(
+    async def _sync_joint_with_timeout(
         self,
-        approved: list[Action],
+        execution_book,
+        venue_gates: dict,
         ctx: DecisionContext,
     ) -> ExecutionSyncReport | None:
         timeout_ms = int(self.config.placement_timeout_ms)
         try:
-            coro = route_actions_to_managers_with_report(approved, self.order_managers)
+            coro = route_joint_target_book_with_report(
+                execution_book,
+                order_managers=self.order_managers,
+                venue_gates=venue_gates,
+                execute=True,
+            )
             if timeout_ms <= 0:
                 return await coro
             return await asyncio.wait_for(coro, timeout=timeout_ms / 1000.0)
@@ -304,8 +399,8 @@ class StrategyRunner:
             {
                 "type": "ExecutionSyncFailed",
                 "actor_id": self.config.actor_id,
-                "exchange": ctx.frame.primary.exchange,
-                "symbol": ctx.frame.primary.symbol,
+                "exchange": ctx.frame.local.exchange,
+                "symbol": ctx.frame.local.symbol,
                 "t_end_ms": ctx.frame.t_end_ms,
                 "frame_step": ctx.frame_step,
                 "message": message,
@@ -319,31 +414,15 @@ class StrategyRunner:
         if callable(set_kill_switch):
             set_kill_switch(self.control_plane.state.kill_switch)
 
-    def _live_execution_intent(self) -> bool:
-        """Whether live order sync would run if risk approves the target book."""
-
-        if self.config.observe_only:
-            return False
-        if self.control_plane is not None and self.control_plane.state.observe_only:
-            return False
-        if self._frame_step <= self.config.action_start_after_steps:
-            return False
-        if self.order_managers.get(self._last_primary_exchange) is None:
-            return False
-        return True
-
-    def _should_execute_live(self, approved: list[Action]) -> bool:
+    def _should_execute_live(
+        self,
+        approved: list[Action],
+        *,
+        venue_gates: dict,
+    ) -> bool:
         if not approved:
             return False
-        if self.config.observe_only:
-            return False
-        if self.control_plane is not None and self.control_plane.state.observe_only:
-            return False
-        if self._frame_step <= self.config.action_start_after_steps:
-            return False
-        if self.order_managers.get(self._last_primary_exchange) is None:
-            return False
-        return True
+        return any(gate.live and gate.has_orders for gate in venue_gates.values())
 
     async def _publish_decision(
         self,
