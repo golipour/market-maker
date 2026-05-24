@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Primary and hedge buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``primary_buy_vwap`` / ``primary_sell_vwap`` / ``hedge_buy_vwap`` / ``hedge_sell_vwap`` on decisions.",
+  "description": "Local and global buy/sell VWAPs from persisted StrategyDecision payloads (same depth policy as MPC ``TorchResidualPriceModel``). Requires runtime emitting ``local_buy_vwap`` / ``local_sell_vwap`` / ``global_buy_vwap`` / ``global_sell_vwap`` on decisions.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Chart:** Primary and hedge buy/sell reference VWAPs on one time series.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_hedge`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'StrategyDecision'`` on **Decisions topic**.\n\n**Chart:** Local and global buy/sell reference VWAPs on one time series.\n\n**Semantics:** **Buy** VWAP walks the **ask** side (lift-offer); **sell** VWAP walks the **bid** side (hit-bid), each to ``depth_used = min(vwap_depth, total_bid_qty, total_ask_qty)`` in base units (matches ``vwap_from_raw_orderbook`` / MPC ``State``). **Hedge** series are null when there is no hedge row for that decision (``has_global`` false or thin book).\n\nMatch **Exchange**, **Symbol**, and **Decisions topic** to your runtime and persistence list.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -65,7 +65,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'primary_buy_vwap' AS metric,\n       (e.payload->>'primary_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'primary_buy_vwap'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'local_buy_vwap' AS metric,\n       (e.payload->>'local_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'local_buy_vwap'\nORDER BY 1",
           "refId": "A"
         },
         {
@@ -76,7 +76,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'primary_sell_vwap' AS metric,\n       (e.payload->>'primary_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'primary_sell_vwap'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'local_sell_vwap' AS metric,\n       (e.payload->>'local_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'local_sell_vwap'\nORDER BY 1",
           "refId": "B"
         },
         {
@@ -87,7 +87,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'hedge_buy_vwap' AS metric,\n       (e.payload->>'hedge_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'hedge_buy_vwap') = 'number'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'global_buy_vwap' AS metric,\n       (e.payload->>'global_buy_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'global_buy_vwap') = 'number'\nORDER BY 1",
           "refId": "C"
         },
         {
@@ -98,7 +98,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'hedge_sell_vwap' AS metric,\n       (e.payload->>'hedge_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'hedge_sell_vwap') = 'number'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'global_sell_vwap' AS metric,\n       (e.payload->>'global_sell_vwap')::double precision AS value\nFROM mm_events e\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(e.payload->'global_sell_vwap') = 'number'\nORDER BY 1",
           "refId": "D"
         }
       ],

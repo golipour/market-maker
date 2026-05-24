@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\nOne chart per funnel stage; each line is a rejection reason count at that stage. Risk uses `action_pipeline.risk_approved` with fallback to top-level `risk.rejection_counts`.",
+        "content": "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\nOne chart per funnel stage; each line is a rejection reason count at that stage. Risk uses `action_pipeline.risk_approved_target` with fallback to top-level `risk.rejection_counts`.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -249,7 +249,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], e.payload->'risk'->'rejection_counts'), '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],

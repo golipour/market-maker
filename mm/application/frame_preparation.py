@@ -14,7 +14,7 @@ def clean_strategy_frame(
     frame: StrategyInputFrame,
     open_orders: Mapping[str, Order],
 ) -> StrategyInputFrame:
-    """Return a frame whose primary/hedge books exclude the bot's live orders."""
+    """Return a frame whose local/global books exclude the bot's live orders."""
 
     clean_primary = _replace_event_orderbook(
         frame.local,

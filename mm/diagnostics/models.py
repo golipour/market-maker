@@ -51,7 +51,7 @@ class ObjectiveSnapshot:
     expected_total_return: float | None = None
     expected_next_reward: float | None = None
     main_reward_mean: float | None = None
-    hedge_reward_mean: float | None = None
+    global_reward_mean: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,12 +83,6 @@ class ActionPipelineDiagnostics:
     rules_valid: dict[str, Any] = field(default_factory=dict)
     router_accepted: dict[str, Any] = field(default_factory=dict)
     kept: dict[str, Any] = field(default_factory=dict)
-    # Deprecated aliases retained for dashboard migration.
-    risk_approved: dict[str, Any] = field(default_factory=dict)
-    target: dict[str, Any] = field(default_factory=dict)
-    canceled: dict[str, Any] = field(default_factory=dict)
-    placed: dict[str, Any] = field(default_factory=dict)
-    venue_accepted: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,19 +99,19 @@ class FrameDiagnostics:
 class StateDiagnostics:
     mid: float = 0.0
     local_inventory: float = 0.0
-    primary_cash: float = 0.0
+    local_cash: float = 0.0
     global_inventory: float = 0.0
-    hedge_cash: float = 0.0
+    global_cash: float = 0.0
     local_buy_vwap: float = 0.0
     local_sell_vwap: float = 0.0
     global_buy_vwap: float | None = None
     global_sell_vwap: float | None = None
-    primary_base_wallet: dict[str, Any] = field(default_factory=dict)
-    primary_quote_wallet: dict[str, Any] = field(default_factory=dict)
-    hedge_base_wallet: dict[str, Any] = field(default_factory=dict)
-    hedge_quote_wallet: dict[str, Any] = field(default_factory=dict)
-    primary_wealth: float = 0.0
-    hedge_wealth: float | None = None
+    local_base_wallet: dict[str, Any] = field(default_factory=dict)
+    local_quote_wallet: dict[str, Any] = field(default_factory=dict)
+    global_base_wallet: dict[str, Any] = field(default_factory=dict)
+    global_quote_wallet: dict[str, Any] = field(default_factory=dict)
+    local_wealth: float = 0.0
+    global_wealth: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,19 +193,19 @@ def _state_payload(state: StateDiagnostics) -> dict[str, Any]:
     return {
         "mid": state.mid,
         "local_inventory": state.local_inventory,
-        "primary_cash": state.primary_cash,
+        "local_cash": state.local_cash,
         "global_inventory": state.global_inventory,
-        "hedge_cash": state.hedge_cash,
+        "global_cash": state.global_cash,
         "local_buy_vwap": state.local_buy_vwap,
         "local_sell_vwap": state.local_sell_vwap,
         "global_buy_vwap": state.global_buy_vwap,
         "global_sell_vwap": state.global_sell_vwap,
-        "primary_base_wallet": dict(state.primary_base_wallet),
-        "primary_quote_wallet": dict(state.primary_quote_wallet),
-        "hedge_base_wallet": dict(state.hedge_base_wallet),
-        "hedge_quote_wallet": dict(state.hedge_quote_wallet),
-        "primary_wealth": state.primary_wealth,
-        "hedge_wealth": state.hedge_wealth,
+        "local_base_wallet": dict(state.local_base_wallet),
+        "local_quote_wallet": dict(state.local_quote_wallet),
+        "global_base_wallet": dict(state.global_base_wallet),
+        "global_quote_wallet": dict(state.global_quote_wallet),
+        "local_wealth": state.local_wealth,
+        "global_wealth": state.global_wealth,
     }
 
 
@@ -254,18 +248,6 @@ def _action_pipeline_payload(pipeline: ActionPipelineDiagnostics) -> dict[str, A
         "rules_valid": dict(pipeline.rules_valid),
         "router_accepted": dict(pipeline.router_accepted),
         "kept": dict(pipeline.kept),
-        "risk_approved": dict(pipeline.risk_approved),
-        "target": dict(pipeline.target),
-        "canceled": dict(pipeline.canceled),
-        "placed": dict(pipeline.placed),
-        "venue_accepted": dict(pipeline.venue_accepted),
-        "_deprecated_aliases": {
-            "risk_approved": "use risk_approved_target",
-            "target": "use target_book for strategy intent",
-            "canceled": "use planned_cancel",
-            "placed": "use rules_valid (was limit-valid, not exchange placed)",
-            "venue_accepted": "use router_accepted",
-        },
     }
 
 

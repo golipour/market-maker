@@ -111,7 +111,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_cash' AS metric,\n  (e.payload #>> '{state,primary_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_cash',\n  (e.payload #>> '{state,hedge_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_cash' AS metric,\n  (e.payload #>> '{state,local_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_cash',\n  (e.payload #>> '{state,global_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -157,7 +157,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_marked' AS metric,\n  COALESCE((e.payload #>> '{state,primary_wealth}')::double precision,\n    (e.payload #>> '{state,primary_cash}')::double precision\n     + (e.payload #>> '{state,local_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,local_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_marked',\n  COALESCE((e.payload #>> '{state,hedge_wealth}')::double precision,\n    (e.payload #>> '{state,hedge_cash}')::double precision\n     + (e.payload #>> '{state,global_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,global_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_marked' AS metric,\n  COALESCE((e.payload #>> '{state,local_wealth}')::double precision,\n    (e.payload #>> '{state,local_cash}')::double precision\n     + (e.payload #>> '{state,local_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,local_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_marked',\n  COALESCE((e.payload #>> '{state,global_wealth}')::double precision,\n    (e.payload #>> '{state,global_cash}')::double precision\n     + (e.payload #>> '{state,global_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,global_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -207,7 +207,7 @@
           "refId": "A"
         }
       ],
-      "title": "Primary quote wallet (free / locked / total / effective)",
+      "title": "Local quote wallet (free / locked / total / effective)",
       "type": "timeseries"
     },
     {
@@ -253,7 +253,7 @@
           "refId": "A"
         }
       ],
-      "title": "Primary base wallet (free / locked / total / effective)",
+      "title": "Local base wallet (free / locked / total / effective)",
       "type": "timeseries"
     },
     {

@@ -26,7 +26,6 @@ from mm.execution.plan import (
     ActionStageReport,
     ExecutionSyncReport,
     apply_execution_stages_to_pipeline,
-    sync_action_pipeline_aliases,
 )
 from mm.core.wallet import inventory_cash_from_snapshot, portfolio_wealth, wallet_pair_from_snapshot
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
@@ -148,8 +147,6 @@ class DecisionContext:
         if self.action_pipeline_report is None:
             return
         self.action_pipeline_report.risk_approved_target = risk_report
-        self.action_pipeline_report.risk_approved = risk_report
-        sync_action_pipeline_aliases(self.action_pipeline_report)
 
     def apply_execution_to_pipeline(self, execution_report: ExecutionSyncReport, *, executed: bool) -> None:
         if self.action_pipeline_report is None:
@@ -223,11 +220,11 @@ class DecisionContext:
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:
-        primary_base, primary_quote = self._primary_wallet_legs()
-        hedge_base, hedge_quote = self._hedge_wallet_legs()
+        local_base, local_quote = self._local_wallet_legs()
+        global_base, global_quote = self._global_wallet_legs()
         if decision is not None:
             local_inventory = decision.inventory
-            primary_cash = decision.cash
+            local_cash = decision.cash
             mid = decision.mid
             local_buy_vwap = decision.local_buy_vwap
             local_sell_vwap = decision.local_sell_vwap
@@ -235,36 +232,36 @@ class DecisionContext:
             global_sell_vwap = decision.global_sell_vwap
         else:
             local_inventory = self.trading_state.inventory
-            primary_cash = self.trading_state.cash
+            local_cash = self.trading_state.cash
             mid = 0.0
             local_buy_vwap = 0.0
             local_sell_vwap = 0.0
             global_buy_vwap = None
             global_sell_vwap = None
-        global_inventory, hedge_cash = self._global_inventory_cash()
-        primary_wealth = portfolio_wealth(primary_cash, local_inventory, local_sell_vwap or mid)
-        hedge_wealth: float | None = None
+        global_inventory, global_cash = self._global_inventory_cash()
+        local_wealth = portfolio_wealth(local_cash, local_inventory, local_sell_vwap or mid)
+        global_wealth: float | None = None
         if global_sell_vwap is not None:
-            hedge_wealth = portfolio_wealth(hedge_cash, global_inventory, global_sell_vwap)
+            global_wealth = portfolio_wealth(global_cash, global_inventory, global_sell_vwap)
         return StateDiagnostics(
             mid=mid,
             local_inventory=local_inventory,
-            primary_cash=primary_cash,
+            local_cash=local_cash,
             global_inventory=global_inventory,
-            hedge_cash=hedge_cash,
+            global_cash=global_cash,
             local_buy_vwap=local_buy_vwap,
             local_sell_vwap=local_sell_vwap,
             global_buy_vwap=global_buy_vwap,
             global_sell_vwap=global_sell_vwap,
-            primary_base_wallet=primary_base.as_dict(),
-            primary_quote_wallet=primary_quote.as_dict(),
-            hedge_base_wallet=hedge_base.as_dict(),
-            hedge_quote_wallet=hedge_quote.as_dict(),
-            primary_wealth=primary_wealth,
-            hedge_wealth=hedge_wealth,
+            local_base_wallet=local_base.as_dict(),
+            local_quote_wallet=local_quote.as_dict(),
+            global_base_wallet=global_base.as_dict(),
+            global_quote_wallet=global_quote.as_dict(),
+            local_wealth=local_wealth,
+            global_wealth=global_wealth,
         )
 
-    def _primary_wallet_legs(self):
+    def _local_wallet_legs(self):
         if self.binding is None:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
@@ -275,7 +272,7 @@ class DecisionContext:
             trading_symbol=self.binding.local.symbol,
         )
 
-    def _hedge_wallet_legs(self):
+    def _global_wallet_legs(self):
         if self.binding is None or self.binding.global_ is None:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
@@ -333,7 +330,6 @@ class DecisionContext:
     def _action_pipeline(self, decision: StrategyDecision | None) -> ActionPipelineDiagnostics:
         if self.action_pipeline_report is not None:
             report = self.action_pipeline_report
-            sync_action_pipeline_aliases(report)
             return ActionPipelineDiagnostics(
                 continuous=dict(report.continuous),
                 ladder=report.ladder.as_dict(),
@@ -346,11 +342,6 @@ class DecisionContext:
                 rules_valid=report.rules_valid.as_dict(),
                 router_accepted=report.router_accepted.as_dict(),
                 kept=report.kept.as_dict(),
-                risk_approved=report.risk_approved.as_dict(),
-                target=report.target.as_dict(),
-                canceled=report.canceled.as_dict(),
-                placed=report.placed.as_dict(),
-                venue_accepted=report.venue_accepted.as_dict(),
             )
         if decision is None:
             return ActionPipelineDiagnostics()
@@ -363,9 +354,7 @@ class DecisionContext:
             capped=target_summary,
             target_book=target_summary,
             risk_approved_target=_order_stage_summary(approved_orders),
-            risk_approved=_order_stage_summary(approved_orders),
             router_accepted=_order_stage_summary(approved_orders) if self.executed else {},
-            venue_accepted=_order_stage_summary(approved_orders) if self.executed else {},
         )
 
     def _risk_diagnostics(self) -> RiskDiagnostics:

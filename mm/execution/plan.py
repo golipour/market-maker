@@ -45,15 +45,8 @@ class ActionPipelineReport:
     rules_valid: ActionStageReport = field(default_factory=ActionStageReport)
     router_accepted: ActionStageReport = field(default_factory=ActionStageReport)
     kept: ActionStageReport = field(default_factory=ActionStageReport)
-    # Deprecated aliases retained for Grafana/dashboard migration.
-    risk_approved: ActionStageReport = field(default_factory=ActionStageReport)
-    target: ActionStageReport = field(default_factory=ActionStageReport)
-    canceled: ActionStageReport = field(default_factory=ActionStageReport)
-    placed: ActionStageReport = field(default_factory=ActionStageReport)
-    venue_accepted: ActionStageReport = field(default_factory=ActionStageReport)
 
     def as_dict(self) -> dict[str, Any]:
-        sync_action_pipeline_aliases(self)
         return {
             "continuous": dict(self.continuous),
             "ladder": self.ladder.as_dict(),
@@ -66,18 +59,6 @@ class ActionPipelineReport:
             "rules_valid": self.rules_valid.as_dict(),
             "router_accepted": self.router_accepted.as_dict(),
             "kept": self.kept.as_dict(),
-            "risk_approved": self.risk_approved.as_dict(),
-            "target": self.target.as_dict(),
-            "canceled": self.canceled.as_dict(),
-            "placed": self.placed.as_dict(),
-            "venue_accepted": self.venue_accepted.as_dict(),
-            "_deprecated_aliases": {
-                "risk_approved": "use risk_approved_target",
-                "target": "use target_book for strategy intent",
-                "canceled": "use planned_cancel",
-                "placed": "use rules_valid (was limit-valid, not exchange placed)",
-                "venue_accepted": "use router_accepted",
-            },
         }
 
 
@@ -169,42 +150,17 @@ def summarize_open_orders(open_orders: list) -> ActionStageReport:
     return summarize_orders(orders)
 
 
-def sync_action_pipeline_aliases(report: ActionPipelineReport) -> None:
-    """Mirror Phase 4 stage names onto deprecated alias fields."""
-
-    if report.target_book.order_count or not report.target.order_count:
-        report.target = report.target_book
-    if report.risk_approved_target.order_count or report.risk_approved_target.rejection_counts:
-        report.risk_approved = report.risk_approved_target
-    elif report.risk_approved.order_count or report.risk_approved.rejection_counts:
-        report.risk_approved_target = report.risk_approved
-    if report.planned_cancel.order_count or not report.canceled.order_count:
-        report.canceled = report.planned_cancel
-    elif report.canceled.order_count:
-        report.planned_cancel = report.canceled
-    if report.planned_place.order_count:
-        report.placed = report.planned_place
-    if report.rules_valid.order_count or report.rules_valid.rejection_counts:
-        report.placed = report.rules_valid
-    if report.router_accepted.order_count:
-        report.venue_accepted = report.router_accepted
-    elif report.venue_accepted.order_count:
-        report.router_accepted = report.venue_accepted
-
-
 def apply_execution_stages_to_pipeline(
     report: ActionPipelineReport,
     execution_report: ExecutionSyncReport,
     *,
     executed: bool,
 ) -> None:
-    """Map order-manager reconcile output onto Phase 4 pipeline stage names."""
+    """Map order-manager reconcile output onto pipeline stage names."""
 
-    report.target = execution_report.target
     report.target_book = execution_report.target
     report.kept = execution_report.kept
     report.planned_cancel = execution_report.canceled
-    report.canceled = execution_report.canceled
     report.planned_place = execution_report.to_place
     report.rules_valid = ActionStageReport(
         order_count=execution_report.limit_valid.order_count,
@@ -214,12 +170,9 @@ def apply_execution_stages_to_pipeline(
         sell_notional=execution_report.limit_valid.sell_notional,
         rejection_counts=dict(execution_report.venue_rejection_counts),
     )
-    report.placed = report.rules_valid
     report.router_accepted = (
         execution_report.accepted if executed else report.rules_valid
     )
-    report.venue_accepted = report.router_accepted
-    sync_action_pipeline_aliases(report)
 
 
 def _merge_stage_reports(left: ActionStageReport, right: ActionStageReport) -> ActionStageReport:

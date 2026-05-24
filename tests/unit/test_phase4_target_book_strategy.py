@@ -17,7 +17,7 @@ from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.core.order_constraints import OrderConstraints
 from mm.execution.memory import RecordingOrderManager
-from mm.execution.plan import apply_execution_stages_to_pipeline, sync_action_pipeline_aliases
+from mm.execution.plan import apply_execution_stages_to_pipeline
 from mm.risk.engine import PassThroughRiskEngine
 from mm.runtime.config import (
     ControllerRuntimeConfig,
@@ -108,7 +108,6 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert len(joint_book.local.orders) == len(local_orders)
     assert len(ladder) >= 1
     assert pipeline.target_book.order_count == len(local_orders)
-    assert pipeline.target.order_count == pipeline.target_book.order_count
 
 
 def test_joint_target_book_converts_to_legacy_action() -> None:
@@ -131,7 +130,7 @@ def test_joint_target_book_converts_to_legacy_action() -> None:
     assert joint_target_book_to_action(book).orders == action.orders
 
 
-def test_action_pipeline_phase4_stage_aliases() -> None:
+def test_action_pipeline_phase4_stages() -> None:
     from mm.execution.plan import ActionPipelineReport, ActionStageReport, ExecutionSyncReport
 
     report = ActionPipelineReport(
@@ -142,13 +141,13 @@ def test_action_pipeline_phase4_stage_aliases() -> None:
         rules_valid=ActionStageReport(order_count=1),
         router_accepted=ActionStageReport(order_count=1),
     )
-    sync_action_pipeline_aliases(report)
 
-    assert report.target.order_count == 2
-    assert report.risk_approved.order_count == 2
-    assert report.canceled.order_count == 1
-    assert report.placed.order_count == 1
-    assert report.venue_accepted.order_count == 1
+    assert report.target_book.order_count == 2
+    assert report.risk_approved_target.order_count == 2
+    assert report.planned_cancel.order_count == 1
+    assert report.planned_place.order_count == 1
+    assert report.rules_valid.order_count == 1
+    assert report.router_accepted.order_count == 1
 
     execution = ExecutionSyncReport(
         target=ActionStageReport(order_count=2),

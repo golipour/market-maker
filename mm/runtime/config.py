@@ -735,7 +735,7 @@ def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
 
 
 def _venue_risk_from_mapping(payload: dict[str, Any], *, legacy_flat: bool = False) -> VenueRiskLimits:
-    """Parse primary venue limits; ``legacy_flat`` reads top-level migration aliases."""
+    """Parse local venue limits; ``legacy_flat`` reads top-level migration aliases."""
 
     def _get(key: str, default: Any) -> Any:
         if legacy_flat and key in payload:

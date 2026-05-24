@@ -499,17 +499,17 @@ def local_action_funnel_rejections_dashboard() -> dict[str, Any]:
             0,
             "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline.*.rejection_counts`).\n\n"
             "One chart per funnel stage; each line is a rejection reason count at that stage. "
-            "Risk uses `action_pipeline.risk_approved` with fallback to top-level `risk.rejection_counts`.",
+            "Risk uses `action_pipeline.risk_approved_target` with fallback to top-level `risk.rejection_counts`.",
         ),
     ]
 
     y = 4
     for index, (stage, title) in enumerate(_ACTION_PIPELINE_STAGES):
         rejection_expr: str | None = None
-        if stage == "risk_approved":
+        if stage == "risk_approved_target":
             rejection_expr = (
                 "COALESCE("
-                "e.payload #> ARRAY['action_pipeline','risk_approved','rejection_counts'], "
+                "e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], "
                 "e.payload->'risk'->'rejection_counts'"
                 ")"
             )
@@ -571,12 +571,12 @@ ORDER BY 1""",
             12,
             "Cash (local vs global)",
             f"""SELECT e.ts AS "time", 'local_cash' AS metric,
-  (e.payload #>> '{{state,primary_cash}}')::double precision AS value
+  (e.payload #>> '{{state,local_cash}}')::double precision AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'global_cash',
-  (e.payload #>> '{{state,hedge_cash}}')::double precision
+  (e.payload #>> '{{state,global_cash}}')::double precision
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -586,16 +586,16 @@ ORDER BY 1""",
             20,
             "Marked portfolio value (approx)",
             f"""SELECT e.ts AS "time", 'local_marked' AS metric,
-  COALESCE((e.payload #>> '{{state,primary_wealth}}')::double precision,
-    (e.payload #>> '{{state,primary_cash}}')::double precision
+  COALESCE((e.payload #>> '{{state,local_wealth}}')::double precision,
+    (e.payload #>> '{{state,local_cash}}')::double precision
      + (e.payload #>> '{{state,local_inventory}}')::double precision
        * COALESCE((e.payload #>> '{{state,local_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'global_marked',
-  COALESCE((e.payload #>> '{{state,hedge_wealth}}')::double precision,
-    (e.payload #>> '{{state,hedge_cash}}')::double precision
+  COALESCE((e.payload #>> '{{state,global_wealth}}')::double precision,
+    (e.payload #>> '{{state,global_cash}}')::double precision
      + (e.payload #>> '{{state,global_inventory}}')::double precision
        * COALESCE((e.payload #>> '{{state,global_sell_vwap}}')::double precision, 0)) AS value
 FROM mm_events e
@@ -605,7 +605,7 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             15,
             28,
-            "Primary quote wallet (free / locked / total / effective)",
+            "Local quote wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
   (e.payload #>> ARRAY['state','local_quote_wallet', leg])::double precision AS value
 FROM mm_events e
@@ -618,7 +618,7 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             16,
             36,
-            "Primary base wallet (free / locked / total / effective)",
+            "Local base wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
   (e.payload #>> ARRAY['state','local_base_wallet', leg])::double precision AS value
 FROM mm_events e

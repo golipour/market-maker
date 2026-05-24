@@ -67,7 +67,7 @@ def test_objective_snapshot_includes_contribution_fractions() -> None:
         expected_total_return=0.0,
         expected_next_reward=0.0,
         main_reward_mean=0.0,
-        hedge_reward_mean=0.0,
+        global_reward_mean=0.0,
     )
     snap = metrics.to_snapshot()
     assert snap.contribution_fractions["risk_adjusted_return"] == pytest.approx(0.5)
@@ -92,7 +92,7 @@ def test_objective_components_sum_equals_value() -> None:
         expected_total_return=0.01,
         expected_next_reward=1.0,
         main_reward_mean=2.0,
-        hedge_reward_mean=0.0,
+        global_reward_mean=0.0,
     )
     assert sum(metrics.components.values()) == pytest.approx(metrics.objective_value, rel=1e-9)
 

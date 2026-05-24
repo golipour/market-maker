@@ -102,7 +102,7 @@ def instrument_contract(spec: InstrumentSpec) -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class InstrumentPrecisionConfig:
-    """Optional JSON fallback on ``primary`` / ``hedge`` (same field names as ``InstrumentSpec``).
+    """Optional JSON fallback on ``local`` / ``global`` (same field names as ``InstrumentSpec``).
 
     At runtime, ``binding`` loads tick/lot/min from the exchange ``exchange_info`` API
     first (see ``instrument_spec_from_trade_stats``); this block fills only fields the

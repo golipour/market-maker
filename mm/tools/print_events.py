@@ -130,39 +130,49 @@ def summarize_event(event: Any) -> dict[str, Any]:
             **book_health,
         }
     if isinstance(event, StrategyInputFrame):
-        primary_book_health = summarize_book_health(event.primary.orderbook)
-        hedge_book_health = summarize_book_health(event.hedge.orderbook) if event.hedge is not None else {}
+        local_book_health = summarize_book_health(event.local.orderbook)
+        global_book_health = (
+            summarize_book_health(event.global_.orderbook) if event.global_ is not None else {}
+        )
         return {
             "type": "StrategyInputFrame",
-            "primary_exchange": event.primary.exchange,
-            "primary_symbol": event.primary.symbol,
-            "interval_ms": event.primary.interval_ms,
-            "t_start_ms": event.primary.t_start_ms,
-            "t_end_ms": event.primary.t_end_ms,
-            "primary_best_bid": event.primary.orderbook.bids[0].price if event.primary.orderbook.bids else None,
-            "primary_best_ask": event.primary.orderbook.asks[0].price if event.primary.orderbook.asks else None,
-            "primary_mid": primary_book_health["mid"],
-            "primary_trade_count": len(event.primary.trades),
+            "local_exchange": event.local.exchange,
+            "local_symbol": event.local.symbol,
+            "interval_ms": event.local.interval_ms,
+            "t_start_ms": event.local.t_start_ms,
+            "t_end_ms": event.local.t_end_ms,
+            "local_best_bid": event.local.orderbook.bids[0].price if event.local.orderbook.bids else None,
+            "local_best_ask": event.local.orderbook.asks[0].price if event.local.orderbook.asks else None,
+            "local_mid": local_book_health["mid"],
+            "local_trade_count": len(event.local.trades),
             "global_status": event.global_status,
             "has_global": event.has_global,
-            "hedge_exchange": event.hedge.exchange if event.hedge is not None else None,
-            "hedge_symbol": event.hedge.symbol if event.hedge is not None else None,
-            "hedge_t_end_ms": event.hedge.t_end_ms if event.hedge is not None else None,
+            "global_exchange": event.global_.exchange if event.global_ is not None else None,
+            "global_symbol": event.global_.symbol if event.global_ is not None else None,
+            "global_t_end_ms": event.global_.t_end_ms if event.global_ is not None else None,
             "global_lag_ms": event.global_lag_ms,
             "max_global_lag_ms": event.max_global_lag_ms,
-            "hedge_best_bid": event.hedge.orderbook.bids[0].price if event.hedge and event.hedge.orderbook.bids else None,
-            "hedge_best_ask": event.hedge.orderbook.asks[0].price if event.hedge and event.hedge.orderbook.asks else None,
-            "hedge_mid": hedge_book_health.get("mid"),
-            "hedge_trade_count": len(event.hedge.trades) if event.hedge is not None else None,
+            "global_best_bid": (
+                event.global_.orderbook.bids[0].price
+                if event.global_ and event.global_.orderbook.bids
+                else None
+            ),
+            "global_best_ask": (
+                event.global_.orderbook.asks[0].price
+                if event.global_ and event.global_.orderbook.asks
+                else None
+            ),
+            "global_mid": global_book_health.get("mid"),
+            "global_trade_count": len(event.global_.trades) if event.global_ is not None else None,
             "local_private_snapshot": event.local_private is not None,
-            "primary_balance_assets": sorted(event.local_private.balances) if event.local_private is not None else [],
-            "primary_open_order_count": (
+            "local_balance_assets": sorted(event.local_private.balances) if event.local_private is not None else [],
+            "local_open_order_count": (
                 len(event.local_private.open_orders) if event.local_private is not None else None
             ),
             "global_private_snapshot": event.global_private is not None,
             "created_at_ms": event.created_at_ms,
             "frame_contract": (
-                "primary is always present; hedge is None unless a configured hedge exchange has a fresh aligned event"
+                "local is always present; global is None unless a configured global exchange has a fresh aligned event"
             ),
             "unit_policy": "prices=quote_per_base, quantities/volumes=base, notionals=quote",
         }
@@ -341,16 +351,17 @@ async def run(args: argparse.Namespace) -> None:
 
     exchange = args.exchange.lower().strip()
     mode = args.mode.lower().strip()
-    hedge_exchange = args.hedge_exchange.lower().strip() if args.hedge_exchange else None
-    hedge_mode = (args.hedge_mode or mode).lower().strip()
-    hedge_symbol = args.hedge_symbol or args.symbol
+    global_exchange = args.global_exchange.lower().strip() if args.global_exchange else None
+    global_mode = (args.global_mode or mode).lower().strip()
+    global_symbol = args.global_symbol or args.symbol
     api_token = resolve_api_token(exchange, args.private_api_token, args.private_api_token_env)
-    hedge_api_token = (
-        resolve_api_token(hedge_exchange, args.global_private_api_token, args.global_private_api_token_env)
-        if hedge_exchange
+    global_api_token = (
+        resolve_api_token(global_exchange, args.global_private_api_token, args.global_private_api_token_env)
+        if global_exchange
         else None
     )
-    runtime_config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(
+    runtime_config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(
             role="local",
             exchange=exchange,
             symbol=args.symbol,
@@ -359,17 +370,17 @@ async def run(args: argparse.Namespace) -> None:
             trades_limit=args.trades,
             poll_interval_ms=args.poll_ms,
         ),
-        hedge=(
+        global_=(
             MarketDataSourceConfig(
                 role="global",
-                exchange=hedge_exchange,
-                symbol=hedge_symbol,
-                mode=hedge_mode,
+                exchange=global_exchange,
+                symbol=global_symbol,
+                mode=global_mode,
                 depth_limit=args.depth,
                 trades_limit=args.trades,
                 poll_interval_ms=args.poll_ms,
             )
-            if hedge_exchange
+            if global_exchange
             else None
         ),
         interval_ms=args.interval_ms,
@@ -383,21 +394,21 @@ async def run(args: argparse.Namespace) -> None:
         global_private=(
             PrivateRuntimeConfig(
                 mode=args.global_private_mode,
-                api_token=hedge_api_token,
+                api_token=global_api_token,
                 poll_interval_ms=args.global_private_poll_ms,
             )
-            if hedge_exchange
+            if global_exchange
             else None
         ),
     )
     runtime = await build_runtime_components(runtime_config)
     private_contract = {
         "requested_transport_mode": args.private_mode,
-        "selected_transport": runtime.private_state_selections["primary"].mode
-        if "primary" in runtime.private_state_selections
+        "selected_transport": runtime.private_state_selections["local"].mode
+        if "local" in runtime.private_state_selections
         else None,
-        "adapter": type(runtime.private_state_selections["primary"].adapter).__name__
-        if "primary" in runtime.private_state_selections
+        "adapter": type(runtime.private_state_selections["local"].adapter).__name__
+        if "local" in runtime.private_state_selections
         else None,
         "scope": "private_balances_and_orders_only",
         "enabled": bool(api_token),
@@ -414,7 +425,7 @@ async def run(args: argparse.Namespace) -> None:
             "safety": "does not place or cancel orders unless an actor calls OrderManager.sync",
             "live_orders": "ExecutionSnapshot mirrors private open orders for own-order subtraction and execution recovery",
         }
-    selection = runtime.public_market_selections["primary"]
+    selection = runtime.public_market_selections["local"]
     contract = summarize_contract(
         exchange,
         args.symbol,
@@ -425,34 +436,32 @@ async def run(args: argparse.Namespace) -> None:
     )
     contract["runtime_config"] = runtime_config.as_contract()
     contract["selected_public_market_transport"] = selection.transport
-    if hedge_exchange is not None:
-        hedge_selection = runtime.public_market_selections["hedge"]
-        contract["hedge_public_market"] = {
-            "exchange": hedge_exchange,
-            "symbol": hedge_symbol,
-            "requested_transport_mode": hedge_selection.requested_mode,
-            "selected_public_market_transport": hedge_selection.transport,
-            "public_market_adapter": type(hedge_selection.adapter).__name__,
-            "role": "hedge",
-            "hedge_is_anchor": True,
-            "symbol_policy": "same domain symbol as primary by default; no tick-size conversion is applied",
+    if global_exchange is not None:
+        global_selection = runtime.public_market_selections["global"]
+        contract["global_public_market"] = {
+            "exchange": global_exchange,
+            "symbol": global_symbol,
+            "requested_transport_mode": global_selection.requested_mode,
+            "selected_public_market_transport": global_selection.transport,
+            "public_market_adapter": type(global_selection.adapter).__name__,
+            "role": "global",
+            "symbol_policy": "same domain symbol as local by default; no tick-size conversion is applied",
         }
         contract["global_private_state"] = {
             "requested_transport_mode": args.global_private_mode,
-            "selected_transport": runtime.private_state_selections["hedge"].mode
-            if "hedge" in runtime.private_state_selections
+            "selected_transport": runtime.private_state_selections["global"].mode
+            if "global" in runtime.private_state_selections
             else None,
-            "adapter": type(runtime.private_state_selections["hedge"].adapter).__name__
-            if "hedge" in runtime.private_state_selections
+            "adapter": type(runtime.private_state_selections["global"].adapter).__name__
+            if "global" in runtime.private_state_selections
             else None,
-            "enabled": bool(hedge_api_token),
-            "token_configured": bool(hedge_api_token),
+            "enabled": bool(global_api_token),
+            "token_configured": bool(global_api_token),
         }
-    contract["strategy_input_frame"] = {
-        "topic": f"strategy:frames:{exchange}:{args.symbol}:{args.interval_ms}",
-        "primary": "always present",
-        "hedge": "None when --hedge-exchange is omitted, missing, or stale",
-        "hedge_is_anchor": True,
+    contract["joint_strategy_frame"] = {
+        "topic": runtime_config.joint_frame_topic,
+        "local": "always present",
+        "global": "None when --global-exchange is omitted, missing, or stale",
         "max_global_lag_ms": args.max_global_lag_ms,
         "global_grace_ms": args.global_grace_ms,
     }
@@ -490,19 +499,19 @@ async def run_print_loop(runtime: RuntimeComponents, args: argparse.Namespace) -
 def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list[tuple[str, asyncio.Queue]]:
     config = runtime.config
     bus = runtime.bus
-    primary_event_topic = config.local.market_event_topic(config.interval_ms)
-    primary_error_topic = config.local.market_error_topic()
+    local_event_topic = config.local.market_event_topic(config.interval_ms)
+    local_error_topic = config.local.market_error_topic()
     queues: list[tuple[str, asyncio.Queue]] = [
-        (config.frame_topic, bus.subscribe_queue(config.frame_topic)),
-        (primary_event_topic, bus.subscribe_queue(primary_event_topic)),
-        (primary_error_topic, bus.subscribe_queue(primary_error_topic)),
+        (config.joint_frame_topic, bus.subscribe_queue(config.joint_frame_topic)),
+        (local_event_topic, bus.subscribe_queue(local_event_topic)),
+        (local_error_topic, bus.subscribe_queue(local_error_topic)),
     ]
     if config.global_ is not None:
-        hedge_event_topic = config.global_.market_event_topic(config.interval_ms)
-        hedge_error_topic = config.global_.market_error_topic()
+        global_event_topic = config.global_.market_event_topic(config.interval_ms)
+        global_error_topic = config.global_.market_error_topic()
         queues.extend([
-            (hedge_event_topic, bus.subscribe_queue(hedge_event_topic)),
-            (hedge_error_topic, bus.subscribe_queue(hedge_error_topic)),
+            (global_event_topic, bus.subscribe_queue(global_event_topic)),
+            (global_error_topic, bus.subscribe_queue(global_error_topic)),
         ])
     if include_raw:
         trade_topic = config.local.raw_trade_topic()
@@ -512,13 +521,13 @@ def build_print_queues(runtime: RuntimeComponents, *, include_raw: bool) -> list
             (book_topic, bus.subscribe_queue(book_topic)),
         ])
         if config.global_ is not None:
-            hedge_trade_topic = config.global_.raw_trade_topic()
-            hedge_book_topic = config.global_.raw_orderbook_topic()
+            global_trade_topic = config.global_.raw_trade_topic()
+            global_book_topic = config.global_.raw_orderbook_topic()
             queues.extend([
-                (hedge_trade_topic, bus.subscribe_queue(hedge_trade_topic)),
-                (hedge_book_topic, bus.subscribe_queue(hedge_book_topic)),
+                (global_trade_topic, bus.subscribe_queue(global_trade_topic)),
+                (global_book_topic, bus.subscribe_queue(global_book_topic)),
             ])
-    for role, source in (("primary", config.local), ("hedge", config.global_)):
+    for role, source in (("local", config.local), ("global", config.global_)):
         if source is None or role not in runtime.private_state_selections:
             continue
         exchange = source.normalized_exchange()
@@ -565,26 +574,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=None, help="Path to a JSON runtime config file.")
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], default=None)
     parser.add_argument("--symbol", default="BTC_IRT")
-    parser.add_argument("--hedge-exchange", choices=["nobitex", "wallex"], default=None)
-    parser.add_argument("--hedge-symbol", default=None)
-    parser.add_argument("--hedge-mode", choices=["rest", "websocket"], default=None)
+    parser.add_argument("--global-exchange", choices=["nobitex", "wallex"], default=None)
+    parser.add_argument("--global-symbol", default=None)
+    parser.add_argument("--global-mode", choices=["rest", "websocket"], default=None)
     parser.add_argument("--mode", choices=["rest", "websocket"], default="rest")
     parser.add_argument("--private-mode", choices=["rest", "websocket"], default="rest")
     parser.add_argument("--private-api-token", default=None)
     parser.add_argument("--private-api-token-env", default=None)
     parser.add_argument("--private-poll-ms", type=int, default=5000)
-    parser.add_argument("--hedge-private-mode", choices=["rest", "websocket"], default="rest")
-    parser.add_argument("--hedge-private-api-token", default=None)
-    parser.add_argument("--hedge-private-api-token-env", default=None)
-    parser.add_argument("--hedge-private-poll-ms", type=int, default=5000)
+    parser.add_argument("--global-private-mode", choices=["rest", "websocket"], default="rest")
+    parser.add_argument("--global-private-api-token", default=None)
+    parser.add_argument("--global-private-api-token-env", default=None)
+    parser.add_argument("--global-private-poll-ms", type=int, default=5000)
     parser.add_argument("--interval-ms", type=int, default=5000)
     parser.add_argument("--poll-ms", type=int, default=1000)
     parser.add_argument("--depth", type=int, default=10)
     parser.add_argument("--trades", type=int, default=100)
     parser.add_argument("--events", type=int, default=10000, help="Stop after this many events; use 0 to run until timeout.")
     parser.add_argument("--timeout-s", type=float, default=60000.0)
-    parser.add_argument("--max-hedge-lag-ms", type=int, default=2000)
-    parser.add_argument("--hedge-grace-ms", type=int, default=250)
+    parser.add_argument("--max-global-lag-ms", type=int, default=2000)
+    parser.add_argument("--global-grace-ms", type=int, default=250)
     parser.add_argument("--raw", action="store_true")
     args = parser.parse_args()
     if args.config is None and args.exchange is None:

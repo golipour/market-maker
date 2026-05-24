@@ -43,7 +43,7 @@ class StrategyRunner:
     Pipeline per frame:
 
     1. Collect live orders from ``OrderManager`` instances.
-    2. ``clean_strategy_frame`` — subtract own orders from primary/hedge books.
+    2. ``clean_strategy_frame`` — subtract own orders from local/global books.
     3. ``MpcStrategyEngine.decide`` on the clean frame.
     4. ``AbstractRiskEngine.validate_frame`` on the proposed action.
     5. Publish decision + approved action; ``route_actions_to_managers`` when allowed.

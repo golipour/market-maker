@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**X-axis:** spread from mid (0), range **± Spread max**.\n\n**Chart 1 — Market orderbook:** raw exchange-visible book from the latest `MarketEvent` (includes our resting orders).\n\n**Chart 2 — Cleared orderbook:** primary book after subtracting our live orders (`ControllerDiagnostics.cleared_orderbook`, same view the MPC optimizer uses).\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
+        "content": "**X-axis:** spread from mid (0), range **± Spread max**.\n\n**Chart 1 — Market orderbook:** raw exchange-visible book from the latest `MarketEvent` (includes our resting orders).\n\n**Chart 2 — Cleared orderbook:** local book after subtracting our live orders (`ControllerDiagnostics.cleared_orderbook`, same view the MPC optimizer uses).\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
         "mode": "markdown"
       },
       "title": "Notes",

@@ -16,7 +16,7 @@ from mm.core.models.target_book import (
     VenueTargetBook,
 )
 from mm.core.order_constraints import OrderConstraints, build_orders_from_sigmoid_with_report
-from mm.execution.plan import ActionPipelineReport, summarize_orders, sync_action_pipeline_aliases
+from mm.execution.plan import ActionPipelineReport, summarize_orders
 
 
 def _order_to_target_order(order: Order) -> TargetOrder:
@@ -127,7 +127,6 @@ def build_joint_target_book_from_sigmoid(
         target_book_report = merged
 
     pipeline.target_book = target_book_report
-    sync_action_pipeline_aliases(pipeline)
 
     joint_book = JointTargetBook(
         actor_id=actor_id,

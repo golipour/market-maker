@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **price**, **market flow**, and **hedge** models, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). **Hedge — other** also includes **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
+        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **price**, **market flow**, and **global_price** models, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). **Global — other** also includes **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -63,7 +63,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload, ROW_NUMBER() OVER (ORDER BY ts DESC) AS rk\n  FROM mm_events\n  WHERE topic = '${decisions_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n)\nSELECT\n  COALESCE(payload->'price_model'->>'kind', '') AS price_model_kind,\n  COALESCE(payload->'market_flow_model'->>'kind', '') AS market_flow_model_kind,\n  COALESCE(payload->'hedge_price_model'->>'kind', '') AS hedge_price_model_kind\nFROM latest\nWHERE rk = 1",
+          "rawSql": "WITH latest AS (\n  SELECT payload, ROW_NUMBER() OVER (ORDER BY ts DESC) AS rk\n  FROM mm_events\n  WHERE topic = '${decisions_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n)\nSELECT\n  COALESCE(payload->'price_model'->>'kind', '') AS price_model_kind,\n  COALESCE(payload->'market_flow_model'->>'kind', '') AS market_flow_model_kind,\n  COALESCE(payload->'global_price_model'->>'kind', '') AS global_price_model_kind\nFROM latest\nWHERE rk = 1",
           "refId": "A"
         }
       ],
@@ -385,11 +385,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('hedge_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('global_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'global_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Hedge price — μ (deltas)",
+      "title": "Global price — μ (deltas)",
       "type": "timeseries"
     },
     {
@@ -431,11 +431,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('hedge_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('global_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'global_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Hedge price — σ",
+      "title": "Global price — σ",
       "type": "timeseries"
     },
     {
@@ -477,11 +477,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts AS \"time\", metric, value FROM (\n  SELECT e.ts AS ts,\n         ('hedge_price_model.' || kv.key) AS metric,\n         (kv.value #>> '{}')::double precision AS value\n  FROM mm_events e,\n  LATERAL jsonb_each(COALESCE(e.payload->'hedge_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND jsonb_typeof(kv.value) = 'number'\n    AND kv.key !~ '^mu_'\n    AND kv.key !~ '^sigma_'\n  UNION ALL\n  SELECT e.ts,\n         'hedge_price_model.active_in_mpc' AS metric,\n         CASE WHEN e.payload->'hedge_price_model'->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND e.payload->'hedge_price_model' ? 'active_in_mpc'\n) u\nORDER BY 1",
+          "rawSql": "SELECT ts AS \"time\", metric, value FROM (\n  SELECT e.ts AS ts,\n         ('global_price_model.' || kv.key) AS metric,\n         (kv.value #>> '{}')::double precision AS value\n  FROM mm_events e,\n  LATERAL jsonb_each(COALESCE(e.payload->'global_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND jsonb_typeof(kv.value) = 'number'\n    AND kv.key !~ '^mu_'\n    AND kv.key !~ '^sigma_'\n  UNION ALL\n  SELECT e.ts,\n         'global_price_model.active_in_mpc' AS metric,\n         CASE WHEN e.payload->'global_price_model'->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND e.payload->'global_price_model' ? 'active_in_mpc'\n) u\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Hedge price — other (decay, …) + active_in_mpc",
+      "title": "Global price — other (decay, …) + active_in_mpc",
       "type": "timeseries"
     },
     {
@@ -666,6 +666,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 21,
+  "version": 23,
   "weekStart": ""
 }

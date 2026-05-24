@@ -476,7 +476,7 @@ def optimize_joint_with_diagnostics(
                 expected_total_return=_finite_item(J_return_raw),
                 expected_next_reward=_finite_item(J_mean_next_raw),
                 main_reward_mean=_finite_item(J_mean_raw),
-                hedge_reward_mean=0.0,
+                global_reward_mean=0.0,
             )
             mpc._last_J_components = dict(epoch_metrics.components)
             if initial_metrics is None:
@@ -485,7 +485,7 @@ def optimize_joint_with_diagnostics(
             mpc._last_J_mean_raw = epoch_metrics.expected_total_reward
             mpc._last_E_dW_next = epoch_metrics.expected_next_reward
             mpc._last_main_reward_mean = epoch_metrics.main_reward_mean
-            mpc._last_hedge_reward_mean = 0.0
+            mpc._last_global_reward_mean = 0.0
             joint_diag_accum["local_fill_bid_mean"] = float(local_fill_bid_sum.detach().item())
             joint_diag_accum["local_fill_ask_mean"] = float(local_fill_ask_sum.detach().item())
             joint_diag_accum["global_fill_bid_mean"] = float(global_fill_bid_sum.detach().item())

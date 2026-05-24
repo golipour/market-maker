@@ -49,7 +49,7 @@ class EpochObjectiveMetrics:
     expected_total_return: float
     expected_next_reward: float
     main_reward_mean: float
-    hedge_reward_mean: float
+    global_reward_mean: float
 
     @classmethod
     def from_tensors(
@@ -61,7 +61,7 @@ class EpochObjectiveMetrics:
         expected_total_return: float,
         expected_next_reward: float,
         main_reward_mean: float,
-        hedge_reward_mean: float,
+        global_reward_mean: float,
     ) -> EpochObjectiveMetrics:
         comps = _components_to_float(components)
         obj = _finite(objective_value)
@@ -73,7 +73,7 @@ class EpochObjectiveMetrics:
             expected_total_return=_finite(expected_total_return),
             expected_next_reward=_finite(expected_next_reward),
             main_reward_mean=_finite(main_reward_mean),
-            hedge_reward_mean=_finite(hedge_reward_mean),
+            global_reward_mean=_finite(global_reward_mean),
         )
 
     def to_snapshot(self) -> ObjectiveSnapshot:
@@ -86,7 +86,7 @@ class EpochObjectiveMetrics:
             expected_total_return=self.expected_total_return,
             expected_next_reward=self.expected_next_reward,
             main_reward_mean=self.main_reward_mean,
-            hedge_reward_mean=self.hedge_reward_mean,
+            global_reward_mean=self.global_reward_mean,
         )
 
 
@@ -102,7 +102,7 @@ def objective_snapshot_payload(snapshot: ObjectiveSnapshot | None) -> dict[str, 
         "expected_total_return": snapshot.expected_total_return,
         "expected_next_reward": snapshot.expected_next_reward,
         "main_reward_mean": snapshot.main_reward_mean,
-        "hedge_reward_mean": snapshot.hedge_reward_mean,
+        "global_reward_mean": snapshot.global_reward_mean,
     }
 
 

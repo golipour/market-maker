@@ -147,7 +147,7 @@ class RuntimeRiskEngine(AbstractRiskEngine):
             if frame.global_ is not None:
                 hedge_market_age = now_ms - int(frame.global_.t_end_ms)
                 if hedge_market_age > hedge.max_market_data_age_ms:
-                    return "stale_hedge_market_data"
+                    return "stale_global_market_data"
             hedge_priv_reason = _private_freshness_reason(
                 frame.global_private,
                 now_ms=now_ms,

@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Per-step market data from persisted MarketEvent rows: trade volume (buy/sell) and best bid/ask, for primary and hedge venues. Topic pattern: market:events:{exchange}:{symbol}:{interval_ms}.",
+  "description": "Per-step market data from persisted MarketEvent rows: trade volume (buy/sell) and best bid/ask, for local and global venues. Topic pattern: market:events:{exchange}:{symbol}:{interval_ms}.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 2,
@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'MarketEvent'`` on topics ``market:events:{exchange}:{symbol}:{interval_ms}``.\n\n**Layout:** For **primary** and **hedge**, stacked time-series panels share the dashboard time range (use **Shared crosshair** / zoom to align). Top row = **step trade volume** (``buy_volume`` / ``sell_volume``, base units, aggregated over ``[t_start_ms, t_end_ms]``). Bottom row = **best bid / best ask** from the step's materialized book (``orderbook.bids[0]`` / ``asks[0]``, quote per base).\n\nSet **Primary exchange**, **Hedge exchange**, **Symbol**, and **Interval ms** to match ``persistence.topics`` in your runtime config.",
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'MarketEvent'`` on topics ``market:events:{exchange}:{symbol}:{interval_ms}``.\n\n**Layout:** For **primary** and **hedge**, stacked time-series panels share the dashboard time range (use **Shared crosshair** / zoom to align). Top row = **step trade volume** (``buy_volume`` / ``sell_volume``, base units, aggregated over ``[t_start_ms, t_end_ms]``). Bottom row = **best bid / best ask** from the step's materialized book (``orderbook.bids[0]`` / ``asks[0]``, quote per base).\n\nSet **Local exchange**, **Global exchange**, **Symbol**, and **Interval ms** to match ``persistence.topics`` in your runtime config.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -36,7 +36,7 @@
       },
       "id": 2,
       "panels": [],
-      "title": "Primary — $primary_exchange",
+      "title": "Local — $local_exchange",
       "type": "row"
     },
     {
@@ -115,7 +115,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'buy_volume' AS metric,\n       (e.payload->>'buy_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${primary_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'buy_volume'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'buy_volume' AS metric,\n       (e.payload->>'buy_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${local_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'buy_volume'\nORDER BY 1",
           "refId": "A"
         },
         {
@@ -126,11 +126,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'sell_volume' AS metric,\n       (e.payload->>'sell_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${primary_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'sell_volume'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'sell_volume' AS metric,\n       (e.payload->>'sell_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${local_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'sell_volume'\nORDER BY 1",
           "refId": "B"
         }
       ],
-      "title": "Primary ($primary_exchange) — step trade volume",
+      "title": "Local ($local_exchange) — step trade volume",
       "type": "timeseries"
     },
     {
@@ -203,7 +203,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'best_bid' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'bids'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${primary_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'best_bid' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'bids'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${local_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         },
         {
@@ -214,11 +214,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'best_ask' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'asks'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${primary_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'best_ask' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'asks'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${local_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "B"
         }
       ],
-      "title": "Primary ($primary_exchange) — best bid / ask",
+      "title": "Local ($local_exchange) — best bid / ask",
       "type": "timeseries"
     },
     {
@@ -231,7 +231,7 @@
       },
       "id": 3,
       "panels": [],
-      "title": "Hedge — $hedge_exchange",
+      "title": "Global — $global_exchange",
       "type": "row"
     },
     {
@@ -310,7 +310,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'buy_volume' AS metric,\n       (e.payload->>'buy_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${hedge_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'buy_volume'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'buy_volume' AS metric,\n       (e.payload->>'buy_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${global_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'buy_volume'\nORDER BY 1",
           "refId": "A"
         },
         {
@@ -321,11 +321,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'sell_volume' AS metric,\n       (e.payload->>'sell_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${hedge_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'sell_volume'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'sell_volume' AS metric,\n       (e.payload->>'sell_volume')::double precision AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${global_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\n  AND e.payload ? 'sell_volume'\nORDER BY 1",
           "refId": "B"
         }
       ],
-      "title": "Hedge ($hedge_exchange) — step trade volume",
+      "title": "Global ($global_exchange) — step trade volume",
       "type": "timeseries"
     },
     {
@@ -398,7 +398,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'best_bid' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'bids'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${hedge_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'best_bid' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'bids'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${global_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         },
         {
@@ -409,11 +409,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       'best_ask' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'asks'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${hedge_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       'best_ask' AS metric,\n       COALESCE(\n         (e.payload->'orderbook'->'asks'->0->>'price')::double precision,\n         (e.payload->>'microprice')::double precision\n       ) AS value\nFROM mm_events e\nWHERE e.topic = CONCAT('market:events:', '${global_exchange}', ':', '${symbol}', ':', '${interval_ms}')\n  AND e.event_type = 'MarketEvent'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "B"
         }
       ],
-      "title": "Hedge ($hedge_exchange) — best bid / ask",
+      "title": "Global ($global_exchange) — best bid / ask",
       "type": "timeseries"
     }
   ],
@@ -433,8 +433,8 @@
           "value": "nobitex"
         },
         "hide": 0,
-        "label": "Primary exchange",
-        "name": "primary_exchange",
+        "label": "Local exchange",
+        "name": "local_exchange",
         "options": [
           {
             "selected": true,
@@ -457,8 +457,8 @@
           "value": "wallex"
         },
         "hide": 0,
-        "label": "Hedge exchange",
-        "name": "hedge_exchange",
+        "label": "Global exchange",
+        "name": "global_exchange",
         "options": [
           {
             "selected": false,

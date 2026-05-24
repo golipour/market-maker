@@ -23,8 +23,8 @@ class RuntimeObservabilitySubscriber:
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
         self._sync_pending_ts_ms: dict[str, int] = {}
-        # Latest primary frame per exchange: (t_end_ms, created_at_ms wall) for latency vs execution sync.
-        self._last_primary_frame_by_exchange: dict[str, tuple[int, int]] = {}
+        # Latest local frame per exchange: (t_end_ms, created_at_ms wall) for latency vs execution sync.
+        self._last_local_frame_by_exchange: dict[str, tuple[int, int]] = {}
 
     async def start(self) -> None:
         self._stopped.clear()

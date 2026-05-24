@@ -515,9 +515,9 @@ class MonteCarloMPCTensorBatched:
         self._last_J_mean_raw: float = 0.0
         self._last_E_dW_next: float = 0.0
         self._last_main_reward_mean: float = 0.0
-        self._last_hedge_reward_mean: float = 0.0
+        self._last_global_reward_mean: float = 0.0
         self._last_main_reward_mean_initial: float = 0.0
-        self._last_hedge_reward_mean_initial: float = 0.0
+        self._last_global_reward_mean_initial: float = 0.0
         self._last_sigmoid_action: SigmoidMixtureAction | None = None
         self._last_global_sigmoid_action: SigmoidMixtureAction | None = None
         self._last_joint_action: Any = None
@@ -710,7 +710,7 @@ class MonteCarloMPCTensorBatched:
         best_J_mean: float | None = None
         best_J_mean_next: float | None = None
         best_main_reward_mean: float | None = None
-        best_hedge_reward_mean: float | None = None
+        best_global_reward_mean: float | None = None
         best_epoch: int | None = None
         initial_metrics: EpochObjectiveMetrics | None = None
         final_metrics: EpochObjectiveMetrics | None = None
@@ -932,7 +932,7 @@ class MonteCarloMPCTensorBatched:
                 main_reward_mean_raw = torch_mod.nan_to_num(
                     total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
-                hedge_reward_mean_raw = torch_mod.nan_to_num(
+                global_reward_mean_raw = torch_mod.nan_to_num(
                     total_hedge_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
                 J, components = terminal_objective(
@@ -959,20 +959,20 @@ class MonteCarloMPCTensorBatched:
                     expected_total_return=_finite_item(J_return_raw),
                     expected_next_reward=_finite_item(J_mean_next_raw),
                     main_reward_mean=_finite_item(main_reward_mean_raw),
-                    hedge_reward_mean=_finite_item(hedge_reward_mean_raw),
+                    global_reward_mean=_finite_item(global_reward_mean_raw),
                 )
                 self._last_J_components = dict(epoch_metrics.components)
                 if not captured_initial_components:
                     self._last_J_components_initial = dict(epoch_metrics.components)
                     self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
-                    self._last_hedge_reward_mean_initial = epoch_metrics.hedge_reward_mean
+                    self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
                     initial_metrics = epoch_metrics
                     captured_initial_components = True
                 final_metrics = epoch_metrics
                 self._last_J_mean_raw = epoch_metrics.expected_total_reward
                 self._last_E_dW_next = epoch_metrics.expected_next_reward
                 self._last_main_reward_mean = epoch_metrics.main_reward_mean
-                self._last_hedge_reward_mean = epoch_metrics.hedge_reward_mean
+                self._last_global_reward_mean = epoch_metrics.global_reward_mean
                 loss = -J
                 if not torch_mod.isfinite(loss):
                     nonfinite_loss_count += 1
@@ -994,7 +994,7 @@ class MonteCarloMPCTensorBatched:
                 best_J_mean = final_metrics.expected_total_reward if final_metrics else 0.0
                 best_J_mean_next = final_metrics.expected_next_reward if final_metrics else 0.0
                 best_main_reward_mean = final_metrics.main_reward_mean if final_metrics else 0.0
-                best_hedge_reward_mean = final_metrics.hedge_reward_mean if final_metrics else 0.0
+                best_global_reward_mean = final_metrics.global_reward_mean if final_metrics else 0.0
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -1018,8 +1018,8 @@ class MonteCarloMPCTensorBatched:
             self._last_E_dW_next = float(best_J_mean_next)
         if best_main_reward_mean is not None and math.isfinite(float(best_main_reward_mean)):
             self._last_main_reward_mean = float(best_main_reward_mean)
-        if best_hedge_reward_mean is not None and math.isfinite(float(best_hedge_reward_mean)):
-            self._last_hedge_reward_mean = float(best_hedge_reward_mean)
+        if best_global_reward_mean is not None and math.isfinite(float(best_global_reward_mean)):
+            self._last_global_reward_mean = float(best_global_reward_mean)
         if self.warm_start:
             self._last_action = best_action
             self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
