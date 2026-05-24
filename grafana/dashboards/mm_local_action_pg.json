@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Primary action pipeline funnel from ControllerDiagnostics in mm_events.",
+  "description": "Local action pipeline funnel from ControllerDiagnostics in mm_events.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -203,11 +203,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','risk_approved','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','target_book','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 risk_approved",
+      "title": "Order count \u2014 target_book",
       "type": "timeseries"
     },
     {
@@ -249,11 +249,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','target','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','risk_approved_target','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 target",
+      "title": "Order count \u2014 risk_approved_target",
       "type": "timeseries"
     },
     {
@@ -295,11 +295,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','kept','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','planned_cancel','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 kept",
+      "title": "Order count \u2014 planned_cancel",
       "type": "timeseries"
     },
     {
@@ -341,11 +341,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','canceled','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','planned_place','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 canceled",
+      "title": "Order count \u2014 planned_place",
       "type": "timeseries"
     },
     {
@@ -387,11 +387,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','placed','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','rules_valid','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 placed",
+      "title": "Order count \u2014 rules_valid",
       "type": "timeseries"
     },
     {
@@ -433,11 +433,57 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','venue_accepted','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','router_accepted','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Order count \u2014 venue_accepted",
+      "title": "Order count \u2014 router_accepted",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n  (e.payload #> ARRAY['action_pipeline','kept','order_count'])::int::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Order count \u2014 kept",
       "type": "timeseries"
     }
   ],
@@ -522,8 +568,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "MM primary action (PostgreSQL)",
-  "uid": "mm-primary-action-pg",
+  "title": "MM local action (PostgreSQL)",
+  "uid": "mm-local-action-pg",
   "version": 1,
   "weekStart": ""
 }

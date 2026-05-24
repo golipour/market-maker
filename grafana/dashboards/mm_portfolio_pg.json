@@ -65,11 +65,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'primary_inventory' AS metric,\n  (e.payload #>> '{state,primary_inventory}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_inventory',\n  (e.payload #>> '{state,hedge_inventory}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_inventory' AS metric,\n  (e.payload #>> '{state,local_inventory}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_inventory',\n  (e.payload #>> '{state,global_inventory}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Inventory (primary vs hedge)",
+      "title": "Inventory (local vs global)",
       "type": "timeseries"
     },
     {
@@ -111,11 +111,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'primary_cash' AS metric,\n  (e.payload #>> '{state,primary_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_cash',\n  (e.payload #>> '{state,hedge_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_cash' AS metric,\n  (e.payload #>> '{state,primary_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_cash',\n  (e.payload #>> '{state,hedge_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Cash (primary vs hedge)",
+      "title": "Cash (local vs global)",
       "type": "timeseries"
     },
     {
@@ -157,7 +157,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'primary_marked' AS metric,\n  COALESCE((e.payload #>> '{state,primary_wealth}')::double precision,\n    (e.payload #>> '{state,primary_cash}')::double precision\n     + (e.payload #>> '{state,primary_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,primary_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'hedge_marked',\n  COALESCE((e.payload #>> '{state,hedge_wealth}')::double precision,\n    (e.payload #>> '{state,hedge_cash}')::double precision\n     + (e.payload #>> '{state,hedge_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,hedge_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_marked' AS metric,\n  COALESCE((e.payload #>> '{state,primary_wealth}')::double precision,\n    (e.payload #>> '{state,primary_cash}')::double precision\n     + (e.payload #>> '{state,local_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,local_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_marked',\n  COALESCE((e.payload #>> '{state,hedge_wealth}')::double precision,\n    (e.payload #>> '{state,hedge_cash}')::double precision\n     + (e.payload #>> '{state,global_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,global_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -203,7 +203,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','primary_quote_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','local_quote_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -249,7 +249,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','primary_base_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','local_base_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -295,11 +295,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", lim AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('min', (e.payload #>> ARRAY['risk','limits','primary','min_inventory'])::double precision),\n    ('max', (e.payload #>> ARRAY['risk','limits','primary','max_inventory'])::double precision)\n) AS t(lim, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", lim AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('min', (e.payload #>> ARRAY['risk','limits','local','min_inventory'])::double precision),\n    ('max', (e.payload #>> ARRAY['risk','limits','local','max_inventory'])::double precision)\n) AS t(lim, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Inventory limits (primary)",
+      "title": "Inventory limits (local)",
       "type": "timeseries"
     },
     {
@@ -341,7 +341,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'primary_plus_hedge' AS metric,\n  ((e.payload #>> '{state,primary_inventory}')::double precision\n   + (e.payload #>> '{state,hedge_inventory}')::double precision) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_plus_global' AS metric,\n  ((e.payload #>> '{state,local_inventory}')::double precision\n   + (e.payload #>> '{state,global_inventory}')::double precision) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -364,8 +364,8 @@
           "text": "nobitex",
           "value": "nobitex"
         },
-        "label": "Primary exchange",
-        "name": "primary_exchange",
+        "label": "Local exchange",
+        "name": "local_exchange",
         "query": "nobitex,wallex",
         "type": "custom"
       },
@@ -374,8 +374,8 @@
           "text": "wallex",
           "value": "wallex"
         },
-        "label": "Hedge exchange",
-        "name": "hedge_exchange",
+        "label": "Global exchange",
+        "name": "global_exchange",
         "query": "nobitex,wallex",
         "type": "custom"
       },

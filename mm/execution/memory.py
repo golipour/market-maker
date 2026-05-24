@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from mm.core.interfaces.order_manager import AbstractOrderManager
+from mm.core.adapters.joint import venue_target_book_to_action
 from mm.core.models.execution import Action, Order
+from mm.core.models.target_book import VenueTargetBook
 from mm.execution.plan import ExecutionSyncReport, summarize_orders
 
 
@@ -28,3 +30,7 @@ class RecordingOrderManager(AbstractOrderManager):
             accepted=summary,
             placed=True,
         )
+
+    async def sync_venue_target_book(self, target: VenueTargetBook) -> ExecutionSyncReport:
+        action = venue_target_book_to_action(target)
+        return await self.sync_with_report([action])

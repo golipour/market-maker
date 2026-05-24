@@ -11,6 +11,7 @@ from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.execution.plan import ExecutionSyncReport, summarize_orders
 from mm.risk.engine import PassThroughRiskEngine
+from tests.unit.conftest import strategy_decision_with_joint
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, RiskRuntimeConfig
 
 
@@ -57,15 +58,7 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
 
 
 def _decision(event: MarketEvent) -> StrategyDecision:
-    order = Order("nobitex", "BTC_IRT", "buy", 99.0, 1.0, client_order_id="c1")
-    return StrategyDecision(
-        actor_id="test-runner",
-        exchange=event.exchange,
-        symbol=event.symbol,
-        t_end_ms=event.t_end_ms,
-        frame_step=1,
-        action=Action(actor_id="test-runner", orders=(order,)),
-    )
+    return strategy_decision_with_joint(event, frame_step=1)
 
 
 class _SlowOrderManager:
@@ -92,6 +85,12 @@ class _SlowOrderManager:
             placed=True,
         )
 
+    async def sync_venue_target_book(self, target):
+        from mm.core.adapters.joint import venue_target_book_to_action
+
+        return await self.sync_with_report([venue_target_book_to_action(target)])
+
+
 
 class _FailingOrderManager:
     exchange = "nobitex"
@@ -106,6 +105,12 @@ class _FailingOrderManager:
     async def sync_with_report(self, actions: list[Action]) -> ExecutionSyncReport:
         self.sync_calls += 1
         raise RuntimeError("place order failed on nobitex: simulated")
+
+    async def sync_venue_target_book(self, target):
+        from mm.core.adapters.joint import venue_target_book_to_action
+
+        return await self.sync_with_report([venue_target_book_to_action(target)])
+
 
 
 @pytest.mark.asyncio

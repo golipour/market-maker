@@ -20,6 +20,7 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.core.wallet import make_balance
+from tests.unit.conftest import venues_payload
 from mm.runtime.config import (
     MarketDataSourceConfig,
     MarketMakerRuntimeConfig,
@@ -68,34 +69,26 @@ def test_venues_local_global_config_aliases() -> None:
     )
 
     assert config.local.normalized_exchange() == "nobitex"
-    assert config.global_venue is not None
-    assert config.global_venue.normalized_exchange() == "wallex"
-    assert config.local is config.local
-    assert config.global_ is config.global_venue
+    assert config.global_ is not None
+    assert config.global_.normalized_exchange() == "wallex"
     assert config.local_private is config.local_private
     assert config.global_private is config.global_private
     assert config.config_warnings == ()
 
 
-def test_legacy_primary_hedge_emits_config_warnings() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-            "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
-            "local_private": {"api_token_env": "NOBITEX_API_TOKEN"},
-            "global_private": {"api_token_env": "WALLEX_API_TOKEN"},
-        }
-    )
-
-    assert "legacy key 'primary' accepted" in config.config_warnings[0]
-    assert "legacy key 'hedge' accepted" in config.config_warnings[1]
-    assert config.local.normalized_exchange() == "nobitex"
-    assert config.global_venue is not None
+def test_legacy_primary_hedge_keys_rejected() -> None:
+    with pytest.raises(ValueError, match="venues object"):
+        runtime_config_from_mapping(
+            {
+                "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
+            }
+        )
 
 
 def test_liquidity_sourcing_config_defaults() -> None:
     config = runtime_config_from_mapping(
-        {"primary": {"exchange": "nobitex", "symbol": "USDT_IRT"}}
+        venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False)
     )
 
     assert config.liquidity_sourcing.enabled is False
@@ -107,7 +100,7 @@ def test_liquidity_sourcing_config_defaults() -> None:
 def test_liquidity_sourcing_config_from_mapping() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+            **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
             "liquidity_sourcing": {
                 "enabled": True,
                 "mode": "liquidity_sourcing",
@@ -126,39 +119,40 @@ def test_liquidity_sourcing_invalid_mode_raises() -> None:
     with pytest.raises(ValueError, match="liquidity_sourcing.mode"):
         runtime_config_from_mapping(
             {
-                "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
                 "liquidity_sourcing": {"mode": "invalid"},
             }
         )
 
 
-def test_runtime_contract_includes_neutral_aliases() -> None:
+def test_runtime_contract_includes_venues() -> None:
     config = runtime_config_from_mapping(
-        {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-            "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
-        }
+        venues_payload(
+            local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+            global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+        )
     )
     contract = config.as_contract()
 
     assert contract["venues"]["local"]["exchange"] == "nobitex"
     assert contract["venues"]["global"]["exchange"] == "wallex"
-    assert contract["legacy_aliases"]["primary"] == "maps to venues.local"
+    assert contract["joint_strategy_frame"]["topic"] == config.joint_frame_topic
     assert contract["liquidity_sourcing"]["enabled"] is False
 
 
-def test_example_config_unchanged_behavior_with_defaults() -> None:
+def test_example_config_loads_liquidity_sourcing() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.liquidity_sourcing.enabled is False
-    assert config.liquidity_sourcing.mode == "single_venue"
+    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.mode == "liquidity_sourcing"
     assert config.controller is not None
     assert config.controller.enabled is True
 
 
+
 def test_joint_models_serialize_through_json() -> None:
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
-        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
+        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
     )
     local_private = PrivateStateSnapshot(
         "nobitex",
@@ -169,7 +163,7 @@ def test_joint_models_serialize_through_json() -> None:
         },
     )
     frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        hedge=_market_event(exchange="wallex"),
+        global_=_market_event(exchange="wallex"),
         local_private=local_private,
         global_status="ready",
         global_lag_ms=50,

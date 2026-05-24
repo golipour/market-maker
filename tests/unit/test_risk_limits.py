@@ -7,6 +7,7 @@ from mm.core.models.strategy import StrategyInputFrame
 from mm.controller.context import DecisionContext
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
 from mm.core.risk_limits import VenueRiskLimits
+from tests.unit.conftest import venues_payload
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, RiskRuntimeConfig, runtime_config_from_mapping
 
 
@@ -34,7 +35,7 @@ def _private(ts: int = 1000) -> PrivateStateSnapshot:
 def test_risk_config_migration_from_flat_keys() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
+            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
             "controller": {
                 "enabled": True,
                 "risk": {
@@ -88,10 +89,10 @@ def test_rejects_buy_when_cash_too_low() -> None:
     assert result.rejection_counts.get("min_cash", 0) >= 1
 
 
-def test_diagnostics_expose_primary_and_hedge_limits() -> None:
+def test_diagnostics_expose_local_and_global_limits() -> None:
     risk_cfg = RiskRuntimeConfig(
         enabled=True,
-        primary=VenueRiskLimits(max_inventory=42.0, min_inventory=0.0),
+        local=VenueRiskLimits(max_inventory=42.0, min_inventory=0.0),
     )
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=ControllerRuntimeConfig(enabled=True, risk=risk_cfg),
@@ -105,6 +106,6 @@ def test_diagnostics_expose_primary_and_hedge_limits() -> None:
     )
     diag = ctx.to_diagnostics()
     payload = diag.as_payload()
-    assert payload["risk"]["limits"]["primary"]["max_inventory"] == 42.0
-    assert payload["risk"]["limits"]["primary"]["min_inventory"] == 0.0
-    assert "hedge" in payload["risk"]["limits"]
+    assert payload["risk"]["limits"]["local"]["max_inventory"] == 42.0
+    assert payload["risk"]["limits"]["local"]["min_inventory"] == 0.0
+    assert "global" in payload["risk"]["limits"]

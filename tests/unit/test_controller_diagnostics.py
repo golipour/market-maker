@@ -23,6 +23,7 @@ from mm.runtime.config import (
     RiskRuntimeConfig,
 )
 from mm.runtime.engine import _default_persistence_topics
+from tests.unit.conftest import strategy_decision_with_joint
 
 
 def _market_event() -> MarketEvent:
@@ -180,13 +181,15 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
     order = Order("nobitex", "BTC_IRT", "buy", 99.0, 1.0, client_order_id="c1")
 
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        decision = strategy_decision_with_joint(frame.local, frame_step=frame_step, actor_id="test-runner")
         return StrategyDecision(
-            actor_id="test-runner",
-            exchange=frame.local.exchange,
-            symbol=frame.local.symbol,
-            t_end_ms=frame.local.t_end_ms,
+            actor_id=decision.actor_id,
+            exchange=decision.exchange,
+            symbol=decision.symbol,
+            t_end_ms=decision.t_end_ms,
             frame_step=frame_step,
-            action=Action(actor_id="test-runner", orders=(order,)),
+            action=decision.action,
+            joint_target_book=decision.joint_target_book,
             mid=100.0,
             inventory=5.0,
             cash=1000.0,

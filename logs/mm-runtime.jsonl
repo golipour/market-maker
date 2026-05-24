@@ -59012,3 +59012,48 @@
 {"ts_ms":1779615768923,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":8}
 {"ts_ms":1779615768927,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":8}
 {"ts_ms":1779615803997,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779617141510,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779617142444,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779617142444,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779617142447,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779618296915,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779618297076,"event":"mpc_optimizer_timing","batch_sec":0.0009624869999242947,"train_sec":0.016756834000261733,"total_sec":0.017719321000186028,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779618297110,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014919400000508176,"train_sec":0.02239308699972753,"total_sec":0.023885026999778347,"global_active":true,"best_epoch":1}
+{"ts_ms":1779618297180,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014355080002133036,"train_sec":0.057917215999623295,"total_sec":0.0593527239998366,"global_active":true,"best_epoch":4}
+{"ts_ms":1779618298041,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779618298041,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779618298044,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779619202264,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619202346,"event":"mpc_optimizer_timing","batch_sec":0.0009547660010866821,"train_sec":0.015259075998983462,"total_sec":0.016213842000070144,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779619202372,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014923110011295648,"train_sec":0.019935606000217376,"total_sec":0.02142791700134694,"global_active":true,"best_epoch":1}
+{"ts_ms":1779619202432,"event":"mpc_joint_optimizer_timing","batch_sec":0.00137887100027001,"train_sec":0.054087686999992,"total_sec":0.05546655800026201,"global_active":true,"best_epoch":4}
+{"ts_ms":1779619298563,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779619298563,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779619298566,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779619328628,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619368723,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619368806,"event":"mpc_optimizer_timing","batch_sec":0.0011896189989784034,"train_sec":0.01642113300113124,"total_sec":0.017610752000109642,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779619368836,"event":"mpc_joint_optimizer_timing","batch_sec":0.001490212000135216,"train_sec":0.022947810999539797,"total_sec":0.024438022999675013,"global_active":true,"best_epoch":1}
+{"ts_ms":1779619368905,"event":"mpc_joint_optimizer_timing","batch_sec":0.0017040670009009773,"train_sec":0.06284154500099248,"total_sec":0.06454561200189346,"global_active":true,"best_epoch":4}
+{"ts_ms":1779619474680,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779619474680,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779619474684,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779619514770,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619575475,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619849077,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779619849147,"event":"mpc_optimizer_timing","batch_sec":0.0009400630005984567,"train_sec":0.013225579001300503,"total_sec":0.01416564200189896,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779619849174,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014364099988597445,"train_sec":0.020858111998677487,"total_sec":0.02229452199753723,"global_active":true,"best_epoch":1}
+{"ts_ms":1779619849229,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014480999998340849,"train_sec":0.04954192000150215,"total_sec":0.050990020001336234,"global_active":true,"best_epoch":4}
+{"ts_ms":1779619955075,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779619955076,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779619955079,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779619995160,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779620052317,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779620249730,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779620249814,"event":"mpc_optimizer_timing","batch_sec":0.0010437929995532613,"train_sec":0.01555183199889143,"total_sec":0.01659562499844469,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779620249842,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014618509994761553,"train_sec":0.02149172200006433,"total_sec":0.022953572999540484,"global_active":true,"best_epoch":1}
+{"ts_ms":1779620249908,"event":"mpc_joint_optimizer_timing","batch_sec":0.001514096999017056,"train_sec":0.059242596002150094,"total_sec":0.06075669300116715,"global_active":true,"best_epoch":4}
+{"ts_ms":1779620360728,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779620360728,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779620360732,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779620390820,"event":"persistence_disabled","reason":"config"}

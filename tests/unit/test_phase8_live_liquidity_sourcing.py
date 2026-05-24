@@ -32,6 +32,7 @@ from mm.runtime.config import (
     runtime_config_from_mapping,
 )
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
+from tests.unit.conftest import venues_payload, strategy_decision_with_joint
 from tests.unit.test_execution_manager import FakeOrderCommandAdapter
 
 
@@ -87,14 +88,14 @@ def _joint_book(*, include_global: bool = True) -> JointTargetBook:
 
 def _runtime_binding() -> MarketMakerRuntimeConfig:
     return MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
-        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
+        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
     )
 
 
 def test_execution_config_parses_per_venue_policies() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
+            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
             "execution": {
                 "local": {"planner": "reconcile"},
                 "global": {"planner": "replace", "max_order_qty": 0.25, "max_quote_distance": 5.0},
@@ -152,7 +153,7 @@ def test_apply_venue_execution_caps_filters_by_qty_and_distance() -> None:
 def test_compute_venue_execution_gates_independent_local_and_global() -> None:
     runtime = _runtime_binding()
     frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        hedge=_market_event(exchange="wallex"),
+        global_=_market_event(exchange="wallex"),
         global_status="ready",
     )
     gates = compute_venue_execution_gates(
@@ -187,7 +188,7 @@ def test_compute_venue_execution_gates_independent_local_and_global() -> None:
 def test_global_stale_market_blocks_only_global_gate() -> None:
     runtime = _runtime_binding()
     frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        hedge=None,
+        global_=None,
         global_status="stale",
     )
     gates = compute_venue_execution_gates(
@@ -308,7 +309,7 @@ async def test_strategy_runner_routes_both_venues_when_live(
     )
 
     frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        hedge=_market_event(exchange="wallex"),
+        global_=_market_event(exchange="wallex"),
         global_status="ready",
     )
     await runner.on_frame(frame)
@@ -317,11 +318,13 @@ async def test_strategy_runner_routes_both_venues_when_live(
     assert global_manager.venue_syncs == 1
 
 
-def test_hedge_exec_disabled_when_live_sourcing_active() -> None:
-    runtime = runtime_config_from_mapping(
+def test_legacy_hedging_key_ignored_when_live_sourcing_active() -> None:
+    config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
-            "hedge": {"exchange": "wallex", "symbol": "BTC_IRT"},
+            **venues_payload(
+                local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+                global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+            ),
             "hedging": {"enabled": True, "observe_only": False},
             "liquidity_sourcing": {
                 "enabled": True,
@@ -331,16 +334,14 @@ def test_hedge_exec_disabled_when_live_sourcing_active() -> None:
         }
     )
 
-    service = build_hedge(runtime, bus=InMemoryBus(), order_managers={})
-
-    assert service is None
-    assert any("mutually exclusive" in warning for warning in runtime.config_warnings)
+    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.global_live_orders is True
 
 
 def test_prepare_execution_joint_book_applies_configured_policies() -> None:
     runtime = _runtime_binding()
     frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        hedge=_market_event(exchange="wallex"),
+        global_=_market_event(exchange="wallex"),
         global_status="ready",
     )
     prepared = prepare_execution_joint_book(

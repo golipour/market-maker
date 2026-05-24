@@ -9,7 +9,7 @@ from mm.models.scoring import (
     score_market_flow,
     score_primary_mid_delta,
 )
-from mm.mpc.global_price_torch import HedgeGaussianPriceModel
+from mm.mpc.global_price_torch import GlobalGaussianPriceModel
 from mm.mpc.market_order_flow_torch import TorchHurdleLogNormalModel
 from mm.mpc.price_torch import TorchResidualPriceModel
 
@@ -159,7 +159,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
     from mm.models.scoring import score_frame_models
     from mm.mpc.mpc_state import OrderbookRelative, State
 
-    hedge = HedgeGaussianPriceModel(decay=0.9, sigma_min_quote=1.0)
+    hedge = GlobalGaussianPriceModel(decay=0.9, sigma_min_quote=1.0)
     book = RawOrderbook(
         exchange="wallex",
         symbol="BTC_IRT",
@@ -168,7 +168,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         asks=(PriceLevel(101.0, 1.0),),
         is_snapshot=True,
     )
-    hedge_event = MarketEvent(
+    global_event = MarketEvent(
         exchange="wallex",
         symbol="BTC_IRT",
         interval_ms=1000,
@@ -204,7 +204,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         imbalance=0.0,
         microprice=100.5,
     )
-    frame = StrategyInputFrame(local=primary, global_=hedge_event, global_status="ready")
+    frame = StrategyInputFrame(local=primary, global_=global_event, global_status="ready")
     state = State(
         mid=100.5,
         ob_rel=OrderbookRelative(bids=(), asks=()),

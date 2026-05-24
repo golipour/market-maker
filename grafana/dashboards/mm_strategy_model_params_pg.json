@@ -536,7 +536,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", model AS metric,\n  (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", model AS metric,\n  (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -579,7 +579,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT model AS model,\n  COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,\n  COUNT(*) AS count\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''\nGROUP BY 1, 2\nORDER BY count DESC",
+          "rawSql": "SELECT model AS model,\n  COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,\n  COUNT(*) AS count\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''\nGROUP BY 1, 2\nORDER BY count DESC",
           "refId": "A"
         }
       ],
@@ -666,6 +666,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 20,
+  "version": 21,
   "weekStart": ""
 }

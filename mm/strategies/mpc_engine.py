@@ -273,7 +273,7 @@ class MpcStrategyEngine:
                     else {}
                 ),
                 "active_in_mpc": self._global_price_model is not None
-                and bool(getattr(self._controller, "hedge_enabled", False)),
+                and bool(getattr(self._controller, "global_enabled", False)),
             },
         )
 
@@ -323,12 +323,12 @@ def _build_controller(
         "device": "cpu",
     }
     optimizer_defaults.update(optimizer_cfg)
-    global_price_model = _build_global_price_model(config.global_price_model)
+    reference_global_price_model = _build_global_price_model(config.global_price_model)
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
     global_flow_cfg = (config.optimizer or {}).get("global_market_flow_model") or config.market_flow_model
     global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.price_model
     global_flow_model = _build_market_flow_model(global_flow_cfg)
-    global_price_model = _build_price_model(
+    sourcing_global_price_model = _build_price_model(
         global_price_cfg,
         market_flow_model=global_flow_model,
         vwap_depth=config.vwap_depth,
@@ -337,10 +337,10 @@ def _build_controller(
         price_model=price_model,
         market_flow_model=market_flow_model,
         execution_model=execution_model,
-        global_price_model=global_price_model,
+        reference_global_price_model=reference_global_price_model,
         liquidity_sourcing_enabled=sourcing.enabled,
         global_market_flow_model=global_flow_model if sourcing.enabled else None,
-        global_price_model=global_price_model if sourcing.enabled else None,
+        global_price_model=sourcing_global_price_model if sourcing.enabled else None,
         **optimizer_defaults,
     )
 
@@ -428,7 +428,7 @@ def _global_market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]
 
 
 def _build_global_price_model(cfg: dict[str, Any] | None) -> Any:
-    from mm.mpc.global_price_torch import GaussianHedgeDeltaModel, HedgeGaussianPriceModel
+    from mm.mpc.global_price_torch import GaussianGlobalDeltaModel, GlobalGaussianPriceModel
 
     if not cfg:
         return None
@@ -437,10 +437,10 @@ def _build_global_price_model(cfg: dict[str, Any] | None) -> Any:
         return None
     if kind in ("legacy", "ewma_gaussian", "hedge_gaussian_rep"):
         payload = {k: v for k, v in cfg.items() if k != "kind"}
-        return HedgeGaussianPriceModel(**payload)
+        return GlobalGaussianPriceModel(**payload)
     if kind == "gaussian":
         payload = {k: v for k, v in cfg.items() if k != "kind"}
-        return GaussianHedgeDeltaModel(**payload)
+        return GaussianGlobalDeltaModel(**payload)
     raise ValueError(f"unsupported global_price_model kind: {kind}")
 
 
@@ -529,14 +529,10 @@ def _state_from_frame(
         global_buy_vwap=global_buy_vwap,
         global_sell_vwap=global_sell_vwap,
         global_inventory=global_inventory,
-        hedge_cash=hedge_cash,
+        global_cash=global_cash,
         global_ob_rel=global_ob_rel,
         global_buy_vol=global_buy_vol,
         global_sell_vol=global_sell_vol,
-        global_inventory=global_inventory,
-        global_cash=global_cash,
-        global_buy_vwap=global_buy_vwap,
-        global_sell_vwap=global_sell_vwap,
         reference_price=reference_price,
         global_active=global_active,
     )
@@ -557,8 +553,8 @@ def _update_residual_price_model(
         return
     if not hasattr(model, "update"):
         return
-    prev_step = _price_model_step(previous.primary)
-    curr_step = _price_model_step(current.primary)
+    prev_step = _price_model_step(previous.local)
+    curr_step = _price_model_step(current.local)
     try:
         model.update(prev_step, curr_step)
     except (ValueError, ZeroDivisionError, TypeError):

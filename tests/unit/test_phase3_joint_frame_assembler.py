@@ -25,16 +25,16 @@ from mm.runtime.config import (
 from tests.unit.test_strategy_pipeline import _event_for, market_event
 
 
-def _runtime_config(*, hedge: bool = True) -> MarketMakerRuntimeConfig:
-    hedge_source = (
+def _runtime_config(*, global_: bool = True) -> MarketMakerRuntimeConfig:
+    global_source = (
         MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT")
-        if hedge
+        if global_
         else None
     )
     return MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
-        hedge=hedge_source,
+        global_=global_source,
         local_private=PrivateRuntimeConfig(api_token="token-a"),
-        global_private=PrivateRuntimeConfig(api_token="token-b") if hedge else None,
+        global_private=PrivateRuntimeConfig(api_token="token-b") if global_ else None,
     )
 
 
@@ -51,7 +51,7 @@ def _private_snapshot(exchange: str) -> PrivateStateSnapshot:
 
 
 @pytest.mark.asyncio
-async def test_joint_frame_assembler_publishes_legacy_and_joint_topics() -> None:
+async def test_joint_frame_assembler_publishes_joint_topic() -> None:
     bus = InMemoryBus()
     local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
@@ -74,33 +74,30 @@ async def test_joint_frame_assembler_publishes_legacy_and_joint_topics() -> None
         binding=config.binding,
         liquidity_sourcing=config.liquidity_sourcing,
         bus=bus,
-        legacy_output_topic=config.frame_topic,
         joint_output_topic=config.joint_frame_topic,
         ledger_service=ledger_service,
         clock_ms=lambda: 2000,
     )
 
-    legacy_queue = bus.subscribe_queue(config.frame_topic)
     joint_queue = bus.subscribe_queue(config.joint_frame_topic)
 
     await assembler.start()
     try:
         await local_private_queue.put(_private_snapshot("nobitex"))
         await global_private_queue.put(_private_snapshot("wallex"))
-        hedge_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
-        primary_event = market_event()
-        await global_queue.put(hedge_event)
-        await local_queue.put(primary_event)
+        global_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
+        local_event = market_event()
+        await global_queue.put(global_event)
+        await local_queue.put(local_event)
 
-        legacy_frame = await asyncio.wait_for(legacy_queue.get(), timeout=1.0)
         joint_frame = await asyncio.wait_for(joint_queue.get(), timeout=1.0)
     finally:
         await assembler.stop()
 
-    assert isinstance(legacy_frame, StrategyInputFrame)
-    assert legacy_frame.local == primary_event
-    assert joint_frame.local_market == primary_event
-    assert joint_frame.global_market == hedge_event
+    assert joint_frame.input_frame is not None
+    assert joint_frame.input_frame.local == local_event
+    assert joint_frame.local_market == local_event
+    assert joint_frame.global_market == global_event
     assert joint_frame.ledger is not None
     assert joint_frame.sync_status.local_market_ready is True
     assert joint_frame.sync_status.global_market_ready is True
@@ -110,9 +107,9 @@ async def test_joint_frame_assembler_publishes_legacy_and_joint_topics() -> None
 
 @pytest.mark.asyncio
 async def test_single_venue_joint_frame_tolerates_missing_global_private() -> None:
-    config = _runtime_config(hedge=True)
+    config = _runtime_config(global_=True)
     legacy_frame = StrategyInputFrame(local=market_event(),
-        hedge=_event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000),
+        global_=_event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000),
         global_status="ready",
         global_lag_ms=0,
         local_private=_private_snapshot("nobitex"),
@@ -133,9 +130,9 @@ async def test_single_venue_joint_frame_tolerates_missing_global_private() -> No
 
 
 def test_liquidity_sourcing_mode_requires_ready_global_market() -> None:
-    config = _runtime_config(hedge=True)
+    config = _runtime_config(global_=True)
     stale_frame = StrategyInputFrame(local=market_event(),
-        hedge=None,
+        global_=None,
         global_status="stale",
         global_lag_ms=1500,
         created_at_ms=2000,
@@ -159,7 +156,7 @@ def test_liquidity_sourcing_mode_requires_ready_global_market() -> None:
 @pytest.mark.asyncio
 async def test_joint_frame_uses_ledger_service_for_wallet_state() -> None:
     bus = InMemoryBus()
-    config = _runtime_config(hedge=False)
+    config = _runtime_config(global_=False)
     ledger_service = PortfolioLedgerService(config, config.binding, bus)
     snapshot = _private_snapshot("nobitex")
     ledger_service._local.apply_snapshot(snapshot)
@@ -196,6 +193,5 @@ def test_build_runtime_components_wires_joint_frame_topic() -> None:
     async def _build() -> None:
         runtime = await build_runtime_components(config)
         assert runtime.frame_assembler.joint_output_topic == config.joint_frame_topic
-        assert runtime.frame_assembler.legacy_output_topic == config.frame_topic
 
     asyncio.run(_build())

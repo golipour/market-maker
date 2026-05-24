@@ -151,7 +151,7 @@ def test_apply_ledger_event_sequence_matches_store_replay() -> None:
 
 def test_build_joint_ledger_snapshot_consolidates_local_and_global() -> None:
     config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
-        hedge=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
+        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
     )
     local = VenueLedgerStateMachine("nobitex", config.binding.local).apply_snapshot(
         PrivateStateSnapshot(

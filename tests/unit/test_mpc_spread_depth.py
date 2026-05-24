@@ -28,8 +28,7 @@ def test_optimizer_stores_objective_params() -> None:
         target_inventory=5.0,
         target_inventory_multiplier=1.5,
         quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
-        hedge_rollout=True,
+        quote_size_max_per_side=10.0
     )
     assert mpc.return_risk_aversion_beta == 2.0
     assert mpc.inventory_target_penalty_weight == 4.0

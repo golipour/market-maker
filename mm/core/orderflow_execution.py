@@ -185,11 +185,17 @@ class ObservedStepExecutionModel:
     ``hedge_fee`` for proportional fee on simulated hedge-venue trades.
     """
 
-    def __init__(self, maker_fee: float = 0.0, hedge_fee: float | None = None):
-        # Kept for compatibility: MPC reads execution_model.maker_fee / hedge_fee.
+    def __init__(
+        self,
+        maker_fee: float = 0.0,
+        hedge_fee: float | None = None,
+        global_fee: float | None = None,
+        **_ignored: object,
+    ) -> None:
         self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
-        if hedge_fee is not None:
-            self.global__fee = max(0.0, min(1.0 - 1e-9, float(hedge_fee)))
+        fee = global_fee if global_fee is not None else hedge_fee
+        if fee is not None:
+            self.global_fee = max(0.0, min(1.0 - 1e-9, float(fee)))
 
     def state_after_step(
         self,

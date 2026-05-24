@@ -7,6 +7,7 @@ from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.strategy import StrategyDecision
+from tests.unit.conftest import venues_payload
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
 from mm.strategies import mpc_engine
 
@@ -61,7 +62,7 @@ async def test_memory_bus_factory_preserves_publish_subscribe() -> None:
 def test_runtime_config_parses_bus_persistence_and_observability() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
+            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
             "bus": {"kind": "redis_streams", "stream_prefix": "test-mm", "max_stream_length": 10},
             "persistence": {"enabled": True, "topics": ["strategy:decisions"], "batch_size": 5},
             "observability": {"run_id": "run-1", "otel_enabled": True},

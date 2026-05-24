@@ -1,0 +1,252 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Venue gates and joint target books from runtime events.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Source:** `ControllerDiagnostics.execution.venue_gates` and `JointTargetBook` events.\n\nVenue execution gates and joint target book order counts.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 2
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", gate.key AS metric,\n  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'execution'->'venue_gates', '{}'::jsonb)) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Venue gate live flags",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 2
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'local_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Joint target book local order count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'global_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Joint target book global order count",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "postgres",
+    "liquidity-sourcing"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "mpc-controller",
+          "value": "mpc-controller"
+        },
+        "label": "Actor ID",
+        "name": "actor_id",
+        "query": "mpc-controller",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
+        "label": "Exchange",
+        "name": "exchange",
+        "options": [
+          {
+            "selected": true,
+            "text": "nobitex",
+            "value": "nobitex"
+          },
+          {
+            "selected": false,
+            "text": "wallex",
+            "value": "wallex"
+          }
+        ],
+        "query": "nobitex,wallex",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
+        "label": "Symbol",
+        "name": "symbol",
+        "query": "USDT_IRT",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "label": "Diagnostics topic",
+        "name": "diagnostics_topic",
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "10000",
+          "value": "10000"
+        },
+        "label": "Interval ms",
+        "name": "interval_ms",
+        "query": "10000",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM liquidity sourcing (PostgreSQL)",
+  "uid": "mm-liquidity-sourcing-pg",
+  "version": 1,
+  "weekStart": ""
+}

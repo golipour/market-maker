@@ -20,6 +20,7 @@ from mm.runtime.config import (
     RiskRuntimeConfig,
 )
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
+from tests.unit.conftest import strategy_decision_with_joint
 
 
 def _market_event() -> MarketEvent:
@@ -48,15 +49,7 @@ def _market_event() -> MarketEvent:
 
 
 def _decision(event: MarketEvent, *, frame_step: int) -> StrategyDecision:
-    order = Order("nobitex", "BTC_IRT", "buy", 99.0, 1.0, client_order_id="c1")
-    return StrategyDecision(
-        actor_id="test-runner",
-        exchange=event.exchange,
-        symbol=event.symbol,
-        t_end_ms=event.t_end_ms,
-        frame_step=frame_step,
-        action=Action(actor_id="test-runner", orders=(order,)),
-    )
+    return strategy_decision_with_joint(event, frame_step=frame_step)
 
 
 def _runner(

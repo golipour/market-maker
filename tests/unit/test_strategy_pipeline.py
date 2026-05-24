@@ -16,6 +16,7 @@ from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.core.models.private import OpenOrder
 from mm.execution.memory import RecordingOrderManager
 from mm.risk.engine import PassThroughRiskEngine
+from tests.unit.conftest import strategy_decision_with_joint
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 from mm.runtime.config import MarketMakerRuntimeConfig, MarketDataSourceConfig
 
@@ -62,7 +63,7 @@ def test_clean_strategy_frame_adjusts_primary_book():
     frame = StrategyInputFrame(local=market_event())
     open_orders = {"own-bid": Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0)}
     clean = clean_strategy_frame(frame, open_orders)
-    assert clean.primary.orderbook.bids[0] == PriceLevel(100.0, 1.0)
+    assert clean.local.orderbook.bids[0] == PriceLevel(100.0, 1.0)
 
 
 class _FakeOrderManager:
@@ -100,22 +101,7 @@ def _minimal_config() -> ControllerRuntimeConfig:
 
 
 def _minimal_decision(event: MarketEvent) -> StrategyDecision:
-    order = Order(
-        exchange=event.exchange,
-        symbol=event.symbol,
-        side="buy",
-        price=99.0,
-        qty=1.0,
-        client_order_id="test-bid",
-    )
-    return StrategyDecision(
-        actor_id="test-runner",
-        exchange=event.exchange,
-        symbol=event.symbol,
-        t_end_ms=event.t_end_ms,
-        frame_step=1,
-        action=Action(actor_id="test-runner", orders=(order,)),
-    )
+    return strategy_decision_with_joint(event, frame_step=1)
 
 
 @pytest.mark.asyncio
@@ -196,13 +182,13 @@ async def test_frame_assembler_passes_none_when_hedge_is_not_configured():
 
 
 @pytest.mark.asyncio
-async def test_frame_assembler_aligns_fresh_hedge_event_to_primary():
+async def test_frame_assembler_aligns_fresh_global_event_to_primary():
     local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
-    hedge_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
-    primary_event = market_event()
-    await global_queue.put(hedge_event)
-    await local_queue.put(primary_event)
+    global_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
+    local_event = market_event()
+    await global_queue.put(global_event)
+    await local_queue.put(local_event)
     assembler = StrategyInputFrameAssembler(
         local_queue=local_queue,
         global_queue=global_queue,
@@ -211,13 +197,13 @@ async def test_frame_assembler_aligns_fresh_hedge_event_to_primary():
     )
     frame = await assembler.next_frame()
 
-    assert frame.global_ == hedge_event
+    assert frame.global_ == global_event
     assert frame.global_status == "ready"
     assert frame.global_lag_ms == 0
 
 
 @pytest.mark.asyncio
-async def test_frame_assembler_hides_stale_hedge_event():
+async def test_frame_assembler_hides_stale_global_event():
     local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     await global_queue.put(_event_for("wallex", "BTC_IRT", t_start_ms=0, t_end_ms=500))

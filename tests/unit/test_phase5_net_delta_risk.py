@@ -15,6 +15,7 @@ from mm.core.risk_limits import VenueRiskLimits
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
 from mm.risk.factory import build_risk_engine
 from mm.risk.net_delta import NetDeltaRiskEngine, evaluate_venue_target_transition
+from tests.unit.conftest import venues_payload
 from mm.runtime.config import LiquiditySourcingRuntimeConfig, RiskRuntimeConfig, runtime_config_from_mapping
 
 
@@ -103,9 +104,9 @@ def _target_book(*orders: TargetOrder) -> JointTargetBook:
     )
 
 
-def test_build_risk_engine_defaults_to_order_level() -> None:
+def test_build_risk_engine_defaults_to_net_delta() -> None:
     engine = build_risk_engine(RiskRuntimeConfig(enabled=True), binding=_binding())
-    assert isinstance(engine, RuntimeRiskEngine)
+    assert isinstance(engine, NetDeltaRiskEngine)
 
 
 def test_build_risk_engine_net_delta_requires_binding() -> None:
@@ -254,7 +255,7 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
     binding = SymbolBinding(local=primary, global_=hedge)
 
     snapshot = _private_snapshot()
-    hedge_event = MarketEvent(
+    global_event = MarketEvent(
         exchange="wallex",
         symbol="BTC_IRT",
         interval_ms=1000,
@@ -269,7 +270,7 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
         microprice=100.0,
     )
     frame = StrategyInputFrame(local=_market_event(),
-        hedge=hedge_event,
+        global_=global_event,
         local_private=snapshot,
         global_private=None,
         global_status="ready",
@@ -315,7 +316,7 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
     binding = SymbolBinding(local=primary, global_=hedge)
 
     snapshot = _private_snapshot()
-    hedge_event = MarketEvent(
+    global_event = MarketEvent(
         exchange="wallex",
         symbol="BTC_IRT",
         interval_ms=1000,
@@ -330,7 +331,7 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
         microprice=100.0,
     )
     frame = StrategyInputFrame(local=_market_event(),
-        hedge=hedge_event,
+        global_=global_event,
         local_private=snapshot,
         global_private=None,
         global_status="ready",
@@ -386,7 +387,7 @@ def test_rejection_includes_transition_diagnostics() -> None:
 def test_risk_config_parses_engine_field() -> None:
     config = runtime_config_from_mapping(
         {
-            "primary": {"exchange": "nobitex", "symbol": "BTC_IRT"},
+            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
             "controller": {
                 "enabled": True,
                 "risk": {"enabled": True, "engine": "net_delta"},

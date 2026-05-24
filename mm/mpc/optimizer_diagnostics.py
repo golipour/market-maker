@@ -86,7 +86,7 @@ class EpochObjectiveMetrics:
             expected_total_return=self.expected_total_return,
             expected_next_reward=self.expected_next_reward,
             main_reward_mean=self.main_reward_mean,
-            hedge_reward_mean=self.global__reward_mean,
+            hedge_reward_mean=self.hedge_reward_mean,
         )
 
 

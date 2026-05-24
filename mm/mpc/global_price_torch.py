@@ -14,9 +14,9 @@ from typing import Any
 import numpy as np
 
 
-class HedgeGaussianPriceModel:
+class GlobalGaussianPriceModel:
     """
-    Gaussian model for hedge VWAP deltas (buy/sell), updated via
+    Gaussian model for global VWAP deltas (buy/sell), updated via
     EWMA sufficient statistics (exponentially weighted moments).
     """
 
@@ -111,7 +111,7 @@ class HedgeGaussianPriceModel:
         return z_buy * sg_db + mu_db, z_sell * sg_ds + mu_ds
 
 
-class GaussianHedgeDeltaModel:
+class GaussianGlobalDeltaModel:
     """Static Gaussian increments (no online learning). Optional ``kind: \"gaussian\"``."""
 
     def __init__(self, sigma_buy: float = 0.0, sigma_sell: float = 0.0):

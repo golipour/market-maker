@@ -416,11 +416,11 @@ class State:
 
     @property
     def global_buy_vwap(self) -> float | None:
-        return self.global__buy_ref
+        return self.hedge_buy_ref
 
     @property
     def global_sell_vwap(self) -> float | None:
-        return self.global__sell_ref
+        return self.hedge_sell_ref
 
 
 def state_from_ob_and_flow(

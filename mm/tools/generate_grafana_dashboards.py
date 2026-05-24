@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Grafana dashboards for controller diagnostics, primary action, portfolio, and hedge execution."""
+"""Generate Grafana dashboards for controller diagnostics, local/global action, portfolio, and liquidity sourcing."""
 
 from __future__ import annotations
 
@@ -241,12 +241,6 @@ _ACTION_PIPELINE_STAGES: tuple[tuple[str, str], ...] = (
     ("rules_valid", "rules_valid"),
     ("router_accepted", "router_accepted"),
     ("kept", "kept"),
-    # Deprecated aliases retained for existing dashboards.
-    ("risk_approved", "risk_approved"),
-    ("target", "target"),
-    ("canceled", "canceled"),
-    ("placed", "placed"),
-    ("venue_accepted", "venue_accepted"),
 )
 
 
@@ -461,7 +455,7 @@ ORDER BY 1""",
     )
 
 
-def primary_action_dashboard() -> dict[str, Any]:
+def local_action_dashboard() -> dict[str, Any]:
     diag_filter = _controller_diagnostics_filter()
 
     panels: list[dict[str, Any]] = [
@@ -487,16 +481,16 @@ def primary_action_dashboard() -> dict[str, Any]:
         y += 6
 
     return _dashboard(
-        title="MM primary action (PostgreSQL)",
-        uid="mm-primary-action-pg",
-        description="Primary action pipeline funnel from ControllerDiagnostics in mm_events.",
+        title="MM local action (PostgreSQL)",
+        uid="mm-local-action-pg",
+        description="Local action pipeline funnel from ControllerDiagnostics in mm_events.",
         tags=["market-maker", "postgres", "controller", "action"],
         panels=panels,
         templating=_controller_diagnostics_templating(),
     )
 
 
-def primary_action_funnel_rejections_dashboard() -> dict[str, Any]:
+def local_action_funnel_rejections_dashboard() -> dict[str, Any]:
     diag_filter = _controller_diagnostics_filter()
 
     panels: list[dict[str, Any]] = [
@@ -532,8 +526,8 @@ def primary_action_funnel_rejections_dashboard() -> dict[str, Any]:
         y += 6
 
     return _dashboard(
-        title="MM primary action funnel rejections (PostgreSQL)",
-        uid="mm-primary-action-rejections-pg",
+        title="MM local action funnel rejections (PostgreSQL)",
+        uid="mm-local-action-rejections-pg",
         description="Per-stage rejection reason counts from ControllerDiagnostics action_pipeline.",
         tags=["market-maker", "postgres", "controller", "action", "rejections"],
         panels=panels,
@@ -560,7 +554,7 @@ def portfolio_dashboard() -> dict[str, Any]:
         _panel_sql_timeseries(
             10,
             4,
-            "Inventory (primary vs hedge)",
+            "Inventory (local vs global)",
             f"""SELECT e.ts AS "time", 'local_inventory' AS metric,
   (e.payload #>> '{{state,local_inventory}}')::double precision AS value
 FROM mm_events e
@@ -575,13 +569,13 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             11,
             12,
-            "Cash (primary vs hedge)",
-            f"""SELECT e.ts AS "time", 'primary_cash' AS metric,
+            "Cash (local vs global)",
+            f"""SELECT e.ts AS "time", 'local_cash' AS metric,
   (e.payload #>> '{{state,primary_cash}}')::double precision AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
-SELECT e.ts, 'hedge_cash',
+SELECT e.ts, 'global_cash',
   (e.payload #>> '{{state,hedge_cash}}')::double precision
 FROM mm_events e
 WHERE {diag_filter}
@@ -591,7 +585,7 @@ ORDER BY 1""",
             12,
             20,
             "Marked portfolio value (approx)",
-            f"""SELECT e.ts AS "time", 'primary_marked' AS metric,
+            f"""SELECT e.ts AS "time", 'local_marked' AS metric,
   COALESCE((e.payload #>> '{{state,primary_wealth}}')::double precision,
     (e.payload #>> '{{state,primary_cash}}')::double precision
      + (e.payload #>> '{{state,local_inventory}}')::double precision
@@ -599,7 +593,7 @@ ORDER BY 1""",
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
-SELECT e.ts, 'hedge_marked',
+SELECT e.ts, 'global_marked',
   COALESCE((e.payload #>> '{{state,hedge_wealth}}')::double precision,
     (e.payload #>> '{{state,hedge_cash}}')::double precision
      + (e.payload #>> '{{state,global_inventory}}')::double precision
@@ -613,7 +607,7 @@ ORDER BY 1""",
             28,
             "Primary quote wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','primary_quote_wallet', leg])::double precision AS value
+  (e.payload #>> ARRAY['state','local_quote_wallet', leg])::double precision AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -626,7 +620,7 @@ ORDER BY 1""",
             36,
             "Primary base wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','primary_base_wallet', leg])::double precision AS value
+  (e.payload #>> ARRAY['state','local_base_wallet', leg])::double precision AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -637,13 +631,13 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             13,
             44,
-            "Inventory limits (primary)",
+            "Inventory limits (local)",
             f"""SELECT e.ts AS "time", lim AS metric, v AS value
 FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES
-    ('min', (e.payload #>> ARRAY['risk','limits','primary','min_inventory'])::double precision),
-    ('max', (e.payload #>> ARRAY['risk','limits','primary','max_inventory'])::double precision)
+    ('min', (e.payload #>> ARRAY['risk','limits','local','min_inventory'])::double precision),
+    ('max', (e.payload #>> ARRAY['risk','limits','local','max_inventory'])::double precision)
 ) AS t(lim, v)
 WHERE {diag_filter} AND v IS NOT NULL
 ORDER BY 1""",
@@ -652,7 +646,7 @@ ORDER BY 1""",
             14,
             52,
             "Combined inventory exposure",
-            f"""SELECT e.ts AS "time", 'primary_plus_hedge' AS metric,
+            f"""SELECT e.ts AS "time", 'local_plus_global' AS metric,
   ((e.payload #>> '{{state,local_inventory}}')::double precision
    + (e.payload #>> '{{state,global_inventory}}')::double precision) AS value
 FROM mm_events e
@@ -663,15 +657,15 @@ ORDER BY 1""",
     templating = [
         {
             "current": {"text": "nobitex", "value": "nobitex"},
-            "label": "Primary exchange",
-            "name": "primary_exchange",
+            "label": "Local exchange",
+            "name": "local_exchange",
             "query": "nobitex,wallex",
             "type": "custom",
         },
         {
             "current": {"text": "wallex", "value": "wallex"},
-            "label": "Hedge exchange",
-            "name": "hedge_exchange",
+            "label": "Global exchange",
+            "name": "global_exchange",
             "query": "nobitex,wallex",
             "type": "custom",
         },
@@ -707,126 +701,61 @@ ORDER BY 1""",
     )
 
 
-def hedge_exec_dashboard() -> dict[str, Any]:
-    hedge_diag = """
-  e.topic = '${hedge_diagnostics_topic}'
-  AND e.event_type = 'HedgeExecutionDiagnostic'
-  AND e.symbol = '${symbol}'
-  AND e.actor_id = '${actor_id}'
-  AND $__timeFilter(e.ts)"""
-
+def liquidity_sourcing_dashboard() -> dict[str, Any]:
+    diag_filter = _controller_diagnostics_filter()
     panels: list[dict[str, Any]] = [
         _panel_text(
             1,
             0,
-            "**Source:** `HedgeIntent` and `HedgeExecutionDiagnostic` on hedge topics.\n\n"
-            "Live fill-driven hedging (separate from MPC `hedge_rollout`).",
+            "**Source:** `ControllerDiagnostics.execution.venue_gates` and `JointTargetBook` events.\n\n"
+            "Venue execution gates and joint target book order counts.",
         ),
         _panel_sql_timeseries(
             10,
             4,
-            "Hedge outcomes by status",
-            f"""SELECT date_trunc('minute', e.ts) AS "time", e.payload->>'status' AS metric,
-  COUNT(*)::double precision AS value
+            "Venue gate live flags",
+            f"""SELECT e.ts AS "time", gate.key AS metric,
+  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value
 FROM mm_events e
-WHERE {hedge_diag}
-GROUP BY 1, 2
+CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'execution'->'venue_gates', '{{}}'::jsonb)) AS gate(key, value)
+WHERE {diag_filter}
 ORDER BY 1""",
+            w=12,
         ),
         _panel_sql_timeseries(
             11,
-            12,
-            "Residual unhedged qty",
-            f"""SELECT e.ts AS "time", 'unhedged_qty' AS metric,
-  (e.payload #>> '{{residual,unhedged_qty}}')::double precision AS value
+            4,
+            "Joint target book local order count",
+            """SELECT e.ts AS "time", 'local_orders' AS metric,
+  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value
 FROM mm_events e
-WHERE {hedge_diag}
-  AND e.payload #>> '{{residual,unhedged_qty}}' IS NOT NULL
+WHERE e.event_type = 'JointTargetBook'
+  AND e.symbol = '${symbol}'
+  AND $__timeFilter(e.ts)
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_sql_timeseries(
+            12,
+            12,
+            "Joint target book global order count",
+            """SELECT e.ts AS "time", 'global_orders' AS metric,
+  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision AS value
+FROM mm_events e
+WHERE e.event_type = 'JointTargetBook'
+  AND e.symbol = '${symbol}'
+  AND $__timeFilter(e.ts)
 ORDER BY 1""",
         ),
-        _panel_sql_table(
-            12,
-            20,
-            "Rejection reasons (count)",
-            f"""SELECT COALESCE(e.payload->>'reason', 'unknown') AS reason,
-  COUNT(*) AS count
-FROM mm_events e
-WHERE {hedge_diag}
-  AND e.payload->>'status' IN ('rejected', 'failed', 'skipped')
-GROUP BY 1
-ORDER BY count DESC""",
-            h=4,
-        ),
-        _panel_sql_table(
-            13,
-            28,
-            "Latest hedge trace",
-            f"""SELECT e.ts,
-  e.payload->>'source_fill_id' AS source_fill_id,
-  e.payload->>'status' AS status,
-  e.payload->>'reason' AS reason,
-  e.payload #>> '{{intent,primary_side}}' AS primary_side,
-  e.payload #>> '{{intent,hedge_side}}' AS hedge_side,
-  (e.payload #>> '{{intent,qty}}')::double precision AS qty,
-  e.payload #>> '{{hedge_order,client_order_id}}' AS hedge_client_order_id
-FROM mm_events e
-WHERE {hedge_diag}
-ORDER BY e.ts DESC
-LIMIT 20""",
-            h=5,
-        ),
-    ]
-    templating = [
-        {
-            "current": {"text": "hedge-executor", "value": "hedge-executor"},
-            "label": "Actor ID",
-            "name": "actor_id",
-            "query": "hedge-executor",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "nobitex", "value": "nobitex"},
-            "label": "Primary exchange",
-            "name": "primary_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "wallex", "value": "wallex"},
-            "label": "Hedge exchange",
-            "name": "hedge_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "USDT_IRT", "value": "USDT_IRT"},
-            "label": "Symbol",
-            "name": "symbol",
-            "query": "USDT_IRT",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "hedge:diagnostics:hedge-executor", "value": "hedge:diagnostics:hedge-executor"},
-            "label": "Hedge diagnostics topic",
-            "name": "hedge_diagnostics_topic",
-            "query": "hedge:diagnostics:hedge-executor",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "hedge:intents:hedge-executor", "value": "hedge:intents:hedge-executor"},
-            "label": "Hedge intents topic",
-            "name": "hedge_intents_topic",
-            "query": "hedge:intents:hedge-executor",
-            "type": "textbox",
-        },
     ]
     return _dashboard(
-        title="MM hedge execution (PostgreSQL)",
-        uid="mm-hedge-execution-pg",
-        description="Fill-driven hedge intents and execution diagnostics.",
-        tags=["market-maker", "postgres", "hedge"],
+        title="MM liquidity sourcing (PostgreSQL)",
+        uid="mm-liquidity-sourcing-pg",
+        description="Venue gates and joint target books from runtime events.",
+        tags=["market-maker", "postgres", "liquidity-sourcing"],
         panels=panels,
-        templating=templating,
+        templating=_controller_diagnostics_templating(),
     )
 
 
@@ -934,17 +863,17 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
-    (OUT / "mm_primary_action_pg.json").write_text(
+    (OUT / "mm_local_action_pg.json").write_text(
         json.dumps(
-            compact_dashboard_panels(primary_action_dashboard(), height_scale=1.0),
+            compact_dashboard_panels(local_action_dashboard(), height_scale=1.0),
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
-    (OUT / "mm_primary_action_rejections_pg.json").write_text(
+    (OUT / "mm_local_action_rejections_pg.json").write_text(
         json.dumps(
-            compact_dashboard_panels(primary_action_funnel_rejections_dashboard(), height_scale=1.0),
+            compact_dashboard_panels(local_action_funnel_rejections_dashboard(), height_scale=1.0),
             indent=2,
         )
         + "\n",
@@ -954,8 +883,8 @@ def main() -> None:
         json.dumps(compact_dashboard_panels(portfolio_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
-    (OUT / "mm_hedge_exec_pg.json").write_text(
-        json.dumps(compact_dashboard_panels(hedge_exec_dashboard()), indent=2) + "\n",
+    (OUT / "mm_liquidity_sourcing_pg.json").write_text(
+        json.dumps(compact_dashboard_panels(liquidity_sourcing_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     patch_model_params_dashboard()
