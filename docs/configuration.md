@@ -190,9 +190,23 @@ Legacy flat keys still parse for one release: top-level `max_inventory` and `max
 
 Optimizer keys map to `mm.mpc.mpc_tensor_batched` (samples, horizon, penalty weights, inventory targets, device, etc.).
 
-## Live hedging (fill-driven)
+## Legacy hedge components
 
-Separate from MPC simulation (`controller.optimizer.hedge_rollout_enabled`):
+The following remain supported for current single-venue and primary-plus-hedge
+deployments. They are **not** the foundation for the liquidity-sourcing upgrade
+(see `docs/liquidity-sourcing-architecture-upgrade-plan.md`). Do not build new
+features on them unless you are maintaining today's reactive hedge path.
+
+| Component | Config / code | Role today | Migration direction |
+|-----------|---------------|------------|---------------------|
+| MPC hedge rollout | `controller.optimizer.hedge_rollout_enabled` | Simulates immediate offsetting hedge trades inside the optimizer objective | Replaced by joint-venue consolidated wealth when liquidity sourcing is enabled |
+| Fill-driven hedge executor | `hedging.enabled`, `HedgeExecutionService` | Places reactive market hedge orders after primary fills | Remains as optional emergency/legacy tool; mutually exclusive with live joint-venue quoting |
+
+Both are independent: enabling one does not imply the other.
+
+## Live hedging (fill-driven, legacy)
+
+Separate from MPC simulation (`controller.optimizer.hedge_rollout_enabled`, also legacy):
 
 ```json
 "hedging": {

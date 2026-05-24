@@ -58946,3 +58946,15 @@
 {"ts_ms":1779550510756,"event":"strategy_frame","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779550510000,"hedge_status":"ready","hedge_lag_ms":0}
 {"ts_ms":1779550510757,"event":"strategy_decision","actor_id":"mpc-controller","exchange":"nobitex","symbol":"USDT_IRT","t_end_ms":1779550510000,"order_count":1,"latency_ms":743.587531,"observe_only":false,"decision_hash":"4d569f8661a8e0933b5ba65040d15f5512320456974e47591b80bf2a6db595b6"}
 {"ts_ms":1779550510762,"event":"order_validation_rejected","type":"OrderValidationRejected","exchange":"nobitex","symbol":"USDT_IRT","reason":"below_min_notional_quote","side":"sell","price":176956.0,"qty":0.34,"min_base_qty":0.01,"min_notional_quote":500000.0,"timestamp_ms":1779550510761}
+{"ts_ms":1779609181545,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779609181545,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1779609181554,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1779609181590,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779609312312,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779609312313,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1779609312319,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1779609312337,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779609723236,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779609723236,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":6}
+{"ts_ms":1779609723239,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":6}
+{"ts_ms":1779609723255,"event":"persistence_disabled","reason":"config"}

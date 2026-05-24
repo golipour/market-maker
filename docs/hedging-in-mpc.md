@@ -1,5 +1,10 @@
 # Hedging In The MPC Objective
 
+> **Legacy path:** `hedge_rollout_enabled` and the reactive hedge reward model described
+> here are retained for current deployments. The liquidity-sourcing upgrade replaces this
+> with joint-venue consolidated wealth and independent maker quoting on both venues.
+> See `docs/liquidity-sourcing-architecture-upgrade-plan.md`.
+
 This note documents how hedge exchange data is currently used by the MPC optimizer, why live hedging is not complete yet, and a concrete architecture for making it executable.
 
 ## Current State

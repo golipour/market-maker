@@ -1,4 +1,9 @@
-"""Subscribe to primary fills and place offsetting hedge market orders."""
+"""Legacy fill-driven hedge executor (reactive offset after primary fills).
+
+This service is retained during the liquidity-sourcing architecture upgrade.
+New cross-venue profit capture should use joint target books and per-venue
+execution planners instead. See ``docs/liquidity-sourcing-architecture-upgrade-plan.md``.
+"""
 
 from __future__ import annotations
 
@@ -43,7 +48,12 @@ def _fill_dedupe_key(fill: Fill) -> str:
 
 @dataclass(slots=True)
 class HedgeExecutionService:
-    """Fill-driven hedge executor; independent of MPC ``hedge_rollout_enabled``."""
+    """Legacy fill-driven hedge executor; independent of MPC ``hedge_rollout_enabled``.
+
+    Both this service and ``hedge_rollout_enabled`` model reactive hedging rather
+    than optional liquidity sourcing. They remain for backward compatibility and
+    emergency use until the joint-venue execution path is live-tested.
+    """
 
     config: HedgingRuntimeConfig
     runtime_config: MarketMakerRuntimeConfig
