@@ -26,19 +26,80 @@ CLI flags on `print_events` can override exchange/symbol/interval when not using
 
 | Section | Type | Description |
 |---------|------|-------------|
-| `primary` | object | **Required.** Primary market data source (`role` implied primary) |
-| `hedge` | object | Optional hedge/reference venue |
+| `venues.local` | object | Preferred name for the primary distribution venue |
+| `venues.global` | object | Optional liquidity source / reference venue |
+| `primary` | object | **Legacy alias** for `venues.local` |
+| `hedge` | object | **Legacy alias** for `venues.global` |
 | `interval_ms` | int | Frame and market-event interval (e.g. `10000`) |
 | `max_hedge_lag_ms` | int | Max allowed hedge `t_end_ms` lag vs primary |
 | `hedge_grace_ms` | int | Wait time for hedge event alignment |
+| `liquidity_sourcing` | object | Joint-venue mode (disabled by default; see below) |
 | `bus` | object | `memory` or `redis_streams` |
 | `persistence` | object | Postgres and/or Parquet |
 | `observability` | object | Metrics, logs, OTLP |
-| `primary_private` | object | API token, poll, execution |
-| `hedge_private` | object | Same for hedge venue |
+| `local_private` / `primary_private` | object | API token, poll, execution for local venue |
+| `global_private` / `hedge_private` | object | Same for global venue |
 | `controller` | object | MPC controller (optional) |
 
 Loader: `mm.runtime.config.load_runtime_config(path)`.
+
+### Neutral venue aliases
+
+New configs should use neutral roles:
+
+```json
+{
+  "venues": {
+    "local": {
+      "exchange": "nobitex",
+      "symbol": "USDT_IRT",
+      "mode": "rest"
+    },
+    "global": {
+      "exchange": "wallex",
+      "symbol": "USDT_IRT",
+      "mode": "rest"
+    }
+  },
+  "local_private": {
+    "mode": "rest",
+    "api_token_env": "NOBITEX_API_TOKEN",
+    "enable_execution": true
+  },
+  "global_private": {
+    "mode": "rest",
+    "api_token_env": "WALLEX_API_TOKEN",
+    "enable_execution": true
+  }
+}
+```
+
+Legacy `primary` / `hedge` / `primary_private` / `hedge_private` keys still parse.
+The loader records non-fatal warnings in `config.config_warnings` when legacy keys
+are used. Runtime behavior is unchanged when only legacy keys are present.
+
+Code accessors: `config.local` (alias for `primary`), `config.global_source` (alias
+for `hedge`), `config.local_private`, `config.global_private`.
+
+### Liquidity sourcing (Phase 1, disabled by default)
+
+```json
+"liquidity_sourcing": {
+  "enabled": false,
+  "mode": "single_venue",
+  "reference_venue": "global",
+  "require_global_private": false
+}
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `enabled` | `false` | When false, runtime uses today's single-venue path |
+| `mode` | `single_venue` | `liquidity_sourcing` reserved for future joint quoting |
+| `reference_venue` | `global` | Which venue supplies consolidated mark price |
+| `require_global_private` | `false` | Future gate for global wallet freshness |
+
+With defaults omitted, existing JSON configs behave exactly as before.
 
 ## Market data source
 

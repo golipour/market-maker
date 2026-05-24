@@ -67,6 +67,18 @@ class SymbolBinding:
     def comparable(self) -> bool:
         return self.hedge is None or self.primary.is_comparable_to(self.hedge)
 
+    @property
+    def local(self) -> InstrumentSpec:
+        """Neutral alias for ``primary``."""
+
+        return self.primary
+
+    @property
+    def global_spec(self) -> InstrumentSpec | None:
+        """Neutral alias for ``hedge``."""
+
+        return self.hedge
+
     def as_contract(self) -> dict[str, object]:
         out: dict[str, object] = {
             "primary": instrument_contract(self.primary),

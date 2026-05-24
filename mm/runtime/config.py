@@ -16,6 +16,9 @@ from mm.core.models.instrument import (
 from mm.core.risk_limits import HedgeVenueRiskLimits, VenueRiskLimits
 
 SourceRole = Literal["primary", "hedge"]
+NeutralVenueRole = Literal["local", "global"]
+LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
+ReferenceVenueRole = Literal["global", "local"]
 BusKind = Literal["memory", "redis_streams"]
 
 
@@ -175,6 +178,24 @@ class OrderbookGridConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LiquiditySourcingRuntimeConfig:
+    """Optional cross-venue liquidity sourcing (disabled by default)."""
+
+    enabled: bool = False
+    mode: LiquiditySourcingMode = "single_venue"
+    reference_venue: ReferenceVenueRole = "global"
+    require_global_private: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "mode": self.mode,
+            "reference_venue": self.reference_venue,
+            "require_global_private": self.require_global_private,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class HedgingRuntimeConfig:
     """Live fill-driven hedge execution (separate from MPC ``hedge_rollout_enabled``)."""
 
@@ -308,6 +329,10 @@ class MarketMakerRuntimeConfig:
     hedge_private: PrivateRuntimeConfig | None = None
     controller: ControllerRuntimeConfig | None = None
     hedging: HedgingRuntimeConfig | None = None
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig = field(
+        default_factory=LiquiditySourcingRuntimeConfig
+    )
+    config_warnings: tuple[str, ...] = ()
     bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
     persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
     observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
@@ -319,6 +344,30 @@ class MarketMakerRuntimeConfig:
             raise ValueError("hedge source role must be 'hedge'")
         if self.interval_ms <= 0:
             raise ValueError("interval_ms must be positive")
+
+    @property
+    def local(self) -> MarketDataSourceConfig:
+        """Neutral alias for ``primary``."""
+
+        return self.primary
+
+    @property
+    def global_source(self) -> MarketDataSourceConfig | None:
+        """Neutral alias for ``hedge``."""
+
+        return self.hedge
+
+    @property
+    def local_private(self) -> PrivateRuntimeConfig | None:
+        """Neutral alias for ``primary_private``."""
+
+        return self.primary_private
+
+    @property
+    def global_private(self) -> PrivateRuntimeConfig | None:
+        """Neutral alias for ``hedge_private``."""
+
+        return self.hedge_private
 
     @property
     def binding(self) -> SymbolBinding:
@@ -344,8 +393,20 @@ class MarketMakerRuntimeConfig:
 
     def as_contract(self) -> dict[str, Any]:
         return {
+            "venues": {
+                "local": _source_contract(self.primary, self.interval_ms),
+                "global": _source_contract(self.hedge, self.interval_ms) if self.hedge else None,
+            },
             "primary": _source_contract(self.primary, self.interval_ms),
             "hedge": _source_contract(self.hedge, self.interval_ms) if self.hedge else None,
+            "legacy_aliases": {
+                "primary": "maps to venues.local",
+                "hedge": "maps to venues.global",
+                "primary_private": "maps to local_private",
+                "hedge_private": "maps to global_private",
+            },
+            "liquidity_sourcing": self.liquidity_sourcing.as_dict(),
+            "config_warnings": list(self.config_warnings),
             "strategy_input_frame": {
                 "topic": self.frame_topic,
                 "primary": "always present",
@@ -415,23 +476,113 @@ def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
 
 
 def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeConfig:
-    primary_payload = payload.get("primary")
-    if not isinstance(primary_payload, dict):
-        raise ValueError("runtime config requires a 'primary' object")
-    hedge_payload = payload.get("hedge")
+    primary_payload, hedge_payload, venue_warnings = _resolve_public_venue_payloads(payload)
+    primary_private_payload, hedge_private_payload, private_warnings = _resolve_private_venue_payloads(
+        payload
+    )
+    config_warnings = tuple(venue_warnings + private_warnings)
     return MarketMakerRuntimeConfig(
         primary=_source_from_mapping(primary_payload, role="primary"),
         hedge=_source_from_mapping(hedge_payload, role="hedge") if isinstance(hedge_payload, dict) else None,
         interval_ms=int(payload.get("interval_ms", 5000)),
         max_hedge_lag_ms=int(payload.get("max_hedge_lag_ms", 2000)),
         hedge_grace_ms=int(payload.get("hedge_grace_ms", 250)),
-        primary_private=_private_from_mapping(payload.get("primary_private")),
-        hedge_private=_private_from_mapping(payload.get("hedge_private")),
+        primary_private=_private_from_mapping(primary_private_payload),
+        hedge_private=_private_from_mapping(hedge_private_payload),
         controller=_controller_from_mapping(payload.get("controller")),
         hedging=_hedging_from_mapping(payload.get("hedging")),
+        liquidity_sourcing=_liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing")),
+        config_warnings=config_warnings,
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
+    )
+
+
+def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any, list[str]]:
+    """Resolve local/global venue config with legacy primary/hedge aliases."""
+
+    warnings: list[str] = []
+    venues = payload.get("venues")
+    local_payload: dict[str, Any] | None = None
+    global_payload: dict[str, Any] | None = None
+    if isinstance(venues, dict):
+        local_payload = _venue_payload_from_mapping(venues.get("local"))
+        global_payload = _venue_payload_from_mapping(venues.get("global"))
+        if venues.get("primary") is not None:
+            warnings.append("venues.primary is ignored; use venues.local")
+        if venues.get("hedge") is not None:
+            warnings.append("venues.hedge is ignored; use venues.global")
+
+    top_local = _venue_payload_from_mapping(payload.get("local"))
+    top_global = _venue_payload_from_mapping(payload.get("global"))
+    legacy_primary = _venue_payload_from_mapping(payload.get("primary"))
+    legacy_hedge = _venue_payload_from_mapping(payload.get("hedge"))
+
+    if local_payload is None:
+        local_payload = top_local or legacy_primary
+        if legacy_primary is not None and top_local is None:
+            warnings.append("legacy key 'primary' accepted; prefer venues.local")
+
+    if global_payload is None:
+        global_payload = top_global or legacy_hedge
+        if legacy_hedge is not None and top_global is None:
+            warnings.append("legacy key 'hedge' accepted; prefer venues.global")
+
+    if local_payload is None:
+        raise ValueError("runtime config requires venues.local or primary")
+    return local_payload, global_payload, warnings
+
+
+def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any, list[str]]:
+    warnings: list[str] = []
+    venues = payload.get("venues")
+    local_private: Any = None
+    global_private: Any = None
+    if isinstance(venues, dict):
+        local_private = venues.get("local_private")
+        global_private = venues.get("global_private")
+        if venues.get("primary_private") is not None:
+            warnings.append("venues.primary_private is ignored; use venues.local_private")
+        if venues.get("hedge_private") is not None:
+            warnings.append("venues.hedge_private is ignored; use venues.global_private")
+
+    top_local_private = payload.get("local_private")
+    top_global_private = payload.get("global_private")
+    legacy_primary_private = payload.get("primary_private")
+    legacy_hedge_private = payload.get("hedge_private")
+
+    if local_private is None:
+        local_private = top_local_private or legacy_primary_private
+        if legacy_primary_private is not None and top_local_private is None:
+            warnings.append("legacy key 'primary_private' accepted; prefer local_private")
+
+    if global_private is None:
+        global_private = top_global_private or legacy_hedge_private
+        if legacy_hedge_private is not None and top_global_private is None:
+            warnings.append("legacy key 'hedge_private' accepted; prefer global_private")
+
+    return local_private, global_private, warnings
+
+
+def _venue_payload_from_mapping(payload: Any) -> dict[str, Any] | None:
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def _liquidity_sourcing_from_mapping(payload: Any) -> LiquiditySourcingRuntimeConfig:
+    if not isinstance(payload, dict):
+        return LiquiditySourcingRuntimeConfig()
+    mode = str(payload.get("mode", "single_venue"))
+    if mode not in ("single_venue", "liquidity_sourcing"):
+        raise ValueError("liquidity_sourcing.mode must be 'single_venue' or 'liquidity_sourcing'")
+    reference_venue = str(payload.get("reference_venue", "global"))
+    if reference_venue not in ("global", "local"):
+        raise ValueError("liquidity_sourcing.reference_venue must be 'global' or 'local'")
+    return LiquiditySourcingRuntimeConfig(
+        enabled=bool(payload.get("enabled", False)),
+        mode=mode,  # type: ignore[arg-type]
+        reference_venue=reference_venue,  # type: ignore[arg-type]
+        require_global_private=bool(payload.get("require_global_private", False)),
     )
 
 
