@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Venue gates and joint target books from runtime events.",
+  "description": "Frame sync, venue gates, and joint target books for liquidity sourcing.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -19,12 +19,25 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `ControllerDiagnostics.execution.venue_gates` and `JointTargetBook` events.\n\nVenue execution gates and joint target book order counts.",
+        "content": "**Sources:** `ControllerDiagnostics.frame`, `execution_gates`, `JointTargetBook`.\n\nFrame sync readiness, liquidity-sourcing mode, per-venue live gates, and joint target books.",
         "mode": "markdown"
       },
       "title": "Notes",
       "transparent": true,
       "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Frame sync & mode",
+      "type": "row"
     },
     {
       "datasource": {
@@ -42,7 +55,7 @@
         "h": 4,
         "w": 12,
         "x": 0,
-        "y": 2
+        "y": 3
       },
       "id": 10,
       "options": {
@@ -65,11 +78,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", gate.key AS metric,\n  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'execution'->'venue_gates', '{}'::jsonb)) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", flag AS metric,\n  CASE WHEN (e.payload #>> ARRAY['frame','sync_status', flag])::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('local_market_ready'),\n    ('global_market_ready'),\n    ('local_private_ready'),\n    ('global_private_ready'),\n    ('ledger_fresh')\n) AS flags(flag)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Venue gate live flags",
+      "title": "Frame readiness flags",
       "type": "timeseries"
     },
     {
@@ -88,7 +101,7 @@
         "h": 4,
         "w": 12,
         "x": 12,
-        "y": 2
+        "y": 3
       },
       "id": 11,
       "options": {
@@ -111,12 +124,25 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('frame_age_ms', ARRAY['frame','frame_age_ms']),\n    ('global_lag_ms', ARRAY['frame','global_lag_ms']),\n    ('local_private_age_ms', ARRAY['frame','local_private_age_ms']),\n    ('global_private_age_ms', ARRAY['frame','global_private_age_ms']),\n    ('latency_skew_ms', ARRAY['frame','sync_status','latency_skew_ms'])\n) AS ages(metric, path)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> path IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Joint target book local order count",
+      "title": "Frame age & latency skew (ms)",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Venue execution gates",
+      "type": "row"
     },
     {
       "datasource": {
@@ -132,9 +158,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 6
+        "y": 8
       },
       "id": 12,
       "options": {
@@ -157,11 +183,251 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'global_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", gate.key AS metric,\n  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload->'execution_gates'->'venue_gates', '{}'::jsonb)\n) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Joint target book global order count",
+      "title": "Venue gate live flags",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", gate.key AS metric,\n  CASE WHEN (gate.value->>'has_orders')::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload->'execution_gates'->'venue_gates', '{}'::jsonb)\n) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Venue gate has_orders flags",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 14,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT gate.key AS exchange,\n  COALESCE(gate.value->>'role', '') AS role,\n  COALESCE(gate.value->>'live', '') AS live,\n  COALESCE(gate.value->>'has_orders', '') AS has_orders,\n  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)::text AS blocked_reasons\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload->'execution_gates'->'venue_gates', '{}'::jsonb)\n) AS gate(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY e.ts DESC\nLIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "title": "Venue gate blocked reasons (latest frame)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Joint target books",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'local_orders' AS metric,\n  jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_orders',\n  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Target book order count (local / global)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", COALESCE(e.payload->>'mode', 'unknown') AS metric,\n  CASE WHEN e.payload->>'mode' = 'liquidity_sourcing' THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Liquidity sourcing mode (1 = liquidity_sourcing)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n  books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,\n  SUM((books.ord->>'qty')::double precision) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  SELECT 'local' AS venue, ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)) AS ord\n  UNION ALL\n  SELECT 'global', ord\n  FROM jsonb_array_elements(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)) AS ord\n) AS books(venue, ord)\nWHERE \n  e.event_type = 'JointTargetBook'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Target book buy/sell qty by venue",
       "type": "timeseries"
     }
   ],

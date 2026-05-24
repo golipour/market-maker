@@ -282,6 +282,56 @@ def _controller_diagnostics_filter() -> str:
   AND $__timeFilter(e.ts)"""
 
 
+def _ledger_templating() -> list[dict[str, Any]]:
+    return [
+        {
+            "current": {"text": "ledger:snapshot", "value": "ledger:snapshot"},
+            "label": "Ledger topic",
+            "name": "ledger_topic",
+            "query": "ledger:snapshot",
+            "type": "textbox",
+        },
+        {
+            "current": {"text": "USDT_IRT", "value": "USDT_IRT"},
+            "label": "Symbol",
+            "name": "symbol",
+            "query": "USDT_IRT",
+            "type": "textbox",
+        },
+        {
+            "current": {"text": "nobitex", "value": "nobitex"},
+            "label": "Local exchange",
+            "name": "local_exchange",
+            "query": "nobitex,wallex",
+            "type": "custom",
+        },
+        {
+            "current": {"text": "wallex", "value": "wallex"},
+            "label": "Global exchange",
+            "name": "global_exchange",
+            "query": "nobitex,wallex",
+            "type": "custom",
+        },
+    ]
+
+
+def _ledger_filter() -> str:
+    return """
+  e.topic = '${ledger_topic}'
+  AND e.event_type = 'JointLedgerSnapshot'
+  AND e.payload #>> '{local,symbol}' = '${symbol}'
+  AND e.payload #>> '{local,exchange}' = '${local_exchange}'
+  AND $__timeFilter(e.ts)"""
+
+
+def _joint_target_book_filter() -> str:
+    return """
+  e.event_type = 'JointTargetBook'
+  AND e.symbol = '${symbol}'
+  AND e.actor_id = '${actor_id}'
+  AND $__timeFilter(e.ts)"""
+
+
 def _controller_diagnostics_templating() -> list[dict[str, Any]]:
     return [
         {
@@ -365,9 +415,58 @@ ORDER BY 1""",
             w=24,
             h=8,
         ),
+        _panel_objective_component(
+            16,
+            32,
+            title="local_inventory_penalty",
+            component_key="local_inventory_penalty",
+            diag_filter=diag_filter,
+            w=12,
+            h=6,
+        ),
+        _panel_objective_component(
+            17,
+            32,
+            title="global_inventory_penalty",
+            component_key="global_inventory_penalty",
+            diag_filter=diag_filter,
+            w=12,
+            h=6,
+            x=12,
+        ),
+        _panel_sql_timeseries(
+            18,
+            38,
+            "Consolidated wealth means (main / global reward)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['optimizer','objective',stage,field])::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
+CROSS JOIN (
+  VALUES ('main_reward_mean', 'main_reward_mean'), ('global_reward_mean', 'global_reward_mean')
+) AS fields(metric, field)
+WHERE {diag_filter}
+  AND e.payload #>> ARRAY['optimizer','objective',stage,field] IS NOT NULL
+ORDER BY 1""",
+            h=6,
+        ),
+        _panel_sql_timeseries(
+            19,
+            44,
+            "Joint MPC expected fills (rollout)",
+            f"""SELECT e.ts AS "time", kv.key AS metric,
+  (kv.value)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','rollout','joint_diagnostics'], '{{}}'::jsonb)
+) AS kv
+WHERE {diag_filter}
+ORDER BY 1""",
+            h=6,
+        ),
         _panel_sql_timeseries(
             13,
-            32,
+            50,
             "Expected total return (mean MC path return)",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value
@@ -379,7 +478,7 @@ ORDER BY 1""",
         ),
         _panel_sql_timeseries(
             14,
-            40,
+            58,
             "Expected total reward (mean MC delta wealth)",
             f"""SELECT e.ts AS "time", stage AS metric,
   (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value
@@ -463,7 +562,8 @@ def local_action_dashboard() -> dict[str, Any]:
             1,
             0,
             "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline` on **Diagnostics topic**).\n\n"
-            "One chart per execution funnel stage, top to bottom in pipeline order.",
+            "Target-book execution funnel: ladder → venue rules → target book → net-delta risk → "
+            "planned cancel/place → rules gateway → router accepted → kept.",
         ),
     ]
 
@@ -547,9 +647,10 @@ def portfolio_dashboard() -> dict[str, Any]:
         _panel_text(
             1,
             0,
-            "**Source:** `ControllerDiagnostics.state` and `risk.limits`.\n\n"
+            "**Source:** `ControllerDiagnostics.state`, `risk.exposure_*`, and `risk.limits`.\n\n"
             "Inventory/cash and wallet legs use **effective totals** (exchange total, wallet locked, "
-            "and open-order collateral when locked under-reports). Limits from configured hard risk.",
+            "and open-order collateral when locked under-reports). Net-delta risk exposure shows "
+            "ledger locked collateral vs target-book locked collateral per venue.",
         ),
         _panel_sql_timeseries(
             10,
@@ -653,6 +754,79 @@ FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
         ),
+        _panel_sql_timeseries(
+            17,
+            60,
+            "Global quote wallet (free / locked / total / effective)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['state','global_quote_wallet', leg])::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+) AS legs(metric, leg)
+WHERE {diag_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            18,
+            68,
+            "Global base wallet (free / locked / total / effective)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> ARRAY['state','global_base_wallet', leg])::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+) AS legs(metric, leg)
+WHERE {diag_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            20,
+            76,
+            "Locked collateral — before risk (ledger)",
+            f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload->'risk'->'exposure_before', '{{}}'::jsonb)
+) AS kv
+WHERE {diag_filter}
+  AND kv.key LIKE '%locked%'
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            21,
+            84,
+            "Locked collateral — after risk (target book)",
+            f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload->'risk'->'exposure_after', '{{}}'::jsonb)
+) AS kv
+WHERE {diag_filter}
+  AND (kv.key LIKE '%locked%' OR kv.key LIKE 'consolidated_%')
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            22,
+            92,
+            "Consolidated ledger exposure",
+            f"""SELECT e.ts AS "time", stage || '_' || key AS metric,
+  (e.payload #>> exposure_path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('before', 'consolidated_base_inventory'),
+    ('before', 'consolidated_quote_wealth'),
+    ('after', 'consolidated_base_inventory'),
+    ('after', 'consolidated_quote_wealth')
+) AS legs(stage, key)
+CROSS JOIN LATERAL (
+  SELECT ARRAY['risk', 'exposure_' || stage, key] AS exposure_path
+) AS paths
+WHERE {diag_filter}
+  AND e.payload #>> exposure_path IS NOT NULL
+ORDER BY 1""",
+        ),
     ]
     templating = [
         {
@@ -703,61 +877,291 @@ ORDER BY 1""",
 
 def liquidity_sourcing_dashboard() -> dict[str, Any]:
     diag_filter = _controller_diagnostics_filter()
+    target_filter = _joint_target_book_filter()
     panels: list[dict[str, Any]] = [
         _panel_text(
             1,
             0,
-            "**Source:** `ControllerDiagnostics.execution.venue_gates` and `JointTargetBook` events.\n\n"
-            "Venue execution gates and joint target book order counts.",
+            "**Sources:** `ControllerDiagnostics.frame`, `execution_gates`, `JointTargetBook`.\n\n"
+            "Frame sync readiness, liquidity-sourcing mode, per-venue live gates, and joint target books.",
         ),
+        _panel_row(2, 4, "Frame sync & mode"),
         _panel_sql_timeseries(
             10,
-            4,
-            "Venue gate live flags",
-            f"""SELECT e.ts AS "time", gate.key AS metric,
-  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value
+            5,
+            "Frame readiness flags",
+            f"""SELECT e.ts AS "time", flag AS metric,
+  CASE WHEN (e.payload #>> ARRAY['frame','sync_status', flag])::boolean THEN 1 ELSE 0 END::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'execution'->'venue_gates', '{{}}'::jsonb)) AS gate(key, value)
+CROSS JOIN (
+  VALUES
+    ('local_market_ready'),
+    ('global_market_ready'),
+    ('local_private_ready'),
+    ('global_private_ready'),
+    ('ledger_fresh')
+) AS flags(flag)
 WHERE {diag_filter}
 ORDER BY 1""",
             w=12,
         ),
         _panel_sql_timeseries(
             11,
-            4,
-            "Joint target book local order count",
-            """SELECT e.ts AS "time", 'local_orders' AS metric,
+            5,
+            "Frame age & latency skew (ms)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('frame_age_ms', ARRAY['frame','frame_age_ms']),
+    ('global_lag_ms', ARRAY['frame','global_lag_ms']),
+    ('local_private_age_ms', ARRAY['frame','local_private_age_ms']),
+    ('global_private_age_ms', ARRAY['frame','global_private_age_ms']),
+    ('latency_skew_ms', ARRAY['frame','sync_status','latency_skew_ms'])
+) AS ages(metric, path)
+WHERE {diag_filter}
+  AND e.payload #>> path IS NOT NULL
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(3, 13, "Venue execution gates"),
+        _panel_sql_timeseries(
+            12,
+            14,
+            "Venue gate live flags",
+            f"""SELECT e.ts AS "time", gate.key AS metric,
+  CASE WHEN (gate.value->>'live')::boolean THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload->'execution_gates'->'venue_gates', '{{}}'::jsonb)
+) AS gate(key, value)
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            13,
+            14,
+            "Venue gate has_orders flags",
+            f"""SELECT e.ts AS "time", gate.key AS metric,
+  CASE WHEN (gate.value->>'has_orders')::boolean THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload->'execution_gates'->'venue_gates', '{{}}'::jsonb)
+) AS gate(key, value)
+WHERE {diag_filter}
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_sql_table(
+            14,
+            22,
+            "Venue gate blocked reasons (latest frame)",
+            f"""SELECT gate.key AS exchange,
+  COALESCE(gate.value->>'role', '') AS role,
+  COALESCE(gate.value->>'live', '') AS live,
+  COALESCE(gate.value->>'has_orders', '') AS has_orders,
+  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)::text AS blocked_reasons
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload->'execution_gates'->'venue_gates', '{{}}'::jsonb)
+) AS gate(key, value)
+WHERE {diag_filter}
+ORDER BY e.ts DESC
+LIMIT 20""",
+            h=6,
+        ),
+        _panel_row(4, 28, "Joint target books"),
+        _panel_sql_timeseries(
+            15,
+            29,
+            "Target book order count (local / global)",
+            f"""SELECT e.ts AS "time", 'local_orders' AS metric,
   jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))::double precision AS value
 FROM mm_events e
-WHERE e.event_type = 'JointTargetBook'
-  AND e.symbol = '${symbol}'
-  AND $__timeFilter(e.ts)
+WHERE {target_filter}
+UNION ALL
+SELECT e.ts, 'global_orders',
+  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision
+FROM mm_events e
+WHERE {target_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            16,
+            29,
+            "Liquidity sourcing mode (1 = liquidity_sourcing)",
+            f"""SELECT e.ts AS "time", COALESCE(e.payload->>'mode', 'unknown') AS metric,
+  CASE WHEN e.payload->>'mode' = 'liquidity_sourcing' THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+WHERE {target_filter}
 ORDER BY 1""",
             w=12,
             x=12,
         ),
         _panel_sql_timeseries(
-            12,
-            12,
-            "Joint target book global order count",
-            """SELECT e.ts AS "time", 'global_orders' AS metric,
-  jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))::double precision AS value
+            17,
+            37,
+            "Target book buy/sell qty by venue",
+            f"""SELECT e.ts AS "time",
+  books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,
+  SUM((books.ord->>'qty')::double precision) AS value
 FROM mm_events e
-WHERE e.event_type = 'JointTargetBook'
-  AND e.symbol = '${symbol}'
-  AND $__timeFilter(e.ts)
+CROSS JOIN LATERAL (
+  SELECT 'local' AS venue, ord
+  FROM jsonb_array_elements(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)) AS ord
+  UNION ALL
+  SELECT 'global', ord
+  FROM jsonb_array_elements(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)) AS ord
+) AS books(venue, ord)
+WHERE {target_filter}
+GROUP BY 1, 2
 ORDER BY 1""",
         ),
     ]
     return _dashboard(
         title="MM liquidity sourcing (PostgreSQL)",
         uid="mm-liquidity-sourcing-pg",
-        description="Venue gates and joint target books from runtime events.",
+        description="Frame sync, venue gates, and joint target books for liquidity sourcing.",
         tags=["market-maker", "postgres", "liquidity-sourcing"],
         panels=panels,
         templating=_controller_diagnostics_templating(),
     )
 
+
+def ledger_dashboard() -> dict[str, Any]:
+    ledger_filter = _ledger_filter()
+    panels: list[dict[str, Any]] = [
+        _panel_text(
+            1,
+            0,
+            "**Source:** `mm_events` (`JointLedgerSnapshot` on **Ledger topic**).\n\n"
+            "Portfolio ledger: balances, locked/available collateral, live order counts, "
+            "consolidated inventory, reference price, and freshness ages.",
+        ),
+        _panel_row(2, 4, "Freshness"),
+        _panel_sql_timeseries(
+            10,
+            5,
+            "Private & market age (ms)",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('local_private_age_ms', ARRAY['freshness','local_private_age_ms']),
+    ('global_private_age_ms', ARRAY['freshness','global_private_age_ms']),
+    ('local_market_age_ms', ARRAY['freshness','local_market_age_ms']),
+    ('global_market_age_ms', ARRAY['freshness','global_market_age_ms'])
+) AS ages(metric, path)
+WHERE {ledger_filter}
+  AND e.payload #>> path IS NOT NULL
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            11,
+            5,
+            "Ledger fresh flag",
+            f"""SELECT e.ts AS "time", 'ledger_fresh' AS metric,
+  CASE WHEN (e.payload #>> '{{freshness,ledger_fresh}}')::boolean THEN 1 ELSE 0 END::double precision AS value
+FROM mm_events e
+WHERE {ledger_filter}
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(3, 13, "Local venue ledger"),
+        _panel_sql_timeseries(
+            12,
+            14,
+            "Local available / locked collateral",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('available_base', ARRAY['local','available_base']),
+    ('available_quote', ARRAY['local','available_quote']),
+    ('locked_base', ARRAY['local','locked_base']),
+    ('locked_quote', ARRAY['local','locked_quote'])
+) AS legs(metric, path)
+WHERE {ledger_filter}
+ORDER BY 1""",
+        ),
+        _panel_sql_timeseries(
+            13,
+            22,
+            "Local live order count",
+            f"""SELECT e.ts AS "time", 'local_live_orders' AS metric,
+  COALESCE(jsonb_object_length(e.payload->'local'->'live_orders'), 0)::double precision AS value
+FROM mm_events e
+WHERE {ledger_filter}
+ORDER BY 1""",
+            w=12,
+        ),
+        _panel_sql_timeseries(
+            14,
+            22,
+            "Global live order count",
+            f"""SELECT e.ts AS "time", 'global_live_orders' AS metric,
+  COALESCE(jsonb_object_length(e.payload->'global'->'live_orders'), 0)::double precision AS value
+FROM mm_events e
+WHERE {ledger_filter}
+  AND e.payload->'global' IS NOT NULL
+ORDER BY 1""",
+            w=12,
+            x=12,
+        ),
+        _panel_row(4, 30, "Global venue ledger"),
+        _panel_sql_timeseries(
+            15,
+            31,
+            "Global available / locked collateral",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('available_base', ARRAY['global','available_base']),
+    ('available_quote', ARRAY['global','available_quote']),
+    ('locked_base', ARRAY['global','locked_base']),
+    ('locked_quote', ARRAY['global','locked_quote'])
+) AS legs(metric, path)
+WHERE {ledger_filter}
+  AND e.payload->'global' IS NOT NULL
+ORDER BY 1""",
+        ),
+        _panel_row(5, 39, "Consolidated"),
+        _panel_sql_timeseries(
+            16,
+            40,
+            "Consolidated inventory & quote wealth",
+            f"""SELECT e.ts AS "time", metric,
+  (e.payload #>> path)::double precision AS value
+FROM mm_events e
+CROSS JOIN (
+  VALUES
+    ('consolidated_base_inventory', ARRAY['consolidated_base_inventory']),
+    ('consolidated_quote_wealth', ARRAY['consolidated_quote_wealth']),
+    ('reference_price', ARRAY['reference_price'])
+) AS legs(metric, path)
+WHERE {ledger_filter}
+ORDER BY 1""",
+        ),
+    ]
+    return _dashboard(
+        title="MM ledger (PostgreSQL)",
+        uid="mm-ledger-pg",
+        description="Joint ledger snapshots: balances, collateral, live orders, and freshness.",
+        tags=["market-maker", "postgres", "ledger"],
+        panels=panels,
+        templating=_ledger_templating(),
+    )
 
 _MODEL_SCORE_ROW_TITLE = "Model scores (ControllerDiagnostics)"
 _MODEL_SCORE_PANEL_TITLES = frozenset(
@@ -885,6 +1289,10 @@ def main() -> None:
     )
     (OUT / "mm_liquidity_sourcing_pg.json").write_text(
         json.dumps(compact_dashboard_panels(liquidity_sourcing_dashboard()), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (OUT / "mm_ledger_pg.json").write_text(
+        json.dumps(compact_dashboard_panels(ledger_dashboard()), indent=2) + "\n",
         encoding="utf-8",
     )
     patch_model_params_dashboard()

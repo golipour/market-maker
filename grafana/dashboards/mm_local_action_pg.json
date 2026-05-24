@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline` on **Diagnostics topic**).\n\nOne chart per execution funnel stage, top to bottom in pipeline order.",
+        "content": "**Source:** `mm_events` (`ControllerDiagnostics.action_pipeline` on **Diagnostics topic**).\n\nTarget-book execution funnel: ladder \u2192 venue rules \u2192 target book \u2192 net-delta risk \u2192 planned cancel/place \u2192 rules gateway \u2192 router accepted \u2192 kept.",
         "mode": "markdown"
       },
       "title": "Notes",

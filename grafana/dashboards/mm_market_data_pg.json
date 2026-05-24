@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'MarketEvent'`` on topics ``market:events:{exchange}:{symbol}:{interval_ms}``.\n\n**Layout:** For **primary** and **hedge**, stacked time-series panels share the dashboard time range (use **Shared crosshair** / zoom to align). Top row = **step trade volume** (``buy_volume`` / ``sell_volume``, base units, aggregated over ``[t_start_ms, t_end_ms]``). Bottom row = **best bid / best ask** from the step's materialized book (``orderbook.bids[0]`` / ``asks[0]``, quote per base).\n\nSet **Local exchange**, **Global exchange**, **Symbol**, and **Interval ms** to match ``persistence.topics`` in your runtime config.",
+        "content": "**Source:** PostgreSQL ``mm_events``, ``event_type = 'MarketEvent'`` on topics ``market:events:{exchange}:{symbol}:{interval_ms}``.\n\n**Layout:** For **local** and **global** venues, stacked time-series panels share the dashboard time range (use **Shared crosshair** / zoom to align). Top row = **step trade volume** (``buy_volume`` / ``sell_volume``, base units, aggregated over ``[t_start_ms, t_end_ms]``). Bottom row = **best bid / best ask** from the step's materialized book (``orderbook.bids[0]`` / ``asks[0]``, quote per base).\n\nSet **Local exchange**, **Global exchange**, **Symbol**, and **Interval ms** to match ``persistence.topics`` in your runtime config.",
         "mode": "markdown"
       },
       "title": "Notes",

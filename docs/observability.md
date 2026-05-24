@@ -18,19 +18,23 @@ Observability is **decoupled from strategy code**: the runtime publishes domain 
 
 **`RuntimeObservabilitySubscriber`** (`mm.observability.subscribers`) subscribes to:
 
-- `strategy:frames:…`
+- `strategy:joint:frames:…` (when liquidity sourcing enabled)
 - `strategy:decisions`
 - `strategy:actions`
-- `execution:orders:{primary}` and `execution:state:{primary}`
-- `market:errors:{primary}`  
-- Same execution/error topics for **hedge** when configured
+- `execution:orders:{local}` and `execution:state:{local}`
+- `market:errors:{local}`  
+- Same execution/error topics for **global** when configured
 
 ### Metrics (examples)
 
 | Metric | When |
 |--------|------|
-| `mm_strategy_frames_total` | Each `StrategyInputFrame` |
-| `mm_hedge_lag_ms` | Frame includes hedge lag |
+| `mm_strategy_frames_total` | Each legacy `StrategyInputFrame` |
+| `mm_joint_strategy_frames_total` | Each ledger-backed `JointStrategyFrame` |
+| `mm_latency_skew_ms` | Joint frame local/global market skew |
+| `mm_frame_local_market_ready` / `mm_frame_global_market_ready` | Joint frame sync readiness |
+| `mm_frame_ledger_fresh` | Joint ledger freshness gate |
+| `mm_global_lag_ms` | Frame includes global market lag |
 | `mm_controller_latency_ms` | `StrategyDecision` payload |
 | `mm_controller_orders_per_decision` | Order count in decision |
 | `mm_execution_sync_latency_ms` | Time from frame to `ExecutionSyncRequested` |
@@ -59,7 +63,7 @@ Enabled when `persistence.enabled` is true in runtime JSON.
 - **Table:** `mm_events` (see DDL in writer module)
 - **Topics:** explicit `persistence.topics` or `_default_persistence_topics()` in engine
 
-Default topics include market events, strategy frames, actions, decisions (if controller on), execution and private state for primary (and hedge).
+Default topics include market events, joint strategy frames, ledger snapshots, strategy actions, decisions (if controller on), execution and private state for local (and global).
 
 ### Parquet
 
@@ -99,18 +103,20 @@ Grafana provisioning:
 
 | UID / file | Purpose |
 |------------|---------|
-| `mm-controller-diagnostics-pg` | Optimizer objective value, contribution fractions, inventory penalty, MC return/reward (`ControllerDiagnostics`) |
-| `mm-primary-action-pg` | Primary action pipeline order count by stage (`ControllerDiagnostics.action_pipeline`) |
-| `mm-primary-action-rejections-pg` | Per-stage rejection reason counts in the primary action funnel |
-| `mm-strategy-model-params-pg` | Model params from decisions + NLL / residuals from diagnostics |
-| `mm-portfolio-pg` | Inventory, cash, marked value, limits from diagnostics |
-| `mm-hedge-execution-pg` | Fill-driven hedge intents and execution outcomes |
+| `mm-controller-diagnostics-pg` | Optimizer objective, joint inventory penalties, MC return/reward, joint expected fills (`ControllerDiagnostics`) |
+| `mm-local-action-pg` | Target-book execution funnel order counts by stage (`ControllerDiagnostics.action_pipeline`) |
+| `mm-local-action-rejections-pg` | Per-stage rejection reason counts (frame / target-book / rules / router taxonomy) |
+| `mm-liquidity-sourcing-pg` | Frame sync readiness, venue execution gates, joint target books |
+| `mm-ledger-pg` | Ledger balances, locked/available collateral, live order counts, freshness |
+| `mm-strategy-model-params-pg` | Model params from decisions + NLL / skip reasons from diagnostics |
+| `mm-portfolio-pg` | Inventory, cash, wallets, net-delta locked collateral exposure |
 | `mm-orderbook-depth-pg` | Latest book + MPC continuous depth + executable orders (Postgres) |
-| `mm_runtime_overview` | Prometheus runtime metrics |
-| `mm_events_postgres` | Raw `mm_events` exploration |
+| `mm-market-data-pg` | Local/global market trade volume and best bid/ask |
+| `mm-reference-vwaps-pg` | Local/global reference VWAPs from decisions |
+| `mm-runtime-metrics` | Prometheus runtime metrics including joint frame counters |
 | `private_state_postgres` | Private snapshots |
 
-**Dashboard variables** must match runtime: e.g. `exchange=nobitex`, `symbol=USDT_IRT`, `interval_ms=10000`, `diagnostics_topic=strategy:diagnostics:mpc-controller`, `hedge_diagnostics_topic=hedge:diagnostics:hedge-executor`.
+**Dashboard variables** must match runtime: e.g. `exchange=nobitex`, `symbol=USDT_IRT`, `interval_ms=10000`, `diagnostics_topic=strategy:diagnostics:mpc-controller`, `ledger_topic=ledger:snapshot`.
 
 Regenerate JSON from `python3 mm/tools/generate_grafana_dashboards.py` after changing panel SQL.
 

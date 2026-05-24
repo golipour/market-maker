@@ -59173,3 +59173,6 @@
 {"ts_ms":1779621240133,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
 {"ts_ms":1779621240137,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
 {"ts_ms":1779621240153,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779621363830,"event":"persistence_writers_configured","writers":["PostgresEventWriter","ParquetEventWriter"],"topic_count":13}
+{"ts_ms":1779621363860,"event":"postgres_event_writer_ready","database_url_configured":true}
+{"ts_ms":1779621363861,"event":"postgres_event_writer_started","topics":["market:events:nobitex:USDT_IRT:10000","market:events:wallex:USDT_IRT:10000","strategy:joint:frames:nobitex:USDT_IRT:10000","strategy:actions","strategy:decisions","strategy:diagnostics:mpc-controller","execution:orders:nobitex","execution:orders:wallex","execution:state:nobitex","execution:state:wallex","private:state:nobitex:snapshot","private:state:wallex:snapshot","ledger:snapshot"],"batch_size":100,"ready":true}

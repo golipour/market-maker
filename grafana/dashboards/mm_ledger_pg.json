@@ -1,0 +1,466 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Joint ledger snapshots: balances, collateral, live orders, and freshness.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "**Source:** `mm_events` (`JointLedgerSnapshot` on **Ledger topic**).\n\nPortfolio ledger: balances, locked/available collateral, live order counts, consolidated inventory, reference price, and freshness ages.",
+        "mode": "markdown"
+      },
+      "title": "Notes",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
+      "id": 2,
+      "panels": [],
+      "title": "Freshness",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('local_private_age_ms', ARRAY['freshness','local_private_age_ms']),\n    ('global_private_age_ms', ARRAY['freshness','global_private_age_ms']),\n    ('local_market_age_ms', ARRAY['freshness','local_market_age_ms']),\n    ('global_market_age_ms', ARRAY['freshness','global_market_age_ms'])\n) AS ages(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> path IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Private & market age (ms)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'ledger_fresh' AS metric,\n  CASE WHEN (e.payload #>> '{freshness,ledger_fresh}')::boolean THEN 1 ELSE 0 END::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Ledger fresh flag",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Local venue ledger",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['local','available_base']),\n    ('available_quote', ARRAY['local','available_quote']),\n    ('locked_base', ARRAY['local','locked_base']),\n    ('locked_quote', ARRAY['local','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local available / locked collateral",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'local_live_orders' AS metric,\n  COALESCE(jsonb_object_length(e.payload->'local'->'live_orders'), 0)::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local live order count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'global_live_orders' AS metric,\n  COALESCE(jsonb_object_length(e.payload->'global'->'live_orders'), 0)::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global live order count",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Global venue ledger",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['global','available_base']),\n    ('available_quote', ARRAY['global','available_quote']),\n    ('locked_base', ARRAY['global','locked_base']),\n    ('locked_quote', ARRAY['global','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global available / locked collateral",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 5,
+      "panels": [],
+      "title": "Consolidated",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('consolidated_base_inventory', ARRAY['consolidated_base_inventory']),\n    ('consolidated_quote_wealth', ARRAY['consolidated_quote_wealth']),\n    ('reference_price', ARRAY['reference_price'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Consolidated inventory & quote wealth",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "postgres",
+    "ledger"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "ledger:snapshot",
+          "value": "ledger:snapshot"
+        },
+        "label": "Ledger topic",
+        "name": "ledger_topic",
+        "query": "ledger:snapshot",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "USDT_IRT",
+          "value": "USDT_IRT"
+        },
+        "label": "Symbol",
+        "name": "symbol",
+        "query": "USDT_IRT",
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "text": "nobitex",
+          "value": "nobitex"
+        },
+        "label": "Local exchange",
+        "name": "local_exchange",
+        "query": "nobitex,wallex",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "text": "wallex",
+          "value": "wallex"
+        },
+        "label": "Global exchange",
+        "name": "global_exchange",
+        "query": "nobitex,wallex",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM ledger (PostgreSQL)",
+  "uid": "mm-ledger-pg",
+  "version": 1,
+  "weekStart": ""
+}
