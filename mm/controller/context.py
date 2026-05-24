@@ -21,7 +21,13 @@ from mm.diagnostics.models import (
     StateDiagnostics,
     orderbook_snapshot_payload,
 )
-from mm.execution.plan import ActionPipelineReport, ActionStageReport, ExecutionSyncReport
+from mm.execution.plan import (
+    ActionPipelineReport,
+    ActionStageReport,
+    ExecutionSyncReport,
+    apply_execution_stages_to_pipeline,
+    sync_action_pipeline_aliases,
+)
 from mm.core.wallet import inventory_cash_from_snapshot, portfolio_wealth, wallet_pair_from_snapshot
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 
@@ -140,24 +146,17 @@ class DecisionContext:
     def apply_risk_to_pipeline(self, risk_report: ActionStageReport) -> None:
         if self.action_pipeline_report is None:
             return
+        self.action_pipeline_report.risk_approved_target = risk_report
         self.action_pipeline_report.risk_approved = risk_report
+        sync_action_pipeline_aliases(self.action_pipeline_report)
 
     def apply_execution_to_pipeline(self, execution_report: ExecutionSyncReport, *, executed: bool) -> None:
         if self.action_pipeline_report is None:
             return
-        self.action_pipeline_report.target = execution_report.target
-        self.action_pipeline_report.kept = execution_report.kept
-        self.action_pipeline_report.canceled = execution_report.canceled
-        self.action_pipeline_report.placed = ActionStageReport(
-            order_count=execution_report.limit_valid.order_count,
-            buy_qty=execution_report.limit_valid.buy_qty,
-            sell_qty=execution_report.limit_valid.sell_qty,
-            buy_notional=execution_report.limit_valid.buy_notional,
-            sell_notional=execution_report.limit_valid.sell_notional,
-            rejection_counts=dict(execution_report.venue_rejection_counts),
-        )
-        self.action_pipeline_report.venue_accepted = (
-            execution_report.accepted if executed else self.action_pipeline_report.placed
+        apply_execution_stages_to_pipeline(
+            self.action_pipeline_report,
+            execution_report,
+            executed=executed,
         )
 
     def record_execution_gates(self, *, executed: bool, blocked_reasons: list[str]) -> None:
@@ -324,14 +323,21 @@ class DecisionContext:
     def _action_pipeline(self, decision: StrategyDecision | None) -> ActionPipelineDiagnostics:
         if self.action_pipeline_report is not None:
             report = self.action_pipeline_report
+            sync_action_pipeline_aliases(report)
             return ActionPipelineDiagnostics(
                 continuous=dict(report.continuous),
                 ladder=report.ladder.as_dict(),
                 venue_quantized=report.venue_quantized.as_dict(),
                 capped=report.capped.as_dict(),
+                target_book=report.target_book.as_dict(),
+                risk_approved_target=report.risk_approved_target.as_dict(),
+                planned_cancel=report.planned_cancel.as_dict(),
+                planned_place=report.planned_place.as_dict(),
+                rules_valid=report.rules_valid.as_dict(),
+                router_accepted=report.router_accepted.as_dict(),
+                kept=report.kept.as_dict(),
                 risk_approved=report.risk_approved.as_dict(),
                 target=report.target.as_dict(),
-                kept=report.kept.as_dict(),
                 canceled=report.canceled.as_dict(),
                 placed=report.placed.as_dict(),
                 venue_accepted=report.venue_accepted.as_dict(),
@@ -339,12 +345,16 @@ class DecisionContext:
         if decision is None:
             return ActionPipelineDiagnostics()
         approved_orders = tuple(order for a in self.approved_actions for order in a.orders)
+        target_summary = _order_stage_summary_from_dicts(tuple(decision.orders))
         return ActionPipelineDiagnostics(
             continuous=dict(decision.diagnostics.continuous_action_depth),
             ladder=_order_stage_summary_from_dicts(tuple(decision.ladder_orders)),
-            venue_quantized=_order_stage_summary_from_dicts(tuple(decision.orders)),
-            capped=_order_stage_summary_from_dicts(tuple(decision.orders)),
+            venue_quantized=target_summary,
+            capped=target_summary,
+            target_book=target_summary,
+            risk_approved_target=_order_stage_summary(approved_orders),
             risk_approved=_order_stage_summary(approved_orders),
+            router_accepted=_order_stage_summary(approved_orders) if self.executed else {},
             venue_accepted=_order_stage_summary(approved_orders) if self.executed else {},
         )
 

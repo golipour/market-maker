@@ -190,6 +190,18 @@ class StrategyRunner:
                 )
 
             await self._publish_decision(decision, executed_orders=executed_orders)
+            if decision.joint_target_book is not None:
+                await self._publish(
+                    self.config.normalized_target_books_topic,
+                    {
+                        "type": "JointTargetBook",
+                        **decision.joint_target_book.as_payload(),
+                        "exchange": frame.primary.exchange,
+                        "symbol": frame.primary.symbol,
+                        "t_end_ms": frame.primary.t_end_ms,
+                        "frame_step": self._frame_step,
+                    },
+                )
             for action in approved:
                 await self._publish(self.config.normalized_action_topic, action)
 

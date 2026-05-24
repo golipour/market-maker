@@ -6,6 +6,7 @@ from typing import Any, Literal
 from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
+from mm.core.models.target_book import JointTargetBook
 from mm.execution.plan import ActionPipelineReport
 
 HedgeStatus = Literal["disabled", "ready", "missing", "stale"]
@@ -67,6 +68,7 @@ class StrategyDecision:
     t_end_ms: int
     frame_step: int
     action: Action
+    joint_target_book: JointTargetBook | None = None
     observe_only: bool = True
     action_start_after_steps: int = 0
     live_execution_skipped_warmup: bool = False
@@ -121,6 +123,9 @@ class StrategyDecision:
             "sell_volume": self.sell_volume,
             "order_count": self.order_count,
             "orders": list(self.orders),
+            "joint_target_book": (
+                self.joint_target_book.as_payload() if self.joint_target_book is not None else None
+            ),
             "ladder_orders": list(self.ladder_orders),
             "executed_orders": list(executed_orders if executed_orders is not None else ()),
             "price_model": self.model_updates.price,

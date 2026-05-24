@@ -283,6 +283,7 @@ class ControllerRuntimeConfig:
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
     diagnostics_topic: str | None = None
+    target_books_topic: str | None = None
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
     vwap_depth: float | None = None
@@ -309,6 +310,14 @@ class ControllerRuntimeConfig:
             return explicit
         actor = self.actor_id.strip() or "mpc-controller"
         return f"strategy:diagnostics:{actor}"
+
+    @property
+    def normalized_target_books_topic(self) -> str:
+        explicit = (self.target_books_topic or "").strip()
+        if explicit:
+            return explicit
+        actor = self.actor_id.strip() or "mpc-controller"
+        return f"strategy:target_books:{actor}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +714,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         diagnostics_topic=(
             str(payload["diagnostics_topic"]) if payload.get("diagnostics_topic") is not None else None
         ),
+        target_books_topic=(
+            str(payload["target_books_topic"]) if payload.get("target_books_topic") is not None else None
+        ),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
         vwap_depth=(
@@ -833,6 +845,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "placement_max_concurrency": config.placement_max_concurrency,
         "decisions_topic": config.normalized_decisions_topic,
         "action_topic": config.normalized_action_topic,
+        "target_books_topic": config.normalized_target_books_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
         "max_orders_per_side": config.max_orders_per_side,
         "vwap_depth": config.vwap_depth,

@@ -76,9 +76,16 @@ class ActionPipelineDiagnostics:
     ladder: dict[str, Any] = field(default_factory=dict)
     venue_quantized: dict[str, Any] = field(default_factory=dict)
     capped: dict[str, Any] = field(default_factory=dict)
+    target_book: dict[str, Any] = field(default_factory=dict)
+    risk_approved_target: dict[str, Any] = field(default_factory=dict)
+    planned_cancel: dict[str, Any] = field(default_factory=dict)
+    planned_place: dict[str, Any] = field(default_factory=dict)
+    rules_valid: dict[str, Any] = field(default_factory=dict)
+    router_accepted: dict[str, Any] = field(default_factory=dict)
+    kept: dict[str, Any] = field(default_factory=dict)
+    # Deprecated aliases retained for dashboard migration.
     risk_approved: dict[str, Any] = field(default_factory=dict)
     target: dict[str, Any] = field(default_factory=dict)
-    kept: dict[str, Any] = field(default_factory=dict)
     canceled: dict[str, Any] = field(default_factory=dict)
     placed: dict[str, Any] = field(default_factory=dict)
     venue_accepted: dict[str, Any] = field(default_factory=dict)
@@ -238,12 +245,25 @@ def _action_pipeline_payload(pipeline: ActionPipelineDiagnostics) -> dict[str, A
         "ladder": dict(pipeline.ladder),
         "venue_quantized": dict(pipeline.venue_quantized),
         "capped": dict(pipeline.capped),
+        "target_book": dict(pipeline.target_book),
+        "risk_approved_target": dict(pipeline.risk_approved_target),
+        "planned_cancel": dict(pipeline.planned_cancel),
+        "planned_place": dict(pipeline.planned_place),
+        "rules_valid": dict(pipeline.rules_valid),
+        "router_accepted": dict(pipeline.router_accepted),
+        "kept": dict(pipeline.kept),
         "risk_approved": dict(pipeline.risk_approved),
         "target": dict(pipeline.target),
-        "kept": dict(pipeline.kept),
         "canceled": dict(pipeline.canceled),
         "placed": dict(pipeline.placed),
         "venue_accepted": dict(pipeline.venue_accepted),
+        "_deprecated_aliases": {
+            "risk_approved": "use risk_approved_target",
+            "target": "use target_book for strategy intent",
+            "canceled": "use planned_cancel",
+            "placed": "use rules_valid (was limit-valid, not exchange placed)",
+            "venue_accepted": "use router_accepted",
+        },
     }
 
 

@@ -14,9 +14,9 @@ from typing import Any
 
 from mm.core.order_constraints import (
     OrderConstraints,
-    build_orders_from_sigmoid_with_report,
     mid_from_orderbook,
 )
+from mm.core.models.target_book import JointTargetBook
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.market import MarketEvent
@@ -27,6 +27,11 @@ from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.mpc_state import State
 from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig
+from mm.strategies.target_book_builder import (
+    build_joint_target_book_from_sigmoid,
+    joint_target_book_to_legacy_action,
+    local_constraints_from_spec,
+)
 
 
 def _vwap_target_depth(price_model: Any | None) -> float:
@@ -135,7 +140,7 @@ class MpcStrategyEngine:
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
         optimizer_run = getattr(self._controller, "last_diagnostics", None)
-        order_constraints = OrderConstraints.from_spec(
+        order_constraints = local_constraints_from_spec(
             self.binding.primary,
             max_orders_per_side=self.config.max_orders_per_side,
         )
@@ -144,15 +149,15 @@ class MpcStrategyEngine:
             mid=float(state.mid),
             orderbook_grid=self.config.orderbook_grid,
         )
-        orders, action_pipeline, ladder = build_orders_from_sigmoid_with_report(
+        joint_target_book, action_pipeline, ladder, _local_orders = build_joint_target_book_from_sigmoid(
             actor_id=self.config.actor_id,
-            event=frame.primary,
+            local_event=frame.primary,
             sigmoid_action=sigmoid_action,
             orderbook_grid=self.config.orderbook_grid,
-            constraints=order_constraints,
+            local_constraints=order_constraints,
             continuous=continuous_depth,
         )
-        action = Action(actor_id=self.config.actor_id, orders=tuple(orders))
+        action = joint_target_book_to_legacy_action(joint_target_book)
         order_summaries = tuple(_order_summary(order) for order in action.orders)
         decision_hash = hashlib.sha256(
             json.dumps(order_summaries, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -176,6 +181,7 @@ class MpcStrategyEngine:
             t_end_ms=frame.primary.t_end_ms,
             frame_step=frame_step,
             action=action,
+            joint_target_book=joint_target_book,
             observe_only=self.config.observe_only,
             action_start_after_steps=self.config.action_start_after_steps,
             live_execution_skipped_warmup=(
