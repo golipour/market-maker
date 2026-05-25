@@ -111,6 +111,44 @@ def test_controller_action_start_after_steps_from_mapping() -> None:
     assert config.controller.action_start_after_steps == 15
 
 
+def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(
+                local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+                global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+            ),
+            "interval_ms": 2500,
+            "persistence": {
+                "enabled": True,
+                "topics": [
+                    "{local_market_event_topic}",
+                    "{global_market_event_topic}",
+                    "{joint_frame_topic}",
+                ],
+            },
+        }
+    )
+
+    assert config.resolved_persistence_topics == (
+        "market:events:nobitex:USDT_IRT:2500",
+        "market:events:wallex:USDT_IRT:2500",
+        "strategy:joint:frames:nobitex:USDT_IRT:2500",
+    )
+
+
+def test_persistence_topic_template_rejects_unknown_placeholder() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+            "persistence": {"enabled": True, "topics": ["market:events:{unknown}"]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="unknown persistence topic placeholder"):
+        _ = config.resolved_persistence_topics
+
+
 def test_controller_reconcile_from_mapping() -> None:
     config = runtime_config_from_mapping(
         {

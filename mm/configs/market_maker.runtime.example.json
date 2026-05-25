@@ -61,9 +61,9 @@
     "database_url_env": "MM_DATABASE_URL",
     "parquet_root_env": "MM_PARQUET_ROOT",
     "topics": [
-      "market:events:nobitex:USDT_IRT:10000",
-      "market:events:wallex:USDT_IRT:10000",
-      "strategy:joint:frames:nobitex:USDT_IRT:10000",
+      "{local_market_event_topic}",
+      "{global_market_event_topic}",
+      "{joint_frame_topic}",
       "strategy:actions",
       "strategy:decisions",
       "strategy:diagnostics:mpc-controller",

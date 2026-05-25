@@ -95,6 +95,9 @@ def test_example_runtime_config_loads() -> None:
     assert config.execution.local.planner == "reconcile"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
+    assert "market:events:nobitex:USDT_IRT:10000" in config.resolved_persistence_topics
+    assert "market:events:wallex:USDT_IRT:10000" in config.resolved_persistence_topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.resolved_persistence_topics
 
 
 def test_single_venue_runtime_config_dataclass() -> None:

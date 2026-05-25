@@ -232,6 +232,17 @@ From `MarketMakerRuntimeConfig`:
 | Ledger | `ledger:snapshot` |
 | Target books | `strategy:target_books:{actor_id}` |
 
+`persistence.topics` may use runtime placeholders so interval changes do not
+leave writers subscribed to old topic names:
+
+| Placeholder | Resolves to |
+|-------------|-------------|
+| `{interval_ms}` | Configured frame interval |
+| `{local_market_event_topic}` | Local market event topic for `interval_ms` |
+| `{global_market_event_topic}` | Global market event topic for `interval_ms` |
+| `{joint_frame_topic}` | Joint strategy frame topic for `interval_ms` |
+| `{frame_topic}` | Local strategy frame topic for `interval_ms` |
+
 ## Environment variables
 
 | Variable | Purpose |

@@ -392,6 +392,49 @@ class MarketMakerRuntimeConfig:
         return f"strategy:joint:frames:{self.local.normalized_exchange()}:{self.local.symbol}:{self.interval_ms}"
 
     @property
+    def resolved_persistence_topics(self) -> tuple[str, ...]:
+        """Configured persistence topics with runtime placeholders expanded."""
+
+        if not self.persistence.topics:
+            return ()
+        context: dict[str, str | int] = {
+            "interval_ms": self.interval_ms,
+            "local_exchange": self.local.normalized_exchange(),
+            "local_symbol": self.local.symbol,
+            "local_market_event_topic": self.local.market_event_topic(self.interval_ms),
+            "frame_topic": self.frame_topic,
+            "joint_frame_topic": self.joint_frame_topic,
+        }
+        if self.global_ is not None:
+            context.update(
+                {
+                    "global_exchange": self.global_.normalized_exchange(),
+                    "global_symbol": self.global_.symbol,
+                    "global_market_event_topic": self.global_.market_event_topic(self.interval_ms),
+                }
+            )
+        if self.controller is not None:
+            context.update(
+                {
+                    "strategy_actions_topic": self.controller.normalized_action_topic,
+                    "strategy_decisions_topic": self.controller.normalized_decisions_topic,
+                    "strategy_diagnostics_topic": self.controller.normalized_diagnostics_topic,
+                    "strategy_target_books_topic": self.controller.normalized_target_books_topic,
+                }
+            )
+        resolved: list[str] = []
+        for topic in self.persistence.topics:
+            try:
+                expanded = topic.format_map(context)
+            except KeyError as exc:
+                key = str(exc).strip("'")
+                raise ValueError(f"unknown persistence topic placeholder: {key}") from exc
+            expanded = expanded.strip()
+            if expanded:
+                resolved.append(expanded)
+        return tuple(dict.fromkeys(resolved))
+
+    @property
     def sources(self) -> tuple[MarketDataSourceConfig, ...]:
         if self.global_ is None:
             return (self.local,)
@@ -437,6 +480,7 @@ class MarketMakerRuntimeConfig:
                 "database_url_configured": bool(self.persistence.resolved_database_url()),
                 "parquet_root_configured": bool(self.persistence.resolved_parquet_root()),
                 "topics": self.persistence.topics,
+                "resolved_topics": self.resolved_persistence_topics,
                 "batch_size": self.persistence.batch_size,
             },
             "observability": {

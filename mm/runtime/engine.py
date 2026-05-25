@@ -308,7 +308,7 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
     if not config.persistence.enabled:
         log_event("persistence_disabled", {"reason": "config"})
         return ()
-    topics = config.persistence.topics or _default_persistence_topics(config)
+    topics = config.resolved_persistence_topics or _default_persistence_topics(config)
     daemons: list[object] = []
     database_url = config.persistence.resolved_database_url()
     if database_url:
