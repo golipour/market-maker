@@ -372,10 +372,14 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
         RuntimeTopics.ledger_snapshot(),
         topics.strategy_decisions,
         topics.strategy_actions,
+        "risk:events",
+        "execution:errors",
         RuntimeTopics.execution_orders(config.local.normalized_exchange()),
         RuntimeTopics.execution_state(config.local.normalized_exchange()),
         config.local.market_error_topic(),
     ]
+    if topics.strategy_diagnostics is not None:
+        observed_topics.append(topics.strategy_diagnostics)
     if config.global_ is not None:
         observed_topics.extend(
             [

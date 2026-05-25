@@ -10,3 +10,11 @@ providers:
     options:
       path: /var/lib/grafana/dashboards
 
+  - name: "market_maker_observability_v2"
+    orgId: 1
+    folder: "Market Maker - Observability v2"
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/observability-v2

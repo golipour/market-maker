@@ -22,7 +22,7 @@ from mm.runtime.config import (
     ObservabilityRuntimeConfig,
     RiskRuntimeConfig,
 )
-from mm.runtime.engine import _default_persistence_topics
+from mm.runtime.engine import _build_observability_daemons, _default_persistence_topics
 from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 
 
@@ -140,6 +140,21 @@ def test_default_persistence_topics_include_diagnostics() -> None:
     )
     topics = _default_persistence_topics(runtime)
     assert "strategy:diagnostics:mpc-controller" in topics
+
+
+def test_observability_topics_include_diagnostics_risk_and_execution_errors() -> None:
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        controller=_minimal_config(actor_id="mpc-controller"),
+        observability=ObservabilityRuntimeConfig(),
+    )
+    daemons = _build_observability_daemons(runtime, InMemoryBus())
+
+    topics = daemons[0].topics
+
+    assert "strategy:diagnostics:mpc-controller" in topics
+    assert "risk:events" in topics
+    assert "execution:errors" in topics
 
 
 @pytest.mark.asyncio

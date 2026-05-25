@@ -49,10 +49,16 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
 
     requested = await asyncio.wait_for(command_queue.get(), timeout=1.0)
     placed = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    accepted = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    completed = await asyncio.wait_for(command_queue.get(), timeout=1.0)
     snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)
 
     assert requested["type"] == "ExecutionSyncRequested"
     assert placed["type"] == "PlaceOrdersRequested"
+    assert accepted["type"] == "PlaceOrdersAccepted"
+    assert completed["type"] == "ExecutionSyncCompleted"
+    assert completed["accepted_count"] == 1
+    assert completed["target_count"] == 1
     assert isinstance(snapshot, ExecutionSnapshot)
     assert commands.placed[0].price == 100.0
     assert snapshot.live_order_count == 1

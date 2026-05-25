@@ -91,6 +91,7 @@ class DecisionContext:
     frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     latency_ms: float = 0.0
+    stage_timings_ms: dict[str, float] = field(default_factory=dict)
 
     decision: StrategyDecision | None = None
     controller_error: str | None = None
@@ -113,6 +114,12 @@ class DecisionContext:
         text = message.strip()
         if text:
             self.extra_warnings.append(text)
+
+    def record_stage_latency(self, stage: str, latency_ms: float) -> None:
+        name = stage.strip()
+        if not name:
+            return
+        self.stage_timings_ms[name] = max(0.0, float(latency_ms))
 
     def record_decision(self, decision: StrategyDecision) -> None:
         self.decision = decision
@@ -315,15 +322,19 @@ class DecisionContext:
         return {}
 
     def _optimizer_diagnostics(self, decision: StrategyDecision | None) -> OptimizerDiagnostics:
+        stage_timing_payload = {f"{stage}_ms": value for stage, value in self.stage_timings_ms.items()}
+        if self.latency_ms:
+            stage_timing_payload["controller_total_ms"] = max(0.0, float(self.latency_ms))
         if decision is None:
             return OptimizerDiagnostics(
                 config={"kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched")},
+                timing=stage_timing_payload,
             )
         opt = dict(decision.diagnostics.optimizer)
         if "objective" in opt and isinstance(opt.get("objective"), dict):
             return OptimizerDiagnostics(
                 config=dict(opt.get("config", {})),
-                timing=dict(opt.get("timing", {})),
+                timing={**dict(opt.get("timing", {})), **stage_timing_payload},
                 objective=dict(opt.get("objective", {})),
                 action=dict(opt.get("action", {})),
                 gradients=dict(opt.get("gradients", {})),
@@ -331,6 +342,7 @@ class DecisionContext:
             )
         return OptimizerDiagnostics(
             config={"kind": opt.get("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))},
+            timing=stage_timing_payload,
             objective={
                 "summary": {
                     "last_expected_delta_wealth": opt.get("last_expected_delta_wealth"),

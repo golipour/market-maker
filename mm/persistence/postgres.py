@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import EventEnvelope, envelope_event, to_jsonable
-from mm.observability import counter_inc, gauge, log_event
+from mm.observability import counter_inc, gauge, histogram_observe, log_event
+from mm.observability import schema as obs_schema
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS mm_events (
@@ -29,6 +31,8 @@ CREATE TABLE IF NOT EXISTS mm_events (
 );
 CREATE INDEX IF NOT EXISTS mm_events_run_topic_ts_idx ON mm_events (run_id, topic, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_events_exchange_symbol_ts_idx ON mm_events (exchange, symbol, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_events_topic_type_ts_idx ON mm_events (topic, event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_events_actor_ts_idx ON mm_events (actor_id, ts DESC) WHERE actor_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
@@ -99,6 +103,12 @@ class PostgresEventWriter:
             async for event in self.bus.subscribe(topic):
                 envelope = envelope_event(topic, event, run_id=self.run_id, source="postgres-writer")
                 await self._queue.put(envelope)
+                gauge(
+                    obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                    float(self._queue.qsize()),
+                    labels={"writer": "postgres"},
+                    help="Persistence writer queue depth",
+                )
         except asyncio.CancelledError:
             raise
 
@@ -115,15 +125,23 @@ class PostgresEventWriter:
                 if batch and (len(batch) >= self.batch_size or self._queue.empty()):
                     to_write = batch
                     batch = []
-                    await asyncio.to_thread(self._write_batch, to_write)
+                    queue_depth = self._queue.qsize()
+                    gauge(
+                        obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                        float(queue_depth),
+                        labels={"writer": "postgres"},
+                        help="Persistence writer queue depth",
+                    )
+                    await asyncio.to_thread(self._write_batch, to_write, queue_depth)
         except asyncio.CancelledError:
             if batch:
-                await asyncio.to_thread(self._write_batch, batch)
+                await asyncio.to_thread(self._write_batch, batch, self._queue.qsize())
             raise
 
-    def _write_batch(self, batch: list[EventEnvelope]) -> None:
+    def _write_batch(self, batch: list[EventEnvelope], queue_depth: int = 0) -> None:
         if not batch:
             return
+        started_ns = time.monotonic_ns()
         try:
             import psycopg2
             import psycopg2.extras
@@ -190,13 +208,53 @@ class PostgresEventWriter:
                                 latest_rows,
                             )
                     conn.commit()
+                    latency_ms = _elapsed_ms(started_ns)
                     counter_inc("mm_persistence_events_written_total", len(batch), labels={"writer": "postgres"})
                     gauge("mm_persistence_batch_size", len(batch), labels={"writer": "postgres"})
+                    gauge(
+                        obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                        float(queue_depth),
+                        labels={"writer": "postgres"},
+                        help="Persistence writer queue depth",
+                    )
+                    histogram_observe(
+                        obs_schema.MM_PERSISTENCE_WRITE_LATENCY_MS,
+                        latency_ms,
+                        labels={"writer": "postgres"},
+                        help="Persistence batch write latency",
+                    )
+                    log_event(
+                        obs_schema.EVENT_PERSISTENCE_BATCH_WRITTEN,
+                        {
+                            "writer": "postgres",
+                            "batch_size": len(batch),
+                            "queue_depth": int(queue_depth),
+                            "latency_ms": latency_ms,
+                        },
+                    )
                 finally:
                     conn.close()
             except Exception as exc:
                 counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
-                log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
+                log_event(
+                    "postgres_event_writer_error",
+                    {
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "batch_size": len(batch),
+                        "latency_ms": _elapsed_ms(started_ns),
+                    },
+                )
+                log_event(
+                    obs_schema.EVENT_PERSISTENCE_BATCH_FAILED,
+                    {
+                        "writer": "postgres",
+                        "batch_size": len(batch),
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": True,
+                    },
+                )
                 return
 
     def _ensure_ready(self) -> bool:
@@ -282,3 +340,7 @@ def _dedupe_latest_rows_by_state_key(
         state_key = str(row[0])
         by_key[state_key] = row
     return list(by_key.values())
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    return (time.monotonic_ns() - started_ns) / 1_000_000

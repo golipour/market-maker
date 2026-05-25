@@ -1,0 +1,442 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Optimizer objective, contribution fractions, timing, and gradient health.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n       (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Objective value",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','improvement'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Objective improvement",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Contribution fractions",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n       CASE WHEN kv.key LIKE '%_sec' THEN (kv.value)::double precision * 1000.0 ELSE (kv.value)::double precision END AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND kv.value ~ '^-?[0-9]+(\\.[0-9]+)?$'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Optimizer timings",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','gradients'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND kv.value ~ '^-?[0-9]+(\\.[0-9]+)?$'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Nonfinite counts",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "optimizer"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:diagnostics:mpc-controller",
+            "value": "strategy:diagnostics:mpc-controller"
+          }
+        ],
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:target_books:mpc-controller",
+            "value": "strategy:target_books:mpc-controller"
+          }
+        ],
+        "query": "strategy:target_books:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "10000,5000,1000",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 04 Optimizer Diagnostics",
+  "uid": "mm-obs-v2-optimizer",
+  "version": 1,
+  "weekStart": ""
+}

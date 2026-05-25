@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 from mm.env_loader import repo_root
+from mm.observability.logs import log_event
+from mm.observability import schema as obs_schema
 from mm.runtime.config import ObservabilityRuntimeConfig
 
 
@@ -27,15 +29,32 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
     if config.json_logs:
         os.environ.setdefault("MM_JSON_LOG", "1")
     if config.log_path:
-        os.environ.setdefault("MM_LOG_PATH", _resolve_log_path_for_process(str(config.log_path)))
+        try:
+            os.environ.setdefault("MM_LOG_PATH", _resolve_log_path_for_process(str(config.log_path)))
+        except Exception as exc:
+            log_event(
+                obs_schema.EVENT_OBSERVABILITY_SETUP_FAILED,
+                {
+                    "component": "logs",
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
     if config.metrics_enabled:
         os.environ.setdefault("MM_METRICS_PORT", str(config.metrics_port))
         try:
             from mm.observability.registry import start_server
 
             start_server(port=config.metrics_port)
-        except Exception:
-            pass
+        except Exception as exc:
+            log_event(
+                obs_schema.EVENT_OBSERVABILITY_SETUP_FAILED,
+                {
+                    "component": "metrics",
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
     if config.run_id:
         os.environ.setdefault("MM_RUN_ID", config.run_id)
     if config.service_name:
@@ -48,11 +67,29 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except Exception:
+    except Exception as exc:
+        log_event(
+            obs_schema.EVENT_OBSERVABILITY_SETUP_FAILED,
+            {
+                "component": "otel_import",
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
         return
     endpoint = config.otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    resource = Resource.create({"service.name": config.service_name, "mm.run_id": config.run_id})
-    provider = TracerProvider(resource=resource)
-    exporter_kwargs = {"endpoint": endpoint.rstrip("/") + "/v1/traces"} if endpoint else {}
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(**exporter_kwargs)))
-    trace.set_tracer_provider(provider)
+    try:
+        resource = Resource.create({"service.name": config.service_name, "mm.run_id": config.run_id})
+        provider = TracerProvider(resource=resource)
+        exporter_kwargs = {"endpoint": endpoint.rstrip("/") + "/v1/traces"} if endpoint else {}
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(**exporter_kwargs)))
+        trace.set_tracer_provider(provider)
+    except Exception as exc:
+        log_event(
+            obs_schema.EVENT_OBSERVABILITY_SETUP_FAILED,
+            {
+                "component": "otel",
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )

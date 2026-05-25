@@ -134,6 +134,7 @@ class StrategyRunner:
         self._last_local_exchange = frame.local.exchange.lower().strip()
         self._sync_control_plane_to_risk()
 
+        clean_started = time.monotonic_ns()
         ledger = joint_frame.ledger
         open_orders = _live_orders_from_ledger(ledger)
         clean_frame = clean_strategy_frame(frame, open_orders)
@@ -155,17 +156,22 @@ class StrategyRunner:
             ledger=ledger,
             frame_sync_status=joint_frame.sync_status.as_payload(),
         )
+        ctx.record_stage_latency("clean", _elapsed_ms(clean_started))
         approved: list[Action] = []
 
         try:
+            decide_started = time.monotonic_ns()
             try:
                 decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
                 ctx.record_decision(decision)
+                ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
             except Exception as exc:
+                ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
                 ctx.record_controller_error(exc)
                 await self._publish_controller_error(frame, exc)
                 return approved
 
+            risk_started = time.monotonic_ns()
             proposed = [decision.action]
             execution_book = decision.joint_target_book
             if execution_book is None:
@@ -240,6 +246,7 @@ class StrategyRunner:
                 exposure_after=dict(risk_result.exposure_after),
             )
             ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
+            ctx.record_stage_latency("risk", _elapsed_ms(risk_started))
             if len(approved) < len(proposed) and self.bus is not None:
                 await self.bus.publish(
                     "risk:events",
@@ -254,6 +261,7 @@ class StrategyRunner:
                     },
                 )
 
+            publish_started = time.monotonic_ns()
             observe_only_control = (
                 self.control_plane is not None and self.control_plane.state.observe_only
             )
@@ -319,7 +327,9 @@ class StrategyRunner:
                 )
             for action in approved:
                 await self._publish(self.config.normalized_action_topic, action)
+            ctx.record_stage_latency("publish", _elapsed_ms(publish_started))
 
+            execute_started = time.monotonic_ns()
             execution_report: ExecutionSyncReport | None = None
             sync_executed = executed
             if approved:
@@ -338,6 +348,7 @@ class StrategyRunner:
                         venue_gates=venue_gates,
                         execute=False,
                     )
+            ctx.record_stage_latency("execute", _elapsed_ms(execute_started))
             if execution_report is not None:
                 ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
 
@@ -358,6 +369,8 @@ class StrategyRunner:
                 )
             return approved
         except Exception as exc:
+            if "risk" not in ctx.stage_timings_ms:
+                ctx.record_stage_latency("risk", _elapsed_ms(risk_started) if "risk_started" in locals() else 0.0)
             ctx.record_controller_error(exc)
             await self._publish_controller_error(frame, exc)
             return approved
@@ -404,18 +417,19 @@ class StrategyRunner:
     async def _publish_execution_error(self, ctx: DecisionContext, message: str) -> None:
         if self.bus is None:
             return
-        await self.bus.publish(
-            "execution:errors",
-            {
-                "type": "ExecutionSyncFailed",
-                "actor_id": self.config.actor_id,
-                "exchange": ctx.frame.local.exchange,
-                "symbol": ctx.frame.local.symbol,
-                "t_end_ms": ctx.frame.t_end_ms,
-                "frame_step": ctx.frame_step,
-                "message": message,
-            },
-        )
+        payload = {
+            "type": "ExecutionSyncFailed",
+            "actor_id": self.config.actor_id,
+            "exchange": ctx.frame.local.exchange,
+            "symbol": ctx.frame.local.symbol,
+            "t_end_ms": ctx.frame.t_end_ms,
+            "frame_step": ctx.frame_step,
+            "error": message.split(":", 1)[0],
+            "message": message,
+            "retryable": True,
+        }
+        log_event("execution_sync_failed", payload)
+        await self.bus.publish("execution:errors", payload)
 
     async def _publish_controller_error(
         self,
@@ -506,3 +520,7 @@ def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:
         for exchange_order_id, open_order in venue.live_orders.items():
             out[f"{exchange_key}:{exchange_order_id}"] = open_order.order
     return out
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    return (time.monotonic_ns() - started_ns) / 1_000_000

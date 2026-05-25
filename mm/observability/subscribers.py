@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
@@ -57,6 +58,9 @@ class RuntimeObservabilitySubscriber:
             return
         if isinstance(event, dict):
             kind = str(event.get("type", ""))
+            if kind == "ControllerDiagnostics":
+                self._observe_controller_diagnostics(event)
+                return
             if kind in {"StrategyDecision", "ControllerDecision"}:
                 self._observe_strategy_decision(event)
                 return
@@ -66,6 +70,9 @@ class RuntimeObservabilitySubscriber:
             if kind == "ExecutionSyncRequested":
                 self._observe_execution_sync_requested(event)
                 self._observe_execution_event(topic, event)
+                return
+            if kind == "RiskActionsFiltered":
+                self._observe_risk_event(event)
                 return
             if kind.endswith("Error") or "error" in event:
                 self._observe_error(topic, event)
@@ -239,6 +246,169 @@ class RuntimeObservabilitySubscriber:
                 },
             )
 
+    def _observe_controller_diagnostics(self, payload: dict[str, Any]) -> None:
+        labels = _controller_labels(payload)
+        frame = _dict(payload.get("frame"))
+        frame_age_ms = _as_float(frame.get("frame_age_ms"))
+        if frame_age_ms is not None:
+            gauge(
+                obs_schema.MM_FRAME_AGE_MS,
+                frame_age_ms,
+                labels={k: labels[k] for k in ("exchange", "symbol")},
+                help="Wall ms between frame creation and diagnostics publication",
+            )
+
+        sync_status = _dict(frame.get("sync_status"))
+        for field in (
+            "local_market_ready",
+            "global_market_ready",
+            "local_private_ready",
+            "global_private_ready",
+            "ledger_fresh",
+        ):
+            if field in sync_status:
+                gauge(
+                    obs_schema.MM_FRAME_SYNC_READY,
+                    1.0 if bool(sync_status.get(field)) else 0.0,
+                    labels={**{k: labels[k] for k in ("exchange", "symbol")}, "field": field},
+                    help="Controller frame sync readiness flags",
+                )
+
+        optimizer = _dict(payload.get("optimizer"))
+        timing = _dict(optimizer.get("timing"))
+        for stage, value_ms in _timing_ms(timing).items():
+            histogram_observe(
+                obs_schema.MM_CONTROLLER_STAGE_LATENCY_MS,
+                value_ms,
+                labels={**labels, "stage": stage},
+                help="Controller or optimizer stage latency in milliseconds",
+            )
+
+        for warning in payload.get("warnings") or ():
+            reason = _bounded_reason(warning)
+            counter_inc(
+                obs_schema.MM_CONTROLLER_WARNINGS_TOTAL,
+                labels={**labels, "reason": reason},
+                help="Controller diagnostics warnings",
+            )
+
+        models = _dict(payload.get("models"))
+        for model_key, score_any in models.items():
+            score = _dict(score_any)
+            model = str(score.get("model") or model_key)
+            model_labels = {**labels, "model": model}
+            nll = _as_float(score.get("nll"))
+            if nll is not None:
+                histogram_observe(
+                    obs_schema.MM_MODEL_NLL,
+                    nll,
+                    labels=model_labels,
+                    help="Pre-update model negative log likelihood",
+                )
+            log_likelihood = _as_float(score.get("log_likelihood"))
+            if log_likelihood is not None:
+                gauge(
+                    obs_schema.MM_MODEL_LOG_LIKELIHOOD,
+                    log_likelihood,
+                    labels=model_labels,
+                    help="Model log likelihood for latest observation",
+                )
+            residual = _as_float(score.get("standardized_residual"))
+            if residual is not None:
+                gauge(
+                    obs_schema.MM_MODEL_STANDARDIZED_RESIDUAL,
+                    residual,
+                    labels=model_labels,
+                    help="Model standardized residual for latest observation",
+                )
+            skip_reason = score.get("skip_reason")
+            if skip_reason:
+                counter_inc(
+                    obs_schema.MM_MODEL_SCORE_SKIPPED_TOTAL,
+                    labels={**model_labels, "reason": _bounded_reason(skip_reason)},
+                    help="Model score skipped by reason",
+                )
+
+        action_pipeline = _dict(payload.get("action_pipeline"))
+        for stage, stage_any in action_pipeline.items():
+            stage_payload = _dict(stage_any)
+            if not stage_payload:
+                continue
+            stage_labels = {**labels, "stage": str(stage)}
+            order_count = _as_float(stage_payload.get("order_count"))
+            if order_count is not None:
+                gauge(
+                    obs_schema.MM_ACTION_STAGE_ORDERS,
+                    order_count,
+                    labels={**stage_labels, "side": "all"},
+                    help="Order count at action pipeline stage",
+                )
+            for side in ("buy", "sell"):
+                qty = _as_float(stage_payload.get(f"{side}_qty"))
+                if qty is not None:
+                    gauge(
+                        obs_schema.MM_ACTION_STAGE_QTY,
+                        qty,
+                        labels={**stage_labels, "side": side},
+                        help="Base quantity at action pipeline stage",
+                    )
+                notional = _as_float(stage_payload.get(f"{side}_notional"))
+                if notional is not None:
+                    gauge(
+                        obs_schema.MM_ACTION_STAGE_NOTIONAL,
+                        notional,
+                        labels={**stage_labels, "side": side},
+                        help="Quote notional at action pipeline stage",
+                    )
+            for reason, count in _dict(stage_payload.get("rejection_counts")).items():
+                inc = _as_float(count)
+                if inc is None or inc <= 0:
+                    continue
+                counter_inc(
+                    obs_schema.MM_ACTION_REJECTED_TOTAL,
+                    inc,
+                    labels={**stage_labels, "reason": _bounded_reason(reason)},
+                    help="Action pipeline rejections by stage and reason",
+                )
+
+        risk = _dict(payload.get("risk"))
+        if risk:
+            gauge(
+                obs_schema.MM_RISK_APPROVED,
+                1.0 if bool(risk.get("approved")) else 0.0,
+                labels=labels,
+                help="Risk approval state for latest controller frame",
+            )
+            for reason, count in _dict(risk.get("rejection_counts")).items():
+                inc = _as_float(count)
+                if inc is None or inc <= 0:
+                    continue
+                counter_inc(
+                    obs_schema.MM_RISK_REJECT_TOTAL,
+                    inc,
+                    labels={**labels, "reason": _bounded_reason(reason)},
+                    help="Risk rejections by reason",
+                )
+            for phase in ("exposure_before", "exposure_after"):
+                for field, value in _dict(risk.get(phase)).items():
+                    v = _as_float(value)
+                    if v is None:
+                        continue
+                    gauge(
+                        obs_schema.MM_RISK_EXPOSURE,
+                        v,
+                        labels={**labels, "phase": phase.replace("exposure_", ""), "field": str(field)},
+                        help="Risk exposure fields before and after approval",
+                    )
+
+        gates = _dict(payload.get("execution_gates"))
+        for reason in gates.get("blocked_reasons") or ():
+            counter_inc(
+                obs_schema.MM_EXECUTION_GATE_BLOCK_TOTAL,
+                labels={**labels, "reason": _bounded_reason(reason)},
+                help="Live execution gate blocked reasons",
+            )
+
     def _maybe_persist_step_economics(self, payload: dict[str, Any], econ: dict[str, Any]) -> None:
         try:
             from datetime import datetime, timezone
@@ -285,6 +455,21 @@ class RuntimeObservabilitySubscriber:
                 labels={"exchange": labels["exchange"]},
                 help="Order manager sync rounds observed",
             )
+        if etype == "ExecutionSyncCompleted":
+            counter_inc(
+                obs_schema.MM_EXECUTION_SYNC_COMPLETED_TOTAL,
+                labels={"exchange": labels["exchange"]},
+                help="Order manager sync rounds completed",
+            )
+        if etype == "ExecutionSyncFailed":
+            counter_inc(
+                obs_schema.MM_EXECUTION_SYNC_FAILED_TOTAL,
+                labels={
+                    "exchange": labels["exchange"],
+                    "error": str(payload.get("error", "unknown")),
+                },
+                help="Order manager sync rounds failed",
+            )
         if etype == "PlaceOrdersAccepted":
             oids = payload.get("order_ids") or ()
             n = len(oids) if isinstance(oids, (list, tuple)) else 0
@@ -320,6 +505,22 @@ class RuntimeObservabilitySubscriber:
                 help="Orders requested for cancel",
             )
 
+    def _observe_risk_event(self, payload: dict[str, Any]) -> None:
+        labels = {
+            "actor_id": str(payload.get("actor_id", "")),
+            "exchange": str(payload.get("exchange", "")),
+            "symbol": str(payload.get("symbol", "")),
+        }
+        proposed = _as_float(payload.get("proposed_actions")) or 0.0
+        approved = _as_float(payload.get("approved_actions")) or 0.0
+        if approved < proposed:
+            counter_inc(
+                obs_schema.MM_RISK_REJECT_TOTAL,
+                max(1.0, proposed - approved),
+                labels={**labels, "reason": "actions_filtered"},
+                help="Risk rejections by reason",
+            )
+
     def _observe_order_validation_rejection(self, payload: dict[str, Any]) -> None:
         labels = {
             "exchange": str(payload.get("exchange", "")),
@@ -339,3 +540,60 @@ class RuntimeObservabilitySubscriber:
         }
         counter_inc(obs_schema.MM_RUNTIME_ERRORS_TOTAL, labels=labels, help="Runtime errors observed")
         log_event(obs_schema.EVENT_RUNTIME_ERROR, {"topic": topic, **payload})
+
+
+def _controller_labels(payload: dict[str, Any]) -> dict[str, str]:
+    return {
+        "actor_id": str(payload.get("actor_id", "")),
+        "exchange": str(payload.get("exchange", "")),
+        "symbol": str(payload.get("symbol", "")),
+    }
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return out
+
+
+def _bounded_reason(value: Any) -> str:
+    text = str(value or "unknown").strip()
+    if not text:
+        return "unknown"
+    text = text.split(":", 1)[0]
+    chars: list[str] = []
+    last_underscore = False
+    for ch in text.lower()[:96]:
+        ok = ch.isalnum()
+        if ok:
+            chars.append(ch)
+            last_underscore = False
+        elif not last_underscore:
+            chars.append("_")
+            last_underscore = True
+    reason = "".join(chars).strip("_")
+    return reason or "unknown"
+
+
+def _timing_ms(timing: dict[str, Any]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for key, value in timing.items():
+        v = _as_float(value)
+        if v is None:
+            continue
+        stage = str(key)
+        if stage.endswith("_sec"):
+            out[stage[:-4]] = v * 1000.0
+        elif stage.endswith("_ms"):
+            out[stage[:-3]] = v
+        elif stage in {"best_epoch"}:
+            continue
+    return out

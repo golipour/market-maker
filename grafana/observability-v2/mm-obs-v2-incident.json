@@ -1,0 +1,417 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Frame-level drilldown. Narrow the time range and variables to inspect one incident.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts)) ORDER BY e.ts DESC LIMIT 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest diagnostics payload",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE event_type = 'StrategyDecision'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND actor_id IN (${actor_id:sqlstring})\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest strategy decision",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE topic = '${target_books_topic}'\n  AND event_type = 'JointTargetBook'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND actor_id IN (${actor_id:sqlstring})\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest target book",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, topic, event_type, exchange, symbol, actor_id, payload\nFROM mm_events\nWHERE topic LIKE 'execution:%'\n  AND exchange IN (${exchange:sqlstring})\n  AND (symbol IN (${symbol:sqlstring}) OR symbol IS NULL)\n  AND $__timeFilter(ts)\nORDER BY ts DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Matching execution events",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-mm"
+          },
+          "expr": "{job=\"market-maker-runtime\"} | json | exchange=~\"$exchange\" | symbol=~\"$symbol\"",
+          "refId": "A"
+        }
+      ],
+      "title": "Matching logs",
+      "type": "logs",
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showCommonLabels": false
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "incident"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:diagnostics:mpc-controller",
+            "value": "strategy:diagnostics:mpc-controller"
+          }
+        ],
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:target_books:mpc-controller",
+            "value": "strategy:target_books:mpc-controller"
+          }
+        ],
+        "query": "strategy:target_books:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "10000,5000,1000",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 10 Incident Drilldown",
+  "uid": "mm-obs-v2-incident",
+  "version": 1,
+  "weekStart": ""
+}

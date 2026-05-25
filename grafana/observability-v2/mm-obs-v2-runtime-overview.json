@@ -1,0 +1,592 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Fast runtime health from Prometheus, plus latest controller warnings from PostgreSQL.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "up{job=\"market_maker\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Scrape up",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 6,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Frame rate",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 3
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Decision rate",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))",
+          "refId": "A"
+        }
+      ],
+      "title": "Controller stage p95",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
+          "refId": "A"
+        }
+      ],
+      "title": "Order sync p95",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (exchange,__name__)(rate({__name__=~\"mm_execution_sync_completed_total|mm_execution_sync_failed_total\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Execution completed / failed",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "mm_execution_live_orders",
+          "refId": "A"
+        }
+      ],
+      "title": "Live orders",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Persistence errors",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, w.warning\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'warnings', '[]'::jsonb)) AS w(warning)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 25",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest controller warnings",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "runtime"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:diagnostics:mpc-controller",
+            "value": "strategy:diagnostics:mpc-controller"
+          }
+        ],
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:target_books:mpc-controller",
+            "value": "strategy:target_books:mpc-controller"
+          }
+        ],
+        "query": "strategy:target_books:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "10000,5000,1000",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 00 Runtime Overview",
+  "uid": "mm-obs-v2-runtime-overview",
+  "version": 1,
+  "weekStart": ""
+}

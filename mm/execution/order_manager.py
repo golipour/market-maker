@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -77,20 +78,31 @@ class OrderManager(AbstractOrderManager):
             return await self._sync_locked(actions)
 
     async def _sync_locked(self, actions: list[Action]) -> ExecutionSyncReport:
+        started_ns = time.monotonic_ns()
         target_count = sum(len(action.orders) for action in actions)
+        timestamp_ms = self.clock_ms()
         await self._publish(
             "execution:orders",
             {
                 "type": "ExecutionSyncRequested",
                 "exchange": self.exchange,
+                "actor_id": _single_action_attr(actions, "actor_id"),
+                "symbol": _single_action_symbol(actions),
                 "action_count": len(actions),
                 "target_count": target_count,
-                "timestamp_ms": self.clock_ms(),
+                "timestamp_ms": timestamp_ms,
             },
         )
         combined = ExecutionSyncReport()
         for action in actions:
             combined = combined.merge(await self._reconcile_action(action, execute=True))
+        await self._publish_sync_completed(
+            combined,
+            actor_id=_single_action_attr(actions, "actor_id"),
+            symbol=_single_action_symbol(actions),
+            target_count=target_count,
+            latency_ms=_elapsed_ms(started_ns),
+        )
         await self._publish_snapshot()
         return combined
 
@@ -129,6 +141,20 @@ class OrderManager(AbstractOrderManager):
             return await self._sync_venue_target_locked(target)
 
     async def _sync_venue_target_locked(self, target: VenueTargetBook) -> ExecutionSyncReport:
+        started_ns = time.monotonic_ns()
+        target_count = len(target.orders)
+        await self._publish(
+            "execution:orders",
+            {
+                "type": "ExecutionSyncRequested",
+                "exchange": self.exchange,
+                "actor_id": target.actor_id,
+                "symbol": target.symbol,
+                "action_count": 1,
+                "target_count": target_count,
+                "timestamp_ms": self.clock_ms(),
+            },
+        )
         plan = self._plan_for_venue_target(target)
         scoped_desired = [self._target_order_to_order(order) for order in target.orders]
         accepted_orders: list[Order] = []
@@ -142,13 +168,21 @@ class OrderManager(AbstractOrderManager):
                 Action(actor_id=target.actor_id, orders=tuple(scoped_desired)),
                 router_result,
             )
-        return execution_plan_to_sync_report(
+        report = execution_plan_to_sync_report(
             plan,
             scoped_desired=scoped_desired,
             live_orders=live_snapshot,
             placed=placed,
             accepted_orders=accepted_orders,
         )
+        await self._publish_sync_completed(
+            report,
+            actor_id=target.actor_id,
+            symbol=target.symbol,
+            target_count=target_count,
+            latency_ms=_elapsed_ms(started_ns),
+        )
+        return report
 
     async def cancel_actor_orders(self, actor_id: str, *, reason: str = "") -> None:
         actor = actor_id.strip()
@@ -385,6 +419,53 @@ class OrderManager(AbstractOrderManager):
     async def _publish_snapshot(self) -> None:
         await self._publish("execution:state", self.snapshot())
 
+    async def _publish_sync_completed(
+        self,
+        report: ExecutionSyncReport,
+        *,
+        actor_id: str,
+        symbol: str,
+        target_count: int,
+        latency_ms: float,
+    ) -> None:
+        await self._publish(
+            "execution:orders",
+            {
+                "type": "ExecutionSyncCompleted",
+                "exchange": self.exchange,
+                "actor_id": actor_id,
+                "symbol": symbol,
+                "target_count": int(target_count),
+                "keep_count": int(report.kept.order_count),
+                "cancel_count": int(report.cancel_count),
+                "place_count": int(report.to_place.order_count),
+                "accepted_count": int(report.accepted.order_count),
+                "rejected_count": int(sum(report.venue_rejection_counts.values())),
+                "placed": bool(report.placed),
+                "latency_ms": max(0.0, float(latency_ms)),
+                "timestamp_ms": self.clock_ms(),
+            },
+        )
+
     async def _publish(self, topic_prefix: str, event) -> None:
         if self.bus is not None:
             await self.bus.publish(f"{topic_prefix}:{self.exchange}", event)
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    return (time.monotonic_ns() - started_ns) / 1_000_000
+
+
+def _single_action_attr(actions: list[Action], attr: str) -> str:
+    values = {str(getattr(action, attr, "")).strip() for action in actions}
+    values.discard("")
+    return next(iter(values)) if len(values) == 1 else ""
+
+
+def _single_action_symbol(actions: list[Action]) -> str:
+    symbols = {
+        order.symbol
+        for action in actions
+        for order in action.orders
+    }
+    return next(iter(symbols)) if len(symbols) == 1 else ""

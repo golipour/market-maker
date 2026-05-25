@@ -1,0 +1,513 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Risk decisions, execution gates, order sync lifecycle, and adapter health.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "mm_risk_approved{actor_id=~\"${actor_id:regex}\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Risk approved",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (reason)(rate(mm_risk_reject_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Risk rejects",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Execution gate blocks",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (exchange,__name__)(rate({__name__=~\"mm_execution_sync_completed_total|mm_execution_sync_failed_total\"}[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync completed / failed",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Router failures",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Validation rejects",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts, topic, event_type, exchange, symbol, actor_id, payload\nFROM mm_events\nWHERE topic LIKE 'execution:%'\n  AND exchange IN (${exchange:sqlstring})\n  AND (symbol IN (${symbol:sqlstring}) OR symbol IS NULL)\n  AND $__timeFilter(ts)\nORDER BY ts DESC\nLIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent execution events",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "risk",
+    "execution"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:diagnostics:mpc-controller",
+            "value": "strategy:diagnostics:mpc-controller"
+          }
+        ],
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:target_books:mpc-controller",
+            "value": "strategy:target_books:mpc-controller"
+          }
+        ],
+        "query": "strategy:target_books:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "10000,5000,1000",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 06 Risk And Execution",
+  "uid": "mm-obs-v2-risk-execution",
+  "version": 1,
+  "weekStart": ""
+}

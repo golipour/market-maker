@@ -10,6 +10,8 @@ from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
 from mm.execution.target_book import CommandRejection, ExecutionPlan, RouterResult
 from mm.exchanges.shared.provider_adapter import now_ms
+from mm.observability import counter_inc, log_event
+from mm.observability import schema as obs_schema
 
 
 class OrderRouter:
@@ -66,6 +68,7 @@ class OrderRouter:
                 )
             except Exception as exc:
                 failed_cancels.extend(cancel_ids)
+                self._observe_adapter_failure(plan, operation="cancel_orders", exc=exc)
                 await self._publish(
                     "execution:orders",
                     {
@@ -98,6 +101,7 @@ class OrderRouter:
             try:
                 order_ids = await self.command_adapter.place_orders(orders)
             except Exception as exc:
+                self._observe_adapter_failure(plan, operation="place_orders", exc=exc)
                 failed_places.extend(
                     CommandRejection(
                         order=command.order,
@@ -156,6 +160,30 @@ class OrderRouter:
     async def _publish(self, topic_prefix: str, event: dict[str, Any]) -> None:
         if self.bus is not None:
             await self.bus.publish(f"{topic_prefix}:{self.exchange}", event)
+
+    def _observe_adapter_failure(self, plan: ExecutionPlan, *, operation: str, exc: BaseException) -> None:
+        labels = {
+            "exchange": self.exchange,
+            "operation": operation,
+            "error": type(exc).__name__,
+        }
+        counter_inc(
+            obs_schema.MM_ORDER_ROUTER_FAILURES_TOTAL,
+            labels=labels,
+            help="Order router adapter failures by operation and exception class",
+        )
+        log_event(
+            obs_schema.EVENT_ADAPTER_REQUEST_FAILED,
+            {
+                "exchange": self.exchange,
+                "symbol": plan.symbol,
+                "actor_id": plan.actor_id,
+                "operation": operation,
+                "error": type(exc).__name__,
+                "message": str(exc),
+                "retryable": True,
+            },
+        )
 
 
 def _order_summary(order: Order) -> dict[str, Any]:

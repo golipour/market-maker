@@ -45,8 +45,16 @@ Provisioning:
 - Datasources: `grafana/provisioning/datasources/`
 - Dashboard loader: `grafana/provisioning/dashboards/dashboards.yml`
 - Dashboard JSON: `grafana/dashboards/`
+- Observability v2 dashboard JSON: `grafana/observability-v2/`
 - Prometheus config: `docker/prometheus.yml`
 - Loki / Tempo / Alloy config: `docker/loki.yaml`, `docker/tempo.yaml`, `docker/alloy.alloy`
+
+Grafana folders:
+
+| Folder | Provider | Filesystem path |
+|--------|----------|-----------------|
+| `Market Maker` | `market_maker` | `/var/lib/grafana/dashboards` |
+| `Market Maker - Observability v2` | `market_maker_observability_v2` | `/var/lib/grafana/observability-v2` |
 
 ## Telemetry policy
 
@@ -849,6 +857,7 @@ Regenerate dashboard JSON after changing generated panels:
 
 ```bash
 python3 mm/tools/generate_grafana_dashboards.py
+python3 mm/tools/generate_observability_v2_dashboards.py
 ```
 
 Use PostgreSQL dashboards for rich event payloads and Prometheus dashboards for

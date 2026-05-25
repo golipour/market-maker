@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import EventEnvelope, envelope_event
+from mm.observability import counter_inc, gauge, histogram_observe, log_event
+from mm.observability import schema as obs_schema
 
 
 class ParquetEventWriter:
@@ -54,6 +57,12 @@ class ParquetEventWriter:
         try:
             async for event in self.bus.subscribe(topic):
                 await self._queue.put(envelope_event(topic, event, run_id=self.run_id, source="parquet-writer"))
+                gauge(
+                    obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                    float(self._queue.qsize()),
+                    labels={"writer": "parquet"},
+                    help="Persistence writer queue depth",
+                )
         except asyncio.CancelledError:
             raise
 
@@ -69,17 +78,29 @@ class ParquetEventWriter:
                 if batch and (len(batch) >= self.batch_size or self._queue.empty()):
                     to_write = batch
                     batch = []
-                    await asyncio.to_thread(self._write_batch, to_write)
+                    queue_depth = self._queue.qsize()
+                    gauge(
+                        obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                        float(queue_depth),
+                        labels={"writer": "parquet"},
+                        help="Persistence writer queue depth",
+                    )
+                    await asyncio.to_thread(self._write_batch, to_write, queue_depth)
         except asyncio.CancelledError:
             if batch:
-                await asyncio.to_thread(self._write_batch, batch)
+                await asyncio.to_thread(self._write_batch, batch, self._queue.qsize())
             raise
 
-    def _write_batch(self, batch: list[EventEnvelope]) -> None:
+    def _write_batch(self, batch: list[EventEnvelope], queue_depth: int = 0) -> None:
+        if not batch:
+            return
+        started_ns = time.monotonic_ns()
         grouped: dict[Path, list[dict[str, Any]]] = {}
         for envelope in batch:
             path = self._partition_path(envelope)
             grouped.setdefault(path, []).append(_row(envelope))
+        sink = "parquet"
+        written_count = 0
         for path, rows in grouped.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -93,11 +114,75 @@ class ParquetEventWriter:
                     table = pa.concat_tables([existing, table], promote_options="default")
                 pq.write_table(table, tmp)
                 os.replace(tmp, path)
+                written_count += len(rows)
             except ImportError:
+                sink = "jsonl"
                 fallback = path.with_suffix(".jsonl")
-                with fallback.open("a", encoding="utf-8") as f:
-                    for row in rows:
-                        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                try:
+                    with fallback.open("a", encoding="utf-8") as f:
+                        for row in rows:
+                            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    written_count += len(rows)
+                except Exception as exc:
+                    counter_inc(
+                        "mm_persistence_errors_total",
+                        labels={"writer": "parquet", "error": type(exc).__name__},
+                    )
+                    log_event(
+                        obs_schema.EVENT_PERSISTENCE_BATCH_FAILED,
+                        {
+                            "writer": "parquet",
+                            "batch_size": len(batch),
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                            "path": str(fallback),
+                            "retryable": True,
+                        },
+                    )
+            except Exception as exc:
+                counter_inc(
+                    "mm_persistence_errors_total",
+                    labels={"writer": "parquet", "error": type(exc).__name__},
+                )
+                log_event(
+                    obs_schema.EVENT_PERSISTENCE_BATCH_FAILED,
+                    {
+                        "writer": "parquet",
+                        "batch_size": len(batch),
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "path": str(path),
+                        "retryable": True,
+                    },
+                )
+                continue
+        latency_ms = _elapsed_ms(started_ns)
+        if written_count <= 0:
+            return
+        counter_inc("mm_persistence_events_written_total", written_count, labels={"writer": "parquet"})
+        gauge("mm_persistence_batch_size", written_count, labels={"writer": "parquet"})
+        gauge(
+            obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+            float(queue_depth),
+            labels={"writer": "parquet"},
+            help="Persistence writer queue depth",
+        )
+        histogram_observe(
+            obs_schema.MM_PERSISTENCE_WRITE_LATENCY_MS,
+            latency_ms,
+            labels={"writer": "parquet"},
+            help="Persistence batch write latency",
+        )
+        log_event(
+            obs_schema.EVENT_PERSISTENCE_BATCH_WRITTEN,
+            {
+                "writer": "parquet",
+                "sink": sink,
+                "batch_size": written_count,
+                "queue_depth": int(queue_depth),
+                "latency_ms": latency_ms,
+            },
+        )
 
     def _partition_path(self, envelope: EventEnvelope) -> Path:
         dt = datetime.fromtimestamp(envelope.timestamp_ms / 1000.0, tz=timezone.utc)
@@ -126,3 +211,7 @@ def _row(envelope: EventEnvelope) -> dict[str, Any]:
         "payload_json": json.dumps(envelope.payload, ensure_ascii=False),
         "envelope_json": json.dumps(envelope.as_dict(), ensure_ascii=False),
     }
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    return (time.monotonic_ns() - started_ns) / 1_000_000

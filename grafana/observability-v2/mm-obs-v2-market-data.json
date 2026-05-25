@@ -1,0 +1,485 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Market data quality from persisted `MarketEvent` rows.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(ts, $__interval),\n       (exchange || ' ' || symbol) AS metric,\n       COUNT(*)::double precision AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(ts)\nGROUP BY 1, exchange, symbol\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Market event rate",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\",\n       (exchange || ' ' || symbol) AS metric,\n       GREATEST(0, EXTRACT(EPOCH FROM now()) * 1000 - (payload->>'t_end_ms')::double precision) AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Market event age ms",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", (exchange || ' best_bid') AS metric,\n       (payload->'orderbook'->'bids'->0->>'price')::double precision AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' best_ask') AS metric,\n       (payload->'orderbook'->'asks'->0->>'price')::double precision AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Best bid / ask",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", (exchange || ' spread') AS metric,\n       ((payload->'orderbook'->'asks'->0->>'price')::double precision -\n        (payload->'orderbook'->'bids'->0->>'price')::double precision) AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Spread",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", (exchange || ' buy_volume') AS metric, (payload->>'buy_volume')::double precision AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' sell_volume') AS metric, (payload->>'sell_volume')::double precision AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Buy / sell volume",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-mm"
+          },
+          "expr": "mm_latency_skew_ms",
+          "refId": "A"
+        }
+      ],
+      "title": "Latency skew",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "market-data"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:diagnostics:mpc-controller",
+          "value": "strategy:diagnostics:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:diagnostics:mpc-controller",
+            "value": "strategy:diagnostics:mpc-controller"
+          }
+        ],
+        "query": "strategy:diagnostics:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "strategy:target_books:mpc-controller",
+          "value": "strategy:target_books:mpc-controller"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [
+          {
+            "selected": true,
+            "text": "strategy:target_books:mpc-controller",
+            "value": "strategy:target_books:mpc-controller"
+          }
+        ],
+        "query": "strategy:target_books:mpc-controller",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "10000",
+          "value": "10000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [
+          {
+            "selected": true,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "10000,5000,1000",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 01 Market Data Quality",
+  "uid": "mm-obs-v2-market-data",
+  "version": 1,
+  "weekStart": ""
+}
