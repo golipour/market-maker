@@ -28,7 +28,7 @@ from mm.core.adapters.joint import joint_target_book_to_action
 from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
 from mm.mpc.mpc_state import State
-from mm.pricing import DEFAULT_VWAP_DEPTH_LOTS, vwap_from_raw_orderbook
+from mm.pricing import vwap_from_raw_orderbook
 from mm.runtime.config import (
     ControllerRuntimeConfig,
     ExecutionRuntimeConfig,
@@ -83,10 +83,36 @@ def _venue_optimizer_config(payload: Any, *, venue: str) -> dict[str, Any]:
     return data
 
 
-def _vwap_target_depth(local_price_model: Any | None) -> float:
-    """Depth cap (base units) aligned with ``TorchResidualPriceModel._target_depth_lots``."""
+def _liquidity_sourcing_portfolio_enabled(sourcing: LiquiditySourcingRuntimeConfig) -> bool:
+    return bool(sourcing.enabled and sourcing.mode == "liquidity_sourcing")
 
-    return float(getattr(local_price_model, "_target_depth_lots", DEFAULT_VWAP_DEPTH_LOTS))
+
+def _inventory_vwap_depth(
+    local_inventory: float,
+    global_inventory: float = 0.0,
+    *,
+    liquidity_sourcing_enabled: bool,
+) -> float:
+    """VWAP depth is the absolute inventory whose mark-to-market is being optimized."""
+
+    total = float(local_inventory)
+    if liquidity_sourcing_enabled:
+        total += float(global_inventory)
+    if not math.isfinite(total):
+        return 0.0
+    return max(0.0, abs(total))
+
+
+def _set_model_vwap_depth(model: Any, vwap_depth: float | None) -> None:
+    if model is None or vwap_depth is None or not hasattr(model, "_target_depth_lots"):
+        return
+    try:
+        depth = float(vwap_depth)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(depth):
+        return
+    setattr(model, "_target_depth_lots", max(0.0, depth))
 
 
 def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
@@ -153,7 +179,6 @@ class MpcStrategyEngine:
             frame,
             self.binding,
             self.config.orderbook_grid.spread_max,
-            local_price_model=self._local_price_model,
             reference_price_source=self.config.reference_price_source,
             liquidity_sourcing=self.liquidity_sourcing,
             ledger=self._ledger_context,
@@ -185,6 +210,7 @@ class MpcStrategyEngine:
             state,
             previous=self._previous_frame,
             current=frame,
+            vwap_depth=state.vwap_depth,
         )
         if (
             self._global_price_model is not None
@@ -222,7 +248,12 @@ class MpcStrategyEngine:
                 params_after=self._global_market_flow_model.get_params(),
                 updated=frame.has_global,
             )
-        _update_residual_price_model(self._local_price_model, self._previous_frame, frame)
+        _update_residual_price_model(
+            self._local_price_model,
+            self._previous_frame,
+            frame,
+            state.vwap_depth,
+        )
         if (
             self._local_price_model is not None
             and "local_price" in model_scores
@@ -358,7 +389,12 @@ class MpcStrategyEngine:
                     else {}
                 ),
                 "active_in_mpc": bool(
-                    self.liquidity_sourcing.enabled and self._global_market_flow_model is not None
+                    self.binding.global_ is not None
+                    and (
+                        self.liquidity_sourcing.enabled
+                        or self.config.reference_price_source == "global"
+                    )
+                    and self._global_market_flow_model is not None
                 ),
             },
             global_price={
@@ -368,7 +404,14 @@ class MpcStrategyEngine:
                     if self._global_price_model is not None and hasattr(self._global_price_model, "get_params")
                     else {}
                 ),
-                "active_in_mpc": bool(self.liquidity_sourcing.enabled and self._global_price_model is not None),
+                "active_in_mpc": bool(
+                    self.binding.global_ is not None
+                    and (
+                        self.liquidity_sourcing.enabled
+                        or self.config.reference_price_source == "global"
+                    )
+                    and self._global_price_model is not None
+                ),
             },
         )
 
@@ -389,7 +432,6 @@ def _build_controller(
     local_price_model = _build_price_model(
         config.local_price_model,
         market_flow_model=local_market_flow_model,
-        vwap_depth=config.vwap_depth,
     )
 
     execution_cfg = dict(config.execution_model or {})
@@ -451,13 +493,16 @@ def _build_controller(
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "device": "cpu",
-        "vwap_depth": config.vwap_depth,
         "reference_price_source": config.reference_price_source,
         "local_optimizer": local_optimizer_defaults,
         "global_optimizer": global_optimizer_defaults,
     }
     optimizer_defaults.update(optimizer_cfg)
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
+    global_models_enabled = bool(
+        binding.global_ is not None
+        and (sourcing.enabled or config.reference_price_source == "global")
+    )
     global_market_flow_model = _build_market_flow_model(
         config.global_market_flow_model,
         config_name="global_market_flow_model",
@@ -465,15 +510,14 @@ def _build_controller(
     sourcing_global_price_model = _build_sourcing_global_price_model(
         config.global_price_model,
         market_flow_model=global_market_flow_model,
-        vwap_depth=config.vwap_depth,
     )
     return MonteCarloMPCTensorBatched(
         local_price_model=local_price_model,
         local_market_flow_model=local_market_flow_model,
         execution_model=execution_model,
         liquidity_sourcing_enabled=sourcing.enabled,
-        global_market_flow_model=global_market_flow_model if sourcing.enabled else None,
-        global_price_model=sourcing_global_price_model if sourcing.enabled else None,
+        global_market_flow_model=global_market_flow_model if global_models_enabled else None,
+        global_price_model=sourcing_global_price_model if global_models_enabled else None,
         **optimizer_defaults,
     )
 
@@ -506,7 +550,6 @@ def _build_price_model(
     cfg: dict[str, Any] | None,
     *,
     market_flow_model: Any,
-    vwap_depth: float | None,
     config_name: str = "local_price_model",
 ) -> Any:
     from mm.mpc.price_torch import TorchResidualPriceModel
@@ -515,10 +558,10 @@ def _build_price_model(
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
     if price_kind != "residual":
         raise ValueError(f"unsupported {config_name} kind: {price_kind}")
-    nested_vwap = price_cfg.pop("vwap_depth", None)
-    resolved_vwap = vwap_depth if vwap_depth is not None else nested_vwap
-    if resolved_vwap is not None:
-        price_cfg["vwap_depth"] = float(resolved_vwap)
+    if "vwap_depth" in price_cfg:
+        raise ValueError(
+            f"{config_name}.vwap_depth was removed; VWAP depth is derived from inventory"
+        )
     return TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
 
 
@@ -526,7 +569,6 @@ def _build_sourcing_global_price_model(
     cfg: dict[str, Any] | None,
     *,
     market_flow_model: Any,
-    vwap_depth: float | None,
 ) -> Any | None:
     """Build the global price model used for liquidity-sourcing MPC and diagnostics."""
 
@@ -539,7 +581,6 @@ def _build_sourcing_global_price_model(
         return _build_price_model(
             cfg,
             market_flow_model=market_flow_model,
-            vwap_depth=vwap_depth,
             config_name="global_price_model",
         )
     return _build_global_price_model(cfg)
@@ -607,11 +648,13 @@ def _update_global_vwap_price_model(
     *,
     previous: StrategyInputFrame | None = None,
     current: StrategyInputFrame | None = None,
+    vwap_depth: float | None = None,
 ) -> None:
     """Update the configured global price model from frame VWAP observations."""
 
     if model is None or not hasattr(model, "update"):
         return
+    _set_model_vwap_depth(model, vwap_depth)
     if hasattr(model, "sample_deltas"):
         if state.global_buy_vwap is None or state.global_sell_vwap is None:
             return
@@ -645,7 +688,6 @@ def _state_from_frame(
     binding: SymbolBinding,
     spread_max: float,
     *,
-    local_price_model: Any | None,
     reference_price_source: str = "global",
     liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
     ledger: JointLedgerSnapshot | None = None,
@@ -653,7 +695,26 @@ def _state_from_frame(
     from mm.mpc.mpc_state import OrderbookRelative
 
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
-    vwap_depth = _vwap_target_depth(local_price_model)
+    global_portfolio_enabled = _liquidity_sourcing_portfolio_enabled(sourcing)
+    local_inventory, local_cash = _venue_inventory_cash(
+        ledger.local if ledger is not None else None,
+        frame.local_private,
+        binding.local,
+    )
+    global_inventory = 0.0
+    global_cash = 0.0
+    if global_portfolio_enabled and binding.global_ is not None:
+        global_ledger = ledger.global_ if ledger is not None else None
+        global_inventory, global_cash = _venue_inventory_cash(
+            global_ledger,
+            frame.global_private,
+            binding.global_,
+        )
+    vwap_depth = _inventory_vwap_depth(
+        local_inventory,
+        global_inventory,
+        liquidity_sourcing_enabled=global_portfolio_enabled,
+    )
     local_mid = mid_from_orderbook(frame.local.orderbook)
     bids = tuple(
         (spread, level.qty)
@@ -665,20 +726,11 @@ def _state_from_frame(
         for level in frame.local.orderbook.asks
         if (spread := level.price - local_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
-    local_inventory, local_cash = _venue_inventory_cash(
-        ledger.local if ledger is not None else None,
-        frame.local_private,
-        binding.local,
-    )
     buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.local.orderbook, target_depth=vwap_depth)
     global_buy_vwap = global_sell_vwap = None
-    global_inventory = 0.0
-    global_cash = 0.0
     global_ob_rel = None
     global_buy_vol = 0.0
     global_sell_vol = 0.0
-    global_buy_vwap = 0.0
-    global_sell_vwap = 0.0
     global_mid = None
     if frame.global_ is not None:
         global_mid = mid_from_orderbook(frame.global_.orderbook)
@@ -693,13 +745,6 @@ def _state_from_frame(
             global_sell_vwap = float(global_sell_vwap)
         except ValueError:
             global_buy_vwap = global_sell_vwap = None
-    if binding.global_ is not None:
-        global_ledger = ledger.global_ if ledger is not None else None
-        global_inventory, global_cash = _venue_inventory_cash(
-            global_ledger,
-            frame.global_private,
-            binding.global_,
-        )
     use_global_reference = (
         str(reference_price_source).strip().lower() == "global"
         and global_sell_vwap is not None
@@ -716,6 +761,7 @@ def _state_from_frame(
         cash=local_cash,
         buy_vwap=buy_vwap,
         sell_vwap=sell_vwap,
+        vwap_depth=vwap_depth,
         global_buy_vwap=global_buy_vwap,
         global_sell_vwap=global_sell_vwap,
         global_mid=global_mid,
@@ -751,7 +797,10 @@ def _update_market_flow_model(model: Any, frame: StrategyInputFrame) -> None:
 
 
 def _update_residual_price_model(
-    model: Any, previous: StrategyInputFrame | None, current: StrategyInputFrame
+    model: Any,
+    previous: StrategyInputFrame | None,
+    current: StrategyInputFrame,
+    vwap_depth: float | None = None,
 ) -> None:
     """EWMA on true local VWAP residuals after market-flow-only book evolution."""
 
@@ -759,6 +808,7 @@ def _update_residual_price_model(
         return
     if not hasattr(model, "update"):
         return
+    _set_model_vwap_depth(model, vwap_depth)
     prev_step = _price_model_step(previous.local)
     curr_step = _price_model_step(current.local)
     try:

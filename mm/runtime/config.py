@@ -306,7 +306,6 @@ class ControllerRuntimeConfig:
     target_books_topic: str | None = None
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
-    vwap_depth: float | None = None
     reference_price_source: ReferenceVenueRole = "global"
     local_price_model: dict[str, Any] | None = None
     local_market_flow_model: dict[str, Any] | None = None
@@ -679,6 +678,10 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "controller model config fields were renamed: use local_price_model and "
             f"local_market_flow_model instead of {', '.join(removed_model_keys)}"
         )
+    if "vwap_depth" in payload:
+        raise ValueError(
+            "controller.vwap_depth was removed; VWAP depth is derived from inventory"
+        )
     optimizer_payload = payload.get("optimizer")
     if isinstance(optimizer_payload, dict):
         venue_optimizer_keys = {
@@ -774,11 +777,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         ),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
-        vwap_depth=(
-            float(payload["vwap_depth"])
-            if payload.get("vwap_depth") is not None
-            else None
-        ),
         reference_price_source=_normalize_reference_price_source(
             payload.get("reference_price_source", "global")
         ),
@@ -891,10 +889,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "target_books_topic": config.normalized_target_books_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
         "max_orders_per_side": config.max_orders_per_side,
-        "vwap_depth": config.vwap_depth,
         "vwap_depth_note": (
-            "shared cumulative base quantity cap for local/global VWAP paths in MPC "
-            "and residual price models"
+            "derived each frame from abs(local_inventory), or from "
+            "abs(local_inventory + global_inventory) when liquidity sourcing is enabled; "
+            "VWAP helpers cap to visible book depth when requested depth is larger"
         ),
         "reference_price_source": config.reference_price_source,
         "reference_price_source_note": (

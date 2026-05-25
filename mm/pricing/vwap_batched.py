@@ -18,7 +18,7 @@ def vwap_prices_batched(
     center_mid: torch.Tensor,
     spread_grid: torch.Tensor,
     *,
-    target_depth: float,
+    target_depth: float | torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Batched buy-VWAP (ask side) and sell-VWAP (bid side) to a shared cumulative depth.
@@ -27,6 +27,8 @@ def vwap_prices_batched(
     - ``center_mid``: (n_samples, 1) mid for absolute price = mid ± spread_grid.
     - ``spread_grid``: (n_levels,) positive spreads from mid.
     - ``target_depth``: cap on cumulative base qty per side (shared across bid+ask).
+      May be a scalar or a per-sample tensor shaped ``(n_samples,)`` or
+      ``(n_samples, 1)``.
 
     Returns ``(buy_vwap, sell_vwap)``, each (n_samples, 1).
     """
@@ -36,10 +38,14 @@ def vwap_prices_batched(
     cum_ask = torch.cumsum(ob_asks, dim=1)
     total_bid = cum_bid[:, -1:]
     total_ask = cum_ask[:, -1:]
-    depth_used = torch.minimum(
-        torch.minimum(total_bid, total_ask),
-        torch.full_like(total_bid, float(target_depth)),
-    )
+    if torch.is_tensor(target_depth):
+        target = target_depth.to(device=total_bid.device, dtype=total_bid.dtype)
+        if target.ndim == 1:
+            target = target.view(-1, 1)
+        target = torch.clamp(target, min=0.0)
+    else:
+        target = torch.full_like(total_bid, max(0.0, float(target_depth)))
+    depth_used = torch.minimum(torch.minimum(total_bid, total_ask), target)
     depth_used_safe = torch.clamp(depth_used, min=eps)
 
     cum_bid_prev = torch.cat([torch.zeros_like(cum_bid[:, :1]), cum_bid[:, :-1]], dim=1)

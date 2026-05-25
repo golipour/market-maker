@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from mm.core.models.market import PriceLevel, RawOrderbook
 from mm.pricing.orderbook_ref import mid_raw_orderbook, vwap_from_raw_orderbook
+from mm.pricing.vwap_batched import vwap_prices_batched
 
 
 def _book() -> RawOrderbook:
@@ -45,3 +47,24 @@ def test_vwap_from_raw_orderbook_falls_back_to_mid_when_thin() -> None:
     b, s = vwap_from_raw_orderbook(book, target_depth=100.0)
     assert b == pytest.approx(mid)
     assert s == pytest.approx(mid)
+
+
+def test_batched_vwap_accepts_per_sample_depth() -> None:
+    ob_bids = torch.tensor([[5.0, 10.0], [5.0, 10.0]], dtype=torch.float64)
+    ob_asks = torch.tensor([[5.0, 10.0], [5.0, 10.0]], dtype=torch.float64)
+    mid = torch.tensor([[100.0], [100.0]], dtype=torch.float64)
+    spread = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    depth = torch.tensor([[5.0], [15.0]], dtype=torch.float64)
+
+    buy_vwap, sell_vwap = vwap_prices_batched(
+        ob_bids,
+        ob_asks,
+        mid,
+        spread,
+        target_depth=depth,
+    )
+
+    assert float(buy_vwap[0, 0]) == pytest.approx(101.0)
+    assert float(sell_vwap[0, 0]) == pytest.approx(99.0)
+    assert float(buy_vwap[1, 0]) == pytest.approx((5.0 * 101.0 + 10.0 * 102.0) / 15.0)
+    assert float(sell_vwap[1, 0]) == pytest.approx((5.0 * 99.0 + 10.0 * 98.0) / 15.0)

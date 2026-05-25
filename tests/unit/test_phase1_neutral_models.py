@@ -211,6 +211,16 @@ def test_controller_reference_price_source_is_validated() -> None:
         )
 
 
+def test_controller_fixed_vwap_depth_is_rejected() -> None:
+    with pytest.raises(ValueError, match="vwap_depth"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {"enabled": True, "vwap_depth": 100.0},
+            }
+        )
+
+
 def test_runtime_contract_includes_venues() -> None:
     config = runtime_config_from_mapping(
         venues_payload(

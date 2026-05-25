@@ -35,7 +35,7 @@ from mm.mpc.optimizer_diagnostics import (
 )
 from mm.observability.logs import log_event
 
-from mm.pricing import target_depth_lots_from_price_model, vwap_prices_batched
+from mm.pricing import vwap_prices_batched
 
 
 # -----------------------------------------------------------------------------
@@ -550,7 +550,6 @@ class MonteCarloMPCTensorBatched:
         local_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         global_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         reference_price_source: str = "global",
-        vwap_depth: float | None = None,
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
         quote_spread_max: float | int | None = None,
@@ -579,11 +578,6 @@ class MonteCarloMPCTensorBatched:
         self.reference_price_source = str(reference_price_source or "global").strip().lower()
         if self.reference_price_source not in ("global", "local"):
             raise ValueError("reference_price_source must be 'global' or 'local'")
-        self.vwap_depth = (
-            float(vwap_depth)
-            if vwap_depth is not None
-            else target_depth_lots_from_price_model(self.local_price_model)
-        )
         flat_defaults = VenueOptimizerParams(
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
@@ -710,7 +704,12 @@ class MonteCarloMPCTensorBatched:
         return action
 
     def optimize_with_diagnostics(self, state: State) -> tuple[SigmoidMixtureAction, OptimizerRunDiagnostics]:
-        if self.liquidity_sourcing_enabled:
+        has_global_reference = (
+            self.reference_price_source == "global"
+            and state.global_sell_vwap is not None
+            and float(state.global_sell_vwap) > 0.0
+        )
+        if self.liquidity_sourcing_enabled or has_global_reference:
             from mm.mpc.joint_optimizer import optimize_joint_with_diagnostics
 
             return optimize_joint_with_diagnostics(self, state)
@@ -783,7 +782,7 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
-        vwap_depth = self.vwap_depth
+        vwap_depth = max(0.0, float(getattr(state, "vwap_depth", 0.0)))
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.
         def draw_samples():
@@ -908,8 +907,9 @@ class MonteCarloMPCTensorBatched:
                         mid_fallback_t,
                         spread_grid,
                     )
+                    vwap_depth_t = torch_mod.abs(inv_t)
                     if h == 0:
-                        # Use upstream VWAPs (single vwap_depth policy),
+                        # Use upstream VWAPs computed from the initial inventory depth,
                         # instead of recomputing from the book arrays.
                         buy_vwap_book_t = torch_mod.full(
                             (self.n_samples, 1),
@@ -929,7 +929,7 @@ class MonteCarloMPCTensorBatched:
                             ob_asks,
                             mid_t,
                             spread_grid,
-                            target_depth=vwap_depth,
+                            target_depth=vwap_depth_t,
                         )
                     buy_vwap_t = buy_vwap_book_t + eps_buy_h
                     sell_vwap_t = sell_vwap_book_t + eps_sell_h
@@ -962,7 +962,7 @@ class MonteCarloMPCTensorBatched:
                         ob_asks_next,
                         mid_next,
                         spread_grid,
-                        target_depth=vwap_depth,
+                        target_depth=torch_mod.abs(inv_next),
                     )
                     buy_vwap_next = buy_vwap_book_next + eps_buy_next
                     sell_vwap_next = sell_vwap_book_next + eps_sell_next
@@ -1095,7 +1095,7 @@ class MonteCarloMPCTensorBatched:
                 "fixed_mc_samples": self.fixed_mc_samples,
                 "spread_max": self.spread_max,
                 "spread_step": self.spread_step,
-                "vwap_depth": self.vwap_depth,
+                "vwap_depth": vwap_depth,
                 "reference_price_source": self.reference_price_source,
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,

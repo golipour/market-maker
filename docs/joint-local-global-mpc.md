@@ -162,7 +162,16 @@ The reference path is selected by `controller.reference_price_source`:
 
 Local and global future VWAP paths are still simulated separately from their own
 books and price models. Only the selected path is used as the valuation
-reference.
+reference. A global reference path can be used even when
+`liquidity_sourcing.enabled=false`; in that mode global public data affects the
+reference price, but global inventory, cash, fills, and actions stay out of the
+portfolio.
+
+VWAP depth is not a fixed controller config. The runtime derives it each frame
+from `abs(local_inventory)`, or from `abs(local_inventory + global_inventory)`
+when liquidity sourcing is enabled. If the requested depth is larger than
+visible book depth, the VWAP calculation consumes only the available displayed
+depth.
 
 ## Joint Objective
 
@@ -370,6 +379,7 @@ For the joint optimizer:
 - `optimizer.config.reference_price` is the initial marking price.
 - `optimizer.config.reference_price_source` tells which VWAP path marked
   objective returns.
+- `optimizer.config.vwap_depth` is the initial inventory-derived VWAP depth.
 - `optimizer.config.wealth_0` is the normalization base for returns.
 - `optimizer.config.local_optimizer` and `optimizer.config.global_optimizer`
   show the resolved venue-scoped optimizer parameters.

@@ -221,6 +221,7 @@ def enrich_state_for_joint(
         cash=state.cash,
         buy_vwap=state.buy_vwap,
         sell_vwap=state.sell_vwap,
+        vwap_depth=state.vwap_depth,
         global_buy_vwap=state.global_buy_vwap,
         global_sell_vwap=state.global_sell_vwap,
         global_mid=state.global_mid,

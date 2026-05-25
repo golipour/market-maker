@@ -60,6 +60,7 @@ The optimizer receives `mm.mpc.mpc_state.State`.
 | `buy_vol`, `sell_vol` | Realized local market-flow volumes |
 | `inventory`, `cash` | Local base inventory and quote cash |
 | `buy_vwap`, `sell_vwap` | Local reference VWAPs |
+| `vwap_depth` | Inventory-derived VWAP depth for the current frame |
 | `global_ob_rel` | Optional cleaned global market-only book |
 | `global_buy_vol`, `global_sell_vol` | Optional global market-flow volumes |
 | `global_inventory`, `global_cash` | Optional global base inventory and quote cash |
@@ -80,6 +81,14 @@ The global venue is active only when:
 
 Risk and execution apply stricter freshness requirements before live global
 orders are allowed.
+
+VWAP depth is derived from the inventory being marked: `abs(local_inventory)` in
+single-venue mode, or `abs(local_inventory + global_inventory)` when liquidity
+sourcing is enabled. The scalar and batched VWAP helpers cap naturally to
+available displayed book depth when that requested depth is larger than the
+book. Global public orderbook/VWAP data may still be used as the reference path
+when `controller.reference_price_source="global"` and liquidity sourcing is
+disabled; in that case global inventory and cash remain zero in `State`.
 
 ## Orderbook Projection
 
@@ -262,28 +271,30 @@ Supported global price kinds:
 
 ## Single-Venue Rollout
 
-When `liquidity_sourcing_enabled=false`, `MonteCarloMPCTensorBatched` uses the
-local-only rollout:
+When `liquidity_sourcing_enabled=false` and no usable global reference path is
+selected, `MonteCarloMPCTensorBatched` uses the local-only rollout:
 
 1. Select one local action per horizon step.
 2. Apply action shape regularizers.
 3. Sample local market flow and price residuals.
-4. Build current VWAPs from the simulated local book.
+4. Build current VWAPs from the simulated local book at `abs(inventory)`.
 5. Run `soft_fill_batched()` against the local book.
 6. Update local inventory and cash from simulated fills.
 7. Compute terminal objective from local wealth and penalties.
 
 ## Joint Liquidity-Sourcing Rollout
 
-When `liquidity_sourcing_enabled=true`, `optimize_joint_with_diagnostics()` runs
-a four-curve rollout.
+When `liquidity_sourcing_enabled=true`, or when a global reference path is
+selected and global public data is present, `optimize_joint_with_diagnostics()`
+runs a four-curve rollout.
 
 For each horizon step:
 
 1. Split the joint step tensor into `local_h` and `global_h`.
 2. Draw local and global market-flow volumes.
 3. Draw local and global VWAP residuals.
-4. Compute local and global VWAPs from simulated books.
+4. Compute local and global VWAPs from simulated books at the selected
+   inventory-derived depth.
 5. Run `soft_fill_batched()` for the local book with `depth_scale=1.0`.
 6. Run `soft_fill_batched()` for the global book with
    `depth_scale=1.0` when global is active, otherwise `0.0`.
@@ -354,6 +365,9 @@ W = local_cash + global_cash
 `controller.reference_price_source` (`global` by default, or `local`).
 The local and global VWAP paths are still simulated separately from their own
 books and price models; only the selected path marks wealth and returns.
+Liquidity sourcing controls whether global wallet state, global fills, and
+global actions enter the portfolio. It does not have to be enabled merely to use
+global public data as the reference path.
 
 Initial wealth:
 

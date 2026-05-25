@@ -38,7 +38,7 @@ from mm.mpc.optimizer_diagnostics import (
     build_action_snapshot,
 )
 from mm.observability.logs import log_event
-from mm.pricing import target_depth_lots_from_price_model, vwap_prices_batched
+from mm.pricing import vwap_prices_batched
 
 if TYPE_CHECKING:
     from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
@@ -180,7 +180,7 @@ def optimize_joint_with_diagnostics(
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
     maker_fee = getattr(mpc.execution_model, "maker_fee", 0.0)
-    vwap_depth = float(getattr(mpc, "vwap_depth", target_depth_lots_from_price_model(mpc.local_price_model)))
+    vwap_depth_0 = max(0.0, float(getattr(state, "vwap_depth", 0.0)))
     global_flow_model = mpc.global_market_flow_model
     global_price_model = mpc.global_price_model
     local_opt = mpc.local_optimizer
@@ -369,6 +369,9 @@ def optimize_joint_with_diagnostics(
                     global_mid_fallback_t,
                     spread_grid,
                 )
+                vwap_depth_t = torch_mod.abs(
+                    inv_t + global_inv_t if mpc.liquidity_sourcing_enabled else inv_t
+                )
                 if h == 0:
                     buy_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device)
                     sell_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device)
@@ -383,14 +386,14 @@ def optimize_joint_with_diagnostics(
                     )
                 else:
                     buy_vwap_t, sell_vwap_t = vwap_prices_batched(
-                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth
+                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth_t
                     )
                     global_buy_vwap_t, global_sell_vwap_t = vwap_prices_batched(
                         global_ob_bids,
                         global_ob_asks,
                         global_mid_t,
                         spread_grid,
-                        target_depth=vwap_depth,
+                        target_depth=vwap_depth_t,
                     )
                 buy_vwap_t = buy_vwap_t + eps_buy_h
                 sell_vwap_t = sell_vwap_t + eps_sell_h
@@ -588,7 +591,7 @@ def optimize_joint_with_diagnostics(
             "fixed_mc_samples": mpc.fixed_mc_samples,
             "spread_max": mpc.spread_max,
             "spread_step": mpc.spread_step,
-            "vwap_depth": vwap_depth,
+            "vwap_depth": vwap_depth_0,
             "reference_price": ref_0,
             "reference_price_source": reference_price_source,
             "wealth_0": wealth_0,
@@ -621,7 +624,8 @@ def optimize_joint_with_diagnostics(
         rollout={
             "n_samples": mpc.n_samples,
             "horizon": mpc.horizon,
-            "liquidity_sourcing": True,
+            "liquidity_sourcing": bool(mpc.liquidity_sourcing_enabled),
+            "global_reference": bool(use_global_reference),
             "global_active": global_active,
             "consolidated_wealth": True,
             "global_rollout": False,
