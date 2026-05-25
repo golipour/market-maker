@@ -177,7 +177,7 @@
           "refId": "A"
         }
       ],
-      "title": "Controller stage p95",
+      "title": "Controller stage p95 (ms)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -220,7 +220,7 @@
           "refId": "A"
         }
       ],
-      "title": "Order sync p95",
+      "title": "Order sync p95 (ms)",
       "type": "timeseries",
       "options": {
         "legend": {

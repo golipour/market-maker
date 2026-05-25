@@ -97,7 +97,7 @@
           "refId": "A"
         }
       ],
-      "title": "Latency skew",
+      "title": "Latency skew (ms)",
       "type": "timeseries",
       "options": {
         "legend": {

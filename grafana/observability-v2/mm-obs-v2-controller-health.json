@@ -54,7 +54,7 @@
           "refId": "A"
         }
       ],
-      "title": "Frame age",
+      "title": "Frame age (ms)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -140,7 +140,7 @@
           "refId": "A"
         }
       ],
-      "title": "Stage latency p95",
+      "title": "Stage latency p95 (ms)",
       "type": "timeseries",
       "options": {
         "legend": {

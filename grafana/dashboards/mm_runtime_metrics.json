@@ -409,7 +409,7 @@
           "refId": "D"
         }
       ],
-      "title": "Market / frame → execution sync start (latency)",
+      "title": "Market / frame → execution sync start latency (ms)",
       "type": "timeseries"
     },
     {
@@ -473,7 +473,7 @@
           "refId": "B"
         }
       ],
-      "title": "Order manager: sync latency",
+      "title": "Order manager: sync latency (ms)",
       "type": "timeseries"
     },
     {
@@ -526,7 +526,7 @@
           "refId": "A"
         }
       ],
-      "title": "Controller decision latency (gauge, last scrape)",
+      "title": "Controller decision latency (ms, gauge, last scrape)",
       "type": "timeseries"
     },
     {

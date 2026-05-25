@@ -33,7 +33,7 @@
     "enable_execution": true
   },
   "liquidity_sourcing": {
-    "enabled": true,
+    "enabled": false,
     "mode": "liquidity_sourcing",
     "global_live_orders": false
   },
@@ -93,8 +93,8 @@
     "enabled": true,
     "observe_only": false,
     "action_start_after_steps": 10,
-    "placement_timeout_ms": 3000,
-    "placement_max_concurrency": 8,
+    "placement_timeout_ms": 5000,
+    "placement_max_concurrency": 32,
     "actor_id": "mpc-controller",
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
@@ -148,7 +148,7 @@
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
-      "n_components": 3,
+      "n_components": 4,
       "n_samples": 64,
       "warm_start": false,
       "fixed_mc_samples": true,

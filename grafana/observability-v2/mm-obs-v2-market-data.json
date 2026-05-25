@@ -103,7 +103,7 @@
           "refId": "A"
         }
       ],
-      "title": "Market event age ms",
+      "title": "Market event age (ms)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -284,7 +284,7 @@
           "refId": "A"
         }
       ],
-      "title": "Latency skew",
+      "title": "Latency skew (ms)",
       "type": "timeseries",
       "options": {
         "legend": {
