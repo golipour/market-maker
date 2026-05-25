@@ -12,8 +12,7 @@ The optimizer still chooses continuous sigmoid quote-depth curves over spread
 from mid. In single-venue mode it chooses local bid/ask curves. In liquidity
 sourcing mode it chooses four curves per horizon step: local bid/ask and global
 bid/ask. The strategy layer discretizes the first-step curves into
-`JointTargetBook`; the legacy `Action` is derived from that book for
-compatibility.
+`JointTargetBook`; `Action` is derived from that book for execution reconcile.
 
 ## Integration Point
 
@@ -21,16 +20,16 @@ Production call path:
 
 ```text
 StrategyRunner.on_joint_frame
-  -> StrategyRunner.on_frame
+  -> StrategyRunner._process_input_frame
   -> clean_strategy_frame
   -> MpcStrategyEngine.decide
   -> _state_from_frame
   -> score online models before update
   -> update local/global models
   -> MonteCarloMPCTensorBatched.optimize(state)
-  -> legacy optimizer or joint optimizer
+  -> single-venue optimizer or joint optimizer
   -> build_joint_target_book_from_sigmoid
-  -> StrategyDecision + JointTargetBook + compatibility Action
+  -> StrategyDecision + JointTargetBook + Action
 ```
 
 Public API:
@@ -141,8 +140,8 @@ len(joint_step) = 2 * 6 * n
 len(x_torch) = horizon * 2 * 6 * n
 ```
 
-The optimizer returns the local first-step `SigmoidMixtureAction` for
-compatibility. In joint mode it also stores:
+The optimizer returns the local first-step `SigmoidMixtureAction`. In joint mode
+it also stores:
 
 - `_last_joint_action`
 - `_last_global_sigmoid_action`
@@ -206,7 +205,7 @@ Important details:
 
 - Each optimize call writes a freshly tiled action into `_x_torch`.
 - If `warm_start=False`, Adam optimizer state is reset.
-- If `warm_start=True`, compatible Adam state can be retained.
+- If `warm_start=True`, Adam state can be retained.
 - Joint warm start stores and reloads the joint first-step raw vector, not only
   the local action.
 
@@ -218,8 +217,6 @@ Single-venue optimizer samples:
 | --- | --- |
 | local buy/sell market volume | `market_flow_model` |
 | local VWAP residuals | `price_model` |
-| legacy global/hedge VWAP deltas | `reference_global_price_model`, if configured |
-
 Joint optimizer samples:
 
 | Variable | Source model |
@@ -259,9 +256,7 @@ Supported market-flow kinds:
 
 Supported global price kinds:
 
-- `legacy`
 - `ewma_gaussian`
-- `hedge_gaussian_rep`
 - `gaussian`
 - `residual` for liquidity-sourcing global residual modeling
 - `none` / `disabled`
@@ -269,7 +264,7 @@ Supported global price kinds:
 ## Single-Venue Rollout
 
 When `liquidity_sourcing_enabled=false`, `MonteCarloMPCTensorBatched` uses the
-legacy local-only rollout:
+local-only rollout:
 
 1. Select one local action per horizon step.
 2. Apply action shape regularizers.
@@ -277,13 +272,7 @@ legacy local-only rollout:
 4. Build current VWAPs from the simulated local book.
 5. Run `soft_fill_batched()` against the local book.
 6. Update local inventory and cash from simulated fills.
-7. Optionally apply the legacy immediate hedge-rollout accounting if enabled in
-   older configs.
-8. Compute terminal objective from local wealth and penalties.
-
-The legacy immediate hedge-rollout branch is a simulation assumption only. The
-current runtime does not wire a reactive live hedge service; live cross-venue
-behavior is represented by joint target books and per-venue execution gates.
+7. Compute terminal objective from local wealth and penalties.
 
 ## Joint Liquidity-Sourcing Rollout
 
@@ -402,7 +391,7 @@ Joint diagnostics also record:
 
 The joint objective does not use the older local-only expected-PnL, volatility,
 CVaR, quote-size, and quoted-spread component set. Those still apply in the
-legacy single-venue branch.
+single-venue branch.
 
 ## Legacy Single-Venue Objective
 
@@ -472,7 +461,7 @@ The optimizer output is not sent directly to venues.
 5. In liquidity-sourcing mode, repeat the same process for the stored global
    sigmoid action and global instrument constraints.
 6. Return a `JointTargetBook`.
-7. Convert the joint book to compatibility `Action`.
+7. Convert the joint book to `Action`.
 
 The local `ActionPipelineReport` includes continuous depth, ladder totals,
 venue-quantized totals, capped totals, target-book totals, risk totals, and
@@ -501,7 +490,7 @@ In joint mode:
 - `rollout.liquidity_sourcing` is true
 - `rollout.consolidated_wealth` is true
 - `rollout.global_action_flat` stores the best global first-step raw action
-- local action snapshots remain the main action snapshots for compatibility
+- local action snapshots remain the main action snapshots
 
 `MpcStrategyEngine` embeds this payload in both `StrategyDecision.optimizer` and
 `ControllerDiagnostics.optimizer`.
@@ -530,7 +519,7 @@ global orders may reach the global `OrderManager`.
 - Joint MPC uses the same inventory target/scale resolver for local and global
   inventory penalties.
 - The joint objective uses consolidated wealth and inventory capacity penalties;
-  it does not yet include all legacy quote-shape and tail-risk regularizers.
+  it does not yet include all quote-shape and tail-risk regularizers.
 - The fill model remains a differentiable proportional-share approximation, not
   a queue model.
 - Same-quote consolidated wealth is assumed by the current implementation; if

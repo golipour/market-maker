@@ -248,7 +248,7 @@ async def build_runtime_components(
         max_global_private_age_ms = config.controller.risk.global_.max_private_state_age_ms
 
     frame_assembler = JointStrategyFrameAssembler(
-        legacy_assembler=frame_assembler_inner,
+        input_assembler=frame_assembler_inner,
         binding=config.binding,
         liquidity_sourcing=config.liquidity_sourcing,
         bus=runtime_bus,

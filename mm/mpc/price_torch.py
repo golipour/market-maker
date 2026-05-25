@@ -341,7 +341,7 @@ class TorchResidualPriceModel:
         device: str | None = None,
         dtype: "np.dtype | None" = None,
     ):
-        """Sample pooled residual ~ N(μ_mid, σ_mid²) from get_params() (for legacy single-sided use)."""
+        """Sample pooled residual ~ N(μ_mid, σ_mid²) from get_params()."""
         import torch
         import torch.distributions as dist
         p = self.get_params()
@@ -357,8 +357,8 @@ class TorchResidualPriceModel:
 
 
 def score_mid_delta(delta_mid: float, params: dict) -> "ScoreResult":
-    """Pre-update Gaussian NLL for primary mid change (see ``mm.models.scoring``)."""
+    """Pre-update Gaussian NLL for local mid change (see ``mm.models.scoring``)."""
 
-    from mm.models.scoring import score_primary_mid_delta
+    from mm.models.scoring import score_local_mid_delta
 
-    return score_primary_mid_delta(delta_mid=delta_mid, params_before=params)
+    return score_local_mid_delta(delta_mid=delta_mid, params_before=params)

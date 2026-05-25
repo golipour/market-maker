@@ -3,7 +3,7 @@
 This document describes the implemented low-frequency market maker after the
 liquidity-sourcing migration. The runtime is still a single-process async system
 with an event-bus spine, but the strategy surface is now neutral local/global
-venue orchestration rather than primary/hedge execution.
+venue orchestration.
 
 The production controller path is:
 
@@ -18,7 +18,7 @@ local/global public data
   -> StrategyRunner
   -> clean_strategy_frame
   -> MpcStrategyEngine.decide
-  -> JointTargetBook + compatibility Action
+  -> JointTargetBook + Action
   -> NetDeltaRiskEngine.validate_frame_with_result
   -> per-venue execution gates
   -> route_joint_target_book_with_report
@@ -26,9 +26,9 @@ local/global public data
   -> exchange order adapter
 ```
 
-`StrategyDecision` and `Action` remain compatibility contracts. The main strategy
-intent is `JointTargetBook`, published to `strategy:target_books:{actor_id}`.
-The review surface is still `ControllerDiagnostics` on
+The main strategy intent is `JointTargetBook`, published to
+`strategy:target_books:{actor_id}`. `StrategyDecision`, `Action`, and
+`ControllerDiagnostics` provide the operational review surface on
 `strategy:diagnostics:{actor_id}`.
 
 ## Implemented Model
@@ -42,11 +42,9 @@ Neutral venue names are first-class in new runtime code:
 | `single_venue` | Local-only mode; global curves/orders are inactive |
 | `liquidity_sourcing` | Joint local/global MPC mode with optional global live orders |
 
-Legacy hedge terminology remains in a few compatibility places, mostly
-`StrategyInputFrame` field names and some older docs/tests. There is no live
-`HedgeExecutionService` in the current runtime wiring. The former reactive hedge
-service/config path is superseded by joint target books plus per-venue execution
-gates.
+There is no live reactive secondary-venue service in the current runtime wiring.
+Cross venue behavior is represented by joint target books plus per-venue
+execution gates.
 
 ## Runtime Composition
 
@@ -59,7 +57,7 @@ Main wiring is in `mm.runtime.engine.build_runtime_components`.
 | Event bus | `mm.bus.factory` | In-memory bus or Redis Streams fan-out |
 | Scheduler | `mm.aggregation.scheduler.IntervalScheduler` | Periodic interval callbacks |
 | Symbol engines | `mm.ingestion.symbol_engine.SymbolEngine` | Public trade/book ingestion for each source |
-| Legacy frame assembler | `mm.application.frame_assembler.StrategyInputFrameAssembler` | Align local/global market and private snapshots |
+| Input frame assembler | `mm.application.frame_assembler.StrategyInputFrameAssembler` | Align local/global market and private snapshots |
 | Joint frame assembler | `mm.application.joint_frame_assembler.JointStrategyFrameAssembler` | Attach ledger/freshness and publish `JointStrategyFrame` |
 | Portfolio ledger | `mm.ledger.service.PortfolioLedgerService` | Shadow ledger from private state topics |
 | Control plane | `mm.runtime.control.RuntimeControlPlane` | Kill switch, observe-only, paused actors/venues |
@@ -73,7 +71,7 @@ Main wiring is in `mm.runtime.engine.build_runtime_components`.
 Startup order:
 
 1. Persistence and observability subscribers start.
-2. The joint frame assembler starts the legacy assembler listeners.
+2. The joint frame assembler starts the input-frame assembler listeners.
 3. The strategy runner starts.
 4. The portfolio ledger starts, if private state is configured.
 5. The control plane starts.
@@ -173,9 +171,9 @@ records accepted orders locally after adapter placement.
 2. Wait up to `global_grace_ms` for a same-interval global event.
 3. Pick the latest global event with `t_end_ms <= local.t_end_ms`.
 4. Mark global status as `disabled`, `missing`, `stale`, or `ready`.
-5. Publish a legacy `StrategyInputFrame` internally.
+5. Publish a `StrategyInputFrame` internally.
 
-`JointStrategyFrameAssembler` wraps that legacy frame into `JointStrategyFrame`:
+`JointStrategyFrameAssembler` wraps that input frame into `JointStrategyFrame`:
 
 - chooses a reference price using `liquidity_sourcing.reference_venue`
 - asks the ledger service for a `JointLedgerSnapshot`
@@ -183,13 +181,13 @@ records accepted orders locally after adapter placement.
 - sets mode to `single_venue` or `liquidity_sourcing`
 - publishes to `config.joint_frame_topic`
 
-The strategy runner currently consumes `JointStrategyFrame` but unwraps
-`input_frame` for the legacy-compatible MPC bridge.
+The strategy runner consumes `JointStrategyFrame` and passes the embedded
+`input_frame` through the MPC bridge after ledger enrichment.
 
 ## Strategy Runner
 
-`StrategyRunner.on_joint_frame()` delegates to `on_frame()` after requiring the
-embedded compatibility frame.
+`StrategyRunner.on_joint_frame()` requires a ledger-backed joint frame and then
+processes the embedded input frame.
 
 Per frame:
 
@@ -197,14 +195,14 @@ Per frame:
 2. Sync control-plane kill switch into risk.
 3. Collect live orders from all order managers.
 4. Subtract own orders from local/global books with `clean_strategy_frame`.
-5. Build legacy `TradingState` for compatibility diagnostics.
+5. Build `TradingState` context for diagnostics.
 6. Run `MpcStrategyEngine.decide`.
 7. Prepare an execution target book with per-venue caps and global live-order filtering.
 8. Compute intent execution gates for risk context.
 9. Run `NetDeltaRiskEngine` against the joint target book and ledger adapter.
 10. Publish risk events if actions were filtered.
 11. Compute final venue execution gates.
-12. Publish `StrategyDecision`, `JointTargetBook`, and approved compatibility `Action`s.
+12. Publish `StrategyDecision`, `JointTargetBook`, and approved `Action`s.
 13. Execute or preview each venue target book through `route_joint_target_book_with_report`.
 14. Publish `strategy:journal:{actor_id}`.
 15. Publish `ControllerDiagnostics` in `finally`, including error frames.
@@ -233,7 +231,8 @@ It builds `mm.mpc.mpc_state.State` with:
 When `liquidity_sourcing.enabled` is true, state is enriched for joint MPC and
 `MonteCarloMPCTensorBatched` dispatches to `mm.mpc.joint_optimizer`. The engine
 then discretizes local and optional global sigmoid actions into a
-`JointTargetBook`. The legacy `Action` is derived from that book.
+`JointTargetBook`. The `Action` is derived from that book for the execution
+reconcile path.
 
 Model scoring remains prequential: observations are scored before the market
 flow, local residual price, and global price/flow models are updated.
@@ -255,7 +254,7 @@ The strategy output contract is in `mm.core.models.target_book`:
 3. If liquidity sourcing is active and a global sigmoid exists, repeats the
    process for the global venue.
 4. Updates `ActionPipelineReport.target_book`.
-5. Returns the joint book plus the legacy local pipeline report.
+5. Returns the joint book plus the local pipeline report.
 
 ## Risk
 
@@ -343,14 +342,11 @@ and execution state.
 
 ## Current Caveats
 
-- `StrategyRunner` consumes `JointStrategyFrame` but still uses the embedded
-  `StrategyInputFrame` for MPC and risk compatibility.
+- `StrategyRunner` consumes `JointStrategyFrame`; MPC still receives the cleaned
+  embedded `StrategyInputFrame`.
 - The ledger is shadow state and is compared with `OrderManager.live_orders`;
   order managers still keep local live-order state after adapter acknowledgements.
 - Global target-book diagnostics are produced by joint MPC, but global live
   placement is disabled unless `liquidity_sourcing.global_live_orders=true`.
 - Global execution defaults to the `replace` planner, while local defaults to
   `reconcile`.
-- Some compatibility names still use `hedge` internally or in older docs; new
-  code should prefer `global` unless it specifically refers to legacy research
-  notes.

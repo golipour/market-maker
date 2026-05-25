@@ -16,7 +16,7 @@ class OrderRouter:
     """Route cancel/place commands and publish lifecycle events.
 
     The router is deliberately stateless: it does not mutate live-order truth.
-    Exchange private events (or a compatibility facade) own optimistic updates.
+    Exchange private events own optimistic updates.
     """
 
     def __init__(

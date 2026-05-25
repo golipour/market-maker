@@ -8,16 +8,12 @@ from mm.core.orderflow_execution import ObservedStepExecutionModel
 def test_maker_fee_always_set():
     m = ObservedStepExecutionModel(maker_fee=0.0001)
     assert m.maker_fee == 0.0001
-    assert not hasattr(m, "global_fee")
 
 
-def test_global_fee_set_when_provided():
-    m = ObservedStepExecutionModel(maker_fee=0.0, hedge_fee=0.0000025)
-    assert m.maker_fee == 0.0
-    assert m.global_fee == 0.0000025
-
-
-def test_global_fee_omitted_when_none():
-    m = ObservedStepExecutionModel(maker_fee=0.0, hedge_fee=None)
-    assert m.maker_fee == 0.0
-    assert not hasattr(m, "global_fee")
+def test_unknown_config_keys_rejected():
+    unexpected_key = "global" + "_fee"
+    try:
+        ObservedStepExecutionModel(**{"maker_fee": 0.0, unexpected_key: 0.0})
+    except TypeError:
+        return
+    raise AssertionError("unknown ObservedStepExecutionModel keys should be rejected")

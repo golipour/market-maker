@@ -29,7 +29,6 @@ class _FixedPriceModel:
 
 class _FixedExecutionModel:
     maker_fee = 0.0
-    hedge_fee = 0.0
 
 
 def _minimal_state() -> State:

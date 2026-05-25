@@ -156,12 +156,12 @@ def _gaussian_log_pdf(x: float, mu: float, sigma: float) -> float:
     return -0.5 * math.log(2.0 * math.pi) - math.log(sigma) - 0.5 * z * z
 
 
-def score_primary_mid_delta(
+def score_local_mid_delta(
     *,
     delta_mid: float,
     params_before: dict[str, Any],
 ) -> ScoreResult:
-    """Gaussian NLL for realized primary mid change."""
+    """Gaussian NLL for realized local mid change."""
 
     mu = float(params_before.get("mu_mid", 0.0))
     sigma = float(params_before.get("sigma_mid", params_before.get("sigma_buy", 1e-6)))
@@ -201,13 +201,13 @@ def _price_params_before(model: Any) -> dict[str, float]:
     }
 
 
-def score_hedge_vwap_deltas(
+def score_global_vwap_deltas(
     *,
     delta_buy: float,
     delta_sell: float,
     params_before: dict[str, Any],
 ) -> ScoreResult:
-    """Gaussian NLL for hedge buy/sell VWAP deltas (independent sides)."""
+    """Gaussian NLL for global buy/sell VWAP deltas (independent sides)."""
 
     mu_b = float(params_before.get("mu_delta_buy", 0.0))
     mu_s = float(params_before.get("mu_delta_sell", 0.0))
@@ -318,7 +318,7 @@ def score_frame_models(
                 result = ScoreResult(skip_reason="missing_previous_frame", observation={})
             else:
                 delta = float(curr_mid - prev_mid)
-                result = score_primary_mid_delta(delta_mid=delta, params_before=params_before)
+                result = score_local_mid_delta(delta_mid=delta, params_before=params_before)
         scores["price"] = _to_model_score(
             model="price",
             kind=price_kind,
@@ -331,14 +331,14 @@ def score_frame_models(
     if global_price_model is not None and hasattr(global_price_model, "get_params"):
         params_before = dict(global_price_model.get_params())
         if state.global_buy_vwap is None or state.global_sell_vwap is None or not frame.has_global:
-            result = ScoreResult(skip_reason="missing_hedge", observation={})
+            result = ScoreResult(skip_reason="missing_global", observation={})
         elif getattr(global_price_model, "_last_buy_obs", None) is None:
             result = ScoreResult(skip_reason="missing_previous_frame", observation={})
         else:
             delta_buy = float(state.global_buy_vwap) - float(global_price_model._last_buy_obs)
             delta_sell = float(state.global_sell_vwap) - float(global_price_model._last_sell_obs)
             if global_price_kind == "gaussian":
-                result = score_hedge_vwap_deltas(
+                result = score_global_vwap_deltas(
                     delta_buy=delta_buy,
                     delta_sell=delta_sell,
                     params_before={
@@ -349,7 +349,7 @@ def score_frame_models(
                     },
                 )
             else:
-                result = score_hedge_vwap_deltas(
+                result = score_global_vwap_deltas(
                     delta_buy=delta_buy,
                     delta_sell=delta_sell,
                     params_before=params_before,

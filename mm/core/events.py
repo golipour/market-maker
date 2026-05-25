@@ -65,8 +65,8 @@ def envelope_event(
         event_id=event_id or uuid.uuid4().hex,
         run_id=run_id,
         source=source,
-        exchange=_pick(payload, "exchange", "primary_exchange"),
-        symbol=_pick(payload, "symbol", "primary_symbol"),
+        exchange=_pick(payload, "exchange"),
+        symbol=_pick(payload, "symbol"),
         actor_id=_pick(payload, "actor_id"),
         timestamp_ms=_timestamp_ms(payload),
     )

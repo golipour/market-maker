@@ -209,17 +209,3 @@ class OptimizerRunDiagnostics:
             "rollout": dict(self.rollout),
             "best_epoch": self.best_epoch,
         }
-
-    def legacy_optimizer_dict(self) -> dict[str, Any]:
-        """Backward-compatible subset for ``StrategyDecision`` embedding."""
-
-        payload = self.to_payload()
-        best = payload.get("objective", {}).get("best", {})
-        return {
-            "kind": self.config.get("kind", "monte_carlo_mpc_tensor_batched"),
-            "last_expected_delta_wealth": best.get("expected_total_reward"),
-            "last_expected_return": best.get("expected_total_return"),
-            "last_components": best.get("components"),
-            "best_epoch": self.best_epoch,
-            "timing": dict(self.timing),
-        }

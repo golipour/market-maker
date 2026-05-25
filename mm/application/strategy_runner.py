@@ -14,7 +14,7 @@ from mm.application.venue_execution import (
 )
 from mm.execution.plan import ExecutionSyncReport, stage_report_with_rejections
 from mm.application.frame_preparation import clean_strategy_frame
-from mm.application.trading_context import live_orders_from_managers, trading_state_from_frame
+from mm.application.trading_context import trading_state_from_frame
 from mm.bus.base import AbstractEventBus
 from mm.controller.context import DecisionContext, execution_blocked_reasons
 from mm.core.interfaces.order_manager import AbstractOrderManager
@@ -27,7 +27,6 @@ from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
-from mm.core.adapters.joint import joint_ledger_from_frame
 from mm.risk.net_delta import NetDeltaRiskEngine, target_book_result_to_risk_result
 from mm.runtime.config import (
     ControllerRuntimeConfig,
@@ -40,12 +39,11 @@ from mm.strategies.mpc_engine import MpcStrategyEngine, order_summary_dict
 
 @dataclass(slots=True)
 class StrategyRunner:
-    """Consumes ``StrategyInputFrame``, runs MPC, risk, and optional live execution.
+    """Consumes ``JointStrategyFrame``, runs MPC, risk, and optional live execution.
 
     Pipeline per frame:
 
-    1. Collect live orders from the ledger, or from ``OrderManager`` instances
-       for legacy frames.
+    1. Collect live orders from the ledger.
     2. ``clean_strategy_frame`` — subtract own orders from local/global books.
     3. ``MpcStrategyEngine.decide`` on the clean frame.
     4. ``AbstractRiskEngine.validate_frame`` on the proposed action.
@@ -120,27 +118,24 @@ class StrategyRunner:
         frame = joint_frame.input_frame
         if frame is None:
             raise ValueError("JointStrategyFrame.input_frame is required for strategy pipeline")
-        if joint_frame.ledger is not None:
-            frame = _frame_with_ledger_private(frame, joint_frame.ledger)
-        return await self.on_frame(frame, joint_frame=joint_frame)
+        if joint_frame.ledger is None:
+            raise ValueError("JointStrategyFrame.ledger is required for strategy pipeline")
+        frame = _frame_with_ledger_private(frame, joint_frame.ledger)
+        return await self._process_input_frame(frame, joint_frame=joint_frame)
 
-    async def on_frame(
+    async def _process_input_frame(
         self,
         frame: StrategyInputFrame,
         *,
-        joint_frame: JointStrategyFrame | None = None,
+        joint_frame: JointStrategyFrame,
     ) -> list[Action]:
         t0 = time.monotonic_ns()
         self._frame_step += 1
         self._last_local_exchange = frame.local.exchange.lower().strip()
         self._sync_control_plane_to_risk()
 
-        ledger = joint_frame.ledger if joint_frame is not None else None
-        open_orders = (
-            _live_orders_from_ledger(ledger)
-            if ledger is not None
-            else live_orders_from_managers(self.order_managers)
-        )
+        ledger = joint_frame.ledger
+        open_orders = _live_orders_from_ledger(ledger)
         clean_frame = clean_strategy_frame(frame, open_orders)
         trading_state = trading_state_from_frame(
             frame,
@@ -158,11 +153,7 @@ class StrategyRunner:
             run_id=self.run_id,
             binding=self.binding,
             ledger=ledger,
-            frame_sync_status=(
-                joint_frame.sync_status.as_payload()
-                if joint_frame is not None
-                else None
-            ),
+            frame_sync_status=joint_frame.sync_status.as_payload(),
         )
         approved: list[Action] = []
 
@@ -216,15 +207,6 @@ class StrategyRunner:
             )
 
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
-                ledger = (
-                    joint_frame.ledger
-                    if joint_frame is not None and joint_frame.ledger is not None
-                    else joint_ledger_from_frame(
-                        clean_frame,
-                        self.binding,
-                        created_at_ms=clean_frame.created_at_ms,
-                    )
-                )
                 target_risk_result = self.risk_engine.validate_target_book_with_result(
                     decision.joint_target_book,
                     ledger,

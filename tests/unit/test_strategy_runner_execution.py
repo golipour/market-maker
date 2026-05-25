@@ -14,7 +14,7 @@ from mm.core.models.private import OpenOrder
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.execution.plan import ExecutionSyncReport, summarize_orders
 from mm.risk.engine import PassThroughRiskEngine
-from tests.unit.conftest import strategy_decision_with_joint
+from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, RiskRuntimeConfig
 
 
@@ -62,6 +62,12 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
 
 def _decision(event: MarketEvent) -> StrategyDecision:
     return strategy_decision_with_joint(event, frame_step=1)
+
+
+async def _run_market_frame(runner: StrategyRunner) -> list[Action]:
+    return await runner.on_joint_frame(
+        joint_frame_for_input(StrategyInputFrame(local=_market_event()))
+    )
 
 
 class _SlowOrderManager:
@@ -137,7 +143,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_market_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert diagnostics["type"] == "ControllerDiagnostics"
@@ -168,7 +174,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_error(monkeypatc
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_market_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert any("ExecutionSyncError" in warning for warning in diagnostics["warnings"])
@@ -200,8 +206,8 @@ async def test_strategy_runner_continues_after_sync_failure(monkeypatch: pytest.
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_market_frame(runner)
+    await _run_market_frame(runner)
 
     assert calls["count"] == 2
     assert manager.sync_calls == 2
@@ -242,7 +248,7 @@ async def test_strategy_runner_records_pipeline_error_without_raising(
         bus=bus,
     )
 
-    approved = await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    approved = await _run_market_frame(runner)
 
     assert approved == []
     controller_error = await asyncio.wait_for(decision_queue.get(), timeout=1.0)
@@ -276,7 +282,7 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
         status="open",
         timestamp_ms=2000,
     )
-    legacy_frame = StrategyInputFrame(local=_market_event(), created_at_ms=2000)
+    input_frame = StrategyInputFrame(local=_market_event(), created_at_ms=2000)
     ledger = JointLedgerSnapshot(
         local=VenueLedger(
             exchange="nobitex",
@@ -289,7 +295,7 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
         created_at_ms=2000,
     )
     joint_frame = JointStrategyFrame(
-        local_market=legacy_frame.local,
+        local_market=input_frame.local,
         ledger=ledger,
         sync_status=FrameSyncStatus(
             local_market_ready=True,
@@ -297,7 +303,7 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
             ledger_fresh=True,
         ),
         created_at_ms=2000,
-        input_frame=legacy_frame,
+        input_frame=input_frame,
     )
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )

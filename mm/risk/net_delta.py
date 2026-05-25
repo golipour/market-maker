@@ -73,7 +73,7 @@ def _open_notional(orders: tuple[TargetOrder, ...]) -> float:
     return total
 
 
-def _hedge_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
+def _global_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
     return VenueRiskLimits(
         min_inventory=limits.min_inventory,
         max_inventory=limits.max_inventory,
@@ -219,8 +219,8 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             return RiskResult(
                 approved=(),
                 rejection_counts={"no_target_book": 1},
-                exposure_before=_legacy_exposure(state),
-                exposure_after=_legacy_exposure(state),
+                exposure_before=_trading_state_exposure(state),
+                exposure_after=_trading_state_exposure(state),
             )
 
         if ledger is None:
@@ -296,8 +296,8 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         if target_book.global_ is not None and target_book.global_.orders:
             global_stale = frame.global_ is None or frame.global_status not in {"ready"}
             if not global_stale and frame.global_ is not None:
-                hedge_market_age = int(self.clock_ms()) - int(frame.global_.t_end_ms)
-                global_stale = hedge_market_age > self.limits.global_.max_market_data_age_ms
+                global_market_age = int(self.clock_ms()) - int(frame.global_.t_end_ms)
+                global_stale = global_market_age > self.limits.global_.max_market_data_age_ms
             if global_stale:
                 stale_reason = (
                     "stale_global_market_data"
@@ -316,7 +316,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
                 ) + 1
                 global_ok = False
             else:
-                global_limits = _hedge_limits_as_venue_limits(self.limits.global_)
+                global_limits = _global_limits_as_venue_limits(self.limits.global_)
                 global_ok, global_reasons, global_exposure = evaluate_venue_target_transition(
                     ledger=ledger.global_,
                     target=target_book.global_,
@@ -390,15 +390,15 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         now_ms = int(self.clock_ms())
         reasons: list[str] = []
 
-        primary = self.limits.local
+        local_limits = self.limits.local
         market_age_ms = now_ms - int(frame.local.t_end_ms)
-        if market_age_ms > primary.max_market_data_age_ms:
+        if market_age_ms > local_limits.max_market_data_age_ms:
             reasons.append("stale_market_data")
 
         local_private_reason = _ledger_private_freshness_reason(
             ledger.local,
             now_ms=now_ms,
-            max_age_ms=primary.max_private_state_age_ms,
+            max_age_ms=local_limits.max_private_state_age_ms,
             missing_reason="missing_local_private",
             stale_reason="stale_local_private",
         )
@@ -421,8 +421,8 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             if frame.global_ is None or frame.global_status not in {"ready"}:
                 reasons.append("missing_global_market_data")
             else:
-                hedge_market_age = now_ms - int(frame.global_.t_end_ms)
-                if hedge_market_age > self.limits.global_.max_market_data_age_ms:
+                global_market_age = now_ms - int(frame.global_.t_end_ms)
+                if global_market_age > self.limits.global_.max_market_data_age_ms:
                     reasons.append("stale_global_market_data")
 
         require_global_private = False
@@ -476,7 +476,7 @@ def _target_book_order_count(book: JointTargetBook) -> int:
     return count
 
 
-def _legacy_exposure(state: TradingState) -> dict[str, float]:
+def _trading_state_exposure(state: TradingState) -> dict[str, float]:
     return {
         "inventory": float(state.inventory),
         "cash": float(state.cash),

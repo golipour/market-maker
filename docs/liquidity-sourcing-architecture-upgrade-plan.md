@@ -1,5 +1,9 @@
 # Liquidity Sourcing Architecture Upgrade Plan
 
+Status: implemented. The current runtime contract is the clean local/global
+layout described in `docs/low-frequency-market-maker-architecture.md`; the
+migration notes below are preserved as historical planning context.
+
 This plan is based on the current code review plus the design notes in
 `docs/new_design.txt`. The core change is conceptual: the secondary venue should
 no longer be modeled primarily as a reactive "hedge" venue. It should become an

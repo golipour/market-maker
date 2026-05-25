@@ -119,7 +119,7 @@ async def test_order_manager_preview_placement_matches_execute_plan_counts() -> 
 
 
 @pytest.mark.asyncio
-async def test_order_manager_rejection_label_below_min_base_qty() -> None:
+async def test_order_manager_rejection_label_rules_min_qty() -> None:
     limits = VenueOrderLimits(min_base_qty=0.5, min_notional_quote=0.0)
     commands = FakeOrderCommandAdapter()
     manager = OrderManager(
@@ -138,7 +138,7 @@ async def test_order_manager_rejection_label_below_min_base_qty() -> None:
         ]
     )
 
-    assert report.venue_rejection_counts == {"below_min_base_qty": 1}
+    assert report.venue_rejection_counts == {"rules_min_qty": 1}
     assert report.to_place.order_count == 1
     assert report.limit_valid.order_count == 0
     assert report.accepted.order_count == 0
@@ -146,7 +146,7 @@ async def test_order_manager_rejection_label_below_min_base_qty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_order_manager_rejection_label_below_min_notional_quote() -> None:
+async def test_order_manager_rejection_label_rules_min_notional() -> None:
     limits = VenueOrderLimits(min_base_qty=0.0, min_notional_quote=500.0)
     commands = FakeOrderCommandAdapter()
     manager = OrderManager(
@@ -165,7 +165,7 @@ async def test_order_manager_rejection_label_below_min_notional_quote() -> None:
         ]
     )
 
-    assert report.venue_rejection_counts == {"below_min_notional_quote": 1}
+    assert report.venue_rejection_counts == {"rules_min_notional": 1}
     assert report.limit_valid.order_count == 0
     assert report.accepted.order_count == 0
     assert commands.placed == []

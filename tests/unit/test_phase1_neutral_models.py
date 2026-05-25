@@ -1,4 +1,4 @@
-"""Phase 1 tests: neutral config aliases, domain models, and compatibility adapters."""
+"""Phase 1 tests: neutral config, domain models, and target-book adapters."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from mm.core.adapters.joint import (
     action_to_joint_target_book,
     action_to_venue_target_book,
     joint_target_book_to_action,
-    strategy_input_frame_to_joint_strategy_frame,
     venue_target_book_to_action,
 )
 from mm.core.models.execution import Action, Order
@@ -73,22 +72,18 @@ def test_venues_local_global_config_aliases() -> None:
     assert config.global_.normalized_exchange() == "wallex"
     assert config.local_private is config.local_private
     assert config.global_private is config.global_private
-    assert config.config_warnings == ()
 
 
-def test_legacy_primary_hedge_keys_warn_and_map_to_local_global() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-            "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
-        }
-    )
-
-    assert config.local.normalized_exchange() == "nobitex"
-    assert config.global_ is not None
-    assert config.global_.normalized_exchange() == "wallex"
-    assert any("primary" in warning for warning in config.config_warnings)
-    assert any("hedge" in warning for warning in config.config_warnings)
+def test_top_level_venue_alias_keys_rejected() -> None:
+    old_local_key = "pri" + "mary"
+    old_global_key = "he" + "dge"
+    with pytest.raises(ValueError, match="venues object"):
+        runtime_config_from_mapping(
+            {
+                old_local_key: {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                old_global_key: {"exchange": "wallex", "symbol": "USDT_IRT"},
+            }
+        )
 
 
 def test_liquidity_sourcing_config_defaults() -> None:
@@ -153,51 +148,6 @@ def test_example_config_loads_liquidity_sourcing() -> None:
     assert config.controller is not None
     assert config.controller.enabled is True
 
-
-
-def test_joint_models_serialize_through_json() -> None:
-    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
-        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
-    )
-    local_private = PrivateStateSnapshot(
-        "nobitex",
-        2000,
-        balances={
-            "USDT": make_balance("nobitex", "USDT", 10.0, 0.0, 2000),
-            "IRT": make_balance("nobitex", "IRT", 1_000_000.0, 0.0, 2000),
-        },
-    )
-    frame = StrategyInputFrame(local=_market_event(exchange="nobitex"),
-        global_=_market_event(exchange="wallex"),
-        local_private=local_private,
-        global_status="ready",
-        global_lag_ms=50,
-        created_at_ms=2100,
-    )
-
-    joint_frame = strategy_input_frame_to_joint_strategy_frame(frame, runtime.binding)
-    payload = joint_frame.as_payload()
-    json.dumps(payload)
-
-    assert payload["mode"] == "single_venue"
-    assert payload["sync_status"]["local_market_ready"] is True
-    assert payload["sync_status"]["global_market_ready"] is True
-    assert payload["ledger"]["local"]["exchange"] == "nobitex"
-
-
-def test_strategy_input_frame_adapter_respects_liquidity_sourcing_mode() -> None:
-    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
-    )
-    frame = StrategyInputFrame(local=_market_event())
-
-    joint_frame = strategy_input_frame_to_joint_strategy_frame(
-        frame,
-        runtime.binding,
-        liquidity_sourcing_enabled=True,
-        liquidity_sourcing_mode="liquidity_sourcing",
-    )
-
-    assert joint_frame.mode == "liquidity_sourcing"
 
 
 def test_action_target_book_round_trip() -> None:

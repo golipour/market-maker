@@ -32,7 +32,7 @@ def _private(ts: int = 1000) -> PrivateStateSnapshot:
     return PrivateStateSnapshot(exchange="nobitex", timestamp_ms=ts, balances={})
 
 
-def test_risk_config_migration_from_flat_keys() -> None:
+def test_risk_config_uses_nested_local_limits() -> None:
     config = runtime_config_from_mapping(
         {
             **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
@@ -40,9 +40,11 @@ def test_risk_config_migration_from_flat_keys() -> None:
                 "enabled": True,
                 "risk": {
                     "enabled": True,
-                    "max_inventory": 500.0,
-                    "max_data_age_ms": 30_000,
-                    "min_inventory": 0.0,
+                    "local": {
+                        "max_inventory": 500.0,
+                        "max_market_data_age_ms": 30_000,
+                        "min_inventory": 0.0,
+                    },
                 },
             },
         }

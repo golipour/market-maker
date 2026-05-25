@@ -32,7 +32,7 @@ from mm.runtime.config import (
     runtime_config_from_mapping,
 )
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
-from tests.unit.conftest import venues_payload, strategy_decision_with_joint
+from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint, venues_payload
 from tests.unit.test_execution_manager import FakeOrderCommandAdapter
 
 
@@ -312,30 +312,16 @@ async def test_strategy_runner_routes_both_venues_when_live(
         global_=_market_event(exchange="wallex"),
         global_status="ready",
     )
-    await runner.on_frame(frame)
+    await runner.on_joint_frame(
+        joint_frame_for_input(
+            frame,
+            binding=runtime.binding,
+            liquidity_sourcing=runner.liquidity_sourcing,
+        )
+    )
 
     assert local_manager.venue_syncs == 1
     assert global_manager.venue_syncs == 1
-
-
-def test_legacy_hedging_key_ignored_when_live_sourcing_active() -> None:
-    config = runtime_config_from_mapping(
-        {
-            **venues_payload(
-                local={"exchange": "nobitex", "symbol": "BTC_IRT"},
-                global_={"exchange": "wallex", "symbol": "BTC_IRT"},
-            ),
-            "hedging": {"enabled": True, "observe_only": False},
-            "liquidity_sourcing": {
-                "enabled": True,
-                "mode": "liquidity_sourcing",
-                "global_live_orders": True,
-            },
-        }
-    )
-
-    assert config.liquidity_sourcing.enabled is True
-    assert config.liquidity_sourcing.global_live_orders is True
 
 
 def test_prepare_execution_joint_book_applies_configured_policies() -> None:

@@ -6,7 +6,7 @@ from typing import Any, NamedTuple
 
 
 class Step(NamedTuple):
-    """One advance of the order-flow stepper; tuple-compatible with legacy layout."""
+    """One advance of the order-flow stepper; tuple-compatible with the MPC layout."""
 
     t_end_ms: int
     ob: Any
@@ -22,4 +22,4 @@ class Step(NamedTuple):
     global_buy_vwap: float | None
     global_sell_vwap: float | None
     global_inventory: int
-    hedge_cash: int | float
+    global_cash: int | float

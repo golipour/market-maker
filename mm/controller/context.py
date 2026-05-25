@@ -38,7 +38,7 @@ def _private_age_ms(snapshot: PrivateStateSnapshot | None, *, now_ms: int) -> in
     return max(0, now_ms - int(snapshot.timestamp_ms))
 
 
-def _legacy_frame_sync_status(frame: StrategyInputFrame) -> dict[str, Any]:
+def _frame_sync_status_from_input(frame: StrategyInputFrame) -> dict[str, Any]:
     """Expose latency skew and readiness separately from risk rejection counts."""
 
     global_configured = frame.global_status != "disabled"
@@ -189,7 +189,7 @@ class DecisionContext:
             sync_status=(
                 dict(self.frame_sync_status)
                 if self.frame_sync_status is not None
-                else _legacy_frame_sync_status(self.frame)
+                else _frame_sync_status_from_input(self.frame)
             ),
         )
 
@@ -332,7 +332,7 @@ class DecisionContext:
         return OptimizerDiagnostics(
             config={"kind": opt.get("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))},
             objective={
-                "legacy": {
+                "summary": {
                     "last_expected_delta_wealth": opt.get("last_expected_delta_wealth"),
                     "last_components": opt.get("last_components"),
                 }

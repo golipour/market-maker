@@ -21,8 +21,8 @@ def order_passes_limits(order: Order, limits: VenueOrderLimits, *, rel_tol: floa
     """Return (True, \"\") if ``order`` satisfies ``limits``; else (False, short reason)."""
 
     if limits.min_base_qty > 0.0 and float(order.qty) + rel_tol < float(limits.min_base_qty):
-        return False, "below_min_base_qty"
+        return False, "rules_min_qty"
     notional = float(order.price) * float(order.qty)
     if limits.min_notional_quote > 0.0 and notional + rel_tol < float(limits.min_notional_quote):
-        return False, "below_min_notional_quote"
+        return False, "rules_min_notional"
     return True, ""

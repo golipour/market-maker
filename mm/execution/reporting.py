@@ -1,4 +1,4 @@
-"""Convert execution plans into legacy sync reports for diagnostics compatibility."""
+"""Convert execution plans into execution sync reports for diagnostics."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from mm.core.models.execution import Order
 from mm.core.models.private import OpenOrder
 from mm.execution.plan import ExecutionSyncReport, summarize_open_orders, summarize_orders
-from mm.execution.rules_gateway import legacy_rejection_label
 from mm.execution.target_book import ExecutionPlan
 
 
@@ -19,7 +18,7 @@ def execution_plan_to_sync_report(
     placed: bool = False,
     accepted_orders: Sequence[Order] = (),
 ) -> ExecutionSyncReport:
-    """Map a venue execution plan onto the legacy ``ExecutionSyncReport`` funnel."""
+    """Map a venue execution plan onto the ``ExecutionSyncReport`` funnel."""
 
     canceled_orders = [
         live_orders[command.exchange_order_id]
@@ -53,6 +52,5 @@ def _planned_place_orders(plan: ExecutionPlan) -> list[Order]:
 def _rejection_counts(plan: ExecutionPlan) -> dict[str, int]:
     counts: dict[str, int] = {}
     for rejection in plan.rejected:
-        label = legacy_rejection_label(rejection.reason)
-        counts[label] = counts.get(label, 0) + 1
+        counts[rejection.reason] = counts.get(rejection.reason, 0) + 1
     return counts

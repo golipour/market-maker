@@ -20,13 +20,13 @@ from mm.runtime.config import LiquiditySourcingRuntimeConfig, RiskRuntimeConfig,
 
 
 def _binding() -> SymbolBinding:
-    primary = InstrumentSpec(
+    local = InstrumentSpec(
         exchange="nobitex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
     )
-    return SymbolBinding(local=primary, global_=None)
+    return SymbolBinding(local=local, global_=None)
 
 
 def _market_event(*, t_end_ms: int = 1000) -> MarketEvent:
@@ -240,19 +240,19 @@ def test_single_venue_does_not_require_global_private() -> None:
 
 
 def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> None:
-    primary = InstrumentSpec(
+    local = InstrumentSpec(
         exchange="nobitex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
     )
-    hedge = InstrumentSpec(
+    global_ = InstrumentSpec(
         exchange="wallex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
     )
-    binding = SymbolBinding(local=primary, global_=hedge)
+    binding = SymbolBinding(local=local, global_=global_)
 
     snapshot = _private_snapshot()
     global_event = MarketEvent(
@@ -301,19 +301,19 @@ def test_liquidity_sourcing_live_requires_global_private_for_global_orders() -> 
 
 
 def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_orders() -> None:
-    primary = InstrumentSpec(
+    local = InstrumentSpec(
         exchange="nobitex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
     )
-    hedge = InstrumentSpec(
+    global_ = InstrumentSpec(
         exchange="wallex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
     )
-    binding = SymbolBinding(local=primary, global_=hedge)
+    binding = SymbolBinding(local=local, global_=global_)
 
     snapshot = _private_snapshot()
     global_event = MarketEvent(

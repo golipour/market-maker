@@ -6,7 +6,6 @@ from typing import Any
 from mm.bus.base import AbstractEventBus
 from mm.core.models.execution import Action
 from mm.core.models.joint_strategy import JointStrategyFrame
-from mm.core.models.strategy import StrategyInputFrame
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability import schema as obs_schema
 from mm.observability.metrics import counter_inc, gauge, histogram_observe
@@ -50,9 +49,6 @@ class RuntimeObservabilitySubscriber:
         if isinstance(event, JointStrategyFrame):
             self._observe_joint_strategy_frame(topic, event)
             return
-        if isinstance(event, StrategyInputFrame):
-            self._observe_strategy_input_frame(topic, event)
-            return
         if isinstance(event, Action):
             self._observe_action(topic, event)
             return
@@ -80,52 +76,19 @@ class RuntimeObservabilitySubscriber:
             if event.get("exchange") is not None and "live_order_count" in event:
                 self._observe_execution_snapshot_dict(event)
                 return
-        live_order_count = getattr(event, "live_order_count", None)
-        exchange = getattr(event, "exchange", None)
-        timestamp_ms = getattr(event, "timestamp_ms", None)
-        if live_order_count is not None and exchange is not None:
-            self._observe_execution_snapshot_compat(exchange, live_order_count, timestamp_ms)
-
-    def _observe_strategy_input_frame(self, topic: str, frame: StrategyInputFrame) -> None:
-        primary = frame.local
-        labels = {"exchange": primary.exchange, "symbol": primary.symbol, "global_status": frame.global_status}
-        _ = topic
-        with span("mm.frame_assembler.build", exchange=primary.exchange, symbol=primary.symbol):
-            counter_inc(obs_schema.MM_STRATEGY_FRAMES_TOTAL, labels=labels, help="Strategy frames assembled")
-            self._last_local_frame_by_exchange[primary.exchange.lower().strip()] = (
-                int(primary.t_end_ms),
-                int(frame.created_at_ms),
-            )
-            if frame.global_lag_ms is not None:
-                gauge(
-                    "mm_global_lag_ms",
-                    float(frame.global_lag_ms),
-                    labels=labels,
-                    help="Selected global event lag",
-                )
-            log_event(
-                obs_schema.EVENT_STRATEGY_FRAME,
-                {
-                    "exchange": primary.exchange,
-                    "symbol": primary.symbol,
-                    "t_end_ms": primary.t_end_ms,
-                    "global_status": frame.global_status,
-                    "global_lag_ms": frame.global_lag_ms,
-                },
-            )
 
     def _observe_joint_strategy_frame(self, topic: str, frame: JointStrategyFrame) -> None:
-        primary = frame.local_market
+        local = frame.local_market
         sync = frame.sync_status
         labels = {
-            "exchange": primary.exchange,
-            "symbol": primary.symbol,
+            "exchange": local.exchange,
+            "symbol": local.symbol,
             "mode": frame.mode,
             "global_status": sync.global_status,
         }
         _ = topic
-        self._last_local_frame_by_exchange[primary.exchange.lower().strip()] = (
-            int(primary.t_end_ms),
+        self._last_local_frame_by_exchange[local.exchange.lower().strip()] = (
+            int(local.t_end_ms),
             int(frame.created_at_ms),
         )
         counter_inc(
@@ -161,9 +124,9 @@ class RuntimeObservabilitySubscriber:
         log_event(
             "joint_strategy_frame",
             {
-                "exchange": primary.exchange,
-                "symbol": primary.symbol,
-                "t_end_ms": primary.t_end_ms,
+                "exchange": local.exchange,
+                "symbol": local.symbol,
+                "t_end_ms": local.t_end_ms,
                 "mode": frame.mode,
                 "sync_status": sync.as_payload(),
             },
@@ -183,7 +146,7 @@ class RuntimeObservabilitySubscriber:
                     obs_schema.MM_FRAME_TO_EXEC_SYNC_LATENCY_MS,
                     max(0.0, float(sync_ts - created_at_ms)),
                     labels={"exchange": ex},
-                    help="Wall ms from StrategyInputFrame.created_at_ms to ExecutionSyncRequested",
+                    help="Wall ms from JointStrategyFrame.created_at_ms to ExecutionSyncRequested",
                 )
                 histogram_observe(
                     obs_schema.MM_MARKET_WINDOW_END_TO_EXEC_SYNC_LATENCY_MS,
@@ -214,17 +177,6 @@ class RuntimeObservabilitySubscriber:
                 labels={"exchange": ex},
                 help="Current live orders by exchange",
             )
-
-    def _observe_execution_snapshot_compat(self, exchange: Any, live_order_count: Any, timestamp_ms: Any) -> None:
-        ex = str(exchange)
-        if timestamp_ms is not None:
-            self._finish_sync_latency(ex, int(timestamp_ms))
-        gauge(
-            obs_schema.MM_EXECUTION_LIVE_ORDERS,
-            float(live_order_count),
-            labels={"exchange": ex},
-            help="Current live orders by exchange",
-        )
 
     def _finish_sync_latency(self, exchange: str, snapshot_ts_ms: int) -> None:
         pending = self._sync_pending_ts_ms.pop(exchange.lower().strip(), None)

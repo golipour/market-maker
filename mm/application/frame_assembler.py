@@ -12,7 +12,7 @@ from mm.exchanges.shared.provider_adapter import now_ms
 
 
 class StrategyInputFrameAssembler:
-    """Build primary decision frames with an optional aligned hedge event."""
+    """Build local decision frames with an optional aligned global event."""
 
     def __init__(
         self,
@@ -25,7 +25,7 @@ class StrategyInputFrameAssembler:
         output_topic: str | None = None,
         max_global_lag_ms: int = 2_000,
         global_grace_ms: int = 250,
-        hedge_history_size: int = 128,
+        global_history_size: int = 128,
         clock_ms: Callable[[], int] = now_ms,
     ):
         self.local_queue = local_queue
@@ -37,21 +37,21 @@ class StrategyInputFrameAssembler:
         self.max_global_lag_ms = max(0, int(max_global_lag_ms))
         self.global_grace_ms = max(0, int(global_grace_ms))
         self.clock_ms = clock_ms
-        self._global_events: deque[MarketEvent] = deque(maxlen=max(1, int(hedge_history_size)))
+        self._global_events: deque[MarketEvent] = deque(maxlen=max(1, int(global_history_size)))
         self._local_private: PrivateStateSnapshot | None = None
         self._global_private: PrivateStateSnapshot | None = None
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
 
     async def start(self) -> None:
-        """Start hedge/private listeners and the primary publish loop."""
+        """Start global/private listeners and the local publish loop."""
 
         self._stopped.clear()
         await self.start_listeners()
-        self._tasks.append(asyncio.create_task(self._run_primary()))
+        self._tasks.append(asyncio.create_task(self._run_local()))
 
     async def start_listeners(self) -> None:
-        """Start hedge and private snapshot listeners without the publish loop."""
+        """Start global and private snapshot listeners without the publish loop."""
 
         self._stopped.clear()
         self._tasks = []
@@ -70,16 +70,16 @@ class StrategyInputFrameAssembler:
         self._tasks.clear()
 
     async def next_frame(self) -> StrategyInputFrame:
-        primary = await self.local_queue.get()
-        return await self.build_frame(primary)
+        local = await self.local_queue.get()
+        return await self.build_frame(local)
 
-    async def build_frame(self, primary: MarketEvent) -> StrategyInputFrame:
+    async def build_frame(self, local: MarketEvent) -> StrategyInputFrame:
         self._drain_latest_inputs()
         if self.global_queue is not None:
-            await self._wait_for_matching_global(primary.t_end_ms)
+            await self._wait_for_matching_global(local.t_end_ms)
         self._drain_latest_inputs()
-        hedge, global_status, global_lag_ms = self._select_global(primary)
-        return StrategyInputFrame(local=primary, global_=hedge,
+        global_event, global_status, global_lag_ms = self._select_global(local)
+        return StrategyInputFrame(local=local, global_=global_event,
             local_private=self._local_private,
             global_private=self._global_private,
             global_status=global_status,
@@ -88,7 +88,7 @@ class StrategyInputFrameAssembler:
             created_at_ms=self.clock_ms(),
         )
 
-    async def _run_primary(self) -> None:
+    async def _run_local(self) -> None:
         try:
             while not self._stopped.is_set():
                 frame = await self.next_frame()
@@ -137,23 +137,23 @@ class StrategyInputFrameAssembler:
                 except asyncio.QueueEmpty:
                     break
 
-    async def _wait_for_matching_global(self, primary_t_end_ms: int) -> None:
+    async def _wait_for_matching_global(self, local_t_end_ms: int) -> None:
         if self.global_grace_ms <= 0:
             return
         deadline = self.clock_ms() + self.global_grace_ms
         while self.clock_ms() < deadline:
-            if any(event.t_end_ms == primary_t_end_ms for event in self._global_events):
+            if any(event.t_end_ms == local_t_end_ms for event in self._global_events):
                 return
             await asyncio.sleep(0.005)
 
-    def _select_global(self, primary: MarketEvent) -> tuple[MarketEvent | None, GlobalMarketStatus, int | None]:
+    def _select_global(self, local: MarketEvent) -> tuple[MarketEvent | None, GlobalMarketStatus, int | None]:
         if self.global_queue is None:
             return None, "disabled", None
-        candidates = [event for event in self._global_events if event.t_end_ms <= primary.t_end_ms]
+        candidates = [event for event in self._global_events if event.t_end_ms <= local.t_end_ms]
         if not candidates:
             return None, "missing", None
-        hedge = max(candidates, key=lambda event: event.t_end_ms)
-        global_lag_ms = primary.t_end_ms - hedge.t_end_ms
+        global_event = max(candidates, key=lambda event: event.t_end_ms)
+        global_lag_ms = local.t_end_ms - global_event.t_end_ms
         if global_lag_ms > self.max_global_lag_ms:
             return None, "stale", global_lag_ms
-        return hedge, "ready", global_lag_ms
+        return global_event, "ready", global_lag_ms

@@ -1,7 +1,7 @@
 """
 Reference prices (ticks) from orderbook and market order flow (MOF-only).
 
-Tick VWAP helpers for MOF-only reference pricing (standalone; ``mm.mpc`` has no legacy imports).
+Tick VWAP helpers for MOF-only reference pricing.
 """
 
 from __future__ import annotations

@@ -413,7 +413,6 @@ class MonteCarloMPCTensorBatched:
         price_model: Any,
         market_flow_model: Any,
         execution_model: Any,
-        reference_global_price_model: Any = None,
         n_components: int = 2,
         n_samples: int = 32,
         horizon: int = 4,
@@ -431,11 +430,6 @@ class MonteCarloMPCTensorBatched:
         verbose: bool = False,
         inv_coef: float | None = None,
         target_inv: float | None = None,
-        hedge_enabled: bool | None = None,
-        hedge_coef: float | None = None,
-        global_coef: float = 0.0,
-        global_fee: float = 0.0,
-        global_reward_weight: float = 1.0,
         return_risk_aversion_beta: float = 1.0,
         inventory_target_penalty_weight: float | None = None,
         target_inventory: float | None = None,
@@ -452,7 +446,6 @@ class MonteCarloMPCTensorBatched:
         self.price_model = price_model
         self.market_flow_model = market_flow_model
         self.execution_model = execution_model
-        self.reference_global_price_model = reference_global_price_model
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
@@ -489,22 +482,6 @@ class MonteCarloMPCTensorBatched:
         explicit_target = _coalesce_param(target_inventory, target_inv, default=None)
         self.target_inventory = float(explicit_target) if explicit_target is not None else None
         self.target_inventory_multiplier = max(1e-6, float(target_inventory_multiplier))
-        legacy_global_coef = float(hedge_coef) if hedge_coef is not None else float(global_coef)
-        if hedge_enabled is None:
-            self.global_enabled = bool(legacy_global_coef != 0.0)
-        else:
-            self.global_enabled = bool(hedge_enabled)
-        self.global_coef = legacy_global_coef
-        self.hedge_coef = legacy_global_coef
-        # Legacy public alias retained for older tests/config probes. The new
-        # rollout diagnostics use ``global_enabled``.
-        self.hedge_enabled = (
-            bool(self.global_enabled)
-            if hedge_enabled is not None or hedge_coef is not None
-            else True
-        )
-        self.global_fee = max(0.0, min(1.0 - 1e-9, float(global_fee)))
-        self.global_reward_weight = max(0.0, float(global_reward_weight))
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
         self.global_market_flow_model = global_market_flow_model
         self.global_price_model = global_price_model
@@ -659,12 +636,9 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
-        global_fee_rollout = getattr(self.execution_model, "global_fee", self.global_fee)
-        global_fee_rollout = max(0.0, min(1.0 - 1e-9, float(global_fee_rollout)))
         vwap_depth = target_depth_lots_from_price_model(self.price_model)
 
-        # Pre-draw MC samples: (n_samples, horizon) for MOF, price residuals,
-        # and hedge delta shocks (used when hedge dynamics are enabled).
+        # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.
         def draw_samples():
             sample_shape = (self.n_samples, self.horizon)
             if hasattr(self.market_flow_model, "sample"):
@@ -686,17 +660,7 @@ class MonteCarloMPCTensorBatched:
             else:
                 eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
                 eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-            if self.reference_global_price_model is not None and hasattr(self.reference_global_price_model, "sample_deltas"):
-                d_hedge_buy, d_hedge_sell = self.reference_global_price_model.sample_deltas(
-                    sample_shape,
-                    device=_device,
-                    dtype=dtype,
-                    torch_mod=torch_mod,
-                )
-            else:
-                d_hedge_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-                d_hedge_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-            return buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell
+            return buy_vol, sell_vol, eps_buy, eps_sell
 
         batch_time_sec = 0.0
         if self.fixed_mc_samples:
@@ -706,8 +670,6 @@ class MonteCarloMPCTensorBatched:
                 fixed_sell_vol,
                 fixed_eps_buy,
                 fixed_eps_sell,
-                fixed_d_hedge_buy,
-                fixed_d_hedge_sell,
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
 
@@ -725,7 +687,6 @@ class MonteCarloMPCTensorBatched:
         best_J_mean: float | None = None
         best_J_mean_next: float | None = None
         best_main_reward_mean: float | None = None
-        best_global_reward_mean: float | None = None
         best_epoch: int | None = None
         initial_metrics: EpochObjectiveMetrics | None = None
         final_metrics: EpochObjectiveMetrics | None = None
@@ -749,17 +710,15 @@ class MonteCarloMPCTensorBatched:
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
 
                 if self.fixed_mc_samples:
-                    buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell = (
+                    buy_vol, sell_vol, eps_buy, eps_sell = (
                         fixed_buy_vol,
                         fixed_sell_vol,
                         fixed_eps_buy,
                         fixed_eps_sell,
-                        fixed_d_hedge_buy,
-                        fixed_d_hedge_sell,
                     )
                 else:
                     t_batch = time.perf_counter()
-                    buy_vol, sell_vol, eps_buy, eps_sell, d_hedge_buy, d_hedge_sell = draw_samples()
+                    buy_vol, sell_vol, eps_buy, eps_sell = draw_samples()
                     batch_time_sec += time.perf_counter() - t_batch
 
                 inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
@@ -767,37 +726,12 @@ class MonteCarloMPCTensorBatched:
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
                 mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
-                global_buy_vwap_t = torch_mod.full(
-                    (self.n_samples, 1),
-                    float(state.global_buy_vwap if state.global_buy_vwap is not None else state.buy_vwap),
-                    dtype=dtype,
-                    device=_device,
-                )
-                global_sell_vwap_t = torch_mod.full(
-                    (self.n_samples, 1),
-                    float(state.global_sell_vwap if state.global_sell_vwap is not None else state.sell_vwap),
-                    dtype=dtype,
-                    device=_device,
-                )
-                hedge_inv_t = torch_mod.full(
-                    (self.n_samples, 1),
-                    float(getattr(state, "global_inventory", 0)),
-                    dtype=dtype,
-                    device=_device,
-                )
-                hedge_cash_t = torch_mod.full(
-                    (self.n_samples, 1),
-                    float(getattr(state, "hedge_cash", 0.0)),
-                    dtype=dtype,
-                    device=_device,
-                )
 
                 book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(self.n_samples, -1)
                 book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(self.n_samples, -1)
 
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                total_hedge_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 inv_path = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
                 step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
 
@@ -871,28 +805,6 @@ class MonteCarloMPCTensorBatched:
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
                     inv_path[:, h] = inv_next.squeeze(1)
-                    if self.global_enabled:
-                        d_buy = d_hedge_buy[:, h : h + 1]
-                        d_sell = d_hedge_sell[:, h : h + 1]
-                        global_buy_vwap_next = global_buy_vwap_t + d_buy
-                        global_sell_vwap_next = global_sell_vwap_t + d_sell
-                        d_inv = inv_delta.unsqueeze(1)  # fee-adjusted executed inventory change
-                        # Hedge trade at t+1 on hedge venue:
-                        # - d_inv>0 (longer main) -> sell hedge inventory at hedge bid
-                        # - d_inv<0 (shorter main) -> buy hedge inventory at hedge ask
-                        trade_cash_hedge = torch_mod.where(
-                            d_inv >= 0.0,
-                            d_inv * global_sell_vwap_next,
-                            d_inv * global_buy_vwap_next,
-                        )
-                        one_minus_hedge_fee = float(1.0 - global_fee_rollout)
-                        hedge_cash_next = hedge_cash_t + trade_cash_hedge * one_minus_hedge_fee
-                        hedge_inv_next = hedge_inv_t - d_inv
-                    else:
-                        global_buy_vwap_next = global_buy_vwap_t
-                        global_sell_vwap_next = global_sell_vwap_t
-                        hedge_cash_next = hedge_cash_t
-                        hedge_inv_next = hedge_inv_t
                     mid_next = _mid_from_book_best_levels_batched(
                         ob_bids_next,
                         ob_asks_next,
@@ -914,25 +826,15 @@ class MonteCarloMPCTensorBatched:
                     step_reward_main = _delta_wealth_mtm_batched(
                         sell_vwap_t, inv_t, cash_t, sell_vwap_next, inv_next, cash_next
                     )
-                    hedge_reward = torch_mod.zeros_like(step_reward_main)
-                    if self.global_enabled:
-                        hedge_wealth_t = hedge_cash_t + hedge_inv_t * global_sell_vwap_t
-                        hedge_wealth_next = hedge_cash_next + hedge_inv_next * global_sell_vwap_next
-                        hedge_reward = (hedge_wealth_next - hedge_wealth_t).squeeze(1)
-                    step_reward = step_reward_main + float(self.global_reward_weight) * hedge_reward
+                    step_reward = step_reward_main
                     if h == 0:
                         step_reward_0 = step_reward
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
-                    total_hedge_reward = total_hedge_reward + hedge_reward
 
                     mid_fallback_t = mid_next
                     inv_t = inv_next
                     cash_t = cash_next
-                    global_buy_vwap_t = global_buy_vwap_next
-                    global_sell_vwap_t = global_sell_vwap_next
-                    hedge_cash_t = hedge_cash_next
-                    hedge_inv_t = hedge_inv_next
 
                 returns = total_reward / wealth_0
                 J_mean_raw = torch_mod.nan_to_num(
@@ -947,9 +849,7 @@ class MonteCarloMPCTensorBatched:
                 main_reward_mean_raw = torch_mod.nan_to_num(
                     total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
-                global_reward_mean_raw = torch_mod.nan_to_num(
-                    total_hedge_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
-                )
+                global_reward_mean_raw = torch_mod.zeros((), dtype=dtype, device=_device)
                 J, components = terminal_objective(
                     returns,
                     inv_path,
@@ -1009,7 +909,6 @@ class MonteCarloMPCTensorBatched:
                 best_J_mean = final_metrics.expected_total_reward if final_metrics else 0.0
                 best_J_mean_next = final_metrics.expected_next_reward if final_metrics else 0.0
                 best_main_reward_mean = final_metrics.main_reward_mean if final_metrics else 0.0
-                best_global_reward_mean = final_metrics.global_reward_mean if final_metrics else 0.0
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -1033,8 +932,7 @@ class MonteCarloMPCTensorBatched:
             self._last_E_dW_next = float(best_J_mean_next)
         if best_main_reward_mean is not None and math.isfinite(float(best_main_reward_mean)):
             self._last_main_reward_mean = float(best_main_reward_mean)
-        if best_global_reward_mean is not None and math.isfinite(float(best_global_reward_mean)):
-            self._last_global_reward_mean = float(best_global_reward_mean)
+        self._last_global_reward_mean = 0.0
         if self.warm_start:
             self._last_action = best_action
             self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
@@ -1082,7 +980,7 @@ class MonteCarloMPCTensorBatched:
             rollout={
                 "n_samples": self.n_samples,
                 "horizon": self.horizon,
-                "global_enabled": self.global_enabled,
+                "liquidity_sourcing": False,
                 "soft_fill_temp": self.soft_fill_temp,
                 "soft_fill_activation": self.soft_fill_activation,
             },

@@ -138,14 +138,13 @@
       "init_sigma": 1.0
     },
     "global_price_model": {
-      "kind": "legacy",
+      "kind": "ewma_gaussian",
       "decay": 0.95,
       "sigma_min_quote": 1.0
     },
     "execution_model": {
       "kind": "real",
-      "maker_fee": 0.0,
-      "global_fee": 0.0
+      "maker_fee": 0.0
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",

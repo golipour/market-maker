@@ -75,7 +75,7 @@ def _compare_live_orders(
 
 
 class PortfolioLedgerService:
-    """Shadow ledger beside OrderManager; strategy continues using legacy state."""
+    """Maintain the strategy-facing ledger from private state snapshots."""
 
     def __init__(
         self,

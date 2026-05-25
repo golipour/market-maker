@@ -208,7 +208,7 @@ class SigmoidMixtureAction:
 
 def sigmoid_action_to_action(sigmoid_action: SigmoidMixtureAction) -> Action:
     """
-    Convert SigmoidMixtureAction to a single-level Action (legacy).
+    Convert SigmoidMixtureAction to a single-level Action.
     Prefer sigmoid_action_to_discretized_action for execution with depth fit.
     """
     delta_b = float(sigmoid_action.bid_x0[0])
@@ -399,10 +399,10 @@ class State:
     cash: float = 0.0
     buy_ref: float = 0.0
     sell_ref: float = 0.0
-    hedge_buy_ref: float | None = None
-    hedge_sell_ref: float | None = None
+    global_buy_ref: float | None = None
+    global_sell_ref: float | None = None
     global_inventory: int = 0
-    hedge_cash: float = 0.0
+    global_cash: float = 0.0
 
     @property
     def buy_vwap(self) -> float:
@@ -416,11 +416,11 @@ class State:
 
     @property
     def global_buy_vwap(self) -> float | None:
-        return self.hedge_buy_ref
+        return self.global_buy_ref
 
     @property
     def global_sell_vwap(self) -> float | None:
-        return self.hedge_sell_ref
+        return self.global_sell_ref
 
 
 def state_from_ob_and_flow(
@@ -431,10 +431,10 @@ def state_from_ob_and_flow(
     sell_vol: float,
     inventory: int,
     cash: float = 0.0,
-    hedge_buy_ref: float | None = None,
-    hedge_sell_ref: float | None = None,
+    global_buy_ref: float | None = None,
+    global_sell_ref: float | None = None,
     global_inventory: int = 0,
-    hedge_cash: float = 0.0,
+    global_cash: float = 0.0,
 ) -> State:
     """Build State from mid, orderbook levels (spread_ticks, qty), flow, and position."""
     ob_rel = OrderbookRelative(
@@ -450,10 +450,10 @@ def state_from_ob_and_flow(
         cash=cash,
         buy_ref=mid,
         sell_ref=mid,
-        hedge_buy_ref=hedge_buy_ref,
-        hedge_sell_ref=hedge_sell_ref,
+        global_buy_ref=global_buy_ref,
+        global_sell_ref=global_sell_ref,
         global_inventory=int(global_inventory),
-        hedge_cash=float(hedge_cash),
+        global_cash=float(global_cash),
     )
 
 
@@ -479,10 +479,10 @@ def state_from_orderbook(
     cash: float = 0.0,
     spread_max: float | None = None,
     reference_depth_lots: float = 1000.0,
-    hedge_buy_ref: float | None = None,
-    hedge_sell_ref: float | None = None,
+    global_buy_ref: float | None = None,
+    global_sell_ref: float | None = None,
     global_inventory: int = 0,
-    hedge_cash: float = 0.0,
+    global_cash: float = 0.0,
 ) -> State:
     """
     Build State from trade_stats Orderbook and flow/position.
@@ -502,10 +502,10 @@ def state_from_orderbook(
         cash=cash,
         buy_ref=buy_ref,
         sell_ref=sell_ref,
-        hedge_buy_ref=hedge_buy_ref,
-        hedge_sell_ref=hedge_sell_ref,
+        global_buy_ref=global_buy_ref,
+        global_sell_ref=global_sell_ref,
         global_inventory=int(global_inventory),
-        hedge_cash=float(hedge_cash),
+        global_cash=float(global_cash),
     )
 
 
@@ -530,10 +530,10 @@ def state_from_step(
         _private_fills_ask,
         main_buy_ref,
         main_sell_ref,
-        hedge_buy_ref,
-        hedge_sell_ref,
+        global_buy_ref,
+        global_sell_ref,
         global_inventory,
-        hedge_cash,
+        global_cash,
     ) = step
     mid = float(ob.mid)
     ob_rel = ob_to_ob_rel(ob, spread_max=spread_max)
@@ -546,8 +546,8 @@ def state_from_step(
         cash=float(cash),
         buy_ref=float(main_buy_ref),
         sell_ref=float(main_sell_ref),
-        hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
-        hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
+        global_buy_ref=float(global_buy_ref) if global_buy_ref is not None else None,
+        global_sell_ref=float(global_sell_ref) if global_sell_ref is not None else None,
         global_inventory=int(global_inventory),
-        hedge_cash=float(hedge_cash),
+        global_cash=float(global_cash),
     )

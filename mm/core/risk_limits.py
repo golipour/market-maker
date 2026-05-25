@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class VenueRiskLimits:
-    """Hard limits for one venue role (primary quote or hedge)."""
+    """Hard limits for one venue role."""
 
     min_inventory: float = 0.0
     max_inventory: float = float("inf")
@@ -32,7 +32,7 @@ class VenueRiskLimits:
 
 @dataclass(frozen=True, slots=True)
 class GlobalVenueRiskLimits:
-    """Hard limits for hedge venue (live hedge orders in Phase 6)."""
+    """Hard limits for the optional global venue."""
 
     min_inventory: float = 0.0
     max_inventory: float = float("inf")

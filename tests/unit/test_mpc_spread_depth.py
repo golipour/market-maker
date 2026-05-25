@@ -38,7 +38,6 @@ def test_optimizer_stores_objective_params() -> None:
     assert mpc.quote_size_max_per_side == 10.0
     assert mpc.inv_coef == 4.0
     assert mpc.target_inv == 5.0
-    assert mpc.hedge_enabled is True
 
 
 def test_resolve_inventory_target_from_quote_size_range() -> None:
@@ -69,36 +68,6 @@ def test_terminal_objective_uses_clear_component_names() -> None:
 
     assert set(components) == {"risk_adjusted_return", "inventory_capacity_penalty"}
     assert torch.isclose(objective, sum(components.values()))
-
-
-def test_hedge_enabled_explicit_overrides_hedge_coef() -> None:
-    opt = object()
-    flow = object()
-    exe = object()
-    on = MonteCarloMPCTensorBatched(
-        opt, flow, exe, hedge_enabled=True, hedge_coef=0.0,
-        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
-    )
-    assert on.hedge_enabled is True
-    off = MonteCarloMPCTensorBatched(
-        opt, flow, exe, hedge_enabled=False, hedge_coef=1.0,
-        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
-    )
-    assert off.hedge_enabled is False
-
-
-def test_hedge_enabled_defaults_from_hedge_coef() -> None:
-    opt = object()
-    flow = object()
-    exe = object()
-    assert MonteCarloMPCTensorBatched(
-        opt, flow, exe, hedge_coef=0.0,
-        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
-    ).hedge_enabled is False
-    assert MonteCarloMPCTensorBatched(
-        opt, flow, exe, hedge_coef=0.01,
-        quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
-    ).hedge_enabled is True
 
 
 def test_effective_sigmoid_action_exposes_executable_depth() -> None:

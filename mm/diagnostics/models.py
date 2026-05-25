@@ -12,7 +12,7 @@ CONTROLLER_DIAGNOSTICS_VERSION = 1
 
 
 def orderbook_snapshot_payload(book: RawOrderbook | None) -> dict[str, Any]:
-    """JSON-friendly primary orderbook levels for diagnostics and Grafana."""
+    """JSON-friendly local orderbook levels for diagnostics and Grafana."""
 
     if book is None:
         return {"bids": [], "asks": []}

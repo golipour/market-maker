@@ -23,7 +23,7 @@ from mm.runtime.config import (
     RiskRuntimeConfig,
 )
 from mm.runtime.engine import _default_persistence_topics
-from tests.unit.conftest import strategy_decision_with_joint
+from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 
 
 def _market_event() -> MarketEvent:
@@ -165,7 +165,7 @@ async def test_strategy_runner_publishes_diagnostics_on_controller_error(
         run_id="run-test",
     )
     frame = StrategyInputFrame(local=_market_event(), created_at_ms=1_500)
-    approved = await runner.on_frame(frame)
+    approved = await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
 
     assert approved == []
     diagnostics = await diag_queue.get()
@@ -209,7 +209,8 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
         risk_engine=PassThroughRiskEngine(),
         bus=bus,
     )
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    frame = StrategyInputFrame(local=_market_event())
+    await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
 
     diagnostics = await diag_queue.get()
     assert diagnostics["type"] == CONTROLLER_DIAGNOSTICS_TYPE
@@ -250,7 +251,7 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
 
 
-def test_legacy_sync_status_marks_stale_global_market_not_ready() -> None:
+def test_sync_status_marks_stale_global_market_not_ready() -> None:
     frame = StrategyInputFrame(
         local=_market_event(),
         global_=None,

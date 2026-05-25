@@ -11,27 +11,13 @@ RULES_TICK_SIZE = "rules_tick_size"
 RULES_QTY_STEP = "rules_qty_step"
 RULES_PRICE_BAND = "rules_price_band"
 
-_LEGACY_REJECTION_MAP = {
-    "below_min_base_qty": RULES_MIN_QTY,
-    "below_min_notional_quote": RULES_MIN_NOTIONAL,
-}
-
 
 def normalize_rules_reason(reason: str) -> str:
-    """Map legacy limit-check reasons onto the stable rules taxonomy."""
+    """Return a stable rules taxonomy reason for a venue validation failure."""
 
-    if reason in _LEGACY_REJECTION_MAP:
-        return _LEGACY_REJECTION_MAP[reason]
     if reason.startswith("rules_"):
         return reason
     return reason
-
-
-def legacy_rejection_label(reason: str) -> str:
-    """Map rules taxonomy back to legacy OrderManager report labels."""
-
-    reverse = {value: key for key, value in _LEGACY_REJECTION_MAP.items()}
-    return reverse.get(reason, reason)
 
 
 class ExchangeRulesGateway:

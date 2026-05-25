@@ -254,16 +254,6 @@ class RiskRuntimeConfig:
     local: VenueRiskLimits = field(default_factory=VenueRiskLimits)
     global_: GlobalVenueRiskLimits = field(default_factory=GlobalVenueRiskLimits)
 
-    @property
-    def max_inventory(self) -> float:
-        """Alias for legacy flat config and diagnostics."""
-        return self.local.max_inventory
-
-    @property
-    def max_data_age_ms(self) -> int:
-        """Alias for legacy flat config."""
-        return self.local.max_market_data_age_ms
-
 
 @dataclass(frozen=True, slots=True)
 class ReconcileRuntimeConfig:
@@ -359,7 +349,6 @@ class MarketMakerRuntimeConfig:
         default_factory=LiquiditySourcingRuntimeConfig
     )
     execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
-    config_warnings: tuple[str, ...] = ()
     bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
     persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
     observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
@@ -411,7 +400,6 @@ class MarketMakerRuntimeConfig:
             "global_grace_ms": self.global_grace_ms,
             "liquidity_sourcing": self.liquidity_sourcing.as_dict(),
             "execution": self.execution.as_dict(),
-            "config_warnings": list(self.config_warnings),
             "joint_strategy_frame": {
                 "topic": self.joint_frame_topic,
                 "ledger_topic": "ledger:snapshot",
@@ -488,7 +476,7 @@ def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
 
 
 def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeConfig:
-    local_payload, global_payload, config_warnings = _resolve_public_venue_payloads(payload)
+    local_payload, global_payload = _resolve_public_venue_payloads(payload)
     local_private_payload, global_private_payload = _resolve_private_venue_payloads(payload)
     liquidity_sourcing = _liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing"))
     return MarketMakerRuntimeConfig(
@@ -502,29 +490,21 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         controller=_controller_from_mapping(payload.get("controller")),
         liquidity_sourcing=liquidity_sourcing,
         execution=_execution_from_mapping(payload.get("execution")),
-        config_warnings=tuple(config_warnings),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
     )
 
 
-def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any, list[str]]:
-    warnings: list[str] = []
+def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any]:
     venues = payload.get("venues")
-    if isinstance(venues, dict):
-        local_payload = _venue_payload_from_mapping(venues.get("local"))
-        global_payload = _venue_payload_from_mapping(venues.get("global"))
-    else:
-        local_payload = _venue_payload_from_mapping(payload.get("primary"))
-        global_payload = _venue_payload_from_mapping(payload.get("hedge"))
-        if local_payload is not None:
-            warnings.append("legacy primary config key is deprecated; use venues.local")
-        if global_payload is not None:
-            warnings.append("legacy hedge config key is deprecated; use venues.global")
+    if not isinstance(venues, dict):
+        raise ValueError("runtime config requires venues object with local venue")
+    local_payload = _venue_payload_from_mapping(venues.get("local"))
+    global_payload = _venue_payload_from_mapping(venues.get("global"))
     if local_payload is None:
         raise ValueError("runtime config requires venues.local")
-    return local_payload, global_payload, warnings
+    return local_payload, global_payload
 
 
 def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any]:
@@ -725,10 +705,7 @@ def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
     enabled = bool(payload.get("enabled", True))
     local_payload = payload.get("local")
     global_payload = payload.get("global")
-    if isinstance(local_payload, dict):
-        local = _venue_risk_from_mapping(local_payload)
-    else:
-        local = _venue_risk_from_mapping(payload, legacy_flat=True)
+    local = _venue_risk_from_mapping(local_payload) if isinstance(local_payload, dict) else VenueRiskLimits()
     global_limits = _global_risk_from_mapping(global_payload) if isinstance(global_payload, dict) else GlobalVenueRiskLimits()
     engine_raw = str(payload.get("engine", "net_delta")).strip().lower()
     if engine_raw != "net_delta":
@@ -741,26 +718,21 @@ def _risk_from_mapping(payload: Any) -> RiskRuntimeConfig:
     )
 
 
-def _venue_risk_from_mapping(payload: dict[str, Any], *, legacy_flat: bool = False) -> VenueRiskLimits:
-    """Parse local venue limits; ``legacy_flat`` reads top-level migration aliases."""
+def _venue_risk_from_mapping(payload: dict[str, Any]) -> VenueRiskLimits:
+    """Parse local venue limits."""
 
-    def _get(key: str, default: Any) -> Any:
-        if legacy_flat and key in payload:
-            return payload[key]
-        return payload.get(key, default)
-
-    max_inv = float(_get("max_inventory", float("inf")))
-    min_inv = float(_get("min_inventory", 0.0))
+    max_inv = float(payload.get("max_inventory", float("inf")))
+    min_inv = float(payload.get("min_inventory", 0.0))
     if min_inv < 0.0:
         min_inv = 0.0
     return VenueRiskLimits(
         min_inventory=min_inv,
         max_inventory=max_inv,
-        min_cash=float(_get("min_cash", 0.0)),
-        max_open_notional=float(_get("max_open_notional", float("inf"))),
-        max_order_notional=float(_get("max_order_notional", float("inf"))),
-        max_market_data_age_ms=int(_get("max_market_data_age_ms", _get("max_data_age_ms", 10_000))),
-        max_private_state_age_ms=int(_get("max_private_state_age_ms", 60_000)),
+        min_cash=float(payload.get("min_cash", 0.0)),
+        max_open_notional=float(payload.get("max_open_notional", float("inf"))),
+        max_order_notional=float(payload.get("max_order_notional", float("inf"))),
+        max_market_data_age_ms=int(payload.get("max_market_data_age_ms", 10_000)),
+        max_private_state_age_ms=int(payload.get("max_private_state_age_ms", 60_000)),
     )
 
 
@@ -776,7 +748,7 @@ def _global_risk_from_mapping(payload: dict[str, Any] | None) -> GlobalVenueRisk
         min_cash=float(payload.get("min_cash", 0.0)),
         max_market_order_notional=float(payload.get("max_market_order_notional", float("inf"))),
         max_slippage_bps=float(payload.get("max_slippage_bps", float("inf"))),
-        max_market_data_age_ms=int(payload.get("max_market_data_age_ms", payload.get("max_data_age_ms", 10_000))),
+        max_market_data_age_ms=int(payload.get("max_market_data_age_ms", 10_000)),
         max_private_state_age_ms=int(payload.get("max_private_state_age_ms", 60_000)),
     )
 
@@ -825,7 +797,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},
             "global_price_model": config.global_price_model
             or {
-                "kind": "legacy",
+                "kind": "ewma_gaussian",
                 "note": "EWMA Gaussian deltas on global refs",
             },
             "execution_model": config.execution_model or {"kind": "real"},

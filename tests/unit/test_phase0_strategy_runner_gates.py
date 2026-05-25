@@ -20,7 +20,7 @@ from mm.runtime.config import (
     RiskRuntimeConfig,
 )
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
-from tests.unit.conftest import strategy_decision_with_joint
+from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 
 
 def _market_event() -> MarketEvent:
@@ -89,6 +89,10 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
     return ControllerRuntimeConfig(**base)
 
 
+async def _run_frame(runner: StrategyRunner) -> None:
+    await runner.on_joint_frame(joint_frame_for_input(StrategyInputFrame(local=_market_event())))
+
+
 @pytest.mark.asyncio
 async def test_strategy_runner_observe_only_config_blocks_live_sync(
     monkeypatch: pytest.MonkeyPatch,
@@ -107,7 +111,7 @@ async def test_strategy_runner_observe_only_config_blocks_live_sync(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
@@ -138,7 +142,7 @@ async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
         control_plane=control_plane,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
@@ -164,9 +168,9 @@ async def test_strategy_runner_warmup_blocks_live_sync_until_threshold(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_frame(runner)
+    await _run_frame(runner)
+    await _run_frame(runner)
 
     assert len(manager.synced) == 1
 
@@ -200,7 +204,7 @@ async def test_strategy_runner_live_execution_syncs_when_gates_pass(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert len(manager.synced) == 1
@@ -230,7 +234,7 @@ async def test_strategy_runner_no_manager_blocks_live_sync(
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    await _run_frame(runner)
 
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert diagnostics["execution_gates"]["executed"] is False

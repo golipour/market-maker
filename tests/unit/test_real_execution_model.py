@@ -5,21 +5,17 @@ from __future__ import annotations
 from mm.core.models.real_execution import RealExecutionModel
 
 
-def test_maker_fee_only():
+def test_maker_fee():
     m = RealExecutionModel(maker_fee=0.0001)
     assert m.maker_fee == 0.0001
-    assert not hasattr(m, "global_fee")
 
 
-def test_maker_and_global_fee():
-    m = RealExecutionModel(maker_fee=0.00015, hedge_fee=0.0000025)
-    assert m.maker_fee == 0.00015
-    assert m.global_fee == 0.0000025
-
-
-def test_unknown_config_keys_ignored():
-    m = RealExecutionModel(maker_fee=0.0, extra_from_json=123)
-    assert m.maker_fee == 0.0
+def test_unknown_config_keys_rejected():
+    try:
+        RealExecutionModel(maker_fee=0.0, extra_from_json=123)  # type: ignore[call-arg]
+    except TypeError:
+        return
+    raise AssertionError("unknown RealExecutionModel keys should be rejected")
 
 
 def test_lives_under_mm_package():

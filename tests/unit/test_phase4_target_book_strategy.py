@@ -30,8 +30,8 @@ from mm.runtime.engine import _default_persistence_topics
 from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     build_venue_target_book_from_orders,
-    joint_target_book_to_legacy_action,
 )
+from tests.unit.conftest import joint_frame_for_input
 
 
 def _market_event() -> MarketEvent:
@@ -110,7 +110,7 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert pipeline.target_book.order_count == len(local_orders)
 
 
-def test_joint_target_book_converts_to_legacy_action() -> None:
+def test_joint_target_book_converts_to_action() -> None:
     book = JointTargetBook(
         actor_id="actor-1",
         local=VenueTargetBook(
@@ -123,7 +123,7 @@ def test_joint_target_book_converts_to_legacy_action() -> None:
             ),
         ),
     )
-    action = joint_target_book_to_legacy_action(book)
+    action = joint_target_book_to_action(book)
 
     assert isinstance(action, Action)
     assert len(action.orders) == 2
@@ -177,7 +177,6 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
     from mm.strategies.mpc_engine import MpcStrategyEngine
 
     class _FakeController:
-        hedge_enabled = False
         last_diagnostics = None
 
         def optimize(self, state):
@@ -188,7 +187,7 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
         lambda config, binding, **kwargs: _FakeController(),
     )
     monkeypatch.setattr("mm.strategies.mpc_engine.score_frame_models", lambda **kwargs: {})
-    monkeypatch.setattr("mm.strategies.mpc_engine._update_hedge_vwap_price_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr("mm.strategies.mpc_engine._update_global_vwap_price_model", lambda *args, **kwargs: None)
     monkeypatch.setattr("mm.strategies.mpc_engine._update_market_flow_model", lambda *args: None)
     monkeypatch.setattr("mm.strategies.mpc_engine._update_residual_price_model", lambda *args: None)
     monkeypatch.setattr(
@@ -254,7 +253,8 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
         bus=bus,
     )
 
-    await runner.on_frame(StrategyInputFrame(local=_market_event()))
+    frame = StrategyInputFrame(local=_market_event())
+    await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
 
     event = await asyncio.wait_for(target_queue.get(), timeout=1.0)
     assert event["type"] == "JointTargetBook"

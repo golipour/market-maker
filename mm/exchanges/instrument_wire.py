@@ -32,7 +32,7 @@ from mm.core.asset_aliases import canonical_asset_code
 from mm.core.models.instrument import normalize_symbol, split_symbol
 from mm.core.models.market import PriceLevel, RawOrderbook, RawTrade
 
-# Back-compat for tests / ``quote_unit``; Nobitex scales are defined in ``nobitex/instrument_wire.json``.
+# Nobitex conversion constant used by tests; runtime scales live in ``nobitex/instrument_wire.json``.
 RIAL_PER_TOMAN_NOBITEX = 10.0
 
 _WIRE_CACHE: dict[str, tuple[int, dict[str, Any]]] = {}

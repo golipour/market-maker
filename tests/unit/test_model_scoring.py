@@ -5,9 +5,9 @@ import math
 import pytest
 
 from mm.models.scoring import (
-    score_hedge_vwap_deltas,
+    score_global_vwap_deltas,
+    score_local_mid_delta,
     score_market_flow,
-    score_primary_mid_delta,
 )
 from mm.mpc.global_price_torch import GlobalGaussianPriceModel
 from mm.mpc.market_order_flow_torch import TorchHurdleLogNormalModel
@@ -39,9 +39,9 @@ def test_hurdle_lognormal_flow_nll_uses_pre_update_params() -> None:
     assert result.observation["prob_sell"] > 0.0
 
 
-def test_primary_mid_delta_nll_deterministic() -> None:
+def test_local_mid_delta_nll_deterministic() -> None:
     params = {"mu_mid": 1.0, "sigma_mid": 2.0}
-    result = score_primary_mid_delta(delta_mid=3.0, params_before=params)
+    result = score_local_mid_delta(delta_mid=3.0, params_before=params)
     assert result.skip_reason is None
     assert result.nll is not None
     z = (3.0 - 1.0) / 2.0
@@ -50,8 +50,8 @@ def test_primary_mid_delta_nll_deterministic() -> None:
     assert result.standardized_residual == pytest.approx(z)
 
 
-def test_primary_mid_delta_skips_invalid_sigma() -> None:
-    result = score_primary_mid_delta(delta_mid=1.0, params_before={"mu_mid": 0.0, "sigma_mid": 0.0})
+def test_local_mid_delta_skips_invalid_sigma() -> None:
+    result = score_local_mid_delta(delta_mid=1.0, params_before={"mu_mid": 0.0, "sigma_mid": 0.0})
     assert result.skip_reason == "invalid_sigma"
     assert result.nll is None
 
@@ -118,14 +118,14 @@ def test_strategy_price_model_update_uses_true_vwap_residuals() -> None:
     assert model.realized_buy_price_hist[-1] == pytest.approx(103.0)
 
 
-def test_hedge_vwap_delta_nll_deterministic() -> None:
+def test_global_vwap_delta_nll_deterministic() -> None:
     params = {
         "mu_delta_buy": 0.5,
         "mu_delta_sell": -0.25,
         "sigma_delta_buy": 1.0,
         "sigma_delta_sell": 2.0,
     }
-    result = score_hedge_vwap_deltas(delta_buy=1.5, delta_sell=0.0, params_before=params)
+    result = score_global_vwap_deltas(delta_buy=1.5, delta_sell=0.0, params_before=params)
     assert result.skip_reason is None
     assert result.nll is not None
     assert result.nll > 0.0
@@ -153,13 +153,13 @@ def test_torch_model_score_before_update_differs_from_after() -> None:
     assert before_nll != after_nll
 
 
-def test_hedge_model_first_observation_skips_via_score_frame() -> None:
+def test_global_model_first_observation_skips_via_score_frame() -> None:
     from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
     from mm.core.models.strategy import StrategyInputFrame
     from mm.models.scoring import score_frame_models
     from mm.mpc.mpc_state import OrderbookRelative, State
 
-    hedge = GlobalGaussianPriceModel(decay=0.9, sigma_min_quote=1.0)
+    global_price_model = GlobalGaussianPriceModel(decay=0.9, sigma_min_quote=1.0)
     book = RawOrderbook(
         exchange="wallex",
         symbol="BTC_IRT",
@@ -182,7 +182,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         imbalance=0.0,
         microprice=100.5,
     )
-    primary_book = RawOrderbook(
+    local_book = RawOrderbook(
         exchange="nobitex",
         symbol="BTC_IRT",
         timestamp_ms=1000,
@@ -190,13 +190,13 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         asks=(PriceLevel(101.0, 1.0),),
         is_snapshot=True,
     )
-    primary = MarketEvent(
+    local = MarketEvent(
         exchange="nobitex",
         symbol="BTC_IRT",
         interval_ms=1000,
         t_start_ms=0,
         t_end_ms=1000,
-        orderbook=primary_book,
+        orderbook=local_book,
         trades=(),
         buy_volume=0.0,
         sell_volume=0.0,
@@ -204,7 +204,7 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         imbalance=0.0,
         microprice=100.5,
     )
-    frame = StrategyInputFrame(local=primary, global_=global_event, global_status="ready")
+    frame = StrategyInputFrame(local=local, global_=global_event, global_status="ready")
     state = State(
         mid=100.5,
         ob_rel=OrderbookRelative(bids=(), asks=()),
@@ -223,10 +223,10 @@ def test_hedge_model_first_observation_skips_via_score_frame() -> None:
         state=state,
         market_flow_model=None,
         price_model=TorchResidualPriceModel(),
-        global_price_model=hedge,
+        global_price_model=global_price_model,
         market_flow_kind="hurdle_lognormal",
         price_kind="residual",
-        global_price_kind="legacy",
+        global_price_kind="ewma_gaussian",
     )
     assert scores["price"].skip_reason == "missing_previous_frame"
     assert scores["global_price"].skip_reason == "missing_previous_frame"

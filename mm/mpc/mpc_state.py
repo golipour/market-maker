@@ -1,4 +1,4 @@
-"""MPC state and sigmoid action types (decoupled from trade_stats / legacy state module)."""
+"""MPC state and sigmoid action types."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class OrderbookRelative:
 
 @dataclass(frozen=True)
 class Action:
-    """Legacy single-level action kept for compatibility."""
+    """Single-level action used by older optimizer helpers."""
 
     delta_b_ticks: float
     delta_a_ticks: float

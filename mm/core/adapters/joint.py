@@ -1,4 +1,4 @@
-"""Compatibility adapters between legacy and joint-venue domain models."""
+"""Adapters between local/global strategy inputs, ledgers, and target books."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def joint_ledger_from_frame(
     reference_price: float | None = None,
     created_at_ms: int | None = None,
 ) -> JointLedgerSnapshot:
-    """Build a joint ledger snapshot from legacy frame private state."""
+    """Build a joint ledger snapshot from frame private state."""
 
     local = venue_ledger_from_private_snapshot(frame.local_private, binding.local)
     global_ledger = (
@@ -225,7 +225,7 @@ def build_frame_sync_status(
     )
 
 
-def joint_strategy_frame_from_legacy(
+def joint_strategy_frame_from_input(
     frame: StrategyInputFrame,
     binding: SymbolBinding,
     *,
@@ -274,42 +274,6 @@ def joint_strategy_frame_from_legacy(
     )
 
 
-def strategy_input_frame_to_joint_strategy_frame(
-    frame: StrategyInputFrame,
-    binding: SymbolBinding,
-    *,
-    liquidity_sourcing_enabled: bool = False,
-    liquidity_sourcing_mode: LiquiditySourcingMode = "single_venue",
-) -> JointStrategyFrame:
-    """Adapt legacy ``StrategyInputFrame`` into ``JointStrategyFrame``."""
-
-    mode: LiquiditySourcingMode = (
-        "liquidity_sourcing"
-        if liquidity_sourcing_enabled and liquidity_sourcing_mode == "liquidity_sourcing"
-        else "single_venue"
-    )
-    ledger = joint_ledger_from_frame(frame, binding, created_at_ms=frame.created_at_ms)
-    liquidity_config = LiquiditySourcingRuntimeConfig(
-        enabled=liquidity_sourcing_enabled,
-        mode=liquidity_sourcing_mode,
-    )
-    sync_status = build_frame_sync_status(
-        frame,
-        ledger=ledger,
-        binding=binding,
-        liquidity_sourcing=liquidity_config,
-        now_ms=frame.created_at_ms,
-    )
-    return JointStrategyFrame(
-        local_market=frame.local,
-        global_market=frame.global_,
-        ledger=ledger,
-        mode=mode,
-        sync_status=sync_status,
-        created_at_ms=frame.created_at_ms,
-    )
-
-
 def _order_to_target_order(order: Order) -> TargetOrder:
     return TargetOrder(
         exchange=order.exchange,
@@ -338,7 +302,7 @@ def action_to_venue_target_book(
     *,
     policy: str = "reconcile",
 ) -> VenueTargetBook:
-    """Convert a legacy ``Action`` into a single-venue target book."""
+    """Convert an ``Action`` into a single-venue target book."""
 
     if not action.orders:
         return VenueTargetBook(
@@ -362,7 +326,7 @@ def action_to_venue_target_book(
 
 
 def venue_target_book_to_action(book: VenueTargetBook) -> Action:
-    """Convert a venue target book back to a legacy ``Action``."""
+    """Convert a venue target book into an executable action."""
 
     return Action(
         actor_id=book.actor_id,
@@ -377,7 +341,7 @@ def action_to_joint_target_book(
     global_book: VenueTargetBook | None = None,
     diagnostics: dict | None = None,
 ) -> JointTargetBook:
-    """Wrap a legacy primary ``Action`` as a joint target book."""
+    """Wrap a local action as a joint target book."""
 
     return JointTargetBook(
         actor_id=action.actor_id,
@@ -389,7 +353,7 @@ def action_to_joint_target_book(
 
 
 def joint_target_book_to_action(book: JointTargetBook) -> Action:
-    """Flatten a joint target book into one legacy ``Action`` for current execution."""
+    """Flatten a joint target book into one executable action."""
 
     orders: list[Order] = [
         _target_order_to_order(order) for order in book.local.orders

@@ -1,7 +1,7 @@
 """
 Live market websocket: URLs, subscribe payloads, and JSON parsing per exchange.
 
-Stateful pieces (Binance merged book, KuCoin classic vs legacy) live in session objects.
+Stateful pieces (Binance merged book and KuCoin channel variants) live in session objects.
 WebSocket trade stream normalization for exchange adapters.
 """
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from mm.core.adapters.joint import joint_target_book_to_action
 from mm.core.models.execution import Order
 from mm.core.models.instrument import InstrumentSpec
 from mm.core.models.market import MarketEvent
@@ -74,7 +73,7 @@ def build_joint_target_book_from_sigmoid(
     global_constraints: OrderConstraints | None = None,
     global_sigmoid_action: Any | None = None,
 ) -> tuple[JointTargetBook, ActionPipelineReport, list[Order], list[Order]]:
-    """Discretize MPC output into a joint target book and legacy pipeline report."""
+    """Discretize MPC output into a joint target book and pipeline report."""
 
     local_orders, pipeline, ladder = build_orders_from_sigmoid_with_report(
         actor_id=actor_id,
@@ -139,12 +138,6 @@ def build_joint_target_book_from_sigmoid(
         },
     )
     return joint_book, pipeline, ladder, local_orders
-
-
-def joint_target_book_to_legacy_action(book: JointTargetBook):
-    """Convert a joint target book to the legacy ``Action`` execution shape."""
-
-    return joint_target_book_to_action(book)
 
 
 def local_constraints_from_spec(

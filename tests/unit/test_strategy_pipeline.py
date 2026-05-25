@@ -13,10 +13,10 @@ from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action, Order, TradingState
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
-from mm.core.models.private import OpenOrder
+from mm.core.models.private import OpenOrder, PrivateStateSnapshot
 from mm.execution.memory import RecordingOrderManager
 from mm.risk.engine import PassThroughRiskEngine
-from tests.unit.conftest import strategy_decision_with_joint
+from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 from mm.runtime.config import MarketMakerRuntimeConfig, MarketDataSourceConfig
 
@@ -59,7 +59,7 @@ def test_subtract_own_orders_removes_and_reduces_matching_levels():
     assert clean.asks == (PriceLevel(101.0, 4.0),)
 
 
-def test_clean_strategy_frame_adjusts_primary_book():
+def test_clean_strategy_frame_adjusts_local_book():
     frame = StrategyInputFrame(local=market_event())
     open_orders = {"own-bid": Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0)}
     clean = clean_strategy_frame(frame, open_orders)
@@ -115,19 +115,16 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
     monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
 
     bus = InMemoryBus()
-    manager = _FakeOrderManager(
-        {
-            "own-bid": OpenOrder(
-                exchange_order_id="own-bid",
-                actor_id="test-runner",
-                order=Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0),
-                remaining_qty=4.0,
-                filled_qty=0.0,
-                status="open",
-                timestamp_ms=2000,
-            )
-        }
+    open_order = OpenOrder(
+        exchange_order_id="own-bid",
+        actor_id="test-runner",
+        order=Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0),
+        remaining_qty=4.0,
+        filled_qty=0.0,
+        status="open",
+        timestamp_ms=2000,
     )
+    manager = _FakeOrderManager()
 
     runtime_config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
@@ -139,7 +136,15 @@ async def test_strategy_runner_subtracts_own_orders_before_decide(monkeypatch: p
         risk_engine=PassThroughRiskEngine(),
         bus=bus,
     )
-    await runner.on_frame(StrategyInputFrame(local=market_event()))
+    frame = StrategyInputFrame(
+        local=market_event(),
+        local_private=PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2000,
+            open_orders={"own-bid": open_order},
+        ),
+    )
+    await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime_config.binding))
 
     assert seen_bid_qty == [1.0]
 
@@ -161,14 +166,15 @@ async def test_strategy_runner_risk_blocks_execution(monkeypatch: pytest.MonkeyP
         risk_engine=RejectAllRisk(),
         bus=None,
     )
-    approved = await runner.on_frame(StrategyInputFrame(local=market_event()))
+    frame = StrategyInputFrame(local=market_event())
+    approved = await runner.on_joint_frame(joint_frame_for_input(frame))
 
     assert approved == []
     assert manager.synced == []
 
 
 @pytest.mark.asyncio
-async def test_frame_assembler_passes_none_when_hedge_is_not_configured():
+async def test_frame_assembler_passes_none_when_global_is_not_configured():
     queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     await queue.put(market_event())
     assembler = StrategyInputFrameAssembler(local_queue=queue, global_grace_ms=0)
@@ -182,7 +188,7 @@ async def test_frame_assembler_passes_none_when_hedge_is_not_configured():
 
 
 @pytest.mark.asyncio
-async def test_frame_assembler_aligns_fresh_global_event_to_primary():
+async def test_frame_assembler_aligns_fresh_global_event_to_local():
     local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     global_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
     global_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)

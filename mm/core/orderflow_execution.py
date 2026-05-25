@@ -179,23 +179,15 @@ class ObservedStepExecutionModel:
     Live / replay: inventory, cash, and refs come from the ``Step`` (exchange path).
     PnL decomposition is chosen so components sum to ``wealth_pnl``.
 
-    ``maker_fee`` and ``hedge_fee`` are not applied inside ``state_after_step`` (observed
-    fees come from the step). They are read by MPC rollouts (e.g.
-    ``MonteCarloMPCTensorBatched``) like ``maker_fee`` for main-venue simulation and
-    ``hedge_fee`` for proportional fee on simulated hedge-venue trades.
+    ``maker_fee`` is not applied inside ``state_after_step`` (observed fees come
+    from the step). MPC rollouts read it for fill simulation.
     """
 
     def __init__(
         self,
         maker_fee: float = 0.0,
-        hedge_fee: float | None = None,
-        global_fee: float | None = None,
-        **_ignored: object,
     ) -> None:
         self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
-        fee = global_fee if global_fee is not None else hedge_fee
-        if fee is not None:
-            self.global_fee = max(0.0, min(1.0 - 1e-9, float(fee)))
 
     def state_after_step(
         self,
@@ -215,29 +207,29 @@ class ObservedStepExecutionModel:
             _private_fills_ask,
             main_buy_ref,
             main_sell_ref,
-            hedge_buy_ref,
-            hedge_sell_ref,
+            global_buy_ref,
+            global_sell_ref,
             global_inventory,
-            hedge_cash,
+            global_cash,
         ) = curr_step
         mid_curr = float(ob_curr.mid)
         ob_rel = ob_to_ob_rel(ob_curr, spread_max=spread_max)
         cash_f = float(cash_new)
         inv_i = int(inv_new)
-        hedge_inv_i = int(global_inventory)
-        hedge_cash_f = float(hedge_cash)
+        global_inv_i = int(global_inventory)
+        global_cash_f = float(global_cash)
 
         # Option B: liquidation-style mark-to-bid (sell-side representative price).
         main_ref_prev = float(prev_state.sell_ref)
         main_ref_next = float(main_sell_ref)
-        hedge_ref_prev = float(
-            prev_state.hedge_sell_ref
-            if prev_state.hedge_sell_ref is not None
+        global_ref_prev = float(
+            prev_state.global_sell_ref
+            if prev_state.global_sell_ref is not None
             else prev_state.sell_ref
         )
-        hedge_ref_next = float(
-            hedge_sell_ref
-            if hedge_sell_ref is not None
+        global_ref_next = float(
+            global_sell_ref
+            if global_sell_ref is not None
             else main_ref_next
         )
 
@@ -246,10 +238,10 @@ class ObservedStepExecutionModel:
         main_wealth_pnl = main_wealth_after - main_wealth_before
         wealth_before = (
             main_wealth_before
-            + float(getattr(prev_state, "hedge_cash", 0.0))
-            + int(getattr(prev_state, "global_inventory", 0)) * hedge_ref_prev
+            + float(getattr(prev_state, "global_cash", 0.0))
+            + int(getattr(prev_state, "global_inventory", 0)) * global_ref_prev
         )
-        wealth_after = main_wealth_after + hedge_cash_f + hedge_inv_i * hedge_ref_next
+        wealth_after = main_wealth_after + global_cash_f + global_inv_i * global_ref_next
         wealth_pnl = wealth_after - wealth_before
         inventory_pnl = prev_state.inventory * (main_ref_next - main_ref_prev)
         delta_inv = inv_i - prev_state.inventory
@@ -267,10 +259,10 @@ class ObservedStepExecutionModel:
             cash=cash_f,
             buy_ref=float(main_buy_ref),
             sell_ref=float(main_sell_ref),
-            hedge_buy_ref=float(hedge_buy_ref) if hedge_buy_ref is not None else None,
-            hedge_sell_ref=float(hedge_sell_ref) if hedge_sell_ref is not None else None,
-            global_inventory=hedge_inv_i,
-            hedge_cash=hedge_cash_f,
+            global_buy_ref=float(global_buy_ref) if global_buy_ref is not None else None,
+            global_sell_ref=float(global_sell_ref) if global_sell_ref is not None else None,
+            global_inventory=global_inv_i,
+            global_cash=global_cash_f,
         )
         return next_state, DeltaPnL(
             spread_pnl=float(spread_pnl),

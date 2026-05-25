@@ -59,7 +59,7 @@ async def test_joint_frame_assembler_publishes_joint_topic() -> None:
     global_private_queue: asyncio.Queue[PrivateStateSnapshot] = asyncio.Queue()
 
     config = _runtime_config()
-    legacy = StrategyInputFrameAssembler(
+    input_assembler = StrategyInputFrameAssembler(
         local_queue=local_queue,
         global_queue=global_queue,
         local_private_queue=local_private_queue,
@@ -70,7 +70,7 @@ async def test_joint_frame_assembler_publishes_joint_topic() -> None:
     )
     ledger_service = PortfolioLedgerService(config, config.binding, bus)
     assembler = JointStrategyFrameAssembler(
-        legacy_assembler=legacy,
+        input_assembler=input_assembler,
         binding=config.binding,
         liquidity_sourcing=config.liquidity_sourcing,
         bus=bus,
@@ -108,7 +108,7 @@ async def test_joint_frame_assembler_publishes_joint_topic() -> None:
 @pytest.mark.asyncio
 async def test_single_venue_joint_frame_tolerates_missing_global_private() -> None:
     config = _runtime_config(global_=True)
-    legacy_frame = StrategyInputFrame(local=market_event(),
+    input_frame = StrategyInputFrame(local=market_event(),
         global_=_event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000),
         global_status="ready",
         global_lag_ms=0,
@@ -118,7 +118,7 @@ async def test_single_venue_joint_frame_tolerates_missing_global_private() -> No
     )
 
     sync_status = build_frame_sync_status(
-        legacy_frame,
+        input_frame,
         ledger=None,
         binding=config.binding,
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=False),
@@ -161,12 +161,12 @@ async def test_joint_frame_uses_ledger_service_for_wallet_state() -> None:
     snapshot = _private_snapshot("nobitex")
     ledger_service._local.apply_snapshot(snapshot)
 
-    legacy_frame = StrategyInputFrame(local=market_event(),
+    input_frame = StrategyInputFrame(local=market_event(),
         local_private=snapshot,
         created_at_ms=2000,
     )
     assembler = JointStrategyFrameAssembler(
-        legacy_assembler=StrategyInputFrameAssembler(
+        input_assembler=StrategyInputFrameAssembler(
             local_queue=asyncio.Queue(),
             clock_ms=lambda: 2000,
         ),
@@ -176,7 +176,7 @@ async def test_joint_frame_uses_ledger_service_for_wallet_state() -> None:
         clock_ms=lambda: 2000,
     )
 
-    joint = assembler.build_joint_frame(legacy_frame)
+    joint = assembler.build_joint_frame(input_frame)
 
     assert joint.ledger is not None
     assert joint.ledger.local.available_base == pytest.approx(1.0)

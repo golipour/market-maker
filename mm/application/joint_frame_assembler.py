@@ -1,4 +1,4 @@
-"""Ledger-backed joint strategy frame assembly alongside legacy frames."""
+"""Ledger-backed joint strategy frame assembly."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from mm.application.frame_assembler import StrategyInputFrameAssembler
 from mm.bus.base import AbstractEventBus
 from mm.core.adapters.joint import (
     _reference_price_from_frame,
-    joint_strategy_frame_from_legacy,
+    joint_strategy_frame_from_input,
 )
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.joint_strategy import JointStrategyFrame
@@ -27,7 +27,7 @@ class JointStrategyFrameAssembler:
     def __init__(
         self,
         *,
-        legacy_assembler: StrategyInputFrameAssembler,
+        input_assembler: StrategyInputFrameAssembler,
         binding: SymbolBinding,
         liquidity_sourcing: LiquiditySourcingRuntimeConfig,
         bus: AbstractEventBus | None = None,
@@ -38,7 +38,7 @@ class JointStrategyFrameAssembler:
         max_global_private_age_ms: int = 120_000,
         clock_ms: Callable[[], int] = now_ms,
     ) -> None:
-        self.legacy_assembler = legacy_assembler
+        self.input_assembler = input_assembler
         self.binding = binding
         self.liquidity_sourcing = liquidity_sourcing
         self.bus = bus
@@ -54,7 +54,7 @@ class JointStrategyFrameAssembler:
 
     async def start(self) -> None:
         self._stopped.clear()
-        await self.legacy_assembler.start_listeners()
+        await self.input_assembler.start_listeners()
         if self.ledger_queue is not None:
             self._tasks.append(asyncio.create_task(self._run_ledger()))
         self._tasks.append(asyncio.create_task(self._run_publish()))
@@ -65,16 +65,16 @@ class JointStrategyFrameAssembler:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
-        await self.legacy_assembler.stop()
+        await self.input_assembler.stop()
 
     async def next_joint_frame(self) -> JointStrategyFrame:
-        legacy = await self.legacy_assembler.next_frame()
-        return self.build_joint_frame(legacy)
+        input_frame = await self.input_assembler.next_frame()
+        return self.build_joint_frame(input_frame)
 
-    def build_joint_frame(self, legacy: StrategyInputFrame) -> JointStrategyFrame:
+    def build_joint_frame(self, input_frame: StrategyInputFrame) -> JointStrategyFrame:
         now_ms = self.clock_ms()
         reference_price = _reference_price_from_frame(
-            legacy,
+            input_frame,
             reference_venue=self.liquidity_sourcing.reference_venue,
         )
         if self.ledger_service is not None:
@@ -84,7 +84,7 @@ class JointStrategyFrameAssembler:
                     reference_price=reference_price,
                     created_at_ms=now_ms,
                 ),
-                legacy=legacy,
+                input_frame=input_frame,
                 now_ms=now_ms,
             )
         elif self._latest_ledger is not None:
@@ -94,28 +94,28 @@ class JointStrategyFrameAssembler:
                     reference_price=reference_price,
                     created_at_ms=now_ms,
                 ),
-                legacy=legacy,
+                input_frame=input_frame,
                 now_ms=now_ms,
             )
         else:
             ledger = None
 
-        return joint_strategy_frame_from_legacy(
-            legacy,
+        return joint_strategy_frame_from_input(
+            input_frame,
             self.binding,
             ledger=ledger,
             liquidity_sourcing=self.liquidity_sourcing,
             now_ms=now_ms,
             max_local_private_age_ms=self.max_local_private_age_ms,
             max_global_private_age_ms=self.max_global_private_age_ms,
-            input_frame=legacy,
+            input_frame=input_frame,
         )
 
     async def _run_publish(self) -> None:
         try:
             while not self._stopped.is_set():
-                legacy = await self.legacy_assembler.next_frame()
-                joint = self.build_joint_frame(legacy)
+                input_frame = await self.input_assembler.next_frame()
+                joint = self.build_joint_frame(input_frame)
                 if self.bus is not None and self.joint_output_topic:
                     await self.bus.publish(self.joint_output_topic, joint)
         except asyncio.CancelledError:
@@ -136,18 +136,18 @@ class JointStrategyFrameAssembler:
         self,
         ledger: JointLedgerSnapshot,
         *,
-        legacy: StrategyInputFrame,
+        input_frame: StrategyInputFrame,
         now_ms: int,
     ) -> JointLedgerSnapshot:
         global_market_age = (
-            max(0, now_ms - int(legacy.global_.t_end_ms))
-            if legacy.global_ is not None
+            max(0, now_ms - int(input_frame.global_.t_end_ms))
+            if input_frame.global_ is not None
             else None
         )
         freshness = LedgerFreshness(
             local_private_age_ms=ledger.freshness.local_private_age_ms,
             global_private_age_ms=ledger.freshness.global_private_age_ms,
-            local_market_age_ms=max(0, now_ms - int(legacy.local.t_end_ms)),
+            local_market_age_ms=max(0, now_ms - int(input_frame.local.t_end_ms)),
             global_market_age_ms=global_market_age,
             ledger_fresh=ledger.freshness.ledger_fresh,
         )

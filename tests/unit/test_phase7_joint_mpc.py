@@ -155,12 +155,12 @@ def test_single_venue_mask_zeros_global_effective_depth() -> None:
     assert float(local_bid[-1]) > 0.0
 
 
-def test_liquidity_sourcing_disabled_matches_legacy_optimizer_path() -> None:
+def test_liquidity_sourcing_disabled_uses_single_venue_optimizer_path() -> None:
     state = _minimal_state(global_active=False)
-    legacy = _build_optimizer(liquidity_sourcing_enabled=False)
-    legacy_action, _ = legacy.optimize_with_diagnostics(state)
-    assert legacy_action.n_components == 1
-    assert legacy._last_global_sigmoid_action is None
+    optimizer = _build_optimizer(liquidity_sourcing_enabled=False)
+    action, _ = optimizer.optimize_with_diagnostics(state)
+    assert action.n_components == 1
+    assert optimizer._last_global_sigmoid_action is None
 
 
 def test_joint_optimizer_runs_with_consolidated_wealth() -> None:
@@ -189,7 +189,7 @@ def test_build_controller_uses_global_price_model_not_local_residual() -> None:
         local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
         controller=ControllerRuntimeConfig(
             enabled=True,
-            global_price_model={"kind": "legacy", "decay": 0.95},
+            global_price_model={"kind": "ewma_gaussian", "decay": 0.95},
             price_model={"kind": "residual", "residual_decay": 0.95},
             optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
         ),

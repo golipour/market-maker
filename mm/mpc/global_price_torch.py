@@ -1,9 +1,9 @@
-"""Hedge-venue VWAP dynamics for MPC rollouts.
+"""Global-venue VWAP dynamics for MPC rollouts.
 
-Gaussian EWMA-style hedge VWAP model (used when hedge leg participates in MPC):
+Gaussian EWMA-style global VWAP model:
 EWMA on (buy, sell) VWAP *deltas*, then Gaussian ``sample_deltas``
 for the optimiser. Observations and deltas use the same numeric units as the
-runtime (quote-per-base floats in the new stack; historically ticks in the old).
+runtime (quote-per-base floats).
 """
 
 from __future__ import annotations
@@ -24,14 +24,8 @@ class GlobalGaussianPriceModel:
         self,
         decay: float = 0.97,
         sigma_min_quote: float = 1.0,
-        sigma_min_ticks: float | None = None,
-        **_: Any,
     ):
         self.decay = min(0.999999, max(0.0, float(decay)))
-        # Preferred name in the float-domain stack is sigma_min_quote.
-        # sigma_min_ticks remains as a compatibility alias.
-        if sigma_min_ticks is not None:
-            sigma_min_quote = float(sigma_min_ticks)
         self.sigma_min_quote = max(1e-9, float(sigma_min_quote))
         self._m1_buy: float | None = None
         self._m2_buy: float | None = None
@@ -95,7 +89,7 @@ class GlobalGaussianPriceModel:
         dtype: Any = None,
         torch_mod: Any = None,
     ) -> tuple[Any, Any]:
-        """Sample Gaussian delta shocks for (buy, sell) hedge VWAPs."""
+        """Sample Gaussian delta shocks for (buy, sell) global VWAPs."""
         n_samples, horizon = int(shape[0]), int(shape[1])
         p = self.get_params()
         mu_db = float(p.get("mu_delta_buy", 0.0) or 0.0)
@@ -146,11 +140,11 @@ def score_vwap_deltas(
     delta_sell: float,
     params: dict,
 ) -> "ScoreResult":
-    """Pre-update hedge VWAP delta score (see ``mm.models.scoring``)."""
+    """Pre-update global VWAP delta score (see ``mm.models.scoring``)."""
 
-    from mm.models.scoring import score_hedge_vwap_deltas
+    from mm.models.scoring import score_global_vwap_deltas
 
-    return score_hedge_vwap_deltas(
+    return score_global_vwap_deltas(
         delta_buy=delta_buy,
         delta_sell=delta_sell,
         params_before=params,

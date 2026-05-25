@@ -41,8 +41,8 @@ CLI flags on `print_events` can override exchange/symbol/interval when not using
 
 Loader: `mm.runtime.config.load_runtime_config(path)`.
 
-Legacy `primary` / `hedge` keys are accepted as migration aliases for
-`venues.local` / `venues.global` and emit config warnings.
+Use `venues.local` and optional `venues.global`; top-level venue aliases are
+rejected.
 
 ### Venues and private credentials
 
@@ -158,8 +158,8 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "max_private_state_age_ms": 120000
     }
   },
-  "global_price_model": {"kind": "legacy", "decay": 0.95},
-  "execution_model": {"kind": "real", "maker_fee": 0.0, "global_fee": 0.0},
+  "global_price_model": {"kind": "ewma_gaussian", "decay": 0.95},
+  "execution_model": {"kind": "real", "maker_fee": 0.0},
   "optimizer": {"kind": "monte_carlo_mpc_tensor_batched", ...}
 }
 ```

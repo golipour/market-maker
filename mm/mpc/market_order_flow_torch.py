@@ -1450,11 +1450,6 @@ class TorchHurdleGeneralizedParetoModel:
     def pmf(k: int, p0: float, xi: float, beta: float, u: float) -> float:
         return _hurdle_generalized_pareto_pmf(k, p0, xi, beta, u)
 
-
-# Backward-compatible alias.
-TorchHurdleParetoModel = TorchHurdleGeneralizedParetoModel
-
-
 def score_flow_observation(
     buy_volume: float,
     sell_volume: float,

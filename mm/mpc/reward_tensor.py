@@ -84,7 +84,7 @@ def reward_delta_inventory_slippage_tensor(
     spread_ask_ticks: Tensor | None = None,
     use_softplus: bool = True,
 ) -> Tensor:
-    """Composite differentiable reward for legacy training helpers."""
+    """Composite differentiable reward for single-venue training helpers."""
     torch = _get_torch()
     r_delta = delta_pnl_detailed_tensor(state, next_state)
     r_inv = inventory_pnl_term_tensor(state, next_state)

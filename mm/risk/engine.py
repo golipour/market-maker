@@ -127,15 +127,15 @@ class RuntimeRiskEngine(AbstractRiskEngine):
         return self.validate_frame_with_result(actions, state, frame)
 
     def _frame_gate_reason(self, frame: StrategyInputFrame, *, now_ms: int) -> str | None:
-        primary = self.limits.local
+        local = self.limits.local
         market_age_ms = now_ms - int(frame.local.t_end_ms)
-        if market_age_ms > primary.max_market_data_age_ms:
+        if market_age_ms > local.max_market_data_age_ms:
             return "stale_market_data"
 
         priv_reason = _private_freshness_reason(
             frame.local_private,
             now_ms=now_ms,
-            max_age_ms=primary.max_private_state_age_ms,
+            max_age_ms=local.max_private_state_age_ms,
             missing_reason="missing_local_private",
             stale_reason="stale_local_private",
         )
@@ -143,20 +143,20 @@ class RuntimeRiskEngine(AbstractRiskEngine):
             return priv_reason
 
         if frame.has_global:
-            hedge = self.limits.global_
+            global_limits = self.limits.global_
             if frame.global_ is not None:
-                hedge_market_age = now_ms - int(frame.global_.t_end_ms)
-                if hedge_market_age > hedge.max_market_data_age_ms:
+                global_market_age = now_ms - int(frame.global_.t_end_ms)
+                if global_market_age > global_limits.max_market_data_age_ms:
                     return "stale_global_market_data"
-            hedge_priv_reason = _private_freshness_reason(
+            global_priv_reason = _private_freshness_reason(
                 frame.global_private,
                 now_ms=now_ms,
-                max_age_ms=hedge.max_private_state_age_ms,
+                max_age_ms=global_limits.max_private_state_age_ms,
                 missing_reason="missing_global_private",
                 stale_reason="stale_global_private",
             )
-            if hedge_priv_reason is not None:
-                return hedge_priv_reason
+            if global_priv_reason is not None:
+                return global_priv_reason
         return None
 
     def _filter_actions(

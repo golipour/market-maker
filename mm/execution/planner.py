@@ -23,7 +23,7 @@ def _target_order_to_order(order: TargetOrder) -> Order:
 
 
 def target_orders_to_domain_orders(target: VenueTargetBook) -> tuple[Order, ...]:
-    """Convert venue target orders into legacy ``Order`` objects for reconcile."""
+    """Convert venue target orders into ``Order`` objects for reconcile."""
 
     return tuple(_target_order_to_order(order) for order in target.orders)
 
