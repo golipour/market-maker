@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Sequence
-from typing import TypeVar
+import queue
+import threading
+from typing import TypeVar, cast
 
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
@@ -17,18 +19,48 @@ async def map_in_thread_pool(
     *,
     max_concurrency: int = 8,
 ) -> list[R]:
-    """Run sync callables in a bounded thread pool, preserving input order."""
+    """Run sync callables in a bounded worker pool, preserving input order.
+
+    The implementation avoids ``asyncio`` executor futures because some
+    restricted runtimes allow threads but never wake the event loop from
+    executor callbacks.
+    """
 
     if not items:
         return []
-    concurrency = max(1, int(max_concurrency))
-    semaphore = asyncio.Semaphore(concurrency)
+    concurrency = min(len(items), max(1, int(max_concurrency)))
+    work: queue.Queue[tuple[int, T]] = queue.Queue()
+    for idx, item in enumerate(items):
+        work.put((idx, item))
+    results: list[R | None] = [None] * len(items)
+    errors: list[BaseException] = []
 
-    async def _run(item: T) -> R:
-        async with semaphore:
-            return await asyncio.to_thread(fn, item)
+    def _worker() -> None:
+        while True:
+            try:
+                idx, item = work.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                results[idx] = fn(item)
+            except BaseException as exc:  # propagate after active workers settle
+                errors.append(exc)
+            finally:
+                work.task_done()
 
-    return list(await asyncio.gather(*(_run(item) for item in items)))
+    threads = [
+        threading.Thread(target=_worker, daemon=True, name="mm-order-worker")
+        for _ in range(concurrency)
+    ]
+    for thread in threads:
+        thread.start()
+
+    while any(thread.is_alive() for thread in threads):
+        await asyncio.sleep(0.001)
+
+    if errors:
+        raise errors[0]
+    return [cast(R, result) for result in results]
 
 
 class DryRunOrderCommandAdapter(AbstractOrderCommandAdapter):

@@ -209,9 +209,9 @@ def start_server(host: str = "0.0.0.0", port: int | None = None) -> None:
     if _server_thread is not None and _server_thread.is_alive():
         return
     port = int(port if port is not None else _port())
+    httpd = HTTPServer((host, port), _Handler)
 
     def _run() -> None:
-        httpd = HTTPServer((host, port), _Handler)
         httpd.serve_forever(poll_interval=0.5)
 
     _server_thread = threading.Thread(target=_run, daemon=True, name="mm-metrics")

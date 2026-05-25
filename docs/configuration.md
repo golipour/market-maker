@@ -41,7 +41,8 @@ CLI flags on `print_events` can override exchange/symbol/interval when not using
 
 Loader: `mm.runtime.config.load_runtime_config(path)`.
 
-Legacy `primary` / `hedge` keys are **not** accepted. Use `venues.local` / `venues.global`.
+Legacy `primary` / `hedge` keys are accepted as migration aliases for
+`venues.local` / `venues.global` and emit config warnings.
 
 ### Venues and private credentials
 
@@ -95,7 +96,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
   "mode": "liquidity_sourcing",
   "reference_venue": "global",
   "require_global_private": false,
-  "global_live_orders": true
+  "global_live_orders": false
 }
 ```
 

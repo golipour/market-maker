@@ -7,7 +7,10 @@ import pytest
 from mm.application.strategy_runner import StrategyRunner
 from mm.bus.memory import InMemoryBus
 from mm.core.models.execution import Action, Order
+from mm.core.models.joint_strategy import FrameSyncStatus, JointStrategyFrame
+from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+from mm.core.models.private import OpenOrder
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.execution.plan import ExecutionSyncReport, summarize_orders
 from mm.risk.engine import PassThroughRiskEngine
@@ -206,3 +209,108 @@ async def test_strategy_runner_continues_after_sync_failure(monkeypatch: pytest.
     second = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert first["frame_step"] == 1
     assert second["frame_step"] == 2
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_records_pipeline_error_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(actor_id="test-runner", orders=()),
+            joint_target_book=None,
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    decision_queue = bus.subscribe_queue("strategy:decisions")
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    runner = StrategyRunner(
+        config=_runner_config(),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={},
+        risk_engine=PassThroughRiskEngine(),
+        bus=bus,
+    )
+
+    approved = await runner.on_frame(StrategyInputFrame(local=_market_event()))
+
+    assert approved == []
+    controller_error = await asyncio.wait_for(decision_queue.get(), timeout=1.0)
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert controller_error["type"] == "ControllerError"
+    assert controller_error["error"] == "ValueError"
+    assert any("joint_target_book" in warning for warning in diagnostics["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        seen["best_bid_qty"] = frame.local.orderbook.bids[0].qty
+        assert frame.local_private is not None
+        seen["private_order_ids"] = tuple(frame.local_private.open_orders)
+        return strategy_decision_with_joint(frame.local, frame_step=frame_step, actor_id="test-runner")
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    order = Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0, client_order_id="ledger-order")
+    open_order = OpenOrder(
+        exchange_order_id="ledger-1",
+        actor_id="test-runner",
+        order=order,
+        remaining_qty=2.0,
+        filled_qty=0.0,
+        status="open",
+        timestamp_ms=2000,
+    )
+    legacy_frame = StrategyInputFrame(local=_market_event(), created_at_ms=2000)
+    ledger = JointLedgerSnapshot(
+        local=VenueLedger(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            base_asset="BTC",
+            quote_asset="IRT",
+            live_orders={"ledger-1": open_order},
+            last_snapshot_ms=2000,
+        ),
+        created_at_ms=2000,
+    )
+    joint_frame = JointStrategyFrame(
+        local_market=legacy_frame.local,
+        ledger=ledger,
+        sync_status=FrameSyncStatus(
+            local_market_ready=True,
+            local_private_ready=True,
+            ledger_fresh=True,
+        ),
+        created_at_ms=2000,
+        input_frame=legacy_frame,
+    )
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    runner = StrategyRunner(
+        config=_runner_config(observe_only=True),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={},
+        risk_engine=PassThroughRiskEngine(),
+        bus=InMemoryBus(),
+    )
+
+    await runner.on_joint_frame(joint_frame)
+
+    assert seen["best_bid_qty"] == pytest.approx(3.0)
+    assert seen["private_order_ids"] == ("ledger-1",)

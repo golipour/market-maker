@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from mm.application.venue_execution import (
@@ -19,14 +19,16 @@ from mm.bus.base import AbstractEventBus
 from mm.controller.context import DecisionContext, execution_blocked_reasons
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.risk import AbstractRiskEngine
-from mm.core.models.execution import Action
+from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.joint_strategy import JointStrategyFrame
+from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
+from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
 from mm.core.adapters.joint import joint_ledger_from_frame
-from mm.risk.net_delta import NetDeltaRiskEngine
+from mm.risk.net_delta import NetDeltaRiskEngine, target_book_result_to_risk_result
 from mm.runtime.config import (
     ControllerRuntimeConfig,
     ExecutionRuntimeConfig,
@@ -42,7 +44,8 @@ class StrategyRunner:
 
     Pipeline per frame:
 
-    1. Collect live orders from ``OrderManager`` instances.
+    1. Collect live orders from the ledger, or from ``OrderManager`` instances
+       for legacy frames.
     2. ``clean_strategy_frame`` — subtract own orders from local/global books.
     3. ``MpcStrategyEngine.decide`` on the clean frame.
     4. ``AbstractRiskEngine.validate_frame`` on the proposed action.
@@ -103,9 +106,9 @@ class StrategyRunner:
                         "strategy_runner_frame_error",
                         {
                             "actor_id": self.config.actor_id,
-                            "exchange": frame.local.exchange,
-                            "symbol": frame.local.symbol,
-                            "t_end_ms": frame.local.t_end_ms,
+                            "exchange": frame.local_market.exchange,
+                            "symbol": frame.local_market.symbol,
+                            "t_end_ms": frame.local_market.t_end_ms,
                             "error": type(exc).__name__,
                             "message": str(exc),
                         },
@@ -117,15 +120,27 @@ class StrategyRunner:
         frame = joint_frame.input_frame
         if frame is None:
             raise ValueError("JointStrategyFrame.input_frame is required for strategy pipeline")
-        return await self.on_frame(frame)
+        if joint_frame.ledger is not None:
+            frame = _frame_with_ledger_private(frame, joint_frame.ledger)
+        return await self.on_frame(frame, joint_frame=joint_frame)
 
-    async def on_frame(self, frame: StrategyInputFrame) -> list[Action]:
+    async def on_frame(
+        self,
+        frame: StrategyInputFrame,
+        *,
+        joint_frame: JointStrategyFrame | None = None,
+    ) -> list[Action]:
         t0 = time.monotonic_ns()
         self._frame_step += 1
         self._last_local_exchange = frame.local.exchange.lower().strip()
         self._sync_control_plane_to_risk()
 
-        open_orders = live_orders_from_managers(self.order_managers)
+        ledger = joint_frame.ledger if joint_frame is not None else None
+        open_orders = (
+            _live_orders_from_ledger(ledger)
+            if ledger is not None
+            else live_orders_from_managers(self.order_managers)
+        )
         clean_frame = clean_strategy_frame(frame, open_orders)
         trading_state = trading_state_from_frame(
             frame,
@@ -142,6 +157,12 @@ class StrategyRunner:
             frame_step=self._frame_step,
             run_id=self.run_id,
             binding=self.binding,
+            ledger=ledger,
+            frame_sync_status=(
+                joint_frame.sync_status.as_payload()
+                if joint_frame is not None
+                else None
+            ),
         )
         approved: list[Action] = []
 
@@ -151,22 +172,13 @@ class StrategyRunner:
                 ctx.record_decision(decision)
             except Exception as exc:
                 ctx.record_controller_error(exc)
-                await self._publish(
-                    self.config.normalized_decisions_topic,
-                    {
-                        "type": "ControllerError",
-                        "actor_id": self.config.actor_id,
-                        "exchange": frame.local.exchange,
-                        "symbol": frame.local.symbol,
-                        "t_end_ms": frame.local.t_end_ms,
-                        "error": type(exc).__name__,
-                        "message": str(exc),
-                    },
-                )
+                await self._publish_controller_error(frame, exc)
                 return approved
 
             proposed = [decision.action]
             execution_book = decision.joint_target_book
+            if execution_book is None:
+                raise ValueError("StrategyDecision.joint_target_book is required")
             if execution_book is not None:
                 execution_book = prepare_execution_joint_book(
                     execution_book,
@@ -204,20 +216,34 @@ class StrategyRunner:
             )
 
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
-                ledger = joint_ledger_from_frame(
-                    clean_frame,
-                    self.binding,
-                    created_at_ms=clean_frame.created_at_ms,
+                ledger = (
+                    joint_frame.ledger
+                    if joint_frame is not None and joint_frame.ledger is not None
+                    else joint_ledger_from_frame(
+                        clean_frame,
+                        self.binding,
+                        created_at_ms=clean_frame.created_at_ms,
+                    )
                 )
-                risk_result = self.risk_engine.validate_frame_with_result(
-                    proposed,
-                    trading_state,
+                target_risk_result = self.risk_engine.validate_target_book_with_result(
+                    decision.joint_target_book,
+                    ledger,
                     clean_frame,
-                    joint_target_book=decision.joint_target_book,
-                    ledger=ledger,
                     live_execution=live_execution,
                     global_live_execution=global_live_execution,
                 )
+                risk_result = target_book_result_to_risk_result(
+                    target_risk_result,
+                    proposed_actions=proposed,
+                )
+                if target_risk_result.approved is not None:
+                    execution_book = prepare_execution_joint_book(
+                        target_risk_result.approved,
+                        execution=self.execution,
+                        liquidity_sourcing=self.liquidity_sourcing,
+                        frame=clean_frame,
+                        binding=self.binding,
+                    )
             else:
                 risk_result = self.risk_engine.validate_frame_with_result(
                     proposed, trading_state, clean_frame
@@ -249,8 +275,6 @@ class StrategyRunner:
             observe_only_control = (
                 self.control_plane is not None and self.control_plane.state.observe_only
             )
-            if execution_book is None:
-                raise ValueError("StrategyDecision.joint_target_book is required")
             venue_gates = compute_venue_execution_gates(
                 config=self.config,
                 execution=self.execution,
@@ -351,6 +375,10 @@ class StrategyRunner:
                     },
                 )
             return approved
+        except Exception as exc:
+            ctx.record_controller_error(exc)
+            await self._publish_controller_error(frame, exc)
+            return approved
         finally:
             ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
@@ -407,6 +435,24 @@ class StrategyRunner:
             },
         )
 
+    async def _publish_controller_error(
+        self,
+        frame: StrategyInputFrame,
+        exc: BaseException,
+    ) -> None:
+        await self._publish(
+            self.config.normalized_decisions_topic,
+            {
+                "type": "ControllerError",
+                "actor_id": self.config.actor_id,
+                "exchange": frame.local.exchange,
+                "symbol": frame.local.symbol,
+                "t_end_ms": frame.local.t_end_ms,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
+
     def _sync_control_plane_to_risk(self) -> None:
         if self.control_plane is None:
             return
@@ -434,7 +480,6 @@ class StrategyRunner:
             self.config.normalized_decisions_topic,
             decision.as_payload(executed_orders=executed_orders),
         )
-        await self._publish(self.config.normalized_action_topic, decision.action)
 
     async def _publish_diagnostics(self, ctx: DecisionContext) -> None:
         await self._diagnostics.publish(ctx.to_diagnostics())
@@ -442,3 +487,40 @@ class StrategyRunner:
     async def _publish(self, topic: str, event: Any) -> None:
         if self.bus is not None:
             await self.bus.publish(topic, event)
+
+
+def _private_snapshot_from_ledger(ledger: VenueLedger) -> PrivateStateSnapshot:
+    timestamp_ms = int(ledger.last_snapshot_ms or ledger.last_private_event_ms or 0)
+    return PrivateStateSnapshot(
+        exchange=ledger.exchange,
+        timestamp_ms=timestamp_ms,
+        balances=dict(ledger.balances),
+        open_orders=dict(ledger.live_orders),
+    )
+
+
+def _frame_with_ledger_private(
+    frame: StrategyInputFrame,
+    ledger: JointLedgerSnapshot,
+) -> StrategyInputFrame:
+    return replace(
+        frame,
+        local_private=_private_snapshot_from_ledger(ledger.local),
+        global_private=(
+            _private_snapshot_from_ledger(ledger.global_)
+            if ledger.global_ is not None
+            else frame.global_private
+        ),
+        created_at_ms=frame.created_at_ms or ledger.created_at_ms,
+    )
+
+
+def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:
+    out: dict[str, Order] = {}
+    for venue in (ledger.local, ledger.global_):
+        if venue is None:
+            continue
+        exchange_key = venue.exchange.lower().strip()
+        for exchange_order_id, open_order in venue.live_orders.items():
+            out[f"{exchange_key}:{exchange_order_id}"] = open_order.order
+    return out

@@ -91,7 +91,7 @@ def test_example_runtime_config_loads() -> None:
     assert config.controller.actor_id == "mpc-controller"
     assert config.controller.action_start_after_steps == 10
     assert config.liquidity_sourcing.enabled is True
-    assert config.liquidity_sourcing.global_live_orders is True
+    assert config.liquidity_sourcing.global_live_orders is False
     assert config.execution.local.planner == "reconcile"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"

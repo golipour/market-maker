@@ -488,7 +488,7 @@ def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
 
 
 def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeConfig:
-    local_payload, global_payload = _resolve_public_venue_payloads(payload)
+    local_payload, global_payload, config_warnings = _resolve_public_venue_payloads(payload)
     local_private_payload, global_private_payload = _resolve_private_venue_payloads(payload)
     liquidity_sourcing = _liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing"))
     return MarketMakerRuntimeConfig(
@@ -502,22 +502,29 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         controller=_controller_from_mapping(payload.get("controller")),
         liquidity_sourcing=liquidity_sourcing,
         execution=_execution_from_mapping(payload.get("execution")),
-        config_warnings=(),
+        config_warnings=tuple(config_warnings),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
     )
 
 
-def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any, list[str]]:
+    warnings: list[str] = []
     venues = payload.get("venues")
-    if not isinstance(venues, dict):
-        raise ValueError("runtime config requires venues object with local venue")
-    local_payload = _venue_payload_from_mapping(venues.get("local"))
-    global_payload = _venue_payload_from_mapping(venues.get("global"))
+    if isinstance(venues, dict):
+        local_payload = _venue_payload_from_mapping(venues.get("local"))
+        global_payload = _venue_payload_from_mapping(venues.get("global"))
+    else:
+        local_payload = _venue_payload_from_mapping(payload.get("primary"))
+        global_payload = _venue_payload_from_mapping(payload.get("hedge"))
+        if local_payload is not None:
+            warnings.append("legacy primary config key is deprecated; use venues.local")
+        if global_payload is not None:
+            warnings.append("legacy hedge config key is deprecated; use venues.global")
     if local_payload is None:
         raise ValueError("runtime config requires venues.local")
-    return local_payload, global_payload
+    return local_payload, global_payload, warnings
 
 
 def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any]:

@@ -250,6 +250,40 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
 
 
+def test_legacy_sync_status_marks_stale_global_market_not_ready() -> None:
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        global_=None,
+        global_status="stale",
+        global_lag_ms=1500,
+        created_at_ms=1_000,
+    )
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    from mm.application.trading_context import trading_state_from_frame
+
+    trading_state = trading_state_from_frame(
+        frame,
+        runtime.binding,
+        actor_id="test-runner",
+        open_orders={},
+    )
+    ctx = DecisionContext(
+        config=_minimal_config(),
+        frame=frame,
+        clean_frame=frame,
+        trading_state=trading_state,
+        frame_step=2,
+        now_ms=2_500,
+    )
+
+    sync_status = ctx.to_diagnostics().as_payload()["frame"]["sync_status"]
+
+    assert sync_status["global_market_ready"] is False
+    assert sync_status["global_private_ready"] is False
+    assert sync_status["ledger_fresh"] is False
+
+
 def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None:
     from mm.application.orderbook_view import subtract_own_orders
 

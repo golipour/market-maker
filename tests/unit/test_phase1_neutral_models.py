@@ -76,14 +76,19 @@ def test_venues_local_global_config_aliases() -> None:
     assert config.config_warnings == ()
 
 
-def test_legacy_primary_hedge_keys_rejected() -> None:
-    with pytest.raises(ValueError, match="venues object"):
-        runtime_config_from_mapping(
-            {
-                "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-                "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
-            }
-        )
+def test_legacy_primary_hedge_keys_warn_and_map_to_local_global() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "primary": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+            "hedge": {"exchange": "wallex", "symbol": "USDT_IRT"},
+        }
+    )
+
+    assert config.local.normalized_exchange() == "nobitex"
+    assert config.global_ is not None
+    assert config.global_.normalized_exchange() == "wallex"
+    assert any("primary" in warning for warning in config.config_warnings)
+    assert any("hedge" in warning for warning in config.config_warnings)
 
 
 def test_liquidity_sourcing_config_defaults() -> None:

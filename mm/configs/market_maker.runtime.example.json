@@ -33,13 +33,13 @@
     "enable_execution": true
   },
   "liquidity_sourcing": {
-    "enabled": false,
+    "enabled": true,
     "mode": "liquidity_sourcing",
-    "global_live_orders": true
+    "global_live_orders": false
   },
   "execution": {
     "local": {
-      "planner": "replace"
+      "planner": "reconcile"
     },
     "global": {
       "planner": "replace",

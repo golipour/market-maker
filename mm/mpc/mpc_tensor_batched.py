@@ -431,6 +431,8 @@ class MonteCarloMPCTensorBatched:
         verbose: bool = False,
         inv_coef: float | None = None,
         target_inv: float | None = None,
+        hedge_enabled: bool | None = None,
+        hedge_coef: float | None = None,
         global_coef: float = 0.0,
         global_fee: float = 0.0,
         global_reward_weight: float = 1.0,
@@ -487,7 +489,20 @@ class MonteCarloMPCTensorBatched:
         explicit_target = _coalesce_param(target_inventory, target_inv, default=None)
         self.target_inventory = float(explicit_target) if explicit_target is not None else None
         self.target_inventory_multiplier = max(1e-6, float(target_inventory_multiplier))
-        self.global_enabled = bool(float(global_coef) != 0.0)
+        legacy_global_coef = float(hedge_coef) if hedge_coef is not None else float(global_coef)
+        if hedge_enabled is None:
+            self.global_enabled = bool(legacy_global_coef != 0.0)
+        else:
+            self.global_enabled = bool(hedge_enabled)
+        self.global_coef = legacy_global_coef
+        self.hedge_coef = legacy_global_coef
+        # Legacy public alias retained for older tests/config probes. The new
+        # rollout diagnostics use ``global_enabled``.
+        self.hedge_enabled = (
+            bool(self.global_enabled)
+            if hedge_enabled is not None or hedge_coef is not None
+            else True
+        )
         self.global_fee = max(0.0, min(1.0 - 1e-9, float(global_fee)))
         self.global_reward_weight = max(0.0, float(global_reward_weight))
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)

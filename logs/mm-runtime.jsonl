@@ -59873,3 +59873,27 @@
 {"ts_ms":1779692930339,"event":"mpc_optimizer_timing","batch_sec":0.010153511999760667,"train_sec":0.04810645799989288,"total_sec":0.05825996999965355,"n_samples":4,"horizon":1,"best_epoch":1}
 {"ts_ms":1779692930373,"event":"mpc_joint_optimizer_timing","batch_sec":0.002027037000061682,"train_sec":0.022893770999871776,"total_sec":0.02492080799993346,"global_active":true,"best_epoch":1}
 {"ts_ms":1779692930442,"event":"mpc_joint_optimizer_timing","batch_sec":0.001504715999999462,"train_sec":0.058187064999856375,"total_sec":0.05969178099985584,"global_active":true,"best_epoch":4}
+{"ts_ms":1779693782097,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779693782097,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779693782103,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779693782123,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779693792355,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779693793352,"event":"mpc_optimizer_timing","batch_sec":0.0011883550000675314,"train_sec":0.018021925000084593,"total_sec":0.019210280000152125,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779693793378,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014379790000020876,"train_sec":0.01986777100000836,"total_sec":0.02130575000001045,"global_active":true,"best_epoch":1}
+{"ts_ms":1779693793448,"event":"mpc_joint_optimizer_timing","batch_sec":0.0015146729997468356,"train_sec":0.055233369000234234,"total_sec":0.05674804199998107,"global_active":true,"best_epoch":4}
+{"ts_ms":1779694075836,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779694075942,"event":"mpc_optimizer_timing","batch_sec":0.001015080000343005,"train_sec":0.013495588000296266,"total_sec":0.01451066800063927,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779694075970,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014611540000259993,"train_sec":0.02098516700016262,"total_sec":0.022446321000188618,"global_active":true,"best_epoch":1}
+{"ts_ms":1779694076035,"event":"mpc_joint_optimizer_timing","batch_sec":0.001460322000184533,"train_sec":0.05353660000037053,"total_sec":0.05499692200055506,"global_active":true,"best_epoch":4}
+{"ts_ms":1779694076643,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779694076643,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779694076649,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779694076670,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779694107743,"event":"persistence_disabled","reason":"config"}
+{"ts_ms":1779694107832,"event":"mpc_optimizer_timing","batch_sec":0.0010578569999779575,"train_sec":0.016765473999839742,"total_sec":0.0178233309998177,"n_samples":4,"horizon":1,"best_epoch":1}
+{"ts_ms":1779694107865,"event":"mpc_joint_optimizer_timing","batch_sec":0.0014712600000166276,"train_sec":0.025653959999999643,"total_sec":0.02712522000001627,"global_active":true,"best_epoch":1}
+{"ts_ms":1779694107936,"event":"mpc_joint_optimizer_timing","batch_sec":0.0016578130002926628,"train_sec":0.06053907000023173,"total_sec":0.062196883000524394,"global_active":true,"best_epoch":4}
+{"ts_ms":1779694108545,"event":"persistence_sink_missing","sink":"postgres","database_url_env":"MM_DATABASE_URL","message":"persistence.enabled is true, but no database URL resolved"}
+{"ts_ms":1779694108545,"event":"persistence_no_writers_configured","database_url_env":"MM_DATABASE_URL","parquet_root_env":"MM_PARQUET_ROOT","topic_count":7}
+{"ts_ms":1779694108551,"event":"persistence_writers_configured","writers":["PostgresEventWriter"],"topic_count":7}
+{"ts_ms":1779694108572,"event":"persistence_disabled","reason":"config"}

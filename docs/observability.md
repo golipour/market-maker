@@ -149,7 +149,6 @@ These should be handled before relying on production alerts.
 
 | Priority | Item | Why |
 |----------|------|-----|
-| P0 | Fix `RuntimeObservabilitySubscriber` frame bookkeeping typo: `_last_local_frame_by_exchange` is declared, but `_last_primary_frame_by_exchange` is used later | Frame-to-execution latency metrics can fail or stay empty |
 | P0 | Set a non-empty `observability.run_id` for every real run | Incident review, dashboard filtering, replay, and Parquet organization need a stable run key |
 | P1 | Emit Prometheus metrics from `ControllerDiagnostics` | The richest health facts are currently mostly SQL-only |
 | P1 | Add persistence queue depth and flush latency | Backpressure and slow database writes should be visible before data loss or lag |

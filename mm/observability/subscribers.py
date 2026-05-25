@@ -92,7 +92,7 @@ class RuntimeObservabilitySubscriber:
         _ = topic
         with span("mm.frame_assembler.build", exchange=primary.exchange, symbol=primary.symbol):
             counter_inc(obs_schema.MM_STRATEGY_FRAMES_TOTAL, labels=labels, help="Strategy frames assembled")
-            self._last_primary_frame_by_exchange[primary.exchange.lower().strip()] = (
+            self._last_local_frame_by_exchange[primary.exchange.lower().strip()] = (
                 int(primary.t_end_ms),
                 int(frame.created_at_ms),
             )
@@ -101,7 +101,7 @@ class RuntimeObservabilitySubscriber:
                     "mm_global_lag_ms",
                     float(frame.global_lag_ms),
                     labels=labels,
-                    help="Selected hedge event lag",
+                    help="Selected global event lag",
                 )
             log_event(
                 obs_schema.EVENT_STRATEGY_FRAME,
@@ -124,6 +124,10 @@ class RuntimeObservabilitySubscriber:
             "global_status": sync.global_status,
         }
         _ = topic
+        self._last_local_frame_by_exchange[primary.exchange.lower().strip()] = (
+            int(primary.t_end_ms),
+            int(frame.created_at_ms),
+        )
         counter_inc(
             "mm_joint_strategy_frames_total",
             labels=labels,
@@ -170,8 +174,9 @@ class RuntimeObservabilitySubscriber:
         ts = payload.get("timestamp_ms")
         if ex and ts is not None:
             sync_ts = int(ts)
-            self._sync_pending_ts_ms[ex] = sync_ts
-            last = self._last_primary_frame_by_exchange.get(ex.lower().strip())
+            exchange_key = ex.lower().strip()
+            self._sync_pending_ts_ms[exchange_key] = sync_ts
+            last = self._last_local_frame_by_exchange.get(exchange_key)
             if last is not None:
                 t_end_ms, created_at_ms = last
                 histogram_observe(
@@ -184,7 +189,7 @@ class RuntimeObservabilitySubscriber:
                     obs_schema.MM_MARKET_WINDOW_END_TO_EXEC_SYNC_LATENCY_MS,
                     max(0.0, float(sync_ts - t_end_ms)),
                     labels={"exchange": ex},
-                    help="Ms from primary MarketEvent.t_end_ms to ExecutionSyncRequested (runtime wall clock)",
+                    help="Ms from local MarketEvent.t_end_ms to ExecutionSyncRequested (runtime wall clock)",
                 )
 
     def _observe_execution_snapshot(self, snap: ExecutionSnapshot) -> None:
@@ -222,7 +227,7 @@ class RuntimeObservabilitySubscriber:
         )
 
     def _finish_sync_latency(self, exchange: str, snapshot_ts_ms: int) -> None:
-        pending = self._sync_pending_ts_ms.pop(exchange, None)
+        pending = self._sync_pending_ts_ms.pop(exchange.lower().strip(), None)
         if pending is None:
             return
         latency_ms = max(0.0, float(snapshot_ts_ms - pending))

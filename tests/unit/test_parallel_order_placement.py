@@ -17,7 +17,7 @@ def test_map_in_thread_pool_preserves_order() -> None:
 
         out = await map_in_thread_pool(_record, [1, 2, 3, 4], max_concurrency=2)
         assert out == [2, 4, 6, 8]
-        assert seen == [1, 2, 3, 4]
+        assert sorted(seen) == [1, 2, 3, 4]
 
     asyncio.run(_run())
 

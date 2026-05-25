@@ -8,6 +8,7 @@ from typing import Any
 
 from mm.core.models.execution import Action, TradingState
 from mm.core.models.instrument import SymbolBinding
+from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.models import (
@@ -40,17 +41,14 @@ def _private_age_ms(snapshot: PrivateStateSnapshot | None, *, now_ms: int) -> in
 def _legacy_frame_sync_status(frame: StrategyInputFrame) -> dict[str, Any]:
     """Expose latency skew and readiness separately from risk rejection counts."""
 
-    has_global = frame.has_global
+    global_configured = frame.global_status != "disabled"
     return {
         "local_market_ready": True,
-        "global_market_ready": (
-            frame.global_status == "ready"
-            or frame.global_status == "disabled"
-            or not has_global
-        ),
+        "global_market_ready": frame.global_status in {"ready", "disabled"},
         "local_private_ready": frame.local_private is not None,
-        "global_private_ready": frame.global_private is not None or not has_global,
-        "ledger_fresh": frame.local_private is not None,
+        "global_private_ready": frame.global_private is not None or not global_configured,
+        "ledger_fresh": frame.local_private is not None
+        and (frame.global_private is not None or not global_configured),
         "latency_skew_ms": frame.global_lag_ms,
         "global_status": frame.global_status,
     }
@@ -89,6 +87,8 @@ class DecisionContext:
     frame_step: int
     run_id: str = ""
     binding: SymbolBinding | None = None
+    ledger: JointLedgerSnapshot | None = None
+    frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     latency_ms: float = 0.0
 
@@ -184,9 +184,13 @@ class DecisionContext:
                 if self.frame.created_at_ms > 0
                 else None
             ),
-            local_private_age_ms=_private_age_ms(self.frame.local_private, now_ms=self.now_ms),
-            global_private_age_ms=_private_age_ms(self.frame.global_private, now_ms=self.now_ms),
-            sync_status=_legacy_frame_sync_status(self.frame),
+            local_private_age_ms=self._local_private_age_ms(),
+            global_private_age_ms=self._global_private_age_ms(),
+            sync_status=(
+                dict(self.frame_sync_status)
+                if self.frame_sync_status is not None
+                else _legacy_frame_sync_status(self.frame)
+            ),
         )
 
         state = self._state_diagnostics(decision)
@@ -292,6 +296,16 @@ class DecisionContext:
             self.binding.global_.quote_asset,
             trading_symbol=self.binding.global_.symbol,
         )
+
+    def _local_private_age_ms(self) -> int | None:
+        if self.ledger is not None:
+            return self.ledger.freshness.local_private_age_ms
+        return _private_age_ms(self.frame.local_private, now_ms=self.now_ms)
+
+    def _global_private_age_ms(self) -> int | None:
+        if self.ledger is not None:
+            return self.ledger.freshness.global_private_age_ms
+        return _private_age_ms(self.frame.global_private, now_ms=self.now_ms)
 
     def _model_scores(self, decision: StrategyDecision | None) -> dict[str, ModelScore]:
         if decision is None:
