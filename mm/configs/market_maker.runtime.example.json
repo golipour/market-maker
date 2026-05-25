@@ -33,13 +33,13 @@
     "enable_execution": true
   },
   "liquidity_sourcing": {
-    "enabled": true,
+    "enabled": false,
     "mode": "liquidity_sourcing",
     "global_live_orders": true
   },
   "execution": {
     "local": {
-      "planner": "reconcile"
+      "planner": "replace"
     },
     "global": {
       "planner": "replace",
@@ -158,12 +158,12 @@
       "adam_lr": 1e-1,
       "device": "cpu",
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.0001,
+      "inventory_target_penalty_weight": 0.00001,
       "target_inventory_multiplier": 2.0,
-      "quote_size_min_per_side": 0.1,
-      "quote_size_max_per_side": 1.0,
+      "quote_size_min_per_side": 0.3,
+      "quote_size_max_per_side": 10.0,
       "quote_spread_max": 100.0,
-      "quote_spread_min_depth": 0.1,
+      "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
       "soft_fill_temp": 0.1,
       "soft_fill_activation": "hardsigmoid"

@@ -1,38 +1,54 @@
 # MPC Optimizer Implementation Details
 
-This document describes the implemented optimizer used by the low-frequency market maker controller. It focuses on `MonteCarloMPCTensorBatched` in `mm/mpc/mpc_tensor_batched.py` and its integration through `MpcStrategyEngine` in `mm/strategies/mpc_engine.py`.
+This document describes the implemented MPC controller after the
+liquidity-sourcing migration. The main classes are:
 
-The optimizer is a tensor-batched Monte Carlo model predictive controller. It does not choose exchange orders directly. It chooses continuous cumulative bid and ask depth curves over spread from mid, simulates future market-flow paths, evaluates expected terminal objective, and returns the best first-step quote-depth action. The strategy layer later turns that continuous curve into a discrete ladder of limit orders.
+- `mm.strategies.mpc_engine.MpcStrategyEngine`
+- `mm.mpc.mpc_tensor_batched.MonteCarloMPCTensorBatched`
+- `mm.mpc.joint_optimizer.optimize_joint_with_diagnostics`
+- `mm.mpc.joint_mpc`
+
+The optimizer still chooses continuous sigmoid quote-depth curves over spread
+from mid. In single-venue mode it chooses local bid/ask curves. In liquidity
+sourcing mode it chooses four curves per horizon step: local bid/ask and global
+bid/ask. The strategy layer discretizes the first-step curves into
+`JointTargetBook`; the legacy `Action` is derived from that book for
+compatibility.
 
 ## Integration Point
 
-The production call path is:
+Production call path:
 
 ```text
-StrategyRunner.on_frame
+StrategyRunner.on_joint_frame
+  -> StrategyRunner.on_frame
   -> clean_strategy_frame
   -> MpcStrategyEngine.decide
   -> _state_from_frame
-  -> score/update online models
+  -> score online models before update
+  -> update local/global models
   -> MonteCarloMPCTensorBatched.optimize(state)
-  -> build_orders_from_sigmoid_with_report
-  -> StrategyDecision + ControllerDiagnostics
+  -> legacy optimizer or joint optimizer
+  -> build_joint_target_book_from_sigmoid
+  -> StrategyDecision + JointTargetBook + compatibility Action
 ```
 
-The optimizer public API is:
+Public API:
 
 ```python
 action = optimizer.optimize(state)
 ```
 
-Compatibility API with diagnostics:
+Diagnostics API:
 
 ```python
 action, diagnostics = optimizer.optimize_with_diagnostics(state)
 optimizer.last_diagnostics
 ```
 
-`optimize()` is a wrapper around `optimize_with_diagnostics()`.
+`optimize()` is a wrapper around `optimize_with_diagnostics()`. When
+`liquidity_sourcing_enabled` is true, `MonteCarloMPCTensorBatched` dispatches to
+`optimize_joint_with_diagnostics()`.
 
 ## Input State
 
@@ -40,183 +56,200 @@ The optimizer receives `mm.mpc.mpc_state.State`.
 
 | Field | Meaning |
 | --- | --- |
-| `mid` | Current primary mid price, quote per base |
-| `ob_rel` | Cleaned market-only orderbook as `(spread, qty)` tuples |
-| `buy_vol`, `sell_vol` | Realized interval primary market-flow volumes |
-| `inventory`, `cash` | Primary venue base inventory and quote cash |
-| `buy_vwap`, `sell_vwap` | Primary reference VWAPs |
-| `hedge_buy_vwap`, `hedge_sell_vwap` | Optional hedge venue VWAP references |
-| `hedge_inventory`, `hedge_cash` | Optional hedge venue inventory/cash |
+| `mid` | Current local mid price, quote per base |
+| `ob_rel` | Cleaned local market-only book as `(spread, qty)` tuples |
+| `buy_vol`, `sell_vol` | Realized local market-flow volumes |
+| `inventory`, `cash` | Local base inventory and quote cash |
+| `buy_vwap`, `sell_vwap` | Local reference VWAPs |
+| `global_ob_rel` | Optional cleaned global market-only book |
+| `global_buy_vol`, `global_sell_vol` | Optional global market-flow volumes |
+| `global_inventory`, `global_cash` | Optional global base inventory and quote cash |
+| `global_buy_vwap`, `global_sell_vwap` | Optional global reference VWAPs |
+| `reference_price` | Price used to mark consolidated wealth |
+| `global_active` | Whether the global curves participate in rollout |
 
-`MpcStrategyEngine._state_from_frame()` builds this after own-order subtraction, so `ob_rel` should represent market liquidity excluding the bot's own resting orders.
+`MpcStrategyEngine._state_from_frame()` builds this state after own-order
+subtraction. If private state is missing, balances default to zero; hard risk can
+then reject missing or stale private state before live execution.
 
-Reference VWAP depth is controlled by controller `vwap_depth`, falling back to the price model target depth.
+The global venue is active only when:
+
+- `liquidity_sourcing.enabled` is true
+- `liquidity_sourcing.mode == "liquidity_sourcing"`
+- a global market event is present
+- global status is `ready` or `stale`
+
+Risk and execution apply stricter freshness requirements before live global
+orders are allowed.
 
 ## Orderbook Projection
 
-The optimizer projects the cleaned relative book onto a fixed spread grid:
+Both local and global books use the same spread grid:
 
 ```text
 grid_levels = ceil(spread_max / spread_step)
 spread_grid = [spread_step, 2 * spread_step, ..., grid_levels * spread_step]
 ```
 
-Book projection uses two representations:
-
-- cumulative tensors from `OrderbookRelative` for the first fill simulation
-- marginal per-bucket arrays for simulated future book state
-
-Bid spread is:
+Bid spread:
 
 ```text
 spread = mid - bid_price
 ```
 
-Ask spread is:
+Ask spread:
 
 ```text
 spread = ask_price - mid
 ```
 
-Only non-negative spreads inside `spread_max` are kept.
-
-Bucket policy:
+Only non-negative spreads inside `spread_max` are kept. Bucket index:
 
 ```text
 bucket index = ceil(spread / spread_step) - 1
 ```
 
-## Continuous Action Parameterization
+The first rollout step uses cumulative tensors projected from `OrderbookRelative`.
+Later steps use marginal per-bucket arrays produced by the fill transition.
 
-The optimizer chooses cumulative quote depth as a mixture of sigmoids for each side:
+## Action Parameterization
+
+One venue action contains bid and ask sigmoid mixtures:
 
 ```text
 D_side(spread) = sum_i L_i * sigmoid(k_i * (spread - x0_i))
 ```
 
-For each component:
-
-| Parameter | Meaning |
-| --- | --- |
-| `L` | depth scale |
-| `k` | slope/sharpness |
-| `x0` | center spread |
-
-One horizon-step action has this flat layout:
+One venue step layout for `n_components = n`:
 
 ```text
 [bid_L1, bid_k1, bid_x0_1, ..., bid_Ln, bid_k_n, bid_x0_n,
  ask_L1, ask_k1, ask_x0_1, ..., ask_Ln, ask_k_n, ask_x0_n]
 ```
 
-For horizon `H` and `n_components = n`:
+Single-venue horizon layout:
 
 ```text
-len(x_torch) = H * 6 * n
+len(x_torch) = horizon * 6 * n
 ```
 
-Only the first horizon action is returned. Later horizon actions are planning variables.
+Joint-venue step layout concatenates local and global venue actions:
 
-## Effective Depth Convention
+```text
+joint_step = [local_action, global_action]
+len(joint_step) = 2 * 6 * n
+len(x_torch) = horizon * 2 * 6 * n
+```
 
-Raw sigmoid mixtures can have non-zero depth at spread zero. The implemented executable convention is:
+The optimizer returns the local first-step `SigmoidMixtureAction` for
+compatibility. In joint mode it also stores:
+
+- `_last_joint_action`
+- `_last_global_sigmoid_action`
+- `_last_raw_flat`, containing the best joint first-step raw vector when warm
+  start is enabled
+
+## Effective Depth
+
+Raw sigmoid mixtures can have non-zero depth at zero spread. The executable
+convention is:
 
 ```text
 effective_depth(spread) = max(0, raw_depth(spread) - raw_depth(0))
 ```
 
-This convention is used by:
+Effective depth is used by:
 
-- soft fill simulation
-- quote-size penalty (when not structurally enforced)
-- quoted-spread penalty
-- structural softmax decode (`delta_i(s)` in `mm/mpc/l_param.py`)
-- optimizer action diagnostics
-- ladder order conversion
+- fill simulation
+- quote-size penalties
+- quoted-spread penalties
+- structural softmax decode
+- diagnostics
+- target-book order conversion
 
-Reviewers should treat effective depth as the true cumulative order size. Raw depth is useful for optimization parameters and warm starts, not direct order sizing.
+Reviewers should treat effective depth as the true cumulative quote size.
 
-## Positive Parameters And Bounds
+## Positive Parameters And Structural Size
 
-In the **default** parameterization, `L` and `k` are optimized in raw unconstrained tensor space and converted to positive values with `softplus`.
+In default parameterization, `L` and `k` are raw unconstrained values mapped to
+positive values with `softplus`. Bounds are specified in positive parameter
+space and converted to raw optimizer bounds.
 
-Default bounds are specified in effective positive parameter space:
+When `quote_size_softmax_L=true`, raw `L` slots are logits rather than literal
+depth scales. `mm.mpc.l_param` decodes raw parameters so executable depth at
+`spread_max` equals `quote_size_target_per_side`. In this mode hard quote-size
+projection is skipped because size is enforced by reparameterization.
 
-```text
-L in [1e-6, L_max]
-k in [1e-6, k_max]
-x0 in [-x0_max, x0_max]
-```
+Spread-structured softmax mode remains supported when both are positive:
 
-They are converted to raw optimizer-space bounds by `_bounds_effective_to_raw()`. Each closure clamps `x_torch` to raw bounds before rollout.
+- `quote_spread_target`
+- `quote_spread_ref_depth`
 
-When `quote_size_softmax_L=true`, the optimizer no longer treats raw `L`, `k`, and `x0` slots literally. Instead, `mm.mpc.l_param.materialize_side_*()` decodes raw flat params into effective `(L, k, x0)` with structural constraints. In that mode:
-
-- `L` slots are mostly **logits** (mixture weights or spread-scale), not softplus depth scales
-- `L` bounds pass through as logit bounds, typically `[-30, 30]`
-- `k` raw values still map through `softplus` (with a structural floor on spread-leg `k1`)
-- `x0` raw values are logits for sigmoid maps, not direct center spreads
-
-If no custom bounds are supplied:
-
-- default mode: `L_max` defaults to `1e5`, increased when quote size targets require it
-- `quote_size_softmax_L=true`: per-component bounds `[L_logit, k_raw, x0_logit]` with logit ranges `[-30, 30]`, `k` in `[1e-6, 100]`, and `x0` logits unbounded within the same box
-- `k_max = 100`
-- `x0_max = spread_max` (default mode only; structural mode maps logits into `[0, spread_max]`)
-
-Hard quote-size projection (`hard_project_quote_size_target`, `hard_project_quote_size_range`) is **skipped** when `quote_size_softmax_L=true`; size is enforced by reparameterization instead.
+That mode reserves the first component on each side as a spread leg and maps the
+first bid/ask centers so their sum is capped by `quote_spread_target`.
 
 ## Initialization And Warm Start
 
-Initialization order inside `optimize_with_diagnostics()`:
+Single-venue initialization order:
 
-1. If `warm_start=True` and `_last_action` exists, use the previous best action.
-2. Else if `quote_size_target_per_side` is positive, use `_initial_action_uniform_marginal_qrange()`.
-3. Else use a handcrafted default with increasing `L`, decreasing `k`, and spread centers across `[1, spread_max]`.
+1. Use previous best action if `warm_start=True` and available.
+2. Else use `_initial_action_uniform_marginal_qrange()` if
+   `quote_size_target_per_side` is positive.
+3. Else use the handcrafted default with increasing `L`, decreasing `k`, and
+   centers across `[1, spread_max]`.
 
-The selected one-step action is tiled over the whole horizon:
+Joint initialization uses `initial_joint_action_flat()`, which builds one venue
+initializer and concatenates it for local and global actions. The one-step raw
+vector is tiled across the horizon.
 
-```python
-x0_arr = np.tile(one_action, horizon)
-```
+Important details:
 
-Important implementation detail:
-
-- Even with `warm_start=True`, the code writes a freshly tiled action into `_x_torch` at the start of each optimize call.
-- If `warm_start=False`, Adam optimizer state is reset each call.
-- If `warm_start=True`, the previous best action is remembered, and Adam state can be retained when compatible.
-- With `quote_size_softmax_L=true`, initialization uses softmax-logit `L` parameters and may use spread-structured raw center parameters.
+- Each optimize call writes a freshly tiled action into `_x_torch`.
+- If `warm_start=False`, Adam optimizer state is reset.
+- If `warm_start=True`, compatible Adam state can be retained.
+- Joint warm start stores and reloads the joint first-step raw vector, not only
+  the local action.
 
 ## Monte Carlo Samples
 
-The optimizer draws future paths with shape:
-
-```text
-(n_samples, horizon)
-```
-
-Sampled variables:
+Single-venue optimizer samples:
 
 | Variable | Source model |
 | --- | --- |
-| buy market volume | market-flow model |
-| sell market volume | market-flow model |
-| primary buy VWAP residual | price model |
-| primary sell VWAP residual | price model |
-| hedge buy VWAP delta | hedge price model |
-| hedge sell VWAP delta | hedge price model |
+| local buy/sell market volume | `market_flow_model` |
+| local VWAP residuals | `price_model` |
+| legacy global/hedge VWAP deltas | `reference_global_price_model`, if configured |
 
-If `fixed_mc_samples=True`, samples are drawn once before the Adam loop and reused across epochs. This gives a deterministic objective surface for that optimizer call.
+Joint optimizer samples:
 
-If `fixed_mc_samples=False`, samples are redrawn inside each closure. That can behave like stochastic optimization, but initial/final/best objective diagnostics are noisier.
+| Variable | Source model |
+| --- | --- |
+| local buy/sell market volume | `market_flow_model` |
+| global buy/sell market volume | `global_market_flow_model` or fallback local flow model |
+| local VWAP residuals | `price_model` |
+| global VWAP residuals | `global_price_model` or fallback local price model |
 
-## Online Models Used By Optimizer
+If `fixed_mc_samples=True`, samples are drawn once before the Adam loop and
+reused for the whole optimizer call. If false, samples are redrawn inside each
+closure.
 
-The optimizer depends on models already updated by `MpcStrategyEngine` just before optimization.
+## Online Models
 
-### Market-Flow Model
+`MpcStrategyEngine` owns and updates:
 
-Supported config kinds in the strategy bridge:
+| Model | Config | Update |
+| --- | --- | --- |
+| local market flow | `controller.market_flow_model` | current local buy/sell volumes |
+| local residual price | `controller.price_model` | EWMA on local market event price step |
+| reference/global price | `controller.global_price_model` | global VWAP deltas or residual update |
+| global market flow | `controller.optimizer.global_market_flow_model` or local flow config | current global buy/sell volumes |
+| sourcing global price | `controller.optimizer.global_price_model` or `controller.global_price_model` | residual or Gaussian global model |
+
+Model scoring is prequential: `score_frame_models()` evaluates the observation
+using parameters from before the frame update, and
+`refresh_score_params_after()` records the post-update parameters.
+
+Supported market-flow kinds:
 
 - `gamma`
 - `weibull`
@@ -224,31 +257,184 @@ Supported config kinds in the strategy bridge:
 - `hurdle_weibull`
 - `hurdle_lognormal`
 
-The optimizer calls model `sample()` when available. Volumes are modeled as future market buy and sell flow.
+Supported global price kinds:
 
-### Primary Price Model
+- `legacy`
+- `ewma_gaussian`
+- `hedge_gaussian_rep`
+- `gaussian`
+- `residual` for liquidity-sourcing global residual modeling
+- `none` / `disabled`
 
-The production price model is `TorchResidualPriceModel`.
+## Single-Venue Rollout
 
-It samples residual shocks around VWAPs rather than directly replacing the book process. In rollouts:
+When `liquidity_sourcing_enabled=false`, `MonteCarloMPCTensorBatched` uses the
+legacy local-only rollout:
 
-- at horizon step 0, upstream state VWAPs are used
-- after step 0, VWAPs are recomputed from the simulated book arrays
-- sampled residuals are added to buy/sell VWAPs
+1. Select one local action per horizon step.
+2. Apply action shape regularizers.
+3. Sample local market flow and price residuals.
+4. Build current VWAPs from the simulated local book.
+5. Run `soft_fill_batched()` against the local book.
+6. Update local inventory and cash from simulated fills.
+7. Optionally apply the legacy immediate hedge-rollout accounting if enabled in
+   older configs.
+8. Compute terminal objective from local wealth and penalties.
 
-`MpcStrategyEngine` updates the model using EWMA on primary mid changes.
+The legacy immediate hedge-rollout branch is a simulation assumption only. The
+current runtime does not wire a reactive live hedge service; live cross-venue
+behavior is represented by joint target books and per-venue execution gates.
 
-### Hedge Price Model
+## Joint Liquidity-Sourcing Rollout
 
-Optional hedge models:
+When `liquidity_sourcing_enabled=true`, `optimize_joint_with_diagnostics()` runs
+a four-curve rollout.
 
-- `legacy` / `ewma_gaussian` / `hedge_gaussian_rep`: `HedgeGaussianPriceModel`
-- `gaussian`: `GaussianHedgeDeltaModel`
-- disabled: no hedge price model
+For each horizon step:
 
-Hedge deltas are sampled only as future VWAP shocks. Live hedge execution is separate from this optimizer.
+1. Split the joint step tensor into `local_h` and `global_h`.
+2. Draw local and global market-flow volumes.
+3. Draw local and global VWAP residuals.
+4. Compute local and global VWAPs from simulated books.
+5. Run `soft_fill_batched()` for the local book with `depth_scale=1.0`.
+6. Run `soft_fill_batched()` for the global book with
+   `depth_scale=1.0` when global is active, otherwise `0.0`.
+7. Update local and global cash/inventory independently.
+8. Mark consolidated wealth to the global sell VWAP path.
+9. Accumulate normalized consolidated returns.
+10. Carry both market-only books into the next step.
+
+Unfilled own quote remainder is not carried as resting own liquidity into later
+rollout steps. The simulated books after each step are market-only books.
+
+## Soft Fill Model
+
+`soft_fill_batched()` is the differentiable fill transition used by both
+single-venue and joint rollouts.
+
+Inputs include:
+
+- one venue action parameters
+- sell and buy VWAP tensors
+- cumulative market bid/ask depth
+- sell and buy market-flow volumes
+- spread grid
+- maker fee
+- soft fill temperature and activation
+- `depth_scale`
+
+Process:
+
+1. Evaluate effective cumulative bid and ask quote depth.
+2. Convert quote and market cumulative depth to marginal levels.
+3. Combine market liquidity and own quotes.
+4. Soft-consume combined depth using `sigmoid` or `hardsigmoid` reach.
+5. Allocate consumed volume between market liquidity and own quote liquidity by
+   level-size share.
+6. Remove consumed market liquidity from the next market book.
+7. Convert own filled levels into cash and inventory deltas.
+
+Economic convention:
+
+- market sells hit bid-side liquidity, so our bid fills increase inventory and
+  reduce cash
+- market buys hit ask-side liquidity, so our ask fills decrease inventory and
+  increase cash
+
+Implemented cash/inventory updates:
+
+```text
+cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
+inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
+```
+
+This is a differentiable liquidity-share model, not a venue queue-position
+model.
+
+## Joint Objective
+
+Joint MPC uses consolidated wealth:
+
+```text
+W = local_cash + global_cash
+    + (local_inventory + global_inventory) * reference_price
+```
+
+Initial wealth:
+
+```text
+W_0 = max(1e-8, W(state_0))
+```
+
+Rollout return:
+
+```text
+returns = total_delta_consolidated_wealth / W_0
+```
+
+Terminal objective:
+
+```text
+J =
+  entropic_return_beta(returns)
+  - inventory_target_penalty_weight * (
+      local_inventory_capacity_penalty
+      + global_active * global_inventory_capacity_penalty
+    )
+```
+
+Implemented joint components:
+
+| Component | Meaning |
+| --- | --- |
+| `risk_adjusted_return` | Entropic return objective over normalized returns |
+| `inventory_capacity_penalty` | Total inventory penalty |
+| `local_inventory_penalty` | Local inventory penalty contribution |
+| `global_inventory_penalty` | Global contribution, masked when inactive |
+
+Joint diagnostics also record:
+
+- `reference_price`
+- `wealth_0`
+- `global_active`
+- first-step local/global fill means
+- `global_action_flat`
+
+The joint objective does not use the older local-only expected-PnL, volatility,
+CVaR, quote-size, and quoted-spread component set. Those still apply in the
+legacy single-venue branch.
+
+## Legacy Single-Venue Objective
+
+The local-only objective remains:
+
+```text
+J =
+  expected_pnl_weight * reward_term
+  - inventory_target_penalty_weight * inventory_target_term
+  - pnl_volatility_penalty_weight * volatility_term
+  - pnl_cvar_penalty_weight * soft_cvar_term
+  - quote_shape_concentration_penalty_weight * concentration_term
+  - quote_size_target_penalty_weight * size_term
+  - quote_spread_penalty_weight * quoted_spread_term
+```
+
+When `objective_normalize_components=true`, reward, volatility, and CVaR are
+scaled by wealth, inventory miss by an inventory scale, quote-size and spread
+terms are relative, and concentration is normalized into `[0, 1]`.
+
+Soft CVaR weights lower-reward paths with a softmax over negative rewards. The
+quote-shape term is a Herfindahl-style marginal-depth concentration index. The
+quoted-spread term computes the controller curve width at
+`quote_depth_target_for_spread`; it does not inspect market BBO.
 
 ## Per-Epoch Optimization Loop
+
+Both branches minimize:
+
+```text
+loss = -J
+```
 
 Core loop:
 
@@ -260,611 +446,93 @@ for epoch in range(adam_epochs):
         best_epoch = epoch
 ```
 
-The optimizer minimizes:
-
-```text
-loss = -J
-```
-
-So lower loss means higher objective.
-
 The closure:
 
 1. Clears gradients.
 2. Clamps raw parameters to raw bounds.
-3. Optionally projects total quote size (default mode only; skipped when `quote_size_softmax_L=true`).
+3. Optionally projects total quote size in default single-venue mode.
 4. Draws or reuses Monte Carlo samples.
 5. Rolls out every sample for every horizon step.
-6. Computes terminal objective `J`.
-7. Records initial/final/best objective metrics.
+6. Computes objective `J`.
+7. Records initial/final/best metrics.
 8. Backpropagates `loss = -J`.
 9. Clips gradients by `adam_grad_clip`.
 10. Counts nonfinite loss/gradient events.
 
-## Per-Step Rollout
-
-For each horizon step `h`:
-
-1. Select `action_h` from the horizon action tensor.
-2. Add quote-shape regularizers for this action:
-   - marginal-depth concentration
-   - quote-size target
-   - quoted spread at reference depth
-3. Read sampled market buy/sell flow and price residuals for step `h`.
-4. Build current mid from simulated best bid/ask levels.
-5. Build current primary buy/sell VWAPs.
-6. Simulate market-flow interaction with own quotes via `soft_fill_batched()`.
-7. Update primary inventory and cash from simulated fills.
-8. If hedge rollout is enabled, simulate an immediate hedge trade for the primary fill delta.
-9. Compute next mid and next VWAPs from the post-flow market book.
-10. Compute primary and hedge step rewards.
-11. Carry market book, primary state, and hedge state to the next horizon step.
-
-The simulated book is market-only after each step. Unfilled own quote remainder is not carried as resting liquidity into the next simulated step.
-
-## Soft Fill Model
-
-`soft_fill_batched()` is the differentiable fill transition.
-
-Inputs:
-
-- action parameters for one step
-- sell and buy VWAP tensors
-- cumulative market bid and ask depth
-- sell and buy market-flow volumes
-- spread grid
-- maker fee
-- soft fill temperature
-- soft fill activation, either `sigmoid` or `hardsigmoid`
-
-Process:
-
-1. Evaluate effective cumulative bid and ask quote depth.
-2. Convert cumulative quote depth to marginal levels.
-3. Convert cumulative market book to marginal levels.
-4. Combine market levels and our quote levels.
-5. Soft-consume combined depth using the configured reach activation.
-6. Split consumed depth between market liquidity and our quotes by level-size share.
-7. Remove only consumed market liquidity from the next market book.
-8. Convert our filled levels into cash and inventory deltas.
-
-The reach logic is:
-
-```text
-reach_bid_raw = sell_vol - combined_cumulative_bid_depth
-reach_ask_raw = buy_vol - combined_cumulative_ask_depth
-scaled_reach = normalized_reach / soft_fill_temp
-fill_fraction = sigmoid(scaled_reach)      # default
-fill_fraction = hardsigmoid(scaled_reach)  # optional
-consumed_level = combined_level * fill_fraction
-```
-
-`hardsigmoid` can eliminate asymptotic ghost fills from far-from-mid quote levels because it reaches exact zero for sufficiently negative scaled reach.
-
-Economic interpretation:
-
-- market sells hit bid-side liquidity, so our bid fills increase inventory and reduce cash
-- market buys hit ask-side liquidity, so our ask fills decrease inventory and increase cash
-
-Implemented cash/inventory updates:
-
-```text
-cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
-inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
-```
-
-Review caveat:
-
-- This is a differentiable liquidity-share model, not a queue-position model. It assumes proportional sharing with other liquidity at the same spread bucket.
-
-## Hedge Rollout Logic
-
-If `hedge_rollout_enabled` is true, the optimizer simulates an immediate hedge after each primary fill delta.
-
-Let:
-
-```text
-d_inv = primary inventory delta from simulated fills
-```
-
-Then:
-
-- if `d_inv > 0`, primary inventory increased, so sell hedge
-- if `d_inv < 0`, primary inventory decreased, so buy hedge
-
-The hedge cash update uses hedge VWAP next:
-
-```text
-trade_cash_hedge = where(
-  d_inv >= 0,
-  d_inv * hedge_sell_vwap_next,
-  d_inv * hedge_buy_vwap_next
-)
-hedge_cash_next = hedge_cash_t + trade_cash_hedge * (1 - hedge_fee)
-hedge_inv_next = hedge_inv_t - d_inv
-```
-
-The hedge reward is:
-
-```text
-hedge_wealth = hedge_cash + hedge_inventory * hedge_sell_vwap
-hedge_reward = hedge_wealth_next - hedge_wealth_t
-```
-
-Total step reward is:
-
-```text
-step_reward = primary_step_reward + hedge_reward_weight * hedge_reward
-```
-
-Important distinction:
-
-- Hedge rollout is an objective assumption.
-- Live hedging is performed by `HedgeExecutionService` only when `hedging.enabled` is true.
-- The optimizer does not emit hedge orders.
-
-## Reward And Terminal Objective
-
-Primary wealth is marked to sell-side VWAP:
-
-```text
-W = cash + inventory * sell_vwap
-step_reward_main = W_next - W
-```
-
-Across the horizon:
-
-```text
-total_reward = sum(step_reward_main + hedge_reward_weight * hedge_reward)
-```
-
-`terminal_objective()` computes:
-
-```text
-J =
-  expected_pnl_weight * reward_term
-  - inventory_target_penalty_weight * inventory_target_term
-  - pnl_volatility_penalty_weight * volatility_term
-  - pnl_cvar_penalty_weight * soft_cvar_term
-  - quote_shape_concentration_penalty_weight * concentration_term
-  - quote_size_target_penalty_weight * size_term
-  - quote_spread_penalty_weight * spread_term
-```
-
-Reported weighted objective components:
-
-| Component | Meaning |
-| --- | --- |
-| `expected_pnl` | weighted mean reward term |
-| `inventory_target_penalty` | negative inventory target miss term |
-| `pnl_volatility_penalty` | negative reward standard-deviation term |
-| `pnl_cvar_penalty` | negative soft lower-tail risk term |
-| `quote_shape_concentration_penalty` | negative marginal-depth concentration term |
-| `quote_size_target_penalty` | negative quote-size target term |
-| `quote_spread_penalty` | negative quoted-spread term |
-
-These components are designed to sum to `objective.value`.
-
-### Component Normalization
-
-When `objective_normalize_components=true`, the objective uses dimensionless terms:
-
-- reward, volatility, and soft CVaR are divided by `wealth_scale`
-- inventory target miss is divided by `inventory_scale`
-- size and spread penalties are computed as relative errors upstream
-- concentration is normalized into `[0, 1]`
-
-`wealth_scale = max(eps, abs(cash) + abs(inventory * sell_vwap))`.
-
-`inventory_scale = max(eps, abs(target_inventory), quote_size_target_per_side, 1)`.
-
-When normalization is disabled, reward and risk terms stay in quote units and inventory target penalty reverts to squared deviation.
-
-### Soft CVaR
-
-`objective_soft_cvar()` computes a differentiable lower-tail risk term:
-
-```text
-w_i = softmax(-temperature * reward_i)
-soft_tail_mean = sum_i w_i * reward_i
-soft_cvar = -soft_tail_mean
-```
-
-Low-reward paths receive more weight. The objective subtracts `pnl_cvar_penalty_weight * soft_cvar_term`.
-
-## Quote Shape Regularizers
-
-### Marginal-Depth Concentration
-
-`_action_concentration_penalty_from_marginal_depth()`:
-
-- computes effective cumulative depth on the spread grid
-- converts cumulative depth to marginal per-level depth
-- computes the Herfindahl index of per-level depth shares
-- optionally normalizes the index into `[0, 1]`
-
-Interpretation:
-
-```text
-0 = depth spread uniformly across levels
-1 = depth concentrated in one level
-```
-
-The previous `quote_shape_uniformity_penalty_weight` name is treated as a compatibility alias. New configs should use `quote_shape_concentration_penalty_weight`.
-
-### Quote-Size Target
-
-`_action_size_penalty_qrange()` penalizes deviation of effective cumulative depth at `spread_max` from `quote_size_target_per_side`. When `quote_size_softmax_L=true`, this penalty is usually set to zero because size at `spread_max` is enforced structurally.
-
-### Spread At Target Depth
-
-`_action_spread_at_depth()`:
-
-- evaluates quoted bid and ask depth VWAPs from the controller curve
-- fills `quote_depth_target_for_spread` base units on each side of the curve
-- computes quoted width in basis points:
-
-  ```text
-  spread_bps = (ask_depth_vwap - bid_depth_vwap) / mid * 10000
-  ```
-
-- returns one-sided relative excess over `quote_spread_target_bps` when normalization is enabled
-
-This penalizes the controller curve being wider than the configured quoted-spread target at the reference depth. It does not inspect the market BBO.
-
-## Total Quantity Projection
-
-The optimizer supports optional hard projection toward a quote-size target in **default** mode:
-
-| Config | Meaning |
-| --- | --- |
-| `quote_size_target_per_side` | Target cumulative depth per side over `[0, spread_max]` |
-| `hard_project_quote_size_target` | Rescale depth parameters toward `quote_size_target_per_side` |
-| `quote_size_min_per_side`, `quote_size_max_per_side` | Lower/upper cumulative depth bounds per side |
-| `hard_project_quote_size_range` | Clamp projected depth into the configured min/max range |
-
-Projection exists in both numpy and torch helper forms. It is applied before closure rollout and when building returned best/final action slices.
-
-When `quote_size_softmax_L=true`, projection is disabled and quote size is enforced structurally instead (see below).
-
-## Structural Softmax L Parameterization
-
-When `quote_size_softmax_L=true` and `quote_size_target_per_side > 0`, the optimizer decodes raw flat params through `LParamConfig` in `mm/mpc/l_param.py`. Effective depth scales and centers are **computed**, not free variables.
-
-All constraints below use **executable** depth:
-
-```text
-D_eff(s) = D(s) - D(0)
-         = sum_i L_i * delta_i(s)
-
-delta_i(s) = sigmoid(k_i * (s - x0_i)) - sigmoid(-k_i * x0_i)
-```
-
-Implementation entry points:
-
-- `materialize_side_np()` / `materialize_side_torch()` — decode one side to `(L, k, x0)`
-- `sigmoid_action_from_flat_raw()` — build effective action for diagnostics and warm start output
-
-### Mode A — size only (no spread-structured config)
-
-Active when `quote_spread_target` or `quote_spread_ref_depth` is unset/zero.
-
-**Centers**
-
-```text
-x0_i = spread_max * sigmoid(raw_x0_i)     for all i, both sides
-```
-
-Every center lies in `[0, spread_max]`.
-
-**Depth at `spread_max`**
-
-```text
-w_i = softmax(l_i)
-L_i = Q_total * w_i / sum_j(w_j * delta_j(spread_max))
-```
-
-Result: `D_eff(spread_max) = Q_total` exactly for any `(k, x0, w)`.
-
-The optimizer learns logits `l_i` in the raw `L` slots and shape params `(k, x0)`.
-
-### Mode B — spread-structured (both spread config params set)
-
-Active when **both** are positive:
-
-- `quote_spread_target` — maximum allowed sum of first bid/ask centers (quote units)
-- `quote_spread_ref_depth` — minimum executable depth at each side's first center (base units)
-
-Requires `n_components >= 2` (spread leg + tail leg). Validated at optimizer construction:
-
-- `quote_spread_target <= spread_max`
-- `quote_spread_ref_depth <= quote_size_target_per_side`
-
-#### Raw parameter semantics (spread-structured)
-
-| Raw slot | Decoded meaning |
-| --- | --- |
-| bid `L1` (`flat[0]`) | `u_scale` — spread utilization logit |
-| bid `x0_1` (`flat[2]`) | `u_bid` — bid share logit |
-| ask `x0_1` (`flat[3n+2]`) | `u_ask` — ask share logit |
-| bid/ask `L2…Ln` | tail mixture logits |
-| bid/ask `k1` | spread-leg sharpness offset above `k1_min` |
-| bid/ask `k2…kn` | tail slopes via `softplus` |
-| bid/ask `x0_2…xn` | tail center logits mapped into `[x0_1, spread_max]` |
-
-#### Part 1 — spread center upper bound (not equality)
-
-First centers are **not** forced to sum to `quote_spread_target`. They are capped:
-
-```text
-scale = sigmoid(u_scale)                     in (0, 1)
-w     = softmax([u_bid, u_ask])
-
-x0_1_bid = scale * S_max * w_bid
-x0_1_ask = scale * S_max * w_ask
-```
-
-where `S_max = quote_spread_target`.
-
-Properties (always):
-
-- `x0_1_bid >= 0`, `x0_1_ask >= 0`
-- `x0_1_bid + x0_1_ask = scale * S_max <= S_max`
-- asymmetry from `u_bid - u_ask`
-- `scale -> 1` uses the full spread budget; smaller `scale` quotes tighter near mid
-
-Deeper centers on each side:
-
-```text
-x0_i = x0_1 + (spread_max - x0_1) * sigmoid(raw_x0_i)     for i >= 2
-```
-
-#### Part 2 — spread-leg sharpness floor
-
-Spread-leg `k1` has a structural minimum so component 1 rises sharply before its center:
-
-```text
-k1_min(x0_1) = -log(eps / (1 - eps)) / x0_1
-
-k1 = k1_min(x0_1) + softplus(raw_k1)
-```
-
-where `eps = quote_spread_k_epsilon` (default `0.01`).
-
-#### Part 3 — spread leg + tail leg depth budget
-
-Component 1 is the **spread leg**; components `2…n` are the **tail leg**.
-
-Tail mixture:
-
-```text
-v_i = softmax(l_i)     for i = 2..n
-```
-
-Coupled solve for `L1…Ln` enforces:
-
-- `D_eff(x0_1) >= quote_spread_ref_depth` at each side's first center
-- `D_eff(spread_max) = quote_size_target_per_side` exactly
-
-The spread leg pins center depth; the tail fills the remaining budget at `spread_max`. Tail components can add positive depth at the spread center, so the realized center depth is typically **at least** `quote_spread_ref_depth`, not necessarily equal.
-
-When spread-structured mode is active, prefer `quote_spread_penalty_weight=0`; spread width is already encoded structurally. The separate `quote_spread_target_bps` penalty still applies only if explicitly weighted — it measures quoted VWAP width at `quote_depth_target_for_spread`, not the first-center geometry.
-
-### Warm start note
-
-With `quote_size_softmax_L=true`, warm start stores **raw** flat params in `_last_raw_flat`, not effective `(L, k, x0)` values from the returned action. Effective actions are still materialized for diagnostics and order conversion.
-
-## Returned Action
-
-The returned action is the best first-step action:
-
-```text
-best_x[:single_len]
-```
-
-It is converted with:
-
-```python
-optimizer._flat_to_effective_action(...)
-```
-
-In default mode this delegates to `SigmoidMixtureAction.from_flat_positive(...).as_effective()`. In `quote_size_softmax_L` mode it materializes the structured parameters through `sigmoid_action_from_flat_raw(...)`. In both cases downstream `depth_bid()` and `depth_ask()` expose executable effective cumulative depth.
-
-If `warm_start=True`, this best action is stored as `_last_action`.
-
-## Conversion To Limit Orders
-
-The optimizer returns a continuous curve. `MpcStrategyEngine` then calls:
-
-```python
-build_orders_from_sigmoid_with_report(...)
-```
-
-Conversion stages:
-
-1. Evaluate effective cumulative depth at each spread level.
-2. Convert cumulative depth to marginal order quantity:
-
-   ```text
-   qty_i = max(0, cumulative_i - cumulative_{i-1})
-   ```
-
-3. Build bid prices as `mid - spread`.
-4. Build ask prices as `mid + spread`.
-5. Quantize price/qty to venue instrument constraints.
-6. Drop below-min-qty and below-min-notional orders.
-7. Cap to `max_orders_per_side`, keeping largest quantities per side.
-
-This means the optimizer controls the shape, while venue constraints and caps decide the final discrete order set.
+## Target-Book Conversion
+
+The optimizer output is not sent directly to venues.
+
+`build_joint_target_book_from_sigmoid()` performs:
+
+1. Evaluate local effective cumulative depth on the spread ladder.
+2. Convert cumulative depth to marginal limit orders.
+3. Apply local instrument tick/lot/min-notional constraints.
+4. Cap local orders per side.
+5. In liquidity-sourcing mode, repeat the same process for the stored global
+   sigmoid action and global instrument constraints.
+6. Return a `JointTargetBook`.
+7. Convert the joint book to compatibility `Action`.
+
+The local `ActionPipelineReport` includes continuous depth, ladder totals,
+venue-quantized totals, capped totals, target-book totals, risk totals, and
+execution totals. In joint mode, `target_book` summarizes local plus global
+orders.
 
 ## Optimizer Diagnostics
 
-`OptimizerRunDiagnostics` is produced every optimizer call and embedded in controller diagnostics.
-
-Top-level payload:
+`OptimizerRunDiagnostics` includes:
 
 | Field | Meaning |
 | --- | --- |
-| `config` | Optimizer config snapshot |
+| `config` | optimizer kind, grid, horizon, samples, joint/global flags |
 | `timing` | sample draw, train, total seconds, best epoch |
-| `objective.initial` | first closure objective snapshot |
-| `objective.final` | last closure objective snapshot |
-| `objective.best` | best objective snapshot |
+| `objective.initial/final/best` | objective value, loss, weighted components, reward means |
 | `objective.improvement` | best/final minus initial |
-| `objective.contribution_fractions` | final-stage absolute contribution shares by component |
-| `action.initial` | initial effective depth and raw params |
-| `action.final` | final effective depth and raw params |
-| `action.best` | best effective depth and raw params |
+| `objective.contribution_fractions` | final-stage absolute component shares |
+| `action.initial/final/best` | effective local depth curves and raw local params |
 | `gradients` | nonfinite loss/gradient counts |
-| `rollout` | sample count, horizon, hedge enabled, optimizer log |
-| `best_epoch` | epoch index for best objective |
+| `rollout` | branch-specific rollout metadata |
 
-Objective snapshot fields:
+In joint mode:
 
-| Field | Meaning |
-| --- | --- |
-| `value` | scalar objective `J` |
-| `loss` | `-J` |
-| `components` | weighted objective terms |
-| `contribution_fractions` | `abs(component) / sum(abs(components))` |
-| `expected_total_reward` | raw mean horizon reward before objective penalties |
-| `expected_next_reward` | raw mean first-step reward |
-| `main_reward_mean` | mean primary reward |
-| `hedge_reward_mean` | mean hedge reward |
+- `config.joint_venue` is true
+- `config.global_active` records whether global curves were enabled this frame
+- `rollout.liquidity_sourcing` is true
+- `rollout.consolidated_wealth` is true
+- `rollout.global_action_flat` stores the best global first-step raw action
+- local action snapshots remain the main action snapshots for compatibility
 
-Action snapshot fields:
+`MpcStrategyEngine` embeds this payload in both `StrategyDecision.optimizer` and
+`ControllerDiagnostics.optimizer`.
 
-| Field | Meaning |
-| --- | --- |
-| `effective_depth.bid` | cumulative bid depth by spread/price |
-| `effective_depth.ask` | cumulative ask depth by spread/price |
-| `raw_params.flat` | raw flat first-step sigmoid parameters |
+## Execution And Risk Boundaries
 
-## Important Configuration Knobs
+The optimizer does not decide which orders are live. It proposes target books.
 
-| Config | Effect |
-| --- | --- |
-| `n_components` | Expressiveness of each side's depth curve |
-| `n_samples` | Monte Carlo sample count |
-| `horizon` | Planning steps |
-| `adam_epochs` | Gradient steps per decision |
-| `adam_lr` | Adam learning rate |
-| `adam_grad_clip` | Gradient clipping threshold |
-| `fixed_mc_samples` | Deterministic vs stochastic objective per call |
-| `warm_start` | Reuse previous best action as initialization |
-| `spread_max` | Maximum spread domain for book/action projection |
-| `spread_step` | Spread grid resolution |
-| `soft_fill_temp` | Smoothness of fill transition |
-| `soft_fill_activation` | `sigmoid` or `hardsigmoid` fill fraction |
-| `expected_pnl_weight` | Weight on expected reward |
-| `pnl_volatility_penalty_weight` | Penalty on reward volatility |
-| `pnl_cvar_penalty_weight` | Penalty on soft lower-tail reward risk |
-| `cvar_softmax_temperature` | Sharpness of soft CVaR tail weighting |
-| `inventory_target_penalty_weight` | Penalty on expected terminal inventory target miss |
-| `target_inventory` | Desired terminal inventory |
-| `quote_size_target_per_side` | Target cumulative quote depth per side |
-| `quote_size_target_penalty_weight` | Soft size target penalty |
-| `hard_project_quote_size_target` | Hard rescaling toward quote-size target |
-| `quote_size_min_per_side`, `quote_size_max_per_side` | Hard size range bounds when enabled |
-| `hard_project_quote_size_range` | Hard clamp to size range |
-| `quote_size_softmax_L` | Enable structural reparameterization for quote size (and spread when spread config is set) |
-| `quote_shape_concentration_penalty_weight` | Marginal depth concentration penalty |
-| `quote_spread_penalty_weight` | Soft quoted-spread penalty at reference depth (optional when structural spread is enabled) |
-| `quote_spread_target_bps` | Maximum target quoted VWAP width in basis points (soft penalty path) |
-| `quote_depth_target_for_spread` | Cumulative depth used for quoted spread VWAP in the soft penalty |
-| `quote_spread_target` | **Maximum** allowed `x0_1_bid + x0_1_ask` in quote units when spread-structured softmax is enabled |
-| `quote_spread_ref_depth` | Minimum `D_eff(x0_1)` at each side's first center when spread-structured softmax is enabled |
-| `quote_spread_k_epsilon` | Sharpness floor `eps` for spread-leg `k1` (default `0.01`) |
-| `objective_normalize_components` | Scale objective terms into dimensionless units |
-| `hedge_rollout_enabled` | Include simulated hedge trades in objective |
-| `hedge_reward_weight` | Weight of simulated hedge reward |
-| `hedge_fee` / `execution_model.hedge_fee` | Fee used in hedge rollout |
-| `device` | Torch device, usually `cpu` in runtime config |
+After optimization:
 
-## Numerical Safeguards
+- `prepare_execution_joint_book()` strips or caps orders according to execution
+  config.
+- `NetDeltaRiskEngine` approves/rejects the target-book transition against
+  ledger state.
+- `compute_venue_execution_gates()` independently gates local/global placement.
+- `route_joint_target_book_with_report()` executes or previews each venue book.
 
-Implemented safeguards:
+This means `liquidity_sourcing.enabled` affects the optimizer and target-book
+construction, while `liquidity_sourcing.global_live_orders` controls whether
+global orders may reach the global `OrderManager`.
 
-- softplus for positive `k` in default mode
-- optional structural softmax materialization for effective `L` and bounded `x0` when `quote_size_softmax_L=true`
-- raw bound clamping every closure
-- NaN/Inf sanitization in terminal objective
-- objective normalization by wealth and inventory scales
-- gradient clipping
-- nonfinite loss and gradient counters
-- minimum sigma in scoring/model code
-- optional fixed Monte Carlo samples for stable diagnostics
+## Current Caveats
 
-Remaining numerical review points:
-
-- Some optimizer mutation paths still assign through `x_torch.data`; projection paths mostly use `copy_()` under `torch.no_grad()`.
-- Very large quote currencies can make unnormalized rewards large; `objective_normalize_components=true` reduces but does not eliminate calibration needs.
-- `fixed_mc_samples=False` can make best/final objective comparisons noisy.
-- Soft-fill sigmoid temperature can create either overly smooth fills or near-discontinuous gradients.
-
-## Market-Making Assumptions
-
-The optimizer assumes:
-
-- market order flow consumes depth on a spread grid
-- our quotes share fills proportionally with other liquidity in the same bucket
-- unfilled own quotes are not carried into later simulated steps
-- primary inventory is marked to sell-side VWAP
-- hedge rollout, if enabled, is immediate and exact after simulated primary fills
-- venue constraints are handled after optimization, not inside the objective except through structural quote reparameterization (when enabled) or quote-size projection and configured penalties (default mode)
-
-These are modeling choices, not exchange facts. They should be validated against realized fill and PnL data.
-
-## Review Questions For Market-Making Experts
-
-- Is sell-side VWAP the right mark for all inventory states?
-- Should inventory marking switch by long/short inventory?
-- Should the objective include adverse selection from microprice, imbalance, or cross-venue basis?
-- Does proportional fill sharing approximate the venue queue well enough?
-- Should old resting quotes be modeled as persistent inventory/liquidity across horizon steps?
-- Should hedge rollout be disabled unless live fill-driven hedging is healthy?
-- Are quote-size and spread penalties dimensionally calibrated for `USDT_IRT`?
-- Should the action include asymmetric inventory skew beyond the terminal inventory penalty?
-- Should spread-grid levels be tied to venue tick size rather than arbitrary quote-unit steps?
-- Should market-flow volume be modeled as continuous rather than rounded integer volume?
-
-## Review Questions For Software Engineers
-
-- Do diagnostics always expose enough information to reproduce a decision?
-- Should optimizer model updates and optimization be split into separate services/classes?
-- Should `MpcStrategyEngine` call `optimize_with_diagnostics()` directly instead of reading `last_diagnostics`?
-- Should `.data` mutations be replaced fully with `torch.no_grad()` and `copy_()`?
-- Should optimizer config be validated with a stricter schema?
-- Should objective component sums be asserted in tests for all active penalty combinations?
-- Should `fixed_mc_samples=True` also use a deterministic seed per frame for replay reproducibility?
-- Should optimizer timing and nonfinite counters become direct Prometheus metrics?
-
-## Debugging Guide
-
-When a quote looks wrong, inspect `ControllerDiagnostics.optimizer`:
-
-1. Check `objective.best.value` and `objective.improvement.best_minus_initial`.
-2. Check which component dominates `objective.best.components`.
-3. Compare `action.initial`, `action.final`, and `action.best`.
-4. Verify effective depth reaches `quote_size_target_per_side` at `spread_max` (exact when `quote_size_softmax_L=true`).
-5. If spread-structured softmax is enabled, verify `x0_1_bid + x0_1_ask <= quote_spread_target` and center depth `>= quote_spread_ref_depth`.
-6. Check `rollout.hedge_enabled` matches expectations.
-7. Check `gradients.nonfinite_loss_count` and `gradients.nonfinite_grad_count`.
-8. Compare continuous action depth to action pipeline ladder totals.
-9. Check whether venue quantization or capping removed most of the curve.
-10. Check model scores under `ControllerDiagnostics.models`.
-11. Check risk and execution gate rejections after optimizer output.
-
-Useful files:
-
-| Concern | File |
-| --- | --- |
-| Structural quote decode | `mm/mpc/l_param.py` |
-| Optimizer implementation | `mm/mpc/mpc_tensor_batched.py` |
-| Optimizer diagnostics | `mm/mpc/optimizer_diagnostics.py` |
-| State/action types | `mm/mpc/mpc_state.py` |
-| Objective | `mm/mpc/reward_tensor.py` |
-| Strategy integration | `mm/strategies/mpc_engine.py` |
-| Model scoring | `mm/models/scoring.py` |
-| Order conversion | `mm/core/order_constraints.py` |
-| Controller diagnostics | `mm/controller/context.py` |
+- Joint action diagnostics currently expose local action snapshots directly and
+  global raw action via `rollout.global_action_flat`.
+- Joint MPC uses the same inventory target/scale resolver for local and global
+  inventory penalties.
+- The joint objective uses consolidated wealth and inventory capacity penalties;
+  it does not yet include all legacy quote-shape and tail-risk regularizers.
+- The fill model remains a differentiable proportional-share approximation, not
+  a queue model.
+- Same-quote consolidated wealth is assumed by the current implementation; if
+  local/global quote currencies differ, an explicit conversion provider is
+  needed before live deployment.
