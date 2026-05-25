@@ -75,3 +75,37 @@ def test_observability_subscriber_emits_controller_diagnostics_metrics() -> None
     assert 'mm_action_stage_orders{actor_id="obs-test-controller",exchange="nobitex",side="all",stage="ladder",symbol="BTC_IRT"} 2.0' in text
     assert 'mm_risk_approved{actor_id="obs-test-controller",exchange="nobitex",symbol="BTC_IRT"} 0.0' in text
     assert 'reason="observe_only_config"' in text
+
+
+def test_observability_subscriber_clears_sync_pending_on_completion_or_failure() -> None:
+    subscriber = RuntimeObservabilitySubscriber(bus=InMemoryBus(), topics=())
+
+    subscriber.observe(
+        "execution:orders:nobitex",
+        {"type": "ExecutionSyncRequested", "exchange": "nobitex", "timestamp_ms": 1000},
+    )
+    assert subscriber._sync_pending_ts_ms["nobitex"] == 1000
+
+    subscriber.observe(
+        "execution:errors",
+        {
+            "type": "ExecutionSyncFailed",
+            "exchange": "nobitex",
+            "error": "ExecutionSyncTimeout",
+        },
+    )
+    assert "nobitex" not in subscriber._sync_pending_ts_ms
+
+    subscriber.observe(
+        "execution:orders:nobitex",
+        {"type": "ExecutionSyncRequested", "exchange": "nobitex", "timestamp_ms": 2000},
+    )
+    subscriber.observe(
+        "execution:orders:nobitex",
+        {
+            "type": "ExecutionSyncCompleted",
+            "exchange": "nobitex",
+            "latency_ms": 42.0,
+        },
+    )
+    assert "nobitex" not in subscriber._sync_pending_ts_ms

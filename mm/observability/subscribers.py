@@ -71,14 +71,16 @@ class RuntimeObservabilitySubscriber:
                 self._observe_execution_sync_requested(event)
                 self._observe_execution_event(topic, event)
                 return
+            if kind.startswith(("Execution", "Place", "Cancel")):
+                self._observe_execution_event(topic, event)
+                if kind.endswith("Error") or "error" in event:
+                    self._observe_error(topic, event)
+                return
             if kind == "RiskActionsFiltered":
                 self._observe_risk_event(event)
                 return
             if kind.endswith("Error") or "error" in event:
                 self._observe_error(topic, event)
-                return
-            if kind.startswith(("Execution", "Place", "Cancel")):
-                self._observe_execution_event(topic, event)
                 return
             if event.get("exchange") is not None and "live_order_count" in event:
                 self._observe_execution_snapshot_dict(event)
@@ -461,7 +463,17 @@ class RuntimeObservabilitySubscriber:
                 labels={"exchange": labels["exchange"]},
                 help="Order manager sync rounds completed",
             )
+            latency = payload.get("latency_ms")
+            if latency is not None:
+                self._sync_pending_ts_ms.pop(labels["exchange"].lower().strip(), None)
+                histogram_observe(
+                    obs_schema.MM_ORDER_SYNC_LATENCY_MS,
+                    max(0.0, float(latency)),
+                    labels={"exchange": labels["exchange"]},
+                    help="Wall time for completed order manager sync rounds",
+                )
         if etype == "ExecutionSyncFailed":
+            self._sync_pending_ts_ms.pop(labels["exchange"].lower().strip(), None)
             counter_inc(
                 obs_schema.MM_EXECUTION_SYNC_FAILED_TOTAL,
                 labels={

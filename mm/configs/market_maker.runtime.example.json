@@ -148,7 +148,7 @@
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
-      "n_components": 4,
+      "n_components": 3,
       "n_samples": 64,
       "warm_start": false,
       "fixed_mc_samples": true,

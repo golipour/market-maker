@@ -8,6 +8,7 @@ from mm.bus.memory import InMemoryBus
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Action, Fill, Order
 from mm.core.models.private import OpenOrder, PrivateStateSnapshot
+from mm.core.models.target_book import TargetOrder, VenueTargetBook
 from mm.execution.order_manager import ExecutionSnapshot, OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 
@@ -113,6 +114,37 @@ async def test_execution_reconciler_mirrors_private_open_orders() -> None:
         assert filled.live_order_count == 0
     finally:
         await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_venue_target_sync_publishes_execution_snapshot() -> None:
+    bus = InMemoryBus()
+    state_queue = bus.subscribe_queue("execution:state:nobitex")
+    command_queue = bus.subscribe_queue("execution:orders:nobitex")
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), bus=bus, clock_ms=lambda: 1000)
+
+    report = await manager.sync_venue_target_book(
+        VenueTargetBook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            actor_id="actor-1",
+            orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 0.5),),
+        )
+    )
+
+    requested = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    placed = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    accepted = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    completed = await asyncio.wait_for(command_queue.get(), timeout=1.0)
+    snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)
+
+    assert requested["type"] == "ExecutionSyncRequested"
+    assert placed["type"] == "PlaceOrdersRequested"
+    assert accepted["type"] == "PlaceOrdersAccepted"
+    assert completed["type"] == "ExecutionSyncCompleted"
+    assert report.accepted.order_count == 1
+    assert isinstance(snapshot, ExecutionSnapshot)
+    assert snapshot.live_order_count == 1
 
 
 @pytest.mark.asyncio

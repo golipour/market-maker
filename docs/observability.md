@@ -115,7 +115,7 @@ It currently emits metrics and logs for:
 | `mm_inventory`, `mm_cash` | Strategy inventory and cash from decisions |
 | `mm_frame_to_exec_sync_latency_ms` | Frame creation to execution sync request |
 | `mm_market_window_end_to_exec_sync_latency_ms` | Market window end to execution sync request |
-| `mm_order_sync_latency_ms` | Execution sync request to execution snapshot |
+| `mm_order_sync_latency_ms` | Completed order-manager sync latency; falls back to request-to-snapshot for legacy paths |
 | `mm_execution_live_orders` | Current live orders by exchange |
 | `mm_execution_events_total` | Execution events by type |
 | `mm_order_validation_rejected_total` | Venue limit rejections |
@@ -363,7 +363,7 @@ Recommended gate reasons:
 | `mm_order_sync_total` | counter | `exchange` | existing subscriber | Sync requests |
 | `mm_execution_sync_completed_total` | counter | `exchange` | proposed `ExecutionSyncCompleted` | Successful sync rounds |
 | `mm_execution_sync_failed_total` | counter | `exchange`, `error` | `ExecutionSyncFailed` | Failed sync rounds |
-| `mm_order_sync_latency_ms` | histogram | `exchange` | existing subscriber | Request to snapshot latency |
+| `mm_order_sync_latency_ms` | histogram | `exchange` | existing subscriber | Completed sync latency; legacy fallback uses request-to-snapshot latency |
 | `mm_frame_to_exec_sync_latency_ms` | histogram | `exchange` | existing subscriber after typo fix | Frame creation to sync request |
 | `mm_order_place_accepted_total` | counter | `exchange` | existing subscriber | Accepted places |
 | `mm_order_cancel_accepted_total` | counter | `exchange` | existing subscriber | Accepted cancels |

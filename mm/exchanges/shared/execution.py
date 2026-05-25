@@ -34,17 +34,21 @@ async def map_in_thread_pool(
         work.put((idx, item))
     results: list[R | None] = [None] * len(items)
     errors: list[BaseException] = []
+    stop = threading.Event()
 
     def _worker() -> None:
-        while True:
+        while not stop.is_set():
             try:
                 idx, item = work.get_nowait()
             except queue.Empty:
                 return
             try:
+                if stop.is_set():
+                    return
                 results[idx] = fn(item)
             except BaseException as exc:  # propagate after active workers settle
                 errors.append(exc)
+                stop.set()
             finally:
                 work.task_done()
 
@@ -55,8 +59,12 @@ async def map_in_thread_pool(
     for thread in threads:
         thread.start()
 
-    while any(thread.is_alive() for thread in threads):
-        await asyncio.sleep(0.001)
+    try:
+        while any(thread.is_alive() for thread in threads):
+            await asyncio.sleep(0.001)
+    except asyncio.CancelledError:
+        stop.set()
+        raise
 
     if errors:
         raise errors[0]

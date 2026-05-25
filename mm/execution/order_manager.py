@@ -182,6 +182,7 @@ class OrderManager(AbstractOrderManager):
             target_count=target_count,
             latency_ms=_elapsed_ms(started_ns),
         )
+        await self._publish_snapshot()
         return report
 
     async def cancel_actor_orders(self, actor_id: str, *, reason: str = "") -> None:
