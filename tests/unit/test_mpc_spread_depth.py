@@ -102,16 +102,14 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
     params = torch.tensor(flat, dtype=torch.float64)
     spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 2), dtype=torch.float64)
-    sell_vwap = torch.tensor([[100.0]], dtype=torch.float64)
-    buy_vwap = torch.tensor([[100.0]], dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
     sell_vol = torch.tensor([[1_000.0]], dtype=torch.float64)
     buy_vol = torch.tensor([[1_000.0]], dtype=torch.float64)
 
     _, _, _, inv_delta = soft_fill_batched(
         params,
         n_components=1,
-        sell_vwap=sell_vwap,
-        buy_vwap=buy_vwap,
+        mid_price=mid_price,
         book_cum_bid=empty_book,
         book_cum_ask=empty_book,
         sell_vol=sell_vol,
@@ -131,6 +129,41 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
     expected_ask_quote = float(ask_eff[2] - ask_eff[0])
     assert math.isclose(expected_bid_quote, expected_ask_quote, rel_tol=1e-12)
     assert abs(float(inv_delta[0])) < 1e-6
+
+
+def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:
+    from mm.mpc.l_param import LParamConfig
+
+    l_param = LParamConfig(
+        quote_size_min=1.0,
+        quote_size_max=1.0,
+        spread_max=1.0,
+        n_components=1,
+    )
+    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0], dtype=torch.float64)
+    spread_grid = torch.tensor([1.0], dtype=torch.float64)
+    empty_book = torch.zeros((1, 1), dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
+    sell_vol = torch.tensor([[10.0]], dtype=torch.float64)
+    buy_vol = torch.tensor([[0.0]], dtype=torch.float64)
+
+    _, _, cash_delta, inv_delta = soft_fill_batched(
+        params,
+        n_components=1,
+        mid_price=mid_price,
+        book_cum_bid=empty_book,
+        book_cum_ask=empty_book,
+        sell_vol=sell_vol,
+        buy_vol=buy_vol,
+        spread_grid=spread_grid,
+        maker_fee=0.0,
+        soft_temp=0.01,
+        soft_fill_activation="hardsigmoid",
+        l_param=l_param,
+    )
+
+    assert float(inv_delta[0]) == pytest.approx(1.0, rel=1e-6)
+    assert float(cash_delta[0]) == pytest.approx(-99.0, rel=1e-6)
 
 
 def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:

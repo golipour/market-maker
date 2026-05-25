@@ -153,13 +153,16 @@ W = local_cash + global_cash
     + (local_inventory + global_inventory) * reference_price
 ```
 
-The reference price starts from `state.reference_price`. If no explicit
-reference is set, the code prefers the global sell VWAP and falls back to the
-local sell VWAP.
+The reference path is selected by `controller.reference_price_source`:
 
-During rollout, the next reference price follows the simulated global sell VWAP
-path. If global values are missing, state construction falls back to local
-values so the formula still remains finite.
+- `global`: mark inventory and objective returns with the simulated global
+  sell-side VWAP path, falling back to local if no global VWAP is available.
+- `local`: mark inventory and objective returns with the simulated local
+  sell-side VWAP path.
+
+Local and global future VWAP paths are still simulated separately from their own
+books and price models. Only the selected path is used as the valuation
+reference.
 
 ## Joint Objective
 
@@ -365,6 +368,8 @@ For the joint optimizer:
 
 - `optimizer.config.global_active` tells whether the global action participated.
 - `optimizer.config.reference_price` is the initial marking price.
+- `optimizer.config.reference_price_source` tells which VWAP path marked
+  objective returns.
 - `optimizer.config.wealth_0` is the normalization base for returns.
 - `optimizer.config.local_optimizer` and `optimizer.config.global_optimizer`
   show the resolved venue-scoped optimizer parameters.

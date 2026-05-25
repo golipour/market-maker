@@ -125,6 +125,7 @@
       }
     },
     "vwap_depth": 100.0,
+    "reference_price_source": "global",
     "local_price_model": {
       "kind": "residual",
       "residual_decay": 0.95,

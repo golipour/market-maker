@@ -94,6 +94,12 @@ def test_reference_price_prefers_global_sell_vwap() -> None:
     assert reference_price_from_state(state) == 102.0
 
 
+def test_reference_price_can_select_local_sell_vwap() -> None:
+    state = _minimal_state(reference_price=102.0)
+    assert reference_price_from_state(state, "local") == 101.0
+    assert reference_price_from_state(state, "global") == 102.0
+
+
 def test_soft_fill_global_depth_scale_zeros_fills() -> None:
     l_param = LParamConfig(
         quote_size_min=1.0,
@@ -107,16 +113,14 @@ def test_soft_fill_global_depth_scale_zeros_fills() -> None:
     params = torch.tensor(flat, dtype=torch.float64)
     spread_grid = torch.tensor([5.0, 10.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 2), dtype=torch.float64)
-    sell_vwap = torch.tensor([[100.0]], dtype=torch.float64)
-    buy_vwap = torch.tensor([[100.0]], dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
     sell_vol = torch.tensor([[100.0]], dtype=torch.float64)
     buy_vol = torch.tensor([[100.0]], dtype=torch.float64)
 
     _, _, _, inv_masked = soft_fill_batched(
         params,
         1,
-        sell_vwap,
-        buy_vwap,
+        mid_price,
         empty_book,
         empty_book,
         sell_vol,
@@ -256,6 +260,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
         global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
         controller=ControllerRuntimeConfig(
             enabled=True,
+            reference_price_source="local",
             optimizer={
                 "local": {
                     "objective_weight": 0.7,
@@ -296,6 +301,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.inventory_target_penalty_weight == pytest.approx(0.02)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
+    assert controller.reference_price_source == "local"
     assert controller._l_param_config("local").quote_size_min == pytest.approx(0.2)
     assert controller._l_param_config("global").quote_size_max == pytest.approx(5.0)
     assert controller._resolve_inventory_target("local") == pytest.approx(3.3)

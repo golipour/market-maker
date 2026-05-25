@@ -158,6 +158,8 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "max_private_state_age_ms": 120000
     }
   },
+  "vwap_depth": 100.0,
+  "reference_price_source": "global",
   "local_price_model": {"kind": "residual", "residual_decay": 0.95},
   "local_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
   "global_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},

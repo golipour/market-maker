@@ -192,6 +192,25 @@ def test_removed_nested_venue_optimizer_aliases_are_rejected() -> None:
         )
 
 
+def test_controller_reference_price_source_is_validated() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+            "controller": {"enabled": True, "reference_price_source": "local"},
+        }
+    )
+    assert config.controller is not None
+    assert config.controller.reference_price_source == "local"
+
+    with pytest.raises(ValueError, match="reference_price_source"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {"enabled": True, "reference_price_source": "mid"},
+            }
+        )
+
+
 def test_runtime_contract_includes_venues() -> None:
     config = runtime_config_from_mapping(
         venues_payload(

@@ -396,8 +396,7 @@ def _soft_fill_fraction(
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
-    sell_vwap: torch.Tensor,
-    buy_vwap: torch.Tensor,
+    mid_price: torch.Tensor,
     book_cum_bid: torch.Tensor,
     book_cum_ask: torch.Tensor,
     sell_vol: torch.Tensor,
@@ -419,6 +418,7 @@ def soft_fill_batched(
     Inputs:
       book_cum_*: market-book cumulative depth on spread grid (n_samples, grid_levels)
       sell_vol/buy_vol: market order flow per sample (n_samples, 1)
+      mid_price: clean-orderbook mid; quote prices are mid_price ± spread
 
     Returns:
       ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
@@ -491,10 +491,9 @@ def soft_fill_batched(
     consumed_ask_market = consumed_ask_level * (1.0 - ask_share_our)
     ob_bids_next = torch.clamp(book_bid_level - consumed_bid_market, min=0.0)
     ob_asks_next = torch.clamp(book_ask_level - consumed_ask_market, min=0.0)
-    sell_exp = sell_vwap.expand(-1, spread_grid.shape[0])
-    buy_exp = buy_vwap.expand(-1, spread_grid.shape[0])
-    cash_bid = (fill_bid_level * (sell_exp - spread_grid.unsqueeze(0))).sum(dim=1)
-    cash_ask = (fill_ask_level * (buy_exp + spread_grid.unsqueeze(0))).sum(dim=1)
+    mid_exp = mid_price.expand(-1, spread_grid.shape[0])
+    cash_bid = (fill_bid_level * (mid_exp - spread_grid.unsqueeze(0))).sum(dim=1)
+    cash_ask = (fill_ask_level * (mid_exp + spread_grid.unsqueeze(0))).sum(dim=1)
     one_minus_f = 1.0 - maker_fee
     cash_delta = cash_ask * one_minus_f - cash_bid
     inv_delta = fill_bid * one_minus_f - fill_ask
@@ -550,6 +549,8 @@ class MonteCarloMPCTensorBatched:
         global_price_model: Any = None,
         local_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         global_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
+        reference_price_source: str = "global",
+        vwap_depth: float | None = None,
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
         quote_spread_max: float | int | None = None,
@@ -575,6 +576,14 @@ class MonteCarloMPCTensorBatched:
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
         self.global_market_flow_model = global_market_flow_model
         self.global_price_model = global_price_model
+        self.reference_price_source = str(reference_price_source or "global").strip().lower()
+        if self.reference_price_source not in ("global", "local"):
+            raise ValueError("reference_price_source must be 'global' or 'local'")
+        self.vwap_depth = (
+            float(vwap_depth)
+            if vwap_depth is not None
+            else target_depth_lots_from_price_model(self.local_price_model)
+        )
         flat_defaults = VenueOptimizerParams(
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
@@ -774,7 +783,7 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
-        vwap_depth = target_depth_lots_from_price_model(self.local_price_model)
+        vwap_depth = self.vwap_depth
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.
         def draw_samples():
@@ -928,8 +937,7 @@ class MonteCarloMPCTensorBatched:
                     ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
                         action_h,
                         n,
-                        sell_vwap_t,
-                        buy_vwap_t,
+                        mid_t,
                         book_cum_bid_h,
                         book_cum_ask_h,
                         sell_h,
@@ -1087,6 +1095,8 @@ class MonteCarloMPCTensorBatched:
                 "fixed_mc_samples": self.fixed_mc_samples,
                 "spread_max": self.spread_max,
                 "spread_step": self.spread_step,
+                "vwap_depth": self.vwap_depth,
+                "reference_price_source": self.reference_price_source,
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,
                     n_components=self.n_components,

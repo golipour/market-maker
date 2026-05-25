@@ -208,6 +208,13 @@ consumed_level = combined_level * sigmoid(normalized_reach / soft_fill_temp)
    - cash delta from our fills
    - inventory delta from our fills
 
+Own fill cash is priced from the clean orderbook mid and the spread grid:
+
+```text
+bid_fill_price(s) = clean_mid - s
+ask_fill_price(s) = clean_mid + s
+```
+
 This avoids hard fill/no-fill discontinuities and keeps gradients flowing through the quote-depth parameters.
 
 ## Reward And Objective

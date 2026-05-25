@@ -242,6 +242,7 @@ class State:
     sell_vwap: float = 0.0
     global_buy_vwap: float | None = None
     global_sell_vwap: float | None = None
+    global_mid: float | None = None
     global_inventory: float = 0.0
     global_cash: float = 0.0
     global_ob_rel: OrderbookRelative | None = None

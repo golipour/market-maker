@@ -288,7 +288,7 @@ For each horizon step:
 6. Run `soft_fill_batched()` for the global book with
    `depth_scale=1.0` when global is active, otherwise `0.0`.
 7. Update local and global cash/inventory independently.
-8. Mark consolidated wealth to the global sell VWAP path.
+8. Mark consolidated wealth to the selected reference VWAP path.
 9. Accumulate normalized consolidated returns.
 10. Carry both market-only books into the next step.
 
@@ -332,6 +332,8 @@ Economic convention:
 Implemented cash/inventory updates:
 
 ```text
+bid_fill_cash = sum_s bid_fill_qty(s) * (clean_mid - spread_s)
+ask_fill_cash = sum_s ask_fill_qty(s) * (clean_mid + spread_s)
 cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
 inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
 ```
@@ -347,6 +349,11 @@ Joint MPC uses consolidated wealth:
 W = local_cash + global_cash
     + (local_inventory + global_inventory) * reference_price
 ```
+
+`reference_price` is the selected simulated sell-side VWAP path from
+`controller.reference_price_source` (`global` by default, or `local`).
+The local and global VWAP paths are still simulated separately from their own
+books and price models; only the selected path marks wealth and returns.
 
 Initial wealth:
 
@@ -389,6 +396,7 @@ Implemented joint components:
 Joint diagnostics also record:
 
 - `reference_price`
+- `reference_price_source`
 - `wealth_0`
 - `global_active`
 - resolved `local_optimizer` / `global_optimizer` configs

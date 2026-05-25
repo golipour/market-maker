@@ -53,13 +53,18 @@ class JointSigmoidMixtureAction:
         return cls(local=local, global_=global_action, global_active=global_active)
 
 
-def reference_price_from_state(state: State) -> float:
-    """Mark consolidated wealth using the global sell-side reference when available."""
+def reference_price_from_state(state: State, reference_price_source: str | None = None) -> float:
+    """Return the selected sell-side VWAP reference used to mark inventory."""
 
+    source = str(reference_price_source or "").strip().lower()
+    if source == "local":
+        return float(state.sell_vwap)
+    if source == "global":
+        if state.global_sell_vwap is not None and float(state.global_sell_vwap) > 0.0:
+            return float(state.global_sell_vwap)
+        return float(state.sell_vwap)
     if state.reference_price > 0.0:
         return float(state.reference_price)
-    if state.global_sell_vwap > 0.0:
-        return float(state.global_sell_vwap)
     if state.global_sell_vwap is not None and float(state.global_sell_vwap) > 0.0:
         return float(state.global_sell_vwap)
     return float(state.sell_vwap)
@@ -218,6 +223,7 @@ def enrich_state_for_joint(
         sell_vwap=state.sell_vwap,
         global_buy_vwap=state.global_buy_vwap,
         global_sell_vwap=state.global_sell_vwap,
+        global_mid=state.global_mid,
         global_inventory=state.global_inventory,
         global_cash=state.global_cash,
         global_ob_rel=state.global_ob_rel,
@@ -241,8 +247,8 @@ def initial_joint_action_flat(
     return np.concatenate([one, one], dtype=np.float64)
 
 
-def wealth_0_from_state(state: State) -> float:
-    ref = reference_price_from_state(state)
+def wealth_0_from_state(state: State, reference_price_source: str | None = None) -> float:
+    ref = reference_price_from_state(state, reference_price_source)
     wealth = consolidated_wealth_scalar(
         local_cash=state.cash,
         local_inventory=state.inventory,

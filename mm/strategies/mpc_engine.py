@@ -154,6 +154,7 @@ class MpcStrategyEngine:
             self.binding,
             self.config.orderbook_grid.spread_max,
             local_price_model=self._local_price_model,
+            reference_price_source=self.config.reference_price_source,
             liquidity_sourcing=self.liquidity_sourcing,
             ledger=self._ledger_context,
         )
@@ -450,6 +451,8 @@ def _build_controller(
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "device": "cpu",
+        "vwap_depth": config.vwap_depth,
+        "reference_price_source": config.reference_price_source,
         "local_optimizer": local_optimizer_defaults,
         "global_optimizer": global_optimizer_defaults,
     }
@@ -643,6 +646,7 @@ def _state_from_frame(
     spread_max: float,
     *,
     local_price_model: Any | None,
+    reference_price_source: str = "global",
     liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
     ledger: JointLedgerSnapshot | None = None,
 ) -> State:
@@ -675,7 +679,9 @@ def _state_from_frame(
     global_sell_vol = 0.0
     global_buy_vwap = 0.0
     global_sell_vwap = 0.0
+    global_mid = None
     if frame.global_ is not None:
+        global_mid = mid_from_orderbook(frame.global_.orderbook)
         global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=spread_max)
         global_buy_vol = float(frame.global_.buy_volume)
         global_sell_vol = float(frame.global_.sell_volume)
@@ -694,7 +700,12 @@ def _state_from_frame(
             frame.global_private,
             binding.global_,
         )
-    reference_price = float(global_sell_vwap or sell_vwap)
+    use_global_reference = (
+        str(reference_price_source).strip().lower() == "global"
+        and global_sell_vwap is not None
+        and float(global_sell_vwap) > 0.0
+    )
+    reference_price = float(global_sell_vwap if use_global_reference else sell_vwap)
     global_active = _global_active_for_frame(frame, sourcing)
     return State(
         mid=local_mid,
@@ -707,6 +718,7 @@ def _state_from_frame(
         sell_vwap=sell_vwap,
         global_buy_vwap=global_buy_vwap,
         global_sell_vwap=global_sell_vwap,
+        global_mid=global_mid,
         global_inventory=global_inventory,
         global_cash=global_cash,
         global_ob_rel=global_ob_rel,

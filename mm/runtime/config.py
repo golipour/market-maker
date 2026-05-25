@@ -22,6 +22,13 @@ ReferenceVenueRole = Literal["global", "local"]
 BusKind = Literal["memory", "redis_streams"]
 
 
+def _normalize_reference_price_source(value: Any) -> ReferenceVenueRole:
+    source = str(value or "global").strip().lower()
+    if source not in ("global", "local"):
+        raise ValueError("controller.reference_price_source must be 'global' or 'local'")
+    return source  # type: ignore[return-value]
+
+
 @dataclass(frozen=True, slots=True)
 class MarketDataSourceConfig:
     """Public market data source for one strategy role."""
@@ -300,6 +307,7 @@ class ControllerRuntimeConfig:
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
     vwap_depth: float | None = None
+    reference_price_source: ReferenceVenueRole = "global"
     local_price_model: dict[str, Any] | None = None
     local_market_flow_model: dict[str, Any] | None = None
     global_market_flow_model: dict[str, Any] | None = None
@@ -308,6 +316,13 @@ class ControllerRuntimeConfig:
     optimizer: dict[str, Any] | None = None
     risk: RiskRuntimeConfig = field(default_factory=RiskRuntimeConfig)
     reconcile: ReconcileRuntimeConfig = field(default_factory=ReconcileRuntimeConfig)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "reference_price_source",
+            _normalize_reference_price_source(self.reference_price_source),
+        )
 
     @property
     def normalized_action_topic(self) -> str:
@@ -764,6 +779,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             if payload.get("vwap_depth") is not None
             else None
         ),
+        reference_price_source=_normalize_reference_price_source(
+            payload.get("reference_price_source", "global")
+        ),
         local_price_model=_dict_or_none(payload.get("local_price_model")),
         local_market_flow_model=_dict_or_none(payload.get("local_market_flow_model")),
         global_market_flow_model=_dict_or_none(payload.get("global_market_flow_model")),
@@ -875,8 +893,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "max_orders_per_side": config.max_orders_per_side,
         "vwap_depth": config.vwap_depth,
         "vwap_depth_note": (
-            "cumulative base quantity cap for reference VWAP in MPC and residual price model; "
-            "overrides local_price_model.default_vwap_depth_lots when set"
+            "shared cumulative base quantity cap for local/global VWAP paths in MPC "
+            "and residual price models"
+        ),
+        "reference_price_source": config.reference_price_source,
+        "reference_price_source_note": (
+            "selects which simulated sell-side VWAP path marks inventory and objective returns"
         ),
         "model_inputs": {
             "local_price_model": config.local_price_model or {"kind": "residual"},

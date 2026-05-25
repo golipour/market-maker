@@ -90,8 +90,16 @@ def optimize_joint_with_diagnostics(
 
     global_active = bool(state.global_active)
     global_mask = 1.0 if global_active else 0.0
-    ref_0 = float(state.reference_price or reference_price_from_state(state))
-    wealth_0 = wealth_0_from_state(state)
+    reference_price_source = str(getattr(mpc, "reference_price_source", "global")).strip().lower()
+    if reference_price_source not in ("global", "local"):
+        reference_price_source = "global"
+    use_global_reference = (
+        reference_price_source == "global"
+        and state.global_sell_vwap is not None
+        and float(state.global_sell_vwap) > 0.0
+    )
+    ref_0 = float(reference_price_from_state(state, reference_price_source))
+    wealth_0 = wealth_0_from_state(state, reference_price_source)
     obj_local_target = mpc._resolve_inventory_target("local")
     obj_global_target = mpc._resolve_inventory_target("global")
     obj_local_scale = mpc._resolve_inventory_scale("local")
@@ -106,6 +114,7 @@ def optimize_joint_with_diagnostics(
     )
     spread_grid = _spread_grid_tensor(torch_mod, mpc.grid_levels, mpc.spread_step, _device, dtype)
     mid_0 = float(state.mid)
+    global_mid_0 = float(state.global_mid or state.reference_price or state.global_sell_vwap or mid_0)
     inv_0 = float(state.inventory)
     cash_0 = float(state.cash)
     global_inv_0 = float(state.global_inventory)
@@ -171,8 +180,7 @@ def optimize_joint_with_diagnostics(
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
     maker_fee = getattr(mpc.execution_model, "maker_fee", 0.0)
-    local_vwap_depth = target_depth_lots_from_price_model(mpc.local_price_model)
-    global_vwap_depth = target_depth_lots_from_price_model(mpc.global_price_model)
+    vwap_depth = float(getattr(mpc, "vwap_depth", target_depth_lots_from_price_model(mpc.local_price_model)))
     global_flow_model = mpc.global_market_flow_model
     global_price_model = mpc.global_price_model
     local_opt = mpc.local_optimizer
@@ -299,6 +307,12 @@ def optimize_joint_with_diagnostics(
             global_ob_bids = global_ob_bids_0.clone()
             global_ob_asks = global_ob_asks_0.clone()
             mid_fallback_t = torch_mod.full((mpc.n_samples, 1), mid_0, dtype=dtype, device=_device)
+            global_mid_fallback_t = torch_mod.full(
+                (mpc.n_samples, 1),
+                global_mid_0,
+                dtype=dtype,
+                device=_device,
+            )
 
             book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(mpc.n_samples, -1)
             book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(mpc.n_samples, -1)
@@ -349,6 +363,12 @@ def optimize_joint_with_diagnostics(
                 mid_t = _mid_from_book_best_levels_batched(
                     ob_bids, ob_asks, mid_fallback_t, spread_grid
                 )
+                global_mid_t = _mid_from_book_best_levels_batched(
+                    global_ob_bids,
+                    global_ob_asks,
+                    global_mid_fallback_t,
+                    spread_grid,
+                )
                 if h == 0:
                     buy_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device)
                     sell_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device)
@@ -363,17 +383,14 @@ def optimize_joint_with_diagnostics(
                     )
                 else:
                     buy_vwap_t, sell_vwap_t = vwap_prices_batched(
-                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=local_vwap_depth
-                    )
-                    global_mid_t = _mid_from_book_best_levels_batched(
-                        global_ob_bids, global_ob_asks, mid_fallback_t, spread_grid
+                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth
                     )
                     global_buy_vwap_t, global_sell_vwap_t = vwap_prices_batched(
                         global_ob_bids,
                         global_ob_asks,
                         global_mid_t,
                         spread_grid,
-                        target_depth=global_vwap_depth,
+                        target_depth=vwap_depth,
                     )
                 buy_vwap_t = buy_vwap_t + eps_buy_h
                 sell_vwap_t = sell_vwap_t + eps_sell_h
@@ -383,8 +400,7 @@ def optimize_joint_with_diagnostics(
                 ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = soft_fill_batched(
                     local_h,
                     n,
-                    sell_vwap_t,
-                    buy_vwap_t,
+                    mid_t,
                     book_cum_bid_h,
                     book_cum_ask_h,
                     sell_h,
@@ -404,8 +420,7 @@ def optimize_joint_with_diagnostics(
                 ) = soft_fill_batched(
                     global_h,
                     n,
-                    global_sell_vwap_t,
-                    global_buy_vwap_t,
+                    global_mid_t,
                     global_book_cum_bid_h,
                     global_book_cum_ask_h,
                     global_sell_h,
@@ -425,7 +440,7 @@ def optimize_joint_with_diagnostics(
                 local_inv_path[:, h] = inv_next.squeeze(1)
                 global_inv_path[:, h] = global_inv_next.squeeze(1)
 
-                ref_next = global_sell_vwap_t
+                ref_next = global_sell_vwap_t if use_global_reference else sell_vwap_t
                 local_step_reward = (
                     cash_next + inv_next * ref_next - (cash_t + inv_t * ref_t)
                 ).squeeze(1)
@@ -455,6 +470,7 @@ def optimize_joint_with_diagnostics(
                 global_cash_t = global_cash_next
                 ref_t = ref_next
                 mid_fallback_t = mid_t
+                global_mid_fallback_t = global_mid_t
 
             returns = total_reward / wealth_0
             local_returns = total_local_reward / wealth_0
@@ -572,7 +588,9 @@ def optimize_joint_with_diagnostics(
             "fixed_mc_samples": mpc.fixed_mc_samples,
             "spread_max": mpc.spread_max,
             "spread_step": mpc.spread_step,
+            "vwap_depth": vwap_depth,
             "reference_price": ref_0,
+            "reference_price_source": reference_price_source,
             "wealth_0": wealth_0,
             "local_optimizer": local_opt.as_config(
                 spread_max=mpc.spread_max,
