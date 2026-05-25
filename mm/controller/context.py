@@ -28,7 +28,13 @@ from mm.execution.plan import (
     ExecutionSyncReport,
     apply_execution_stages_to_pipeline,
 )
-from mm.core.wallet import inventory_cash_from_snapshot, portfolio_wealth, wallet_pair_from_snapshot
+from mm.core.wallet import (
+    inventory_cash_from_snapshot,
+    inventory_cash_from_venue_ledger,
+    portfolio_wealth,
+    wallet_pair_from_snapshot,
+    wallet_pair_from_venue_ledger,
+)
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 
 
@@ -276,6 +282,8 @@ class DecisionContext:
         if self.binding is None:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
+        if self.ledger is not None:
+            return wallet_pair_from_venue_ledger(self.ledger.local)
         return wallet_pair_from_snapshot(
             self.frame.local_private,
             self.binding.local.base_asset,
@@ -287,6 +295,8 @@ class DecisionContext:
         if self.binding is None or self.binding.global_ is None:
             empty = wallet_pair_from_snapshot(None, "", "")
             return empty[0], empty[1]
+        if self.ledger is not None and self.ledger.global_ is not None:
+            return wallet_pair_from_venue_ledger(self.ledger.global_)
         return wallet_pair_from_snapshot(
             self.frame.global_private,
             self.binding.global_.base_asset,
@@ -297,6 +307,8 @@ class DecisionContext:
     def _global_inventory_cash(self) -> tuple[float, float]:
         if self.binding is None or self.binding.global_ is None:
             return 0.0, 0.0
+        if self.ledger is not None and self.ledger.global_ is not None:
+            return inventory_cash_from_venue_ledger(self.ledger.global_)
         return inventory_cash_from_snapshot(
             self.frame.global_private,
             self.binding.global_.base_asset,

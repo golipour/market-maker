@@ -5,8 +5,12 @@ import pytest
 from mm.bus.factory import build_event_bus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.models.execution import Action
+from mm.core.models.joint_strategy import JointStrategyFrame
+from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.market import MarketEvent, RawOrderbook
+from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision
+from mm.core.models.strategy import StrategyInputFrame
 from tests.unit.conftest import venues_payload
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
 from mm.strategies import mpc_engine
@@ -47,6 +51,36 @@ def test_event_envelope_round_trips_market_event() -> None:
     assert decoded.exchange == "nobitex"
     assert decoded.symbol == "BTC_IRT"
     assert decoded.payload["t_end_ms"] == 1001
+
+
+def test_joint_frame_envelope_omits_embedded_private_frame_snapshot() -> None:
+    private = PrivateStateSnapshot(
+        exchange="nobitex",
+        timestamp_ms=1001,
+        balances={"BTC": Balance("nobitex", "BTC", 1.0, 0.0, 1.0, 1001)},
+    )
+    frame = StrategyInputFrame(local=_event(), local_private=private, created_at_ms=1001)
+    joint = JointStrategyFrame(
+        local_market=frame.local,
+        ledger=JointLedgerSnapshot(
+            local=VenueLedger(
+                exchange="nobitex",
+                symbol="BTC_IRT",
+                base_asset="BTC",
+                quote_asset="IRT",
+                balances=dict(private.balances),
+                last_snapshot_ms=1001,
+            )
+        ),
+        input_frame=frame,
+        created_at_ms=1001,
+    )
+
+    envelope = envelope_event("strategy:frames:joint", joint, run_id="run-1")
+
+    assert "input_frame" not in envelope.payload
+    assert "local_private" not in envelope.payload
+    assert envelope.payload["ledger"]["local"]["balances"]["BTC"]["free"] == 1.0
 
 
 @pytest.mark.asyncio

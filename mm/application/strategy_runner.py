@@ -14,7 +14,7 @@ from mm.application.venue_execution import (
 )
 from mm.execution.plan import ExecutionSyncReport, stage_report_with_rejections
 from mm.application.frame_preparation import clean_strategy_frame
-from mm.application.trading_context import trading_state_from_frame
+from mm.application.trading_context import trading_state_from_ledger
 from mm.bus.base import AbstractEventBus
 from mm.controller.context import DecisionContext, execution_blocked_reasons
 from mm.core.interfaces.order_manager import AbstractOrderManager
@@ -22,8 +22,7 @@ from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.joint_strategy import JointStrategyFrame
-from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
-from mm.core.models.private import PrivateStateSnapshot
+from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
@@ -120,7 +119,10 @@ class StrategyRunner:
             raise ValueError("JointStrategyFrame.input_frame is required for strategy pipeline")
         if joint_frame.ledger is None:
             raise ValueError("JointStrategyFrame.ledger is required for strategy pipeline")
-        frame = _frame_with_ledger_private(frame, joint_frame.ledger)
+        if frame.created_at_ms <= 0:
+            created_at_ms = joint_frame.created_at_ms or joint_frame.ledger.created_at_ms
+            if created_at_ms > 0:
+                frame = replace(frame, created_at_ms=created_at_ms)
         return await self._process_input_frame(frame, joint_frame=joint_frame)
 
     async def _process_input_frame(
@@ -138,9 +140,8 @@ class StrategyRunner:
         ledger = joint_frame.ledger
         open_orders = _live_orders_from_ledger(ledger)
         clean_frame = clean_strategy_frame(frame, open_orders)
-        trading_state = trading_state_from_frame(
-            frame,
-            self.binding,
+        trading_state = trading_state_from_ledger(
+            ledger,
             actor_id=self.config.actor_id,
             open_orders=open_orders,
         )
@@ -162,6 +163,7 @@ class StrategyRunner:
         try:
             decide_started = time.monotonic_ns()
             try:
+                self._engine.set_ledger_context(ledger)
                 decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
                 ctx.record_decision(decision)
                 ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
@@ -483,32 +485,6 @@ class StrategyRunner:
     async def _publish(self, topic: str, event: Any) -> None:
         if self.bus is not None:
             await self.bus.publish(topic, event)
-
-
-def _private_snapshot_from_ledger(ledger: VenueLedger) -> PrivateStateSnapshot:
-    timestamp_ms = int(ledger.last_snapshot_ms or ledger.last_private_event_ms or 0)
-    return PrivateStateSnapshot(
-        exchange=ledger.exchange,
-        timestamp_ms=timestamp_ms,
-        balances=dict(ledger.balances),
-        open_orders=dict(ledger.live_orders),
-    )
-
-
-def _frame_with_ledger_private(
-    frame: StrategyInputFrame,
-    ledger: JointLedgerSnapshot,
-) -> StrategyInputFrame:
-    return replace(
-        frame,
-        local_private=_private_snapshot_from_ledger(ledger.local),
-        global_private=(
-            _private_snapshot_from_ledger(ledger.global_)
-            if ledger.global_ is not None
-            else frame.global_private
-        ),
-        created_at_ms=frame.created_at_ms or ledger.created_at_ms,
-    )
 
 
 def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:

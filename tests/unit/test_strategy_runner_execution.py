@@ -266,8 +266,8 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
 
     def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         seen["best_bid_qty"] = frame.local.orderbook.bids[0].qty
-        assert frame.local_private is not None
-        seen["private_order_ids"] = tuple(frame.local_private.open_orders)
+        assert frame.local_private is None
+        seen["ledger_order_ids"] = tuple(self._ledger_context.local.live_orders)
         return strategy_decision_with_joint(frame.local, frame_step=frame_step, actor_id="test-runner")
 
     monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
@@ -319,4 +319,4 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
     await runner.on_joint_frame(joint_frame)
 
     assert seen["best_bid_qty"] == pytest.approx(3.0)
-    assert seen["private_order_ids"] == ("ledger-1",)
+    assert seen["ledger_order_ids"] == ("ledger-1",)

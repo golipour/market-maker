@@ -145,6 +145,18 @@ async def build_runtime_components(
 ) -> RuntimeComponents:
     load_mm_env()
     configure_observability(config.observability)
+    if config.controller is not None:
+        log_event(
+            "runtime_controller_config",
+            {
+                "actor_id": config.controller.actor_id,
+                "enabled": config.controller.enabled,
+                "observe_only": config.controller.observe_only,
+                "action_start_after_steps": config.controller.action_start_after_steps,
+                "placement_timeout_ms": config.controller.placement_timeout_ms,
+                "placement_max_concurrency": config.controller.placement_max_concurrency,
+            },
+        )
     runtime_bus = bus or build_event_bus(config.bus, run_id=config.observability.run_id)
     scheduler = IntervalScheduler(WallClock())
     public_selections: dict[SourceRole, PublicMarketDataAdapterSelection] = {}
@@ -162,8 +174,6 @@ async def build_runtime_components(
         await engine.publish_on_intervals(scheduler, [config.interval_ms])
         engines[source.role] = engine
 
-    local_private_queue = None
-    global_private_queue = None
     private_selections: dict[SourceRole, PrivateStateAdapterSelection] = {}
     order_command_selections: dict[SourceRole, OrderCommandAdapterSelection] = {}
     order_managers: dict[str, OrderManager] = {}
@@ -190,12 +200,6 @@ async def build_runtime_components(
             adapter=private_selection.adapter,
             bus=runtime_bus,
         )
-        snapshot_queue = runtime_bus.subscribe_queue(f"private:state:{source.normalized_exchange()}:snapshot")
-        if source.role == "local":
-            local_private_queue = snapshot_queue
-        else:
-            global_private_queue = snapshot_queue
-
         if private_config.enable_execution:
             placement_max_concurrency = 8
             if config.controller is not None:
@@ -229,8 +233,6 @@ async def build_runtime_components(
     frame_assembler_inner = StrategyInputFrameAssembler(
         local_queue=runtime_bus.subscribe_queue(local_topic),
         global_queue=runtime_bus.subscribe_queue(global_topic) if global_topic is not None else None,
-        local_private_queue=local_private_queue,
-        global_private_queue=global_private_queue,
         max_global_lag_ms=config.max_global_lag_ms,
         global_grace_ms=config.global_grace_ms,
     )

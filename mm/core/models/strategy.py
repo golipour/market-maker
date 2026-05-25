@@ -19,6 +19,8 @@ class StrategyInputFrame:
     ``global_`` is intentionally optional. When no global exchange is configured,
     or when the configured global stream is missing/stale for this local
     window, strategies receive ``None`` plus an explicit ``global_status``.
+    Private snapshots are a legacy fallback for tests and non-ledger callers;
+    the live runtime carries account/order truth in ``JointLedgerSnapshot``.
     """
 
     local: MarketEvent

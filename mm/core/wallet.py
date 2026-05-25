@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from mm.core.models.execution import Order
+from mm.core.models.ledger import VenueLedger
 from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 
 _BALANCE_EPS = 1e-12
@@ -166,6 +167,24 @@ def inventory_cash_from_snapshot(
     return float(inventory), float(cash)
 
 
+def private_snapshot_from_venue_ledger(ledger: VenueLedger) -> PrivateStateSnapshot:
+    return PrivateStateSnapshot(
+        exchange=ledger.exchange,
+        timestamp_ms=int(ledger.last_snapshot_ms or ledger.last_private_event_ms or 0),
+        balances=dict(ledger.balances),
+        open_orders=dict(ledger.live_orders),
+    )
+
+
+def inventory_cash_from_venue_ledger(ledger: VenueLedger) -> tuple[float, float]:
+    return inventory_cash_from_snapshot(
+        private_snapshot_from_venue_ledger(ledger),
+        ledger.base_asset,
+        ledger.quote_asset,
+        trading_symbol=ledger.symbol,
+    )
+
+
 def wallet_pair_from_snapshot(
     snapshot: PrivateStateSnapshot | None,
     base_asset: str,
@@ -194,6 +213,15 @@ def wallet_pair_from_snapshot(
         order_locked=quote_order_locked,
     )
     return base, quote
+
+
+def wallet_pair_from_venue_ledger(ledger: VenueLedger) -> tuple[WalletLegView, WalletLegView]:
+    return wallet_pair_from_snapshot(
+        private_snapshot_from_venue_ledger(ledger),
+        ledger.base_asset,
+        ledger.quote_asset,
+        trading_symbol=ledger.symbol,
+    )
 
 
 def portfolio_wealth(

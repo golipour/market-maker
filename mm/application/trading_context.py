@@ -7,8 +7,9 @@ from collections.abc import Mapping
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Order, TradingState
 from mm.core.models.instrument import SymbolBinding
+from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.strategy import StrategyInputFrame
-from mm.core.wallet import inventory_cash_from_snapshot
+from mm.core.wallet import inventory_cash_from_snapshot, inventory_cash_from_venue_ledger
 
 
 def live_orders_from_managers(order_managers: Mapping[str, AbstractOrderManager]) -> dict[str, Order]:
@@ -36,6 +37,23 @@ def trading_state_from_frame(
         binding.local.quote_asset,
         trading_symbol=binding.local.symbol,
     )
+    return TradingState(
+        actor_id=actor_id,
+        cash=cash,
+        inventory=inventory,
+        open_orders=dict(open_orders),
+    )
+
+
+def trading_state_from_ledger(
+    ledger: JointLedgerSnapshot,
+    *,
+    actor_id: str,
+    open_orders: Mapping[str, Order],
+) -> TradingState:
+    """Build risk state from the ledger-owned local wallet and live orders."""
+
+    inventory, cash = inventory_cash_from_venue_ledger(ledger.local)
     return TradingState(
         actor_id=actor_id,
         cash=cash,

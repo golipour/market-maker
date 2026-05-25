@@ -263,7 +263,7 @@
           "refId": "A"
         }
       ],
-      "title": "Execution completed / failed",
+      "title": "Execution completed / failed (sync rounds/s)",
       "type": "timeseries",
       "options": {
         "legend": {

@@ -107,6 +107,9 @@ def to_jsonable(value: Any) -> Any:
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
+    as_payload = getattr(value, "as_payload", None)
+    if callable(as_payload):
+        return to_jsonable(as_payload())
     if msgspec is not None and msgspec.structs.is_struct(value):
         return {k: to_jsonable(v) for k, v in msgspec.structs.asdict(value).items()}
     if dataclasses.is_dataclass(value):

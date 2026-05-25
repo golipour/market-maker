@@ -19,10 +19,11 @@ from mm.core.order_constraints import (
 from mm.core.models.target_book import JointTargetBook
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
+from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import DecisionDiagnostics, ModelUpdateReport, StrategyDecision, StrategyInputFrame
-from mm.core.wallet import inventory_cash_from_snapshot
+from mm.core.wallet import inventory_cash_from_snapshot, inventory_cash_from_venue_ledger
 from mm.core.adapters.joint import joint_target_book_to_action
 from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
@@ -86,6 +87,7 @@ class MpcStrategyEngine:
     _price_model: Any = field(init=False, repr=False)
     _global_price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
+    _ledger_context: JointLedgerSnapshot | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._controller = _build_controller(
@@ -97,6 +99,9 @@ class MpcStrategyEngine:
         self._price_model = getattr(self._controller, "price_model", None)
         self._global_price_model = getattr(self._controller, "global_price_model", None)
 
+    def set_ledger_context(self, ledger: JointLedgerSnapshot | None) -> None:
+        self._ledger_context = ledger
+
     def decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
         t0 = time.monotonic_ns()
         state = _state_from_frame(
@@ -105,6 +110,7 @@ class MpcStrategyEngine:
             self.config.orderbook_grid.spread_max,
             price_model=self._price_model,
             liquidity_sourcing=self.liquidity_sourcing,
+            ledger=self._ledger_context,
         )
         if self.liquidity_sourcing.enabled:
             state = enrich_state_for_joint(
@@ -510,6 +516,7 @@ def _state_from_frame(
     *,
     price_model: Any | None,
     liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
+    ledger: JointLedgerSnapshot | None = None,
 ) -> State:
     from mm.mpc.mpc_state import OrderbookRelative
 
@@ -526,11 +533,10 @@ def _state_from_frame(
         for level in frame.local.orderbook.asks
         if (spread := level.price - local_mid) >= 0 and spread <= spread_max and level.qty > 0
     )
-    local_inventory, local_cash = inventory_cash_from_snapshot(
+    local_inventory, local_cash = _venue_inventory_cash(
+        ledger.local if ledger is not None else None,
         frame.local_private,
-        binding.local.base_asset,
-        binding.local.quote_asset,
-        trading_symbol=binding.local.symbol,
+        binding.local,
     )
     buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.local.orderbook, target_depth=vwap_depth)
     global_buy_vwap = global_sell_vwap = None
@@ -553,12 +559,12 @@ def _state_from_frame(
             global_sell_vwap = float(global_sell_vwap)
         except ValueError:
             global_buy_vwap = global_sell_vwap = None
-    if frame.global_private is not None and binding.global_ is not None:
-        global_inventory, global_cash = inventory_cash_from_snapshot(
+    if binding.global_ is not None:
+        global_ledger = ledger.global_ if ledger is not None else None
+        global_inventory, global_cash = _venue_inventory_cash(
+            global_ledger,
             frame.global_private,
-            binding.global_.base_asset,
-            binding.global_.quote_asset,
-            trading_symbol=binding.global_.symbol,
+            binding.global_,
         )
     reference_price = float(global_sell_vwap or sell_vwap)
     global_active = _global_active_for_frame(frame, sourcing)
@@ -580,6 +586,21 @@ def _state_from_frame(
         global_sell_vol=global_sell_vol,
         reference_price=reference_price,
         global_active=global_active,
+    )
+
+
+def _venue_inventory_cash(
+    ledger: VenueLedger | None,
+    snapshot: PrivateStateSnapshot | None,
+    spec,
+) -> tuple[float, float]:
+    if ledger is not None and ledger.last_snapshot_ms > 0:
+        return inventory_cash_from_venue_ledger(ledger)
+    return inventory_cash_from_snapshot(
+        snapshot,
+        spec.base_asset,
+        spec.quote_asset,
+        trading_symbol=spec.symbol,
     )
 
 
