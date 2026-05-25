@@ -125,6 +125,11 @@ def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
                     "{local_market_event_topic}",
                     "{global_market_event_topic}",
                     "{joint_frame_topic}",
+                    "{local_execution_orders_topic}",
+                    "{global_execution_state_topic}",
+                    "{local_private_snapshot_topic}",
+                    "{global_private_snapshot_topic}",
+                    "{ledger_topic}",
                 ],
             },
         }
@@ -134,7 +139,35 @@ def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
         "market:events:nobitex:USDT_IRT:2500",
         "market:events:wallex:USDT_IRT:2500",
         "strategy:joint:frames:nobitex:USDT_IRT:2500",
+        "execution:orders:nobitex",
+        "execution:state:wallex",
+        "private:state:nobitex:snapshot",
+        "private:state:wallex:snapshot",
+        "ledger:snapshot",
     )
+    assert config.effective_persistence_topics == config.resolved_persistence_topics
+
+
+def test_persistence_topics_default_when_unset() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(
+                local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+                global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+            ),
+            "interval_ms": 2500,
+            "controller": {"enabled": True, "actor_id": "mpc-controller"},
+            "persistence": {"enabled": True},
+        }
+    )
+
+    assert config.persistence.topics == ()
+    assert config.resolved_persistence_topics == ()
+    assert "market:events:nobitex:USDT_IRT:2500" in config.effective_persistence_topics
+    assert "market:events:wallex:USDT_IRT:2500" in config.effective_persistence_topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:2500" in config.effective_persistence_topics
+    assert "strategy:diagnostics:mpc-controller" in config.effective_persistence_topics
+    assert "strategy:target_books:mpc-controller" in config.effective_persistence_topics
 
 
 def test_persistence_topic_template_rejects_unknown_placeholder() -> None:

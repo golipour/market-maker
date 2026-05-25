@@ -365,76 +365,112 @@
   "templating": {
     "list": [
       {
-        "current": {
-          "text": "mpc-controller",
-          "value": "mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Actor ID",
+        "multi": false,
         "name": "actor_id",
-        "query": "mpc-controller",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "nobitex",
-          "value": "nobitex"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Exchange",
+        "multi": false,
         "name": "exchange",
-        "options": [
-          {
-            "selected": true,
-            "text": "nobitex",
-            "value": "nobitex"
-          },
-          {
-            "selected": false,
-            "text": "wallex",
-            "value": "wallex"
-          }
-        ],
-        "query": "nobitex,wallex",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "USDT_IRT",
-          "value": "USDT_IRT"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Symbol",
+        "multi": false,
         "name": "symbol",
-        "query": "USDT_IRT",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "strategy:diagnostics:mpc-controller",
-          "value": "strategy:diagnostics:mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Diagnostics topic",
+        "multi": false,
         "name": "diagnostics_topic",
-        "query": "strategy:diagnostics:mpc-controller",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "strategy:target_books:mpc-controller",
-          "value": "strategy:target_books:mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Target books topic",
+        "multi": false,
         "name": "target_books_topic",
-        "query": "strategy:target_books:mpc-controller",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "10000",
-          "value": "10000"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Interval ms",
+        "multi": false,
         "name": "interval_ms",
-        "query": "10000",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },

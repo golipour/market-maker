@@ -242,77 +242,58 @@
         "type": "query"
       },
       {
-        "current": {
-          "selected": true,
-          "text": "strategy:diagnostics:mpc-controller",
-          "value": "strategy:diagnostics:mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Diagnostics topic",
         "multi": false,
         "name": "diagnostics_topic",
-        "options": [
-          {
-            "selected": true,
-            "text": "strategy:diagnostics:mpc-controller",
-            "value": "strategy:diagnostics:mpc-controller"
-          }
-        ],
-        "query": "strategy:diagnostics:mpc-controller",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "selected": true,
-          "text": "strategy:target_books:mpc-controller",
-          "value": "strategy:target_books:mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Target books topic",
         "multi": false,
         "name": "target_books_topic",
-        "options": [
-          {
-            "selected": true,
-            "text": "strategy:target_books:mpc-controller",
-            "value": "strategy:target_books:mpc-controller"
-          }
-        ],
-        "query": "strategy:target_books:mpc-controller",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "selected": true,
-          "text": "10000",
-          "value": "10000"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
-        "options": [
-          {
-            "selected": true,
-            "text": "10000",
-            "value": "10000"
-          },
-          {
-            "selected": false,
-            "text": "5000",
-            "value": "5000"
-          },
-          {
-            "selected": false,
-            "text": "1000",
-            "value": "1000"
-          }
-        ],
-        "query": "10000,5000,1000",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },

@@ -60,22 +60,6 @@
     "enabled": true,
     "database_url_env": "MM_DATABASE_URL",
     "parquet_root_env": "MM_PARQUET_ROOT",
-    "topics": [
-      "{local_market_event_topic}",
-      "{global_market_event_topic}",
-      "{joint_frame_topic}",
-      "strategy:actions",
-      "strategy:decisions",
-      "strategy:diagnostics:mpc-controller",
-      "strategy:target_books:mpc-controller",
-      "execution:orders:nobitex",
-      "execution:orders:wallex",
-      "execution:state:nobitex",
-      "execution:state:wallex",
-      "private:state:nobitex:snapshot",
-      "private:state:wallex:snapshot",
-      "ledger:snapshot"
-    ],
     "batch_size": 100,
     "flush_interval_ms": 1000
   },

@@ -402,6 +402,11 @@ class MarketMakerRuntimeConfig:
             "local_exchange": self.local.normalized_exchange(),
             "local_symbol": self.local.symbol,
             "local_market_event_topic": self.local.market_event_topic(self.interval_ms),
+            "local_execution_orders_topic": f"execution:orders:{self.local.normalized_exchange()}",
+            "local_execution_state_topic": f"execution:state:{self.local.normalized_exchange()}",
+            "local_private_snapshot_topic": f"private:state:{self.local.normalized_exchange()}:snapshot",
+            "local_private_fills_topic": f"private:state:{self.local.normalized_exchange()}:fills",
+            "ledger_topic": "ledger:snapshot",
             "frame_topic": self.frame_topic,
             "joint_frame_topic": self.joint_frame_topic,
         }
@@ -411,6 +416,10 @@ class MarketMakerRuntimeConfig:
                     "global_exchange": self.global_.normalized_exchange(),
                     "global_symbol": self.global_.symbol,
                     "global_market_event_topic": self.global_.market_event_topic(self.interval_ms),
+                    "global_execution_orders_topic": f"execution:orders:{self.global_.normalized_exchange()}",
+                    "global_execution_state_topic": f"execution:state:{self.global_.normalized_exchange()}",
+                    "global_private_snapshot_topic": f"private:state:{self.global_.normalized_exchange()}:snapshot",
+                    "global_private_fills_topic": f"private:state:{self.global_.normalized_exchange()}:fills",
                 }
             )
         if self.controller is not None:
@@ -433,6 +442,43 @@ class MarketMakerRuntimeConfig:
             if expanded:
                 resolved.append(expanded)
         return tuple(dict.fromkeys(resolved))
+
+    @property
+    def default_persistence_topics(self) -> tuple[str, ...]:
+        """Default durable event topics derived from the runtime wiring."""
+
+        local_exchange = self.local.normalized_exchange()
+        topics = [
+            self.local.market_event_topic(self.interval_ms),
+            self.joint_frame_topic,
+            "ledger:snapshot",
+            self.controller.normalized_action_topic if self.controller is not None else "strategy:actions",
+            f"execution:orders:{local_exchange}",
+            f"execution:state:{local_exchange}",
+            f"private:state:{local_exchange}:snapshot",
+        ]
+        if self.controller is not None:
+            topics.append(self.controller.normalized_decisions_topic)
+            topics.append(self.controller.normalized_diagnostics_topic)
+            topics.append(self.controller.normalized_target_books_topic)
+        if self.global_ is not None:
+            global_exchange = self.global_.normalized_exchange()
+            topics.extend(
+                [
+                    self.global_.market_event_topic(self.interval_ms),
+                    f"execution:orders:{global_exchange}",
+                    f"execution:state:{global_exchange}",
+                    f"private:state:{global_exchange}:snapshot",
+                    f"private:state:{local_exchange}:fills",
+                ]
+            )
+        return tuple(dict.fromkeys(topics))
+
+    @property
+    def effective_persistence_topics(self) -> tuple[str, ...]:
+        """Topics used by persistence writers: configured override or runtime defaults."""
+
+        return self.resolved_persistence_topics or self.default_persistence_topics
 
     @property
     def sources(self) -> tuple[MarketDataSourceConfig, ...]:
@@ -481,6 +527,8 @@ class MarketMakerRuntimeConfig:
                 "parquet_root_configured": bool(self.persistence.resolved_parquet_root()),
                 "topics": self.persistence.topics,
                 "resolved_topics": self.resolved_persistence_topics,
+                "effective_topics": self.effective_persistence_topics,
+                "uses_default_topics": not bool(self.persistence.topics),
                 "batch_size": self.persistence.batch_size,
             },
             "observability": {

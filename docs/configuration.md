@@ -232,8 +232,13 @@ From `MarketMakerRuntimeConfig`:
 | Ledger | `ledger:snapshot` |
 | Target books | `strategy:target_books:{actor_id}` |
 
-`persistence.topics` may use runtime placeholders so interval changes do not
-leave writers subscribed to old topic names:
+Normally, leave `persistence.topics` unset. Persistence then uses the default
+topic set derived from the configured venues, controller actor, and
+`interval_ms`. Set `persistence.topics` only when you intentionally want a
+custom subset or extra durable topics.
+
+When you do override `persistence.topics`, runtime placeholders are available so
+interval or venue changes do not leave writers subscribed to old topic names:
 
 | Placeholder | Resolves to |
 |-------------|-------------|
@@ -242,6 +247,14 @@ leave writers subscribed to old topic names:
 | `{global_market_event_topic}` | Global market event topic for `interval_ms` |
 | `{joint_frame_topic}` | Joint strategy frame topic for `interval_ms` |
 | `{frame_topic}` | Local strategy frame topic for `interval_ms` |
+| `{strategy_actions_topic}` | Controller action topic |
+| `{strategy_decisions_topic}` | Controller decision topic |
+| `{strategy_diagnostics_topic}` | Controller diagnostics topic |
+| `{strategy_target_books_topic}` | Controller target-books topic |
+| `{local_execution_orders_topic}` / `{global_execution_orders_topic}` | Execution order topics |
+| `{local_execution_state_topic}` / `{global_execution_state_topic}` | Execution state topics |
+| `{local_private_snapshot_topic}` / `{global_private_snapshot_topic}` | Private snapshot topics |
+| `{ledger_topic}` | Ledger snapshot topic |
 
 ## Environment variables
 

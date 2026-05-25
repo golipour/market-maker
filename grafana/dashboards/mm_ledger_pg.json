@@ -412,44 +412,76 @@
   "templating": {
     "list": [
       {
-        "current": {
-          "text": "ledger:snapshot",
-          "value": "ledger:snapshot"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Ledger topic",
+        "multi": false,
         "name": "ledger_topic",
-        "query": "ledger:snapshot",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "USDT_IRT",
-          "value": "USDT_IRT"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Symbol",
+        "multi": false,
         "name": "symbol",
-        "query": "USDT_IRT",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "nobitex",
-          "value": "nobitex"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Local exchange",
+        "multi": false,
         "name": "local_exchange",
-        "query": "nobitex,wallex",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "wallex",
-          "value": "wallex"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Global exchange",
+        "multi": false,
         "name": "global_exchange",
-        "query": "nobitex,wallex",
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },

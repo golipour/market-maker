@@ -180,6 +180,34 @@ def _dashboard(
     }
 
 
+def _pg_query_var(name: str, label: str, query: str, *, multi: bool = False) -> dict[str, Any]:
+    return {
+        "current": {"selected": False, "text": "All", "value": "$__all"} if multi else {},
+        "datasource": PG_DS,
+        "definition": query,
+        "hide": 0,
+        "includeAll": multi,
+        "label": label,
+        "multi": multi,
+        "name": name,
+        "options": [],
+        "query": query,
+        "refresh": 1,
+        "sort": 1,
+        "type": "query",
+    }
+
+
+def _textbox_var(name: str, label: str, value: str) -> dict[str, Any]:
+    return {
+        "current": {"text": value, "value": value},
+        "label": label,
+        "name": name,
+        "query": value,
+        "type": "textbox",
+    }
+
+
 def _panel_objective_contribution_fractions(
     id_: int,
     y: int,
@@ -301,34 +329,26 @@ def _controller_diagnostics_filter() -> str:
 
 def _ledger_templating() -> list[dict[str, Any]]:
     return [
-        {
-            "current": {"text": "ledger:snapshot", "value": "ledger:snapshot"},
-            "label": "Ledger topic",
-            "name": "ledger_topic",
-            "query": "ledger:snapshot",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "USDT_IRT", "value": "USDT_IRT"},
-            "label": "Symbol",
-            "name": "symbol",
-            "query": "USDT_IRT",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "nobitex", "value": "nobitex"},
-            "label": "Local exchange",
-            "name": "local_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "wallex", "value": "wallex"},
-            "label": "Global exchange",
-            "name": "global_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
+        _pg_query_var(
+            "ledger_topic",
+            "Ledger topic",
+            "SELECT DISTINCT topic FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        ),
+        _pg_query_var(
+            "symbol",
+            "Symbol",
+            "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        ),
+        _pg_query_var(
+            "local_exchange",
+            "Local exchange",
+            "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        ),
+        _pg_query_var(
+            "global_exchange",
+            "Global exchange",
+            "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
+        ),
     ]
 
 
@@ -352,52 +372,16 @@ def _joint_target_book_filter() -> str:
 
 def _controller_diagnostics_templating() -> list[dict[str, Any]]:
     return [
-        {
-            "current": {"text": "mpc-controller", "value": "mpc-controller"},
-            "label": "Actor ID",
-            "name": "actor_id",
-            "query": "mpc-controller",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "nobitex", "value": "nobitex"},
-            "label": "Exchange",
-            "name": "exchange",
-            "options": [
-                {"selected": True, "text": "nobitex", "value": "nobitex"},
-                {"selected": False, "text": "wallex", "value": "wallex"},
-            ],
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "USDT_IRT", "value": "USDT_IRT"},
-            "label": "Symbol",
-            "name": "symbol",
-            "query": "USDT_IRT",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "strategy:diagnostics:mpc-controller", "value": "strategy:diagnostics:mpc-controller"},
-            "label": "Diagnostics topic",
-            "name": "diagnostics_topic",
-            "query": "strategy:diagnostics:mpc-controller",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "strategy:target_books:mpc-controller", "value": "strategy:target_books:mpc-controller"},
-            "label": "Target books topic",
-            "name": "target_books_topic",
-            "query": "strategy:target_books:mpc-controller",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "10000", "value": "10000"},
-            "label": "Interval ms",
-            "name": "interval_ms",
-            "query": "10000",
-            "type": "textbox",
-        },
+        _pg_query_var("actor_id", "Actor ID", "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1"),
+        _pg_query_var("exchange", "Exchange", "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1"),
+        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
+        _pg_query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
+        _pg_query_var("target_books_topic", "Target books topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1"),
+        _pg_query_var(
+            "interval_ms",
+            "Interval ms",
+            "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        ),
     ]
 
 
@@ -1029,41 +1013,19 @@ ORDER BY 1""",
         ),
     ]
     templating = [
-        {
-            "current": {"text": "nobitex", "value": "nobitex"},
-            "label": "Local exchange",
-            "name": "local_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "wallex", "value": "wallex"},
-            "label": "Global exchange",
-            "name": "global_exchange",
-            "query": "nobitex,wallex",
-            "type": "custom",
-        },
-        {
-            "current": {"text": "USDT_IRT", "value": "USDT_IRT"},
-            "label": "Symbol",
-            "name": "symbol",
-            "query": "USDT_IRT",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "mpc-controller", "value": "mpc-controller"},
-            "label": "Actor ID",
-            "name": "actor_id",
-            "query": "mpc-controller",
-            "type": "textbox",
-        },
-        {
-            "current": {"text": "strategy:diagnostics:mpc-controller", "value": "strategy:diagnostics:mpc-controller"},
-            "label": "Diagnostics topic",
-            "name": "diagnostics_topic",
-            "query": "strategy:diagnostics:mpc-controller",
-            "type": "textbox",
-        },
+        _pg_query_var(
+            "local_exchange",
+            "Local exchange",
+            "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        ),
+        _pg_query_var(
+            "global_exchange",
+            "Global exchange",
+            "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
+        ),
+        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
+        _pg_query_var("actor_id", "Actor ID", "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1"),
+        _pg_query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
     ]
     return _dashboard(
         title="MM portfolio (PostgreSQL)",
@@ -1381,6 +1343,14 @@ def _is_model_score_panel(panel: dict[str, Any]) -> bool:
     return title in _MODEL_SCORE_PANEL_TITLES
 
 
+def _replace_template_var(templating: list[dict[str, Any]], name: str, value: dict[str, Any]) -> None:
+    for idx, item in enumerate(templating):
+        if item.get("name") == name:
+            templating[idx] = value
+            return
+    templating.append(value)
+
+
 def patch_model_params_dashboard() -> None:
     path = OUT / "mm_strategy_model_params_pg.json"
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -1431,19 +1401,25 @@ ORDER BY count DESC""",
     )
 
     templating = data.setdefault("templating", {}).setdefault("list", [])
-    if not any(t.get("name") == "diagnostics_topic" for t in templating):
-        templating.append(
-            {
-                "current": {
-                    "text": "strategy:diagnostics:mpc-controller",
-                    "value": "strategy:diagnostics:mpc-controller",
-                },
-                "label": "Diagnostics topic",
-                "name": "diagnostics_topic",
-                "query": "strategy:diagnostics:mpc-controller",
-                "type": "textbox",
-            }
-        )
+    _replace_template_var(
+        templating,
+        "exchange",
+        _pg_query_var("exchange", "Exchange", "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1"),
+    )
+    _replace_template_var(
+        templating,
+        "symbol",
+        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
+    )
+    _replace_template_var(
+        templating,
+        "diagnostics_topic",
+        _pg_query_var(
+            "diagnostics_topic",
+            "Diagnostics topic",
+            "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        ),
+    )
     data["panels"] = panels
     _apply_standard_panel_heights(panels)
     compact_dashboard_panels(data, height_scale=1.0)

@@ -117,9 +117,13 @@ def _templating() -> list[dict[str, Any]]:
         _query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1", multi=True),
         _query_var("actor_id", "Actor", "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1", multi=True),
         _query_var("run_id", "Run", "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC", multi=True),
-        _custom_var("diagnostics_topic", "Diagnostics topic", "strategy:diagnostics:mpc-controller"),
-        _custom_var("target_books_topic", "Target books topic", "strategy:target_books:mpc-controller"),
-        _custom_var("interval_ms", "Interval ms", "10000,5000,1000"),
+        _query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
+        _query_var("target_books_topic", "Target books topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1"),
+        _query_var(
+            "interval_ms",
+            "Interval ms",
+            "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        ),
     ]
 
 

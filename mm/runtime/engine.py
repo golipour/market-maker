@@ -308,7 +308,7 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
     if not config.persistence.enabled:
         log_event("persistence_disabled", {"reason": "config"})
         return ()
-    topics = config.resolved_persistence_topics or _default_persistence_topics(config)
+    topics = config.effective_persistence_topics
     daemons: list[object] = []
     database_url = config.persistence.resolved_database_url()
     if database_url:
@@ -394,32 +394,7 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
 
 
 def _default_persistence_topics(config: MarketMakerRuntimeConfig) -> tuple[str, ...]:
-    runtime_topics = _runtime_topics(config)
-    topics = [
-        runtime_topics.local_market_events,
-        config.joint_frame_topic,
-        RuntimeTopics.ledger_snapshot(),
-        runtime_topics.strategy_actions,
-        RuntimeTopics.execution_orders(config.local.normalized_exchange()),
-        RuntimeTopics.execution_state(config.local.normalized_exchange()),
-        RuntimeTopics.private_snapshot(config.local.normalized_exchange()),
-    ]
-    if config.controller is not None:
-        topics.append(runtime_topics.strategy_decisions)
-        topics.append(config.controller.normalized_diagnostics_topic)
-        topics.append(config.controller.normalized_target_books_topic)
-    if config.global_ is not None:
-        global_exchange = config.global_.normalized_exchange()
-        topics.extend(
-            [
-                config.global_.market_event_topic(config.interval_ms),
-                RuntimeTopics.execution_orders(global_exchange),
-                RuntimeTopics.execution_state(global_exchange),
-                RuntimeTopics.private_snapshot(global_exchange),
-                f"private:state:{config.local.normalized_exchange()}:fills",
-            ]
-        )
-    return tuple(dict.fromkeys(topics))
+    return config.default_persistence_topics
 
 
 def _runtime_topics(config: MarketMakerRuntimeConfig) -> RuntimeTopics:

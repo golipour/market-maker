@@ -495,13 +495,13 @@ Common variables:
 |----------|---------|--------|
 | `run_id` | `live-20260524-001` | `SELECT DISTINCT run_id FROM mm_events ORDER BY 1 DESC` |
 | `actor_id` | `mpc-controller` | `SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1` |
-| `local_exchange` | `nobitex` | runtime config / `mm_events` |
-| `global_exchange` | `wallex` | runtime config / `mm_events` |
-| `exchange` | `nobitex` | runtime config / `mm_events` |
-| `symbol` | `USDT_IRT` | runtime config / `mm_events` |
-| `interval_ms` | `10000` | runtime config |
-| `diagnostics_topic` | `strategy:diagnostics:mpc-controller` | runtime config |
-| `target_books_topic` | `strategy:target_books:mpc-controller` | runtime config |
+| `local_exchange` | discovered | `mm_events` ledger payload |
+| `global_exchange` | discovered | `mm_events` ledger payload |
+| `exchange` | discovered | `SELECT DISTINCT exchange FROM mm_events` |
+| `symbol` | discovered | `SELECT DISTINCT symbol FROM mm_events` |
+| `interval_ms` | discovered | event payload/topic suffix |
+| `diagnostics_topic` | discovered | `strategy:diagnostics:%` topics in `mm_events` |
+| `target_books_topic` | discovered | `strategy:target_books:%` topics in `mm_events` |
 | `ledger_topic` | `ledger:snapshot` | runtime config |
 
 ### Existing dashboard inventory

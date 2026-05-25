@@ -737,40 +737,40 @@
   "templating": {
     "list": [
       {
-        "current": {
-          "text": "nobitex",
-          "value": "nobitex"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
         "hide": 0,
+        "includeAll": false,
         "label": "Exchange",
+        "multi": false,
         "name": "exchange",
-        "options": [
-          {
-            "selected": true,
-            "text": "nobitex",
-            "value": "nobitex"
-          },
-          {
-            "selected": false,
-            "text": "wallex",
-            "value": "wallex"
-          }
-        ],
-        "query": "nobitex,wallex",
-        "skipUrlSync": false,
-        "type": "custom"
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
-        "current": {
-          "text": "USDT_IRT",
-          "value": "USDT_IRT"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
         "hide": 0,
+        "includeAll": false,
         "label": "Symbol",
+        "multi": false,
         "name": "symbol",
-        "query": "USDT_IRT",
-        "skipUrlSync": false,
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       },
       {
         "current": {
@@ -785,14 +785,22 @@
         "type": "textbox"
       },
       {
-        "current": {
-          "text": "strategy:diagnostics:mpc-controller",
-          "value": "strategy:diagnostics:mpc-controller"
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
         },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
         "label": "Diagnostics topic",
+        "multi": false,
         "name": "diagnostics_topic",
-        "query": "strategy:diagnostics:mpc-controller",
-        "type": "textbox"
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -804,6 +812,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 26,
+  "version": 28,
   "weekStart": ""
 }

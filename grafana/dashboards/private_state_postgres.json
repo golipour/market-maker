@@ -446,17 +446,7 @@
   "templating": {
     "list": [
       {
-        "current": {
-          "selected": true,
-          "text": [
-            "nobitex",
-            "wallex"
-          ],
-          "value": [
-            "nobitex",
-            "wallex"
-          ]
-        },
+        "current": {},
         "datasource": {
           "type": "postgres",
           "uid": "postgres-mm"
