@@ -221,12 +221,14 @@ def test_global_model_first_observation_skips_via_score_frame() -> None:
         frame=frame,
         previous_frame=None,
         state=state,
-        market_flow_model=None,
-        price_model=TorchResidualPriceModel(),
+        local_market_flow_model=None,
+        local_price_model=TorchResidualPriceModel(),
+        global_market_flow_model=None,
         global_price_model=global_price_model,
-        market_flow_kind="hurdle_lognormal",
-        price_kind="residual",
+        local_market_flow_kind="hurdle_lognormal",
+        local_price_kind="residual",
+        global_market_flow_kind="hurdle_lognormal",
         global_price_kind="ewma_gaussian",
     )
-    assert scores["price"].skip_reason == "missing_previous_frame"
+    assert scores["local_price"].skip_reason == "missing_previous_frame"
     assert scores["global_price"].skip_reason == "missing_previous_frame"

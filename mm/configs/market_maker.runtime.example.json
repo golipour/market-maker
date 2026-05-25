@@ -33,7 +33,7 @@
     "enable_execution": true
   },
   "liquidity_sourcing": {
-    "enabled": false,
+    "enabled": true,
     "mode": "liquidity_sourcing",
     "global_live_orders": false
   },
@@ -125,12 +125,19 @@
       }
     },
     "vwap_depth": 100.0,
-    "price_model": {
+    "local_price_model": {
       "kind": "residual",
       "residual_decay": 0.95,
       "residual_sigma": 1.0
     },
-    "market_flow_model": {
+    "local_market_flow_model": {
+      "kind": "hurdle_lognormal",
+      "decay": 0.95,
+      "init_p0": 0.3,
+      "init_mu": 0.0,
+      "init_sigma": 1.0
+    },
+    "global_market_flow_model": {
       "kind": "hurdle_lognormal",
       "decay": 0.95,
       "init_p0": 0.3,
@@ -156,16 +163,32 @@
       "adam_epochs": 20,
       "adam_lr": 1e-1,
       "device": "cpu",
-      "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory_multiplier": 2.0,
-      "quote_size_min_per_side": 0.3,
-      "quote_size_max_per_side": 10.0,
-      "quote_spread_max": 100.0,
-      "quote_spread_min_depth": 0.3,
-      "quote_spread_k_epsilon": 0.01,
-      "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid"
+      "local": {
+        "objective_weight": 1.0,
+        "return_risk_aversion_beta": 0.1,
+        "inventory_target_penalty_weight": 0.000001,
+        "target_inventory_multiplier": 2.0,
+        "quote_size_min_per_side": 0.3,
+        "quote_size_max_per_side": 10.0,
+        "quote_spread_max": 100.0,
+        "quote_spread_min_depth": 0.3,
+        "quote_spread_k_epsilon": 0.01,
+        "soft_fill_temp": 0.1,
+        "soft_fill_activation": "hardsigmoid"
+      },
+      "global": {
+        "objective_weight": 1.0,
+        "return_risk_aversion_beta": 0.1,
+        "inventory_target_penalty_weight": 0.000001,
+        "target_inventory_multiplier": 2.0,
+        "quote_size_min_per_side": 0.3,
+        "quote_size_max_per_side": 10.0,
+        "quote_spread_max": 100.0,
+        "quote_spread_min_depth": 0.3,
+        "quote_spread_k_epsilon": 0.01,
+        "soft_fill_temp": 0.1,
+        "soft_fill_activation": "hardsigmoid"
+      }
     }
   }
 }

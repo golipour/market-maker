@@ -122,7 +122,8 @@ The current code wires control-plane `kill_switch` and `observe_only` into the r
 
 Important current diagnostics in `StrategyDecision`:
 
-- model parameter snapshots: `price_model`, `market_flow_model`, `hedge_price_model`
+- model parameter snapshots: `local_price_model`, `local_market_flow_model`,
+  `global_market_flow_model`, `global_price_model`
 - optimizer metadata: kind, last expected delta wealth, reward components, redirected optimizer log
 - continuous pre-discretization depth
 - orderbook grid contract

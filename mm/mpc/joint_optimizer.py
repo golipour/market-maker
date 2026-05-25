@@ -10,8 +10,6 @@ import numpy as np
 
 from mm.mpc.joint_mpc import (
     JointSigmoidMixtureAction,
-    delta_consolidated_wealth_batched,
-    initial_joint_action_flat,
     joint_action_param_len,
     joint_terminal_objective,
     reference_price_from_state,
@@ -94,10 +92,10 @@ def optimize_joint_with_diagnostics(
     global_mask = 1.0 if global_active else 0.0
     ref_0 = float(state.reference_price or reference_price_from_state(state))
     wealth_0 = wealth_0_from_state(state)
-    obj_local_target = mpc._resolve_inventory_target()
-    obj_global_target = mpc._resolve_inventory_target()
-    obj_local_scale = mpc._resolve_inventory_scale()
-    obj_global_scale = mpc._resolve_inventory_scale()
+    obj_local_target = mpc._resolve_inventory_target("local")
+    obj_global_target = mpc._resolve_inventory_target("global")
+    obj_local_scale = mpc._resolve_inventory_scale("local")
+    obj_global_scale = mpc._resolve_inventory_scale("global")
 
     book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
         state.ob_rel, mpc.grid_levels, mpc.spread_step, _device, dtype
@@ -134,23 +132,30 @@ def optimize_joint_with_diagnostics(
     venue_len = action_param_len(n)
     joint_step_len = joint_action_param_len(n)
     param_len = mpc.horizon * joint_step_len
-    l_param = mpc._l_param_config()
-    depth_kw = mpc._depth_call_kwargs()
+    local_l_param = mpc._l_param_config("local")
+    global_l_param = mpc._l_param_config("global")
+    local_depth_kw = mpc._depth_call_kwargs("local")
+    global_depth_kw = mpc._depth_call_kwargs("global")
 
     if mpc.warm_start and mpc._last_raw_flat is not None and mpc._last_raw_flat.size >= joint_step_len:
         one_action = np.array(mpc._last_raw_flat[:joint_step_len], dtype=np.float64)
     else:
-        one_action = initial_joint_action_flat(
+        local_action = _initial_action_uniform_marginal_qrange(
             n_components=n,
             spread_max=mpc.spread_max,
-            l_param=l_param,
-            initializer=_initial_action_uniform_marginal_qrange,
+            l_param=local_l_param,
         )
+        global_action = _initial_action_uniform_marginal_qrange(
+            n_components=n,
+            spread_max=mpc.spread_max,
+            l_param=global_l_param,
+        )
+        one_action = np.concatenate([local_action, global_action])
     x0_arr = np.tile(one_action, mpc.horizon)
 
-    bounds_raw = _bounds_effective_to_raw(mpc.bounds)
-    venue_bounds = bounds_raw[:venue_len]
-    joint_bounds = venue_bounds + venue_bounds
+    local_bounds = _bounds_effective_to_raw(mpc.local_bounds)[:venue_len]
+    global_bounds = _bounds_effective_to_raw(mpc.global_bounds)[:venue_len]
+    joint_bounds = local_bounds + global_bounds
     bounds_full = joint_bounds * mpc.horizon
     lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
     upper = torch_mod.tensor([b[1] for b in bounds_full], dtype=dtype, device=_device)
@@ -166,14 +171,17 @@ def optimize_joint_with_diagnostics(
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
     maker_fee = getattr(mpc.execution_model, "maker_fee", 0.0)
-    vwap_depth = target_depth_lots_from_price_model(mpc.price_model)
-    global_flow_model = mpc.global_market_flow_model or mpc.market_flow_model
-    global_price_model = mpc.global_price_model or mpc.price_model
+    local_vwap_depth = target_depth_lots_from_price_model(mpc.local_price_model)
+    global_vwap_depth = target_depth_lots_from_price_model(mpc.global_price_model)
+    global_flow_model = mpc.global_market_flow_model
+    global_price_model = mpc.global_price_model
+    local_opt = mpc.local_optimizer
+    global_opt = mpc.global_optimizer
 
     def draw_samples():
         sample_shape = (mpc.n_samples, mpc.horizon)
-        if hasattr(mpc.market_flow_model, "sample"):
-            buy_vol, sell_vol = mpc.market_flow_model.sample(sample_shape, device=_device, dtype=dtype)
+        if hasattr(mpc.local_market_flow_model, "sample"):
+            buy_vol, sell_vol = mpc.local_market_flow_model.sample(sample_shape, device=_device, dtype=dtype)
         else:
             buy_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             sell_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
@@ -184,8 +192,8 @@ def optimize_joint_with_diagnostics(
         else:
             global_buy_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             global_sell_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-        if hasattr(mpc.price_model, "sample_residual"):
-            eps_buy, eps_sell = mpc.price_model.sample_residual(
+        if hasattr(mpc.local_price_model, "sample_residual"):
+            eps_buy, eps_sell = mpc.local_price_model.sample_residual(
                 sample_shape, device=_device, dtype=dtype
             )
         else:
@@ -218,7 +226,7 @@ def optimize_joint_with_diagnostics(
     spread_levels = tuple(round(i * mpc.spread_step, 12) for i in range(mpc.grid_levels + 1))
     initial_flat = np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64)
     local_initial_flat, _ = split_venue_action_flat(initial_flat, n)
-    initial_action = sigmoid_action_from_flat_raw(local_initial_flat, n, l_param=l_param)
+    initial_action = sigmoid_action_from_flat_raw(local_initial_flat, n, l_param=local_l_param)
     action_initial_snap = build_action_snapshot(initial_action, mid=mid_0, spread_levels=spread_levels)
 
     best_loss = float("inf")
@@ -298,6 +306,8 @@ def optimize_joint_with_diagnostics(
             global_book_cum_ask_0 = global_book_cum_ask.unsqueeze(0).expand(mpc.n_samples, -1)
 
             total_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
+            total_local_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
+            total_global_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             local_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             global_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             step_reward_0 = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
@@ -353,7 +363,7 @@ def optimize_joint_with_diagnostics(
                     )
                 else:
                     buy_vwap_t, sell_vwap_t = vwap_prices_batched(
-                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth
+                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=local_vwap_depth
                     )
                     global_mid_t = _mid_from_book_best_levels_batched(
                         global_ob_bids, global_ob_asks, mid_fallback_t, spread_grid
@@ -363,7 +373,7 @@ def optimize_joint_with_diagnostics(
                         global_ob_asks,
                         global_mid_t,
                         spread_grid,
-                        target_depth=vwap_depth,
+                        target_depth=global_vwap_depth,
                     )
                 buy_vwap_t = buy_vwap_t + eps_buy_h
                 sell_vwap_t = sell_vwap_t + eps_sell_h
@@ -381,10 +391,10 @@ def optimize_joint_with_diagnostics(
                     buy_h,
                     spread_grid,
                     maker_fee,
-                    soft_temp=mpc.soft_fill_temp,
-                    soft_fill_activation=mpc.soft_fill_activation,
+                    soft_temp=local_opt.soft_fill_temp,
+                    soft_fill_activation=local_opt.soft_fill_activation,
                     depth_scale=1.0,
-                    **depth_kw,
+                    **local_depth_kw,
                 )
                 (
                     global_ob_bids_next,
@@ -402,10 +412,10 @@ def optimize_joint_with_diagnostics(
                     global_buy_h,
                     spread_grid,
                     maker_fee,
-                    soft_temp=mpc.soft_fill_temp,
-                    soft_fill_activation=mpc.soft_fill_activation,
+                    soft_temp=global_opt.soft_fill_temp,
+                    soft_fill_activation=global_opt.soft_fill_activation,
                     depth_scale=global_mask,
-                    **depth_kw,
+                    **global_depth_kw,
                 )
 
                 inv_next = inv_t + local_inv_delta.unsqueeze(1)
@@ -416,18 +426,15 @@ def optimize_joint_with_diagnostics(
                 global_inv_path[:, h] = global_inv_next.squeeze(1)
 
                 ref_next = global_sell_vwap_t
-                step_reward = delta_consolidated_wealth_batched(
-                    local_cash=cash_t,
-                    local_inventory=inv_t,
-                    global_cash=global_cash_t,
-                    global_inventory=global_inv_t,
-                    reference_price=ref_t,
-                    local_cash_next=cash_next,
-                    local_inventory_next=inv_next,
-                    global_cash_next=global_cash_next,
-                    global_inventory_next=global_inv_next,
-                    reference_price_next=ref_next,
-                )
+                local_step_reward = (
+                    cash_next + inv_next * ref_next - (cash_t + inv_t * ref_t)
+                ).squeeze(1)
+                global_step_reward = (
+                    global_cash_next
+                    + global_inv_next * ref_next
+                    - (global_cash_t + global_inv_t * ref_t)
+                ).squeeze(1)
+                step_reward = local_step_reward + global_step_reward
                 if h == 0:
                     step_reward_0 = step_reward
                     local_fill_bid_sum = local_fill_bid_sum + local_inv_delta.mean()
@@ -437,6 +444,8 @@ def optimize_joint_with_diagnostics(
                         global_fill_ask_sum + (-global_inv_delta).clamp(min=0.0).mean() * global_mask
                     )
                 total_reward = total_reward + step_reward
+                total_local_reward = total_local_reward + local_step_reward
+                total_global_reward = total_global_reward + global_step_reward
 
                 ob_bids, ob_asks = ob_bids_next, ob_asks_next
                 global_ob_bids, global_ob_asks = global_ob_bids_next, global_ob_asks_next
@@ -448,12 +457,19 @@ def optimize_joint_with_diagnostics(
                 mid_fallback_t = mid_t
 
             returns = total_reward / wealth_0
+            local_returns = total_local_reward / wealth_0
+            global_returns = total_global_reward / wealth_0
             J, components = joint_terminal_objective(
-                returns,
+                local_returns,
+                global_returns,
                 local_inv_path,
                 global_inv_path,
-                return_risk_aversion_beta=mpc.return_risk_aversion_beta,
-                inventory_target_penalty_weight=mpc.inventory_target_penalty_weight,
+                local_return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
+                global_return_risk_aversion_beta=global_opt.return_risk_aversion_beta,
+                local_objective_weight=local_opt.objective_weight,
+                global_objective_weight=global_opt.objective_weight,
+                local_inventory_target_penalty_weight=local_opt.inventory_target_penalty_weight,
+                global_inventory_target_penalty_weight=global_opt.inventory_target_penalty_weight,
                 local_target_inventory=obj_local_target,
                 global_target_inventory=obj_global_target,
                 local_inventory_scale=obj_local_scale,
@@ -466,6 +482,12 @@ def optimize_joint_with_diagnostics(
             J_return_raw = torch_mod.nan_to_num(
                 returns.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
             )
+            local_reward_raw = torch_mod.nan_to_num(
+                total_local_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+            )
+            global_reward_raw = torch_mod.nan_to_num(
+                total_global_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+            )
             J_mean_next_raw = torch_mod.nan_to_num(
                 step_reward_0.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
             )
@@ -475,8 +497,8 @@ def optimize_joint_with_diagnostics(
                 expected_total_reward=_finite_item(J_mean_raw),
                 expected_total_return=_finite_item(J_return_raw),
                 expected_next_reward=_finite_item(J_mean_next_raw),
-                main_reward_mean=_finite_item(J_mean_raw),
-                global_reward_mean=0.0,
+                main_reward_mean=_finite_item(local_reward_raw),
+                global_reward_mean=_finite_item(global_reward_raw),
             )
             mpc._last_J_components = dict(epoch_metrics.components)
             if initial_metrics is None:
@@ -484,12 +506,14 @@ def optimize_joint_with_diagnostics(
             final_metrics = epoch_metrics
             mpc._last_J_mean_raw = epoch_metrics.expected_total_reward
             mpc._last_E_dW_next = epoch_metrics.expected_next_reward
-            mpc._last_main_reward_mean = epoch_metrics.main_reward_mean
-            mpc._last_global_reward_mean = 0.0
+            mpc._last_main_reward_mean = _finite_item(local_reward_raw)
+            mpc._last_global_reward_mean = _finite_item(global_reward_raw)
             joint_diag_accum["local_fill_bid_mean"] = float(local_fill_bid_sum.detach().item())
             joint_diag_accum["local_fill_ask_mean"] = float(local_fill_ask_sum.detach().item())
             joint_diag_accum["global_fill_bid_mean"] = float(global_fill_bid_sum.detach().item())
             joint_diag_accum["global_fill_ask_mean"] = float(global_fill_ask_sum.detach().item())
+            joint_diag_accum["local_wealth_contrib_mean"] = _finite_item(local_reward_raw)
+            joint_diag_accum["global_wealth_contrib_mean"] = _finite_item(global_reward_raw)
             loss = -J
             if not torch_mod.isfinite(loss):
                 nonfinite_loss_count += 1
@@ -520,8 +544,8 @@ def optimize_joint_with_diagnostics(
     best_flat = best_x.cpu().numpy()
     best_joint_flat = best_flat[:joint_step_len]
     local_flat, global_flat = split_venue_action_flat(best_joint_flat, n)
-    best_local = sigmoid_action_from_flat_raw(local_flat, n, l_param=l_param)
-    best_global = sigmoid_action_from_flat_raw(global_flat, n, l_param=l_param)
+    best_local = sigmoid_action_from_flat_raw(local_flat, n, l_param=local_l_param)
+    best_global = sigmoid_action_from_flat_raw(global_flat, n, l_param=global_l_param)
     joint_action = JointSigmoidMixtureAction(
         local=best_local, global_=best_global, global_active=global_active
     )
@@ -535,7 +559,7 @@ def optimize_joint_with_diagnostics(
     final_local_flat, _ = split_venue_action_flat(
         np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64), n
     )
-    final_action = sigmoid_action_from_flat_raw(final_local_flat, n, l_param=l_param)
+    final_action = sigmoid_action_from_flat_raw(final_local_flat, n, l_param=local_l_param)
 
     diagnostics = OptimizerRunDiagnostics(
         config={
@@ -550,6 +574,14 @@ def optimize_joint_with_diagnostics(
             "spread_step": mpc.spread_step,
             "reference_price": ref_0,
             "wealth_0": wealth_0,
+            "local_optimizer": local_opt.as_config(
+                spread_max=mpc.spread_max,
+                n_components=mpc.n_components,
+            ),
+            "global_optimizer": global_opt.as_config(
+                spread_max=mpc.spread_max,
+                n_components=mpc.n_components,
+            ),
         },
         timing={
             "sample_draw_sec": float(batch_time_sec),

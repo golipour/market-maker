@@ -60,9 +60,8 @@ new goal:
   trace.
 - Frame-level failures and order-level failures share the same broad funnel,
   which increases debugging cost.
-- `HedgeExecutionService` is fill-driven and reactive. It may remain useful as a
-  legacy emergency risk tool, but it should not be the foundation for
-  cross-exchange profit capture.
+- `HedgeExecutionService` is fill-driven and reactive. Cross-exchange profit
+  capture should use the joint local/global execution path instead.
 
 ## Target Architecture
 
@@ -74,9 +73,8 @@ Use neutral roles in new APIs:
 - `global`: the optional liquidity source and reference venue.
 - `single_venue`: local-only operation with global action curves masked out.
 
-Keep legacy `primary` and `hedge` config aliases during migration. New code
-should avoid adding more "hedge" concepts unless it specifically refers to the
-legacy reactive hedge service.
+Use `local` and `global` directly in runtime config and new APIs. Legacy
+`primary` / `hedge` aliases are not part of the current runtime contract.
 
 ### Event Flow
 
@@ -469,8 +467,8 @@ Work:
 2. Add tests for `StrategyRunner` observe-only, warmup, and live gates.
 3. Add tests documenting current `OrderManager` reconcile counts and rejection
    labels.
-4. Mark `HedgeExecutionService` and `hedge_rollout_enabled` as legacy in docs,
-   but do not remove them yet.
+4. Remove legacy hedge execution paths from the runtime contract before enabling
+   liquidity-sourcing behavior.
 
 Acceptance:
 
@@ -484,8 +482,8 @@ Goal: make the new architecture expressible without changing behavior.
 
 Work:
 
-1. Add neutral role aliases: `local` maps to current `primary`, `global` maps to
-   current `hedge`.
+1. Use neutral role config directly: `local` for the quote venue and `global`
+   for the optional reference/source venue.
 2. Add `liquidity_sourcing` config:
 
    ```json
@@ -498,11 +496,11 @@ Work:
    ```
 
 3. Add target-book models and ledger snapshot models.
-4. Add compatibility adapters:
+4. Add explicit conversion boundaries:
    - `StrategyInputFrame -> JointStrategyFrame`
-   - `Action -> VenueTargetBook`
    - `VenueTargetBook -> Action`
-5. Update docs and config contracts to explain legacy aliases.
+5. Update docs and config contracts to describe the canonical local/global
+   shape.
 
 Acceptance:
 
@@ -691,8 +689,8 @@ Work:
    - cancel local actor orders
    - cancel global actor orders
    - cancel all actor orders
-5. Keep legacy `HedgeExecutionService` disabled by default and mutually exclusive
-   with live liquidity sourcing unless explicitly allowed in an emergency mode.
+5. Keep emergency controls explicit in the joint execution path; do not route
+   through the old fill-driven hedge service.
 
 Acceptance:
 
@@ -752,10 +750,9 @@ Suggested future config shape:
 
 Migration rules:
 
-- Continue accepting `primary` as an alias for `venues.local`.
-- Continue accepting `hedge` as an alias for `venues.global`.
-- Continue accepting `hedging` only for the legacy fill-driven hedge service.
-- Emit config warnings when legacy keys are used, but do not fail initially.
+- Accept `venues.local` and `venues.global` only.
+- Reject `primary`, `hedge`, and old hedge-service config keys during startup.
+- Keep model config directly under `controller` with local/global names.
 
 ## Observability Plan
 
@@ -791,13 +788,13 @@ Add focused tests as each phase lands:
 - Joint MPC single-venue mask produces zero global depth.
 - Joint MPC liquidity-sourcing toy scenario prefers buying cheaper venue and
   selling richer venue when inventory/cash constraints allow it.
-- Runtime config migration from current example JSON to new aliases.
+- Runtime config validation for canonical local/global JSON.
 
 ## Rollout Order
 
 Recommended order for real implementation:
 
-1. Add neutral models and config aliases.
+1. Add neutral models and canonical local/global config.
 2. Add ledger beside current state and compare it in diagnostics.
 3. Move frame/risk reads to ledger once parity is established.
 4. Introduce target books while preserving `Action` compatibility.
@@ -810,12 +807,9 @@ Recommended order for real implementation:
 
 ## Non-Goals For The First Upgrade
 
-- Do not remove existing `primary`/`hedge` config keys immediately.
 - Do not automate cross-exchange transfers in the first liquidity-sourcing
   release.
 - Do not enable live global quoting by default.
-- Do not remove legacy `HedgeExecutionService` until the new joint execution path
-  has live-history confidence.
 - Do not rewrite all exchange adapters unless the planner/router interface
   requires a small compatibility shim.
 

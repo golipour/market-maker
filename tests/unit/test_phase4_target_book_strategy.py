@@ -200,7 +200,10 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
             enabled=True,
             actor_id="mpc-controller",
             orderbook_grid=OrderbookGridConfig(spread_max=200.0, spread_step=20.0),
-            optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+            optimizer={
+                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+            },
         ),
     )
     engine = MpcStrategyEngine(config=runtime.controller, binding=runtime.binding)
@@ -244,7 +247,10 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
             actor_id="test-runner",
             observe_only=True,
             risk=RiskRuntimeConfig(enabled=True),
-            optimizer={"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+            optimizer={
+                "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+                "global": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+            },
         ),
         binding=runtime.binding,
         frame_queue=asyncio.Queue(),

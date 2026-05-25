@@ -19,8 +19,7 @@ class StrategyInputFrame:
     ``global_`` is intentionally optional. When no global exchange is configured,
     or when the configured global stream is missing/stale for this local
     window, strategies receive ``None`` plus an explicit ``global_status``.
-    Private snapshots are a legacy fallback for tests and non-ledger callers;
-    the live runtime carries account/order truth in ``JointLedgerSnapshot``.
+    The live runtime carries account/order truth in ``JointLedgerSnapshot``.
     """
 
     local: MarketEvent
@@ -45,8 +44,9 @@ class StrategyInputFrame:
 class ModelUpdateReport:
     """Model state summary produced while evaluating one strategy frame."""
 
-    market_flow: dict[str, Any] = field(default_factory=dict)
-    price: dict[str, Any] = field(default_factory=dict)
+    local_market_flow: dict[str, Any] = field(default_factory=dict)
+    local_price: dict[str, Any] = field(default_factory=dict)
+    global_market_flow: dict[str, Any] = field(default_factory=dict)
     global_price: dict[str, Any] = field(default_factory=dict)
 
 
@@ -130,8 +130,9 @@ class StrategyDecision:
             ),
             "ladder_orders": list(self.ladder_orders),
             "executed_orders": list(executed_orders if executed_orders is not None else ()),
-            "price_model": self.model_updates.price,
-            "market_flow_model": self.model_updates.market_flow,
+            "local_price_model": self.model_updates.local_price,
+            "local_market_flow_model": self.model_updates.local_market_flow,
+            "global_market_flow_model": self.model_updates.global_market_flow,
             "global_price_model": self.model_updates.global_price,
             "optimizer": self.diagnostics.optimizer,
             "continuous_action_depth": self.diagnostics.continuous_action_depth,

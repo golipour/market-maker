@@ -190,8 +190,11 @@ def test_build_controller_uses_global_price_model_not_local_residual() -> None:
         controller=ControllerRuntimeConfig(
             enabled=True,
             global_price_model={"kind": "ewma_gaussian", "decay": 0.95},
-            price_model={"kind": "residual", "residual_decay": 0.95},
-            optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+            local_price_model={"kind": "residual", "residual_decay": 0.95},
+            optimizer={
+                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+            },
         ),
         liquidity_sourcing=sourcing,
     )
@@ -202,6 +205,117 @@ def test_build_controller_uses_global_price_model_not_local_residual() -> None:
     )
 
     assert isinstance(controller.global_price_model, GlobalGaussianPriceModel)
+
+
+def test_build_controller_uses_first_class_global_market_flow_model() -> None:
+    from mm.runtime.config import (
+        ControllerRuntimeConfig,
+        LiquiditySourcingRuntimeConfig,
+        MarketDataSourceConfig,
+        MarketMakerRuntimeConfig,
+    )
+    from mm.strategies.mpc_engine import _build_controller
+
+    sourcing = LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing")
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
+        controller=ControllerRuntimeConfig(
+            enabled=True,
+            local_market_flow_model={"kind": "hurdle_lognormal", "init_p0": 0.1},
+            global_market_flow_model={"kind": "hurdle_lognormal", "init_p0": 0.9},
+            optimizer={
+                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+            },
+        ),
+        liquidity_sourcing=sourcing,
+    )
+
+    controller = _build_controller(
+        runtime.controller,
+        runtime.binding,
+        liquidity_sourcing=sourcing,
+    )
+
+    assert controller.local_market_flow_model.get_params()["p0_buy"] == pytest.approx(0.1)
+    assert controller.global_market_flow_model.get_params()["p0_buy"] == pytest.approx(0.9)
+
+
+def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
+    from mm.runtime.config import (
+        ControllerRuntimeConfig,
+        LiquiditySourcingRuntimeConfig,
+        MarketDataSourceConfig,
+        MarketMakerRuntimeConfig,
+    )
+    from mm.strategies.mpc_engine import _build_controller
+
+    sourcing = LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing")
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
+        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="USDT_IRT"),
+        controller=ControllerRuntimeConfig(
+            enabled=True,
+            optimizer={
+                "local": {
+                    "objective_weight": 0.7,
+                    "return_risk_aversion_beta": 0.2,
+                    "inventory_target_penalty_weight": 0.01,
+                    "target_inventory_multiplier": 3.0,
+                    "quote_size_min_per_side": 0.2,
+                    "quote_size_max_per_side": 2.0,
+                    "soft_fill_temp": 0.11,
+                    "soft_fill_activation": "hardsigmoid",
+                },
+                "global": {
+                    "objective_weight": 0.4,
+                    "return_risk_aversion_beta": 0.8,
+                    "inventory_target_penalty_weight": 0.02,
+                    "target_inventory_multiplier": 4.0,
+                    "quote_size_min_per_side": 1.0,
+                    "quote_size_max_per_side": 5.0,
+                    "soft_fill_temp": 0.33,
+                    "soft_fill_activation": "sigmoid",
+                },
+            },
+        ),
+        liquidity_sourcing=sourcing,
+    )
+
+    controller = _build_controller(
+        runtime.controller,
+        runtime.binding,
+        liquidity_sourcing=sourcing,
+    )
+
+    assert controller.local_optimizer.objective_weight == pytest.approx(0.7)
+    assert controller.global_optimizer.objective_weight == pytest.approx(0.4)
+    assert controller.local_optimizer.return_risk_aversion_beta == pytest.approx(0.2)
+    assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
+    assert controller.local_optimizer.inventory_target_penalty_weight == pytest.approx(0.01)
+    assert controller.global_optimizer.inventory_target_penalty_weight == pytest.approx(0.02)
+    assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
+    assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
+    assert controller._l_param_config("local").quote_size_min == pytest.approx(0.2)
+    assert controller._l_param_config("global").quote_size_max == pytest.approx(5.0)
+    assert controller._resolve_inventory_target("local") == pytest.approx(3.3)
+    assert controller._resolve_inventory_target("global") == pytest.approx(12.0)
+
+
+def test_build_controller_rejects_flat_venue_optimizer_params() -> None:
+    from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig
+    from mm.strategies.mpc_engine import _build_controller
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
+        controller=ControllerRuntimeConfig(
+            enabled=True,
+            optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="optimizer.local/global"):
+        _build_controller(runtime.controller, runtime.binding)
 
 
 def test_joint_optimizer_can_emit_nonzero_global_curve() -> None:

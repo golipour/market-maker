@@ -158,9 +158,36 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "max_private_state_age_ms": 120000
     }
   },
+  "local_price_model": {"kind": "residual", "residual_decay": 0.95},
+  "local_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
+  "global_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
   "global_price_model": {"kind": "ewma_gaussian", "decay": 0.95},
   "execution_model": {"kind": "real", "maker_fee": 0.0},
-  "optimizer": {"kind": "monte_carlo_mpc_tensor_batched", ...}
+  "optimizer": {
+    "kind": "monte_carlo_mpc_tensor_batched",
+    "n_samples": 64,
+    "horizon": 1,
+    "local": {
+      "objective_weight": 1.0,
+      "return_risk_aversion_beta": 0.1,
+      "inventory_target_penalty_weight": 0.000001,
+      "target_inventory_multiplier": 2.0,
+      "quote_size_min_per_side": 0.3,
+      "quote_size_max_per_side": 10.0,
+      "soft_fill_temp": 0.1,
+      "soft_fill_activation": "hardsigmoid"
+    },
+    "global": {
+      "objective_weight": 1.0,
+      "return_risk_aversion_beta": 0.1,
+      "inventory_target_penalty_weight": 0.000001,
+      "target_inventory_multiplier": 2.0,
+      "quote_size_min_per_side": 0.3,
+      "quote_size_max_per_side": 10.0,
+      "soft_fill_temp": 0.1,
+      "soft_fill_activation": "hardsigmoid"
+    }
+  }
 }
 ```
 
@@ -173,7 +200,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 
 ### Hard risk (`controller.risk`)
 
-Separate from optimizer soft preferences (`inventory_target_penalty_weight`, etc.).
+Separate from optimizer soft preferences (`optimizer.local.*` / `optimizer.global.*`).
 
 | Field | Role |
 |-------|------|

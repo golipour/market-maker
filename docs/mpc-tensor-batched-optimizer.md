@@ -455,8 +455,8 @@ Use the same fixed Monte Carlo samples for initial and best evaluation when `fix
 Prefer model APIs that return tensors shaped `(n_samples, horizon)` directly:
 
 ```python
-buy_vol, sell_vol = market_flow_model.sample((n_samples, horizon), ...)
-eps_buy, eps_sell = price_model.sample_residual((n_samples, horizon), ...)
+buy_vol, sell_vol = local_market_flow_model.sample((n_samples, horizon), ...)
+eps_buy, eps_sell = local_price_model.sample_residual((n_samples, horizon), ...)
 ```
 
 The hedge model already supports batched `sample_deltas()`.

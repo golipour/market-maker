@@ -273,36 +273,38 @@ def score_frame_models(
     frame: StrategyInputFrame,
     previous_frame: StrategyInputFrame | None,
     state: State,
-    market_flow_model: Any | None,
-    price_model: Any | None,
+    local_market_flow_model: Any | None,
+    local_price_model: Any | None,
+    global_market_flow_model: Any | None,
     global_price_model: Any | None,
-    market_flow_kind: str,
-    price_kind: str,
+    local_market_flow_kind: str,
+    local_price_kind: str,
+    global_market_flow_kind: str,
     global_price_kind: str,
 ) -> dict[str, ModelScore]:
     """Score realized observations with pre-update params; caller runs updates after."""
 
     scores: dict[str, ModelScore] = {}
 
-    if market_flow_model is not None and hasattr(market_flow_model, "get_params"):
-        params_before = dict(market_flow_model.get_params())
+    if local_market_flow_model is not None and hasattr(local_market_flow_model, "get_params"):
+        params_before = dict(local_market_flow_model.get_params())
         result = score_market_flow(
             buy_volume=frame.local.buy_volume,
             sell_volume=frame.local.sell_volume,
             params_before=params_before,
-            kind=market_flow_kind,
+            kind=local_market_flow_kind,
         )
-        scores["market_flow"] = _to_model_score(
-            model="market_flow",
-            kind=market_flow_kind,
+        scores["local_market_flow"] = _to_model_score(
+            model="local_market_flow",
+            kind=local_market_flow_kind,
             params_before=params_before,
             params_after=params_before,
             result=result,
             updated=False,
         )
 
-    if price_model is not None:
-        params_before = _price_params_before(price_model)
+    if local_price_model is not None:
+        params_before = _price_params_before(local_price_model)
         if previous_frame is None:
             result = ScoreResult(
                 skip_reason="missing_previous_frame",
@@ -319,9 +321,29 @@ def score_frame_models(
             else:
                 delta = float(curr_mid - prev_mid)
                 result = score_local_mid_delta(delta_mid=delta, params_before=params_before)
-        scores["price"] = _to_model_score(
-            model="price",
-            kind=price_kind,
+        scores["local_price"] = _to_model_score(
+            model="local_price",
+            kind=local_price_kind,
+            params_before=params_before,
+            params_after=params_before,
+            result=result,
+            updated=False,
+        )
+
+    if global_market_flow_model is not None and hasattr(global_market_flow_model, "get_params"):
+        params_before = dict(global_market_flow_model.get_params())
+        if frame.global_ is None or not frame.has_global:
+            result = ScoreResult(skip_reason="missing_global", observation={})
+        else:
+            result = score_market_flow(
+                buy_volume=frame.global_.buy_volume,
+                sell_volume=frame.global_.sell_volume,
+                params_before=params_before,
+                kind=global_market_flow_kind,
+            )
+        scores["global_market_flow"] = _to_model_score(
+            model="global_market_flow",
+            kind=global_market_flow_kind,
             params_before=params_before,
             params_after=params_before,
             result=result,

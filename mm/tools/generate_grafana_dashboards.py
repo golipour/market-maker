@@ -1404,7 +1404,7 @@ def patch_model_params_dashboard() -> None:
             f"""SELECT e.ts AS "time", model AS metric,
   (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model
+CROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL
 ORDER BY 1""",
@@ -1420,7 +1420,7 @@ ORDER BY 1""",
   COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,
   COUNT(*) AS count
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model
+CROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model
 WHERE {diag_filter}
   AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL
   AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''

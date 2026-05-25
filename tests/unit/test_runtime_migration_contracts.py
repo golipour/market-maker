@@ -9,7 +9,7 @@ from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import Balance, PrivateStateSnapshot
-from mm.core.models.strategy import StrategyDecision
+from mm.core.models.strategy import ModelUpdateReport, StrategyDecision
 from mm.core.models.strategy import StrategyInputFrame
 from tests.unit.conftest import venues_payload
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
@@ -121,6 +121,12 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
         action=Action(actor_id="mpc-controller"),
         latency_ms=2.5,
         decision_hash="abc",
+        model_updates=ModelUpdateReport(
+            local_price={"kind": "residual"},
+            local_market_flow={"kind": "hurdle_lognormal"},
+            global_market_flow={"kind": "hurdle_lognormal", "active_in_mpc": True},
+            global_price={"kind": "ewma_gaussian", "active_in_mpc": True},
+        ),
     )
 
     payload = decision.as_payload()
@@ -133,6 +139,12 @@ def test_strategy_decision_payload_is_canonical_controller_event() -> None:
     assert payload["local_sell_vwap"] == 0.0
     assert payload["global_buy_vwap"] is None
     assert payload["global_sell_vwap"] is None
+    assert "price_model" not in payload
+    assert "market_flow_model" not in payload
+    assert payload["local_price_model"]["kind"] == "residual"
+    assert payload["local_market_flow_model"]["kind"] == "hurdle_lognormal"
+    assert payload["global_market_flow_model"]["active_in_mpc"] is True
+    assert payload["global_price_model"]["active_in_mpc"] is True
     assert "economics" not in payload
     assert payload["ladder_orders"] == []
     assert payload["executed_orders"] == []

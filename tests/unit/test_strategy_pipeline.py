@@ -94,8 +94,8 @@ def _minimal_config() -> ControllerRuntimeConfig:
         action_start_after_steps=0,
         risk=RiskRuntimeConfig(enabled=True),
         optimizer={
-            "quote_size_min_per_side": 1.0,
-            "quote_size_max_per_side": 10.0,
+            "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+            "global": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
         },
     )
 

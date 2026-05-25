@@ -125,6 +125,73 @@ def test_liquidity_sourcing_invalid_mode_raises() -> None:
         )
 
 
+def test_removed_controller_model_config_names_are_rejected() -> None:
+    with pytest.raises(ValueError, match="local_price_model"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {
+                    "enabled": True,
+                    "price_model": {"kind": "residual"},
+                    "market_flow_model": {"kind": "hurdle_lognormal"},
+                },
+            }
+        )
+
+
+def test_global_model_config_is_not_nested_under_optimizer() -> None:
+    with pytest.raises(ValueError, match="directly under controller"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {
+                    "enabled": True,
+                    "optimizer": {
+                        "kind": "monte_carlo_mpc_tensor_batched",
+                        "global_market_flow_model": {"kind": "hurdle_lognormal"},
+                    },
+                },
+            }
+        )
+
+
+def test_flat_venue_optimizer_config_names_are_rejected() -> None:
+    with pytest.raises(ValueError, match="optimizer.local/global"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {
+                    "enabled": True,
+                    "optimizer": {
+                        "kind": "monte_carlo_mpc_tensor_batched",
+                        "quote_size_min_per_side": 1.0,
+                        "quote_size_max_per_side": 10.0,
+                    },
+                },
+            }
+        )
+
+
+def test_removed_nested_venue_optimizer_aliases_are_rejected() -> None:
+    with pytest.raises(ValueError, match="removed venue optimizer aliases"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {
+                    "enabled": True,
+                    "optimizer": {
+                        "kind": "monte_carlo_mpc_tensor_batched",
+                        "local": {
+                            "inv_coef": 0.1,
+                            "quote_size_min_per_side": 1.0,
+                            "quote_size_max_per_side": 10.0,
+                        },
+                    },
+                },
+            }
+        )
+
+
 def test_runtime_contract_includes_venues() -> None:
     config = runtime_config_from_mapping(
         venues_payload(

@@ -119,24 +119,38 @@ def delta_consolidated_wealth_batched(
 
 
 def joint_terminal_objective(
-    returns: Any,
+    local_returns: Any,
+    global_returns: Any,
     local_inventory_path: Any,
     global_inventory_path: Any,
     *,
-    return_risk_aversion_beta: float,
-    inventory_target_penalty_weight: float,
+    local_return_risk_aversion_beta: float,
+    global_return_risk_aversion_beta: float,
+    local_objective_weight: float,
+    global_objective_weight: float,
+    local_inventory_target_penalty_weight: float,
+    global_inventory_target_penalty_weight: float,
     local_target_inventory: float,
     global_target_inventory: float,
     local_inventory_scale: float,
     global_inventory_scale: float,
     global_active: float,
 ) -> tuple[Any, dict[str, Any]]:
-    """Terminal objective with joint inventory penalty across venues."""
+    """Terminal objective with venue-scoped return and inventory terms."""
 
     import torch
 
-    returns = torch.nan_to_num(returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
-    term_return = objective_entropic_return(returns, beta=return_risk_aversion_beta)
+    local_returns = torch.nan_to_num(local_returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
+    global_returns = torch.nan_to_num(global_returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
+    term_local_return = float(local_objective_weight) * objective_entropic_return(
+        local_returns,
+        beta=local_return_risk_aversion_beta,
+    )
+    term_global_return = (
+        float(global_active)
+        * float(global_objective_weight)
+        * objective_entropic_return(global_returns, beta=global_return_risk_aversion_beta)
+    )
     local_pen = objective_inventory_capacity_penalty(
         local_inventory_path,
         target_inventory=local_target_inventory,
@@ -147,17 +161,20 @@ def joint_terminal_objective(
         target_inventory=global_target_inventory,
         inventory_scale=global_inventory_scale,
     )
-    inv_penalty = local_pen + float(global_active) * global_pen
-    term_inv = -float(inventory_target_penalty_weight) * inv_penalty
+    term_local_inv = -float(local_inventory_target_penalty_weight) * local_pen
+    term_global_inv = (
+        -float(global_active) * float(global_inventory_target_penalty_weight) * global_pen
+    )
+    term_inv = term_local_inv + term_global_inv
     components = {
-        "risk_adjusted_return": term_return,
+        "risk_adjusted_return": term_local_return + term_global_return,
+        "local_risk_adjusted_return": term_local_return,
+        "global_risk_adjusted_return": term_global_return,
         "inventory_capacity_penalty": term_inv,
-        "local_inventory_penalty": -float(inventory_target_penalty_weight) * local_pen,
-        "global_inventory_penalty": -float(inventory_target_penalty_weight)
-        * float(global_active)
-        * global_pen,
+        "local_inventory_penalty": term_local_inv,
+        "global_inventory_penalty": term_global_inv,
     }
-    return term_return + term_inv, components
+    return term_local_return + term_global_return + term_inv, components
 
 
 def ob_rel_from_market_event(

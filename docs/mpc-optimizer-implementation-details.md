@@ -215,16 +215,16 @@ Single-venue optimizer samples:
 
 | Variable | Source model |
 | --- | --- |
-| local buy/sell market volume | `market_flow_model` |
-| local VWAP residuals | `price_model` |
+| local buy/sell market volume | `local_market_flow_model` |
+| local VWAP residuals | `local_price_model` |
 Joint optimizer samples:
 
 | Variable | Source model |
 | --- | --- |
-| local buy/sell market volume | `market_flow_model` |
-| global buy/sell market volume | `global_market_flow_model` or fallback local flow model |
-| local VWAP residuals | `price_model` |
-| global VWAP residuals | `global_price_model` or fallback local price model |
+| local buy/sell market volume | `local_market_flow_model` |
+| global buy/sell market volume | `global_market_flow_model` |
+| local VWAP residuals | `local_price_model` |
+| global VWAP residuals | `global_price_model` |
 
 If `fixed_mc_samples=True`, samples are drawn once before the Adam loop and
 reused for the whole optimizer call. If false, samples are redrawn inside each
@@ -236,11 +236,10 @@ closure.
 
 | Model | Config | Update |
 | --- | --- | --- |
-| local market flow | `controller.market_flow_model` | current local buy/sell volumes |
-| local residual price | `controller.price_model` | EWMA on local market event price step |
+| local market flow | `controller.local_market_flow_model` | current local buy/sell volumes |
+| local residual price | `controller.local_price_model` | EWMA on local market event price step |
 | reference/global price | `controller.global_price_model` | global VWAP deltas or residual update |
-| global market flow | `controller.optimizer.global_market_flow_model` or local flow config | current global buy/sell volumes |
-| sourcing global price | `controller.optimizer.global_price_model` or `controller.global_price_model` | residual or Gaussian global model |
+| global market flow | `controller.global_market_flow_model` | current global buy/sell volumes |
 
 Model scoring is prequential: `score_frame_models()` evaluates the observation
 using parameters from before the frame update, and
@@ -358,25 +357,31 @@ W_0 = max(1e-8, W(state_0))
 Rollout return:
 
 ```text
-returns = total_delta_consolidated_wealth / W_0
+local_returns = total_local_delta_wealth / W_0
+global_returns = total_global_delta_wealth / W_0
 ```
 
 Terminal objective:
 
 ```text
 J =
-  entropic_return_beta(returns)
-  - inventory_target_penalty_weight * (
-      local_inventory_capacity_penalty
-      + global_active * global_inventory_capacity_penalty
-    )
+  local.objective_weight
+    * entropic_return_beta(local_returns, local.return_risk_aversion_beta)
+  + global_active
+    * global.objective_weight
+    * entropic_return_beta(global_returns, global.return_risk_aversion_beta)
+  - local.inventory_target_penalty_weight * local_inventory_capacity_penalty
+  - global_active
+    * global.inventory_target_penalty_weight * global_inventory_capacity_penalty
 ```
 
 Implemented joint components:
 
 | Component | Meaning |
 | --- | --- |
-| `risk_adjusted_return` | Entropic return objective over normalized returns |
+| `risk_adjusted_return` | Sum of local and active global weighted return terms |
+| `local_risk_adjusted_return` | Local weighted entropic return term |
+| `global_risk_adjusted_return` | Global weighted entropic return term |
 | `inventory_capacity_penalty` | Total inventory penalty |
 | `local_inventory_penalty` | Local inventory penalty contribution |
 | `global_inventory_penalty` | Global contribution, masked when inactive |
@@ -386,6 +391,7 @@ Joint diagnostics also record:
 - `reference_price`
 - `wealth_0`
 - `global_active`
+- resolved `local_optimizer` / `global_optimizer` configs
 - first-step local/global fill means
 - `global_action_flat`
 

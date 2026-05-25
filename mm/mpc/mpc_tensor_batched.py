@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -59,11 +60,123 @@ def _get_torch():
     return torch
 
 
-def _coalesce_param(*values: Any, default: Any = None) -> Any:
-    for value in values:
-        if value is not None:
-            return value
-    return default
+@dataclass(frozen=True, slots=True)
+class VenueOptimizerParams:
+    """Venue-scoped optimizer, fill, and inventory-shaping parameters."""
+
+    return_risk_aversion_beta: float = 1.0
+    objective_weight: float = 1.0
+    inventory_target_penalty_weight: float = 0.0
+    target_inventory: float | None = None
+    target_inventory_multiplier: float = 1.5
+    quote_size_min_per_side: float | None = None
+    quote_size_max_per_side: float | None = None
+    quote_spread_max: float | None = None
+    quote_spread_min_depth: float | None = None
+    quote_spread_k_epsilon: float = 0.01
+    soft_fill_temp: float = 0.1
+    soft_fill_activation: str = "sigmoid"
+
+    @classmethod
+    def from_mapping(
+        cls,
+        payload: Any,
+        *,
+        defaults: "VenueOptimizerParams | None" = None,
+    ) -> "VenueOptimizerParams":
+        base = defaults or cls()
+        data = dict(payload or {})
+        explicit_target = data.get("target_inventory", base.target_inventory)
+        inv_weight = data.get(
+            "inventory_target_penalty_weight",
+            base.inventory_target_penalty_weight,
+        )
+        return cls(
+            return_risk_aversion_beta=max(
+                1e-6,
+                float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
+            ),
+            objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
+            inventory_target_penalty_weight=max(0.0, float(inv_weight)),
+            target_inventory=float(explicit_target) if explicit_target is not None else None,
+            target_inventory_multiplier=max(
+                1e-6,
+                float(data.get("target_inventory_multiplier", base.target_inventory_multiplier)),
+            ),
+            quote_size_min_per_side=(
+                float(data.get("quote_size_min_per_side"))
+                if data.get("quote_size_min_per_side") is not None
+                else base.quote_size_min_per_side
+            ),
+            quote_size_max_per_side=(
+                float(data.get("quote_size_max_per_side"))
+                if data.get("quote_size_max_per_side") is not None
+                else base.quote_size_max_per_side
+            ),
+            quote_spread_max=(
+                float(data.get("quote_spread_max"))
+                if data.get("quote_spread_max") is not None
+                else base.quote_spread_max
+            ),
+            quote_spread_min_depth=(
+                float(data.get("quote_spread_min_depth"))
+                if data.get("quote_spread_min_depth") is not None
+                else base.quote_spread_min_depth
+            ),
+            quote_spread_k_epsilon=float(
+                data.get("quote_spread_k_epsilon", base.quote_spread_k_epsilon)
+            ),
+            soft_fill_temp=float(data.get("soft_fill_temp", base.soft_fill_temp)),
+            soft_fill_activation=_normalize_soft_fill_activation(
+                data.get("soft_fill_activation", base.soft_fill_activation)
+            ),
+        )
+
+    def validate(self, *, spread_max: float, n_components: int, venue: str) -> None:
+        if self.quote_size_min_per_side is None or self.quote_size_max_per_side is None:
+            raise ValueError(
+                f"optimizer.{venue}.quote_size_min_per_side and quote_size_max_per_side are required"
+            )
+        l_param = self.l_param_config(spread_max=spread_max, n_components=n_components)
+        validate_l_param_config(l_param)
+
+    def l_param_config(self, *, spread_max: float, n_components: int) -> LParamConfig:
+        if self.quote_size_min_per_side is None or self.quote_size_max_per_side is None:
+            raise ValueError("quote_size_min_per_side and quote_size_max_per_side are required")
+        return LParamConfig(
+            quote_size_min=float(self.quote_size_min_per_side),
+            quote_size_max=float(self.quote_size_max_per_side),
+            spread_max=spread_max,
+            n_components=n_components,
+            quote_spread_max=self.quote_spread_max,
+            quote_spread_min_depth=self.quote_spread_min_depth,
+            quote_spread_k_epsilon=self.quote_spread_k_epsilon,
+        )
+
+    def inventory_target(self, *, spread_max: float, n_components: int) -> float:
+        if self.target_inventory is not None and float(self.target_inventory) > 0.0:
+            return float(self.target_inventory)
+        q_mid = self.l_param_config(spread_max=spread_max, n_components=n_components).quote_size_midpoint()
+        return float(self.target_inventory_multiplier) * q_mid
+
+    def inventory_scale(self, *, spread_max: float, n_components: int) -> float:
+        return max(1e-8, self.inventory_target(spread_max=spread_max, n_components=n_components))
+
+    def as_config(self, *, spread_max: float, n_components: int) -> dict[str, Any]:
+        return {
+            "return_risk_aversion_beta": self.return_risk_aversion_beta,
+            "objective_weight": self.objective_weight,
+            "inventory_target_penalty_weight": self.inventory_target_penalty_weight,
+            "target_inventory": self.inventory_target(spread_max=spread_max, n_components=n_components),
+            "target_inventory_multiplier": self.target_inventory_multiplier,
+            "quote_size_min_per_side": self.quote_size_min_per_side,
+            "quote_size_max_per_side": self.quote_size_max_per_side,
+            "quote_spread_max": self.quote_spread_max,
+            "quote_spread_min_depth": self.quote_spread_min_depth,
+            "quote_spread_k_epsilon": self.quote_spread_k_epsilon,
+            "soft_fill_temp": self.soft_fill_temp,
+            "soft_fill_activation": self.soft_fill_activation,
+        }
 
 
 def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -410,8 +523,8 @@ class MonteCarloMPCTensorBatched:
 
     def __init__(
         self,
-        price_model: Any,
-        market_flow_model: Any,
+        local_price_model: Any,
+        local_market_flow_model: Any,
         execution_model: Any,
         n_components: int = 2,
         n_samples: int = 32,
@@ -428,8 +541,6 @@ class MonteCarloMPCTensorBatched:
         warm_start: bool = False,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
-        inv_coef: float | None = None,
-        target_inv: float | None = None,
         return_risk_aversion_beta: float = 1.0,
         inventory_target_penalty_weight: float | None = None,
         target_inventory: float | None = None,
@@ -437,14 +548,16 @@ class MonteCarloMPCTensorBatched:
         liquidity_sourcing_enabled: bool = False,
         global_market_flow_model: Any = None,
         global_price_model: Any = None,
+        local_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
+        global_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
         quote_spread_max: float | int | None = None,
         quote_spread_min_depth: float | int | None = None,
         quote_spread_k_epsilon: float | None = None,
     ):
-        self.price_model = price_model
-        self.market_flow_model = market_flow_model
+        self.local_price_model = local_price_model
+        self.local_market_flow_model = local_market_flow_model
         self.execution_model = execution_model
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
@@ -452,54 +565,73 @@ class MonteCarloMPCTensorBatched:
         self.spread_max = float(spread_max)
         self.spread_step = max(1e-12, float(spread_step))
         self.grid_levels = _grid_levels(self.spread_max, self.spread_step)
-        self.soft_fill_temp = soft_fill_temp
-        self.soft_fill_activation = _normalize_soft_fill_activation(soft_fill_activation)
         self.adam_lr = adam_lr
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
         self.device = device
         self.warm_start = warm_start
-        self.quote_size_min_per_side = (
-            float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
-        )
-        self.quote_size_max_per_side = (
-            float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
-        )
-        if self.quote_size_min_per_side is None or self.quote_size_max_per_side is None:
-            raise ValueError("quote_size_min_per_side and quote_size_max_per_side are required")
-        if self.quote_size_min_per_side <= 0.0 or self.quote_size_max_per_side <= 0.0:
-            raise ValueError("quote_size_min_per_side and quote_size_max_per_side must be positive")
-        if self.quote_size_min_per_side > self.quote_size_max_per_side:
-            raise ValueError(
-                "quote_size_min_per_side must be <= quote_size_max_per_side"
-            )
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
-        self.return_risk_aversion_beta = max(1e-6, float(return_risk_aversion_beta))
-        self.inventory_target_penalty_weight = max(
-            0.0, float(_coalesce_param(inventory_target_penalty_weight, inv_coef, default=0.0))
-        )
-        explicit_target = _coalesce_param(target_inventory, target_inv, default=None)
-        self.target_inventory = float(explicit_target) if explicit_target is not None else None
-        self.target_inventory_multiplier = max(1e-6, float(target_inventory_multiplier))
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
         self.global_market_flow_model = global_market_flow_model
         self.global_price_model = global_price_model
-        self.quote_spread_max = (
-            float(quote_spread_max) if quote_spread_max is not None else None
+        flat_defaults = VenueOptimizerParams(
+            return_risk_aversion_beta=return_risk_aversion_beta,
+            objective_weight=1.0,
+            inventory_target_penalty_weight=float(
+                inventory_target_penalty_weight
+                if inventory_target_penalty_weight is not None
+                else 0.0
+            ),
+            target_inventory=float(target_inventory) if target_inventory is not None else None,
+            target_inventory_multiplier=target_inventory_multiplier,
+            quote_size_min_per_side=(
+                float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
+            ),
+            quote_size_max_per_side=(
+                float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
+            ),
+            quote_spread_max=float(quote_spread_max) if quote_spread_max is not None else None,
+            quote_spread_min_depth=(
+                float(quote_spread_min_depth) if quote_spread_min_depth is not None else None
+            ),
+            quote_spread_k_epsilon=(
+                float(quote_spread_k_epsilon) if quote_spread_k_epsilon is not None else 0.01
+            ),
+            soft_fill_temp=float(soft_fill_temp),
+            soft_fill_activation=_normalize_soft_fill_activation(soft_fill_activation),
         )
-        self.quote_spread_min_depth = (
-            float(quote_spread_min_depth) if quote_spread_min_depth is not None else None
+        self.local_optimizer = (
+            local_optimizer
+            if isinstance(local_optimizer, VenueOptimizerParams)
+            else VenueOptimizerParams.from_mapping(local_optimizer, defaults=flat_defaults)
         )
-        self.quote_spread_k_epsilon = (
-            float(quote_spread_k_epsilon)
-            if quote_spread_k_epsilon is not None
-            else 0.01
+        self.global_optimizer = (
+            global_optimizer
+            if isinstance(global_optimizer, VenueOptimizerParams)
+            else VenueOptimizerParams.from_mapping(global_optimizer, defaults=self.local_optimizer)
         )
-        lp = self._l_param_config()
-        validate_l_param_config(lp)
-        self.inv_coef = self.inventory_target_penalty_weight
-        self.target_inv = self._resolve_inventory_target()
+        self.local_optimizer.validate(
+            spread_max=self.spread_max,
+            n_components=self.n_components,
+            venue="local",
+        )
+        self.global_optimizer.validate(
+            spread_max=self.spread_max,
+            n_components=self.n_components,
+            venue="global",
+        )
+        self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
+        self.inventory_target_penalty_weight = self.local_optimizer.inventory_target_penalty_weight
+        self.target_inventory = self.local_optimizer.target_inventory
+        self.target_inventory_multiplier = self.local_optimizer.target_inventory_multiplier
+        self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
+        self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
+        self.quote_spread_max = self.local_optimizer.quote_spread_max
+        self.quote_spread_min_depth = self.local_optimizer.quote_spread_min_depth
+        self.quote_spread_k_epsilon = self.local_optimizer.quote_spread_k_epsilon
+        self.soft_fill_temp = self.local_optimizer.soft_fill_temp
+        self.soft_fill_activation = self.local_optimizer.soft_fill_activation
         self._last_action: SigmoidMixtureAction | None = None
         self._last_raw_flat: np.ndarray | None = None
         self._last_J_components: dict | None = None
@@ -522,36 +654,42 @@ class MonteCarloMPCTensorBatched:
             logit_bound = (-30.0, 30.0)
             k_bound = (1e-6, 100.0)
             x0_bound = (-self.spread_max, self.spread_max)
-            self.bounds = [logit_bound, k_bound, x0_bound] * (2 * n) + [logit_bound, logit_bound]
+            local_bounds = [logit_bound, k_bound, x0_bound] * (2 * n) + [logit_bound, logit_bound]
+            global_bounds = [logit_bound, k_bound, x0_bound] * (2 * n) + [logit_bound, logit_bound]
         else:
-            self.bounds = bounds
+            local_bounds = list(bounds)
+            global_bounds = list(bounds)
+        self.local_bounds = local_bounds
+        self.global_bounds = global_bounds
+        self.bounds = self.local_bounds
 
     @property
     def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
         return self._last_diagnostics
 
-    def _l_param_config(self) -> LParamConfig:
-        return LParamConfig(
-            quote_size_min=float(self.quote_size_min_per_side),
-            quote_size_max=float(self.quote_size_max_per_side),
+    def _venue_optimizer(self, venue: str = "local") -> VenueOptimizerParams:
+        return self.global_optimizer if str(venue).lower() == "global" else self.local_optimizer
+
+    def _l_param_config(self, venue: str = "local") -> LParamConfig:
+        return self._venue_optimizer(venue).l_param_config(
             spread_max=self.spread_max,
             n_components=self.n_components,
-            quote_spread_max=self.quote_spread_max,
-            quote_spread_min_depth=self.quote_spread_min_depth,
-            quote_spread_k_epsilon=self.quote_spread_k_epsilon,
         )
 
-    def _resolve_inventory_target(self) -> float:
-        if self.target_inventory is not None and float(self.target_inventory) > 0.0:
-            return float(self.target_inventory)
-        q_mid = self._l_param_config().quote_size_midpoint()
-        return float(self.target_inventory_multiplier) * q_mid
+    def _resolve_inventory_target(self, venue: str = "local") -> float:
+        return self._venue_optimizer(venue).inventory_target(
+            spread_max=self.spread_max,
+            n_components=self.n_components,
+        )
 
-    def _resolve_inventory_scale(self) -> float:
-        return max(1e-8, self._resolve_inventory_target())
+    def _resolve_inventory_scale(self, venue: str = "local") -> float:
+        return self._venue_optimizer(venue).inventory_scale(
+            spread_max=self.spread_max,
+            n_components=self.n_components,
+        )
 
-    def _depth_call_kwargs(self) -> dict[str, Any]:
-        return {"use_softplus": True, "l_param": self._l_param_config()}
+    def _depth_call_kwargs(self, venue: str = "local") -> dict[str, Any]:
+        return {"use_softplus": True, "l_param": self._l_param_config(venue)}
 
     def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
         return sigmoid_action_from_flat_raw(
@@ -636,13 +774,13 @@ class MonteCarloMPCTensorBatched:
         x_torch = self._x_torch
         optimizer = self._optimizer
         maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
-        vwap_depth = target_depth_lots_from_price_model(self.price_model)
+        vwap_depth = target_depth_lots_from_price_model(self.local_price_model)
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.
         def draw_samples():
             sample_shape = (self.n_samples, self.horizon)
-            if hasattr(self.market_flow_model, "sample"):
-                buy_vol, sell_vol = self.market_flow_model.sample(
+            if hasattr(self.local_market_flow_model, "sample"):
+                buy_vol, sell_vol = self.local_market_flow_model.sample(
                     sample_shape, device=_device, dtype=dtype
                 )
             else:
@@ -650,11 +788,11 @@ class MonteCarloMPCTensorBatched:
                 sell_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
                 for s in range(self.n_samples):
                     for h in range(self.horizon):
-                        bv, sv = self.market_flow_model.sample((1,), device=_device, dtype=dtype)
+                        bv, sv = self.local_market_flow_model.sample((1,), device=_device, dtype=dtype)
                         buy_vol[s, h] = bv.squeeze()
                         sell_vol[s, h] = sv.squeeze()
-            if hasattr(self.price_model, "sample_residual"):
-                eps_buy, eps_sell = self.price_model.sample_residual(
+            if hasattr(self.local_price_model, "sample_residual"):
+                eps_buy, eps_sell = self.local_price_model.sample_residual(
                     sample_shape, device=_device, dtype=dtype
                 )
             else:
@@ -820,7 +958,7 @@ class MonteCarloMPCTensorBatched:
                     )
                     buy_vwap_next = buy_vwap_book_next + eps_buy_next
                     sell_vwap_next = sell_vwap_book_next + eps_sell_next
-                    
+
                     ob_bids, ob_asks = ob_bids_next, ob_asks_next
 
                     step_reward_main = _delta_wealth_mtm_batched(
@@ -949,16 +1087,14 @@ class MonteCarloMPCTensorBatched:
                 "fixed_mc_samples": self.fixed_mc_samples,
                 "spread_max": self.spread_max,
                 "spread_step": self.spread_step,
-                "soft_fill_temp": self.soft_fill_temp,
-                "soft_fill_activation": self.soft_fill_activation,
-                "return_risk_aversion_beta": self.return_risk_aversion_beta,
-                "inventory_target_penalty_weight": self.inventory_target_penalty_weight,
-                "target_inventory": obj_inventory_target,
-                "target_inventory_multiplier": self.target_inventory_multiplier,
-                "quote_size_min_per_side": self.quote_size_min_per_side,
-                "quote_size_max_per_side": self.quote_size_max_per_side,
-                "quote_spread_max": self.quote_spread_max,
-                "quote_spread_min_depth": self.quote_spread_min_depth,
+                "local_optimizer": self.local_optimizer.as_config(
+                    spread_max=self.spread_max,
+                    n_components=self.n_components,
+                ),
+                "global_optimizer": self.global_optimizer.as_config(
+                    spread_max=self.spread_max,
+                    n_components=self.n_components,
+                ),
             },
             timing={
                 "sample_draw_sec": float(batch_time_sec),

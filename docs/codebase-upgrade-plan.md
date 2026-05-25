@@ -111,9 +111,10 @@ state:
   hedge_sell_vwap
 
 models:
-  price: ModelScore
-  market_flow: ModelScore
-  hedge_price: ModelScore
+  local_price: ModelScore
+  local_market_flow: ModelScore
+  global_market_flow: ModelScore
+  global_price: ModelScore
 
 optimizer:
   config
@@ -534,22 +535,23 @@ grafana/dashboards/mm_strategy_model_params_pg.json
 Add panels:
 
 1. Model NLL time series:
-   - `models.price.nll`
-   - `models.market_flow.nll`
-   - `models.hedge_price.nll`
+   - `models.local_price.nll`
+   - `models.local_market_flow.nll`
+   - `models.global_market_flow.nll`
+   - `models.global_price.nll`
 
 2. Rolling NLL:
    - moving average by model
    - optional p95 if using SQL window functions
 
 3. Standardized residuals:
-   - primary price standardized residual
-   - hedge buy/sell standardized residuals
+   - local price standardized residual
+   - global buy/sell standardized residuals
 
 4. Observed vs predicted:
-   - observed buy/sell flow vs expected buy/sell flow
+   - observed local/global buy/sell flow vs expected buy/sell flow
    - observed mid delta vs `mu_mid_before`
-   - observed hedge VWAP delta vs `mu_delta_*`
+   - observed global VWAP delta vs `mu_delta_*`
 
 5. Score skip reasons:
    - count by model and skip reason
@@ -562,7 +564,7 @@ SELECT
   model AS metric,
   (payload #>> ARRAY['models', model, 'nll'])::double precision AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['price','market_flow','hedge_price']) AS model
+CROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model
 WHERE e.topic = '${diagnostics_topic}'
   AND e.event_type = 'ControllerDiagnostics'
   AND e.exchange = '${exchange}'
@@ -696,7 +698,7 @@ Do not include order ids, trace ids, or client ids as Prometheus labels.
 ### Regression Tests
 
 - existing `StrategyDecision` schema remains compatible
-- old optimizer config names still parse during migration period
+- removed optimizer config names are rejected with clear errors
 - observe-only never routes live orders
 - diagnostics publish even when optimizer raises
 
@@ -704,7 +706,7 @@ Do not include order ids, trace ids, or client ids as Prometheus labels.
 
 1. Add new diagnostics events while keeping existing decision payload.
 2. Add dashboards against new diagnostics topic.
-3. Keep old optimizer config names as aliases for at least one release.
+3. Reject old optimizer config names instead of aliasing them.
 4. Update example config and docs to use only clear names.
 5. After dashboards are stable, reduce heavy fields in `StrategyDecision`.
 6. Only then add fill-driven hedge execution.
@@ -723,4 +725,3 @@ Do not include order ids, trace ids, or client ids as Prometheus labels.
 10. Hedge execution dashboard.
 
 This order gets visibility first, then structural cleanup, then live hedge execution. That is safer than changing trading behavior before the system can explain itself.
-

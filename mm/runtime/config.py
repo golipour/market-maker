@@ -300,8 +300,9 @@ class ControllerRuntimeConfig:
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
     vwap_depth: float | None = None
-    price_model: dict[str, Any] | None = None
-    market_flow_model: dict[str, Any] | None = None
+    local_price_model: dict[str, Any] | None = None
+    local_market_flow_model: dict[str, Any] | None = None
+    global_market_flow_model: dict[str, Any] | None = None
     global_price_model: dict[str, Any] | None = None
     execution_model: dict[str, Any] | None = None
     optimizer: dict[str, Any] | None = None
@@ -657,6 +658,90 @@ def _observability_from_mapping(payload: Any) -> ObservabilityRuntimeConfig:
 def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
     if not isinstance(payload, dict):
         return None
+    removed_model_keys = [key for key in ("price_model", "market_flow_model") if key in payload]
+    if removed_model_keys:
+        raise ValueError(
+            "controller model config fields were renamed: use local_price_model and "
+            f"local_market_flow_model instead of {', '.join(removed_model_keys)}"
+        )
+    optimizer_payload = payload.get("optimizer")
+    if isinstance(optimizer_payload, dict):
+        venue_optimizer_keys = {
+            "return_risk_aversion_beta",
+            "objective_weight",
+            "inventory_target_penalty_weight",
+            "target_inventory",
+            "target_inventory_multiplier",
+            "quote_size_min_per_side",
+            "quote_size_max_per_side",
+            "quote_spread_max",
+            "quote_spread_min_depth",
+            "quote_spread_k_epsilon",
+            "soft_fill_temp",
+            "soft_fill_activation",
+        }
+        removed_venue_optimizer_aliases = {
+            "inv_coef": "inventory_target_penalty_weight",
+            "target_inv": "target_inventory",
+        }
+        removed_optimizer_keys = [
+            key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_payload
+        ]
+        if removed_optimizer_keys:
+            raise ValueError(
+                "global model config belongs directly under controller: "
+                f"{', '.join(removed_optimizer_keys)}"
+            )
+        removed_flat_optimizer_keys = [
+            key
+            for key in (
+                "return_risk_aversion_beta",
+                "objective_weight",
+                "inventory_target_penalty_weight",
+                "inv_coef",
+                "target_inventory",
+                "target_inv",
+                "target_inventory_multiplier",
+                "quote_size_min_per_side",
+                "quote_size_max_per_side",
+                "quote_spread_max",
+                "quote_spread_min_depth",
+                "quote_spread_k_epsilon",
+                "soft_fill_temp",
+                "soft_fill_activation",
+            )
+            if key in optimizer_payload
+        ]
+        if removed_flat_optimizer_keys:
+            raise ValueError(
+                "venue optimizer config belongs under controller.optimizer.local/global: "
+                f"{', '.join(removed_flat_optimizer_keys)}"
+            )
+        for venue in ("local", "global"):
+            venue_payload = optimizer_payload.get(venue)
+            if venue_payload is None:
+                continue
+            if not isinstance(venue_payload, dict):
+                raise ValueError(f"controller.optimizer.{venue} must be an object")
+            removed_aliases = [
+                key for key in removed_venue_optimizer_aliases if key in venue_payload
+            ]
+            if removed_aliases:
+                replacements = ", ".join(
+                    f"{key}->{removed_venue_optimizer_aliases[key]}"
+                    for key in removed_aliases
+                )
+                raise ValueError(
+                    f"removed venue optimizer aliases under controller.optimizer.{venue}: "
+                    f"{replacements}"
+                )
+            unknown_keys = sorted(
+                key for key in venue_payload if key not in venue_optimizer_keys
+            )
+            if unknown_keys:
+                raise ValueError(
+                    f"unknown controller.optimizer.{venue} keys: {', '.join(unknown_keys)}"
+                )
     return ControllerRuntimeConfig(
         enabled=bool(payload.get("enabled", False)),
         actor_id=str(payload.get("actor_id", "mpc-controller")),
@@ -679,8 +764,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             if payload.get("vwap_depth") is not None
             else None
         ),
-        price_model=_dict_or_none(payload.get("price_model")),
-        market_flow_model=_dict_or_none(payload.get("market_flow_model")),
+        local_price_model=_dict_or_none(payload.get("local_price_model")),
+        local_market_flow_model=_dict_or_none(payload.get("local_market_flow_model")),
+        global_market_flow_model=_dict_or_none(payload.get("global_market_flow_model")),
         global_price_model=_dict_or_none(payload.get("global_price_model")),
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
@@ -790,11 +876,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "vwap_depth": config.vwap_depth,
         "vwap_depth_note": (
             "cumulative base quantity cap for reference VWAP in MPC and residual price model; "
-            "overrides price_model.default_vwap_depth_lots when set"
+            "overrides local_price_model.default_vwap_depth_lots when set"
         ),
         "model_inputs": {
-            "price_model": config.price_model or {"kind": "gaussian"},
-            "market_flow_model": config.market_flow_model or {"kind": "hurdle_lognormal"},
+            "local_price_model": config.local_price_model or {"kind": "residual"},
+            "local_market_flow_model": config.local_market_flow_model or {"kind": "hurdle_lognormal"},
+            "global_market_flow_model": config.global_market_flow_model or {"kind": "hurdle_lognormal"},
             "global_price_model": config.global_price_model
             or {
                 "kind": "ewma_gaussian",
@@ -804,9 +891,9 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "quote_size_min_per_side and quote_size_max_per_side bound cumulative per-side "
-            "depth at spread_max; default inventory target uses their midpoint when "
-            "target_inventory is unset"
+            "optimizer.local/global quote_size_min_per_side and quote_size_max_per_side "
+            "bound venue cumulative per-side depth at spread_max; each venue default "
+            "inventory target uses its own midpoint when target_inventory is unset"
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -822,31 +909,20 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
         },
         "optimizer_objective": {
+            "shape": "controller.optimizer.local and controller.optimizer.global",
+            "objective_weight": "venue contribution weight in the mixed joint objective",
             "return_risk_aversion_beta": (
-                "risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i))) over MC path returns"
+                "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "inventory_target_penalty_weight": (
-                "lambda_inv weight on normalized quadratic inventory capacity penalty"
-            ),
-            "target_inventory": (
-                "optional explicit inventory target in base units; "
-                "defaults to target_inventory_multiplier * midpoint(quote_size_min, quote_size_max)"
-            ),
-            "target_inventory_multiplier": (
-                "multiplier applied to quote-size midpoint when target_inventory is unset"
-            ),
-            "quote_size_min_per_side": (
-                "minimum cumulative quote depth per side at spread_max (base units)"
-            ),
-            "quote_size_max_per_side": (
-                "maximum cumulative quote depth per side at spread_max (base units)"
-            ),
-            "quote_spread_max": (
-                "maximum allowed sum of first bid/ask spread centers (quote units)"
-            ),
-            "quote_spread_min_depth": (
-                "minimum executable depth at each side's first spread center (base units)"
-            ),
+            "inventory_target_penalty_weight": "venue lambda_inv inventory-capacity penalty weight",
+            "target_inventory": "optional venue inventory target in base units",
+            "target_inventory_multiplier": "venue multiplier when target_inventory is unset",
+            "quote_size_min_per_side": "venue minimum cumulative quote depth per side at spread_max",
+            "quote_size_max_per_side": "venue maximum cumulative quote depth per side at spread_max",
+            "quote_spread_max": "venue maximum allowed sum of first bid/ask spread centers",
+            "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",
+            "soft_fill_temp": "venue soft-fill temperature",
+            "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",
         },
         "float_bridge": {
             "mid": "quote-per-base float",

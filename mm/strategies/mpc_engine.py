@@ -40,10 +40,53 @@ from mm.strategies.target_book_builder import (
 )
 
 
-def _vwap_target_depth(price_model: Any | None) -> float:
+_VENUE_OPTIMIZER_KEYS = {
+    "return_risk_aversion_beta",
+    "objective_weight",
+    "inventory_target_penalty_weight",
+    "target_inventory",
+    "target_inventory_multiplier",
+    "quote_size_min_per_side",
+    "quote_size_max_per_side",
+    "quote_spread_max",
+    "quote_spread_min_depth",
+    "quote_spread_k_epsilon",
+    "soft_fill_temp",
+    "soft_fill_activation",
+}
+_REMOVED_VENUE_OPTIMIZER_ALIASES = {
+    "inv_coef": "inventory_target_penalty_weight",
+    "target_inv": "target_inventory",
+}
+_FLAT_VENUE_OPTIMIZER_KEYS = _VENUE_OPTIMIZER_KEYS | set(_REMOVED_VENUE_OPTIMIZER_ALIASES)
+
+
+def _venue_optimizer_config(payload: Any, *, venue: str) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"controller.optimizer.{venue} must be an object")
+    data = dict(payload)
+    removed = sorted(key for key in _REMOVED_VENUE_OPTIMIZER_ALIASES if key in data)
+    if removed:
+        replacements = ", ".join(
+            f"{key}->{_REMOVED_VENUE_OPTIMIZER_ALIASES[key]}" for key in removed
+        )
+        raise ValueError(
+            f"removed venue optimizer aliases under controller.optimizer.{venue}: {replacements}"
+        )
+    unknown = sorted(key for key in data if key not in _VENUE_OPTIMIZER_KEYS)
+    if unknown:
+        raise ValueError(
+            f"unknown controller.optimizer.{venue} keys: {', '.join(unknown)}"
+        )
+    return data
+
+
+def _vwap_target_depth(local_price_model: Any | None) -> float:
     """Depth cap (base units) aligned with ``TorchResidualPriceModel._target_depth_lots``."""
 
-    return float(getattr(price_model, "_target_depth_lots", DEFAULT_VWAP_DEPTH_LOTS))
+    return float(getattr(local_price_model, "_target_depth_lots", DEFAULT_VWAP_DEPTH_LOTS))
 
 
 def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
@@ -83,8 +126,9 @@ class MpcStrategyEngine:
     )
     execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
     _controller: Any = field(init=False, repr=False)
-    _market_flow_model: Any = field(init=False, repr=False)
-    _price_model: Any = field(init=False, repr=False)
+    _local_market_flow_model: Any = field(init=False, repr=False)
+    _local_price_model: Any = field(init=False, repr=False)
+    _global_market_flow_model: Any = field(init=False, repr=False)
     _global_price_model: Any = field(init=False, repr=False)
     _previous_frame: StrategyInputFrame | None = field(default=None, init=False, repr=False)
     _ledger_context: JointLedgerSnapshot | None = field(default=None, init=False, repr=False)
@@ -95,8 +139,9 @@ class MpcStrategyEngine:
             self.binding,
             liquidity_sourcing=self.liquidity_sourcing,
         )
-        self._market_flow_model = getattr(self._controller, "market_flow_model", None)
-        self._price_model = getattr(self._controller, "price_model", None)
+        self._local_market_flow_model = getattr(self._controller, "local_market_flow_model", None)
+        self._local_price_model = getattr(self._controller, "local_price_model", None)
+        self._global_market_flow_model = getattr(self._controller, "global_market_flow_model", None)
         self._global_price_model = getattr(self._controller, "global_price_model", None)
 
     def set_ledger_context(self, ledger: JointLedgerSnapshot | None) -> None:
@@ -108,7 +153,7 @@ class MpcStrategyEngine:
             frame,
             self.binding,
             self.config.orderbook_grid.spread_max,
-            price_model=self._price_model,
+            local_price_model=self._local_price_model,
             liquidity_sourcing=self.liquidity_sourcing,
             ledger=self._ledger_context,
         )
@@ -117,18 +162,21 @@ class MpcStrategyEngine:
                 state,
                 global_active=_global_active_for_frame(frame, self.liquidity_sourcing),
             )
-        flow_kind = str((self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"))
-        price_kind = str((self.config.price_model or {}).get("kind", "residual"))
+        local_flow_kind = str((self.config.local_market_flow_model or {}).get("kind", "hurdle_lognormal"))
+        local_price_kind = str((self.config.local_price_model or {}).get("kind", "residual"))
+        global_flow_kind = str((self.config.global_market_flow_model or {}).get("kind", "hurdle_lognormal"))
         global_price_kind = str((self.config.global_price_model or {}).get("kind", "ewma_gaussian"))
         model_scores = score_frame_models(
             frame=frame,
             previous_frame=self._previous_frame,
             state=state,
-            market_flow_model=self._market_flow_model,
-            price_model=self._price_model,
+            local_market_flow_model=self._local_market_flow_model,
+            local_price_model=self._local_price_model,
+            global_market_flow_model=self._global_market_flow_model,
             global_price_model=self._global_price_model,
-            market_flow_kind=flow_kind,
-            price_kind=price_kind,
+            local_market_flow_kind=local_flow_kind,
+            local_price_kind=local_price_kind,
+            global_market_flow_kind=global_flow_kind,
             global_price_kind=global_price_kind,
         )
         _update_global_vwap_price_model(
@@ -148,25 +196,41 @@ class MpcStrategyEngine:
                 params_after=self._global_price_model.get_params(),
                 updated=True,
             )
-        _update_market_flow_model(self._market_flow_model, frame)
-        global_flow_model = getattr(self._controller, "global_market_flow_model", None)
-        if global_flow_model is not None:
-            _update_global_market_flow_model(global_flow_model, frame)
-        if self._market_flow_model is not None and "market_flow" in model_scores and hasattr(
-            self._market_flow_model, "get_params"
+        _update_market_flow_model(self._local_market_flow_model, frame)
+        if self._global_market_flow_model is not None:
+            _update_global_market_flow_model(self._global_market_flow_model, frame)
+        if (
+            self._local_market_flow_model is not None
+            and "local_market_flow" in model_scores
+            and hasattr(self._local_market_flow_model, "get_params")
         ):
             refresh_score_params_after(
                 model_scores,
-                key="market_flow",
-                params_after=self._market_flow_model.get_params(),
+                key="local_market_flow",
+                params_after=self._local_market_flow_model.get_params(),
                 updated=True,
             )
-        _update_residual_price_model(self._price_model, self._previous_frame, frame)
-        if self._price_model is not None and "price" in model_scores and hasattr(self._price_model, "get_params"):
+        if (
+            self._global_market_flow_model is not None
+            and "global_market_flow" in model_scores
+            and hasattr(self._global_market_flow_model, "get_params")
+        ):
             refresh_score_params_after(
                 model_scores,
-                key="price",
-                params_after=self._price_model.get_params(),
+                key="global_market_flow",
+                params_after=self._global_market_flow_model.get_params(),
+                updated=frame.has_global,
+            )
+        _update_residual_price_model(self._local_price_model, self._previous_frame, frame)
+        if (
+            self._local_price_model is not None
+            and "local_price" in model_scores
+            and hasattr(self._local_price_model, "get_params")
+        ):
+            refresh_score_params_after(
+                model_scores,
+                key="local_price",
+                params_after=self._local_price_model.get_params(),
                 updated=self._previous_frame is not None,
             )
         optimizer_stdout = io.StringIO()
@@ -268,13 +332,33 @@ class MpcStrategyEngine:
 
     def _model_update_report(self) -> ModelUpdateReport:
         return ModelUpdateReport(
-            market_flow={
-                "kind": (self.config.market_flow_model or {}).get("kind", "hurdle_lognormal"),
-                "params": self._market_flow_model.get_params() if hasattr(self._market_flow_model, "get_params") else {},
+            local_market_flow={
+                "kind": (self.config.local_market_flow_model or {}).get("kind", "hurdle_lognormal"),
+                "params": (
+                    self._local_market_flow_model.get_params()
+                    if hasattr(self._local_market_flow_model, "get_params")
+                    else {}
+                ),
             },
-            price={
-                "kind": (self.config.price_model or {}).get("kind", "residual"),
-                "params": self._price_model.get_params() if hasattr(self._price_model, "get_params") else {},
+            local_price={
+                "kind": (self.config.local_price_model or {}).get("kind", "residual"),
+                "params": (
+                    self._local_price_model.get_params()
+                    if hasattr(self._local_price_model, "get_params")
+                    else {}
+                ),
+            },
+            global_market_flow={
+                "kind": (self.config.global_market_flow_model or {}).get("kind", "hurdle_lognormal"),
+                "params": (
+                    self._global_market_flow_model.get_params()
+                    if self._global_market_flow_model is not None
+                    and hasattr(self._global_market_flow_model, "get_params")
+                    else {}
+                ),
+                "active_in_mpc": bool(
+                    self.liquidity_sourcing.enabled and self._global_market_flow_model is not None
+                ),
             },
             global_price={
                 "kind": (self.config.global_price_model or {}).get("kind", "ewma_gaussian"),
@@ -297,10 +381,13 @@ def _build_controller(
     from mm.core.models.real_execution import RealExecutionModel
     from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
 
-    market_flow_model = _build_market_flow_model(config.market_flow_model)
-    price_model = _build_price_model(
-        config.price_model,
-        market_flow_model=market_flow_model,
+    local_market_flow_model = _build_market_flow_model(
+        config.local_market_flow_model,
+        config_name="local_market_flow_model",
+    )
+    local_price_model = _build_price_model(
+        config.local_price_model,
+        market_flow_model=local_market_flow_model,
         vwap_depth=config.vwap_depth,
     )
 
@@ -313,6 +400,22 @@ def _build_controller(
     execution_model = RealExecutionModel(**execution_cfg)
 
     optimizer_cfg = dict(config.optimizer or {})
+    nested_global_model_keys = [
+        key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_cfg
+    ]
+    if nested_global_model_keys:
+        raise ValueError(
+            "global model config belongs directly under controller: "
+            f"{', '.join(nested_global_model_keys)}"
+        )
+    flat_venue_optimizer_keys = sorted(key for key in _FLAT_VENUE_OPTIMIZER_KEYS if key in optimizer_cfg)
+    if flat_venue_optimizer_keys:
+        raise ValueError(
+            "venue optimizer config belongs under controller.optimizer.local/global: "
+            f"{', '.join(flat_venue_optimizer_keys)}"
+        )
+    local_optimizer_cfg = _venue_optimizer_config(optimizer_cfg.pop("local", None), venue="local")
+    global_optimizer_cfg = _venue_optimizer_config(optimizer_cfg.pop("global", None), venue="global")
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
@@ -323,37 +426,56 @@ def _build_controller(
         binding.local,
         max_orders_per_side=config.max_orders_per_side,
     )
+    global_constraints = (
+        OrderConstraints.from_spec(binding.global_, max_orders_per_side=config.max_orders_per_side)
+        if binding.global_ is not None
+        else order_constraints
+    )
+    local_min_qty = float(order_constraints.min_qty or 1.0)
+    global_min_qty = float(global_constraints.min_qty or local_min_qty)
+    local_optimizer_defaults = {
+        "quote_size_min_per_side": local_min_qty,
+        "quote_size_max_per_side": max(local_min_qty, 10.0),
+    }
+    global_optimizer_defaults = {
+        "quote_size_min_per_side": global_min_qty,
+        "quote_size_max_per_side": max(global_min_qty, 10.0),
+    }
+    local_optimizer_defaults.update(local_optimizer_cfg)
+    global_optimizer_defaults.update(global_optimizer_cfg)
     optimizer_defaults = {
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
-        "quote_size_min_per_side": order_constraints.min_qty,
         "device": "cpu",
+        "local_optimizer": local_optimizer_defaults,
+        "global_optimizer": global_optimizer_defaults,
     }
     optimizer_defaults.update(optimizer_cfg)
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
-    global_flow_cfg = (config.optimizer or {}).get("global_market_flow_model") or config.market_flow_model
-    global_price_cfg = (config.optimizer or {}).get("global_price_model") or config.global_price_model
-    global_flow_model = _build_market_flow_model(global_flow_cfg)
+    global_market_flow_model = _build_market_flow_model(
+        config.global_market_flow_model,
+        config_name="global_market_flow_model",
+    )
     sourcing_global_price_model = _build_sourcing_global_price_model(
-        global_price_cfg,
-        market_flow_model=global_flow_model,
+        config.global_price_model,
+        market_flow_model=global_market_flow_model,
         vwap_depth=config.vwap_depth,
     )
     return MonteCarloMPCTensorBatched(
-        price_model=price_model,
-        market_flow_model=market_flow_model,
+        local_price_model=local_price_model,
+        local_market_flow_model=local_market_flow_model,
         execution_model=execution_model,
         liquidity_sourcing_enabled=sourcing.enabled,
-        global_market_flow_model=global_flow_model if sourcing.enabled else None,
+        global_market_flow_model=global_market_flow_model if sourcing.enabled else None,
         global_price_model=sourcing_global_price_model if sourcing.enabled else None,
         **optimizer_defaults,
     )
 
 
-def _build_market_flow_model(cfg: dict[str, Any] | None) -> Any:
+def _build_market_flow_model(cfg: dict[str, Any] | None, *, config_name: str) -> Any:
     from mm.mpc.market_order_flow_torch import (
         TorchDiscreteGammaModel,
         TorchHurdleGammaModel,
@@ -374,7 +496,7 @@ def _build_market_flow_model(cfg: dict[str, Any] | None) -> Any:
         return TorchHurdleWeibullModel(**flow_cfg)
     if flow_kind == "hurdle_lognormal":
         return TorchHurdleLogNormalModel(**flow_cfg)
-    raise ValueError(f"unsupported market_flow_model kind: {flow_kind}")
+    raise ValueError(f"unsupported {config_name} kind: {flow_kind}")
 
 
 def _build_price_model(
@@ -382,13 +504,14 @@ def _build_price_model(
     *,
     market_flow_model: Any,
     vwap_depth: float | None,
+    config_name: str = "local_price_model",
 ) -> Any:
     from mm.mpc.price_torch import TorchResidualPriceModel
 
     price_cfg = dict(cfg or {})
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
     if price_kind != "residual":
-        raise ValueError(f"unsupported price_model kind: {price_kind}")
+        raise ValueError(f"unsupported {config_name} kind: {price_kind}")
     nested_vwap = price_cfg.pop("vwap_depth", None)
     resolved_vwap = vwap_depth if vwap_depth is not None else nested_vwap
     if resolved_vwap is not None:
@@ -410,7 +533,12 @@ def _build_sourcing_global_price_model(
     if kind in ("none", "null", "disabled"):
         return None
     if kind == "residual":
-        return _build_price_model(cfg, market_flow_model=market_flow_model, vwap_depth=vwap_depth)
+        return _build_price_model(
+            cfg,
+            market_flow_model=market_flow_model,
+            vwap_depth=vwap_depth,
+            config_name="global_price_model",
+        )
     return _build_global_price_model(cfg)
 
 
@@ -514,14 +642,14 @@ def _state_from_frame(
     binding: SymbolBinding,
     spread_max: float,
     *,
-    price_model: Any | None,
+    local_price_model: Any | None,
     liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
     ledger: JointLedgerSnapshot | None = None,
 ) -> State:
     from mm.mpc.mpc_state import OrderbookRelative
 
     sourcing = liquidity_sourcing or LiquiditySourcingRuntimeConfig()
-    vwap_depth = _vwap_target_depth(price_model)
+    vwap_depth = _vwap_target_depth(local_price_model)
     local_mid = mid_from_orderbook(frame.local.orderbook)
     bids = tuple(
         (spread, level.qty)

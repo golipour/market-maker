@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **price**, **market flow**, and **global_price** models, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). **Global — other** also includes **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
+        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **local_price_model**, **local_market_flow_model**, **global_market_flow_model**, and **global_price_model**, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). Global model **other** charts also include **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -63,7 +63,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload, ROW_NUMBER() OVER (ORDER BY ts DESC) AS rk\n  FROM mm_events\n  WHERE topic = '${decisions_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n)\nSELECT\n  COALESCE(payload->'price_model'->>'kind', '') AS price_model_kind,\n  COALESCE(payload->'market_flow_model'->>'kind', '') AS market_flow_model_kind,\n  COALESCE(payload->'global_price_model'->>'kind', '') AS global_price_model_kind\nFROM latest\nWHERE rk = 1",
+          "rawSql": "WITH latest AS (\n  SELECT payload, ROW_NUMBER() OVER (ORDER BY ts DESC) AS rk\n  FROM mm_events\n  WHERE topic = '${decisions_topic}'\n    AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}'\n    AND symbol = '${symbol}'\n)\nSELECT\n  COALESCE(payload->'local_price_model'->>'kind', '') AS local_price_model_kind,\n  COALESCE(payload->'local_market_flow_model'->>'kind', '') AS local_market_flow_model_kind,\n  COALESCE(payload->'global_market_flow_model'->>'kind', '') AS global_market_flow_model_kind,\n  COALESCE(payload->'global_price_model'->>'kind', '') AS global_price_model_kind\nFROM latest\nWHERE rk = 1",
           "refId": "A"
         }
       ],
@@ -109,11 +109,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Price model — μ",
+      "title": "Local price model — μ",
       "type": "timeseries"
     },
     {
@@ -155,11 +155,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Price model — σ",
+      "title": "Local price model — σ",
       "type": "timeseries"
     },
     {
@@ -201,11 +201,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_price_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_price_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Price model — other params",
+      "title": "Local price model — other params",
       "type": "timeseries"
     },
     {
@@ -247,11 +247,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Market flow — μ",
+      "title": "Local market flow model — μ",
       "type": "timeseries"
     },
     {
@@ -293,11 +293,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Market flow — σ",
+      "title": "Local market flow model — σ",
       "type": "timeseries"
     },
     {
@@ -339,11 +339,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       ('market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('local_market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'local_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key !~ '^mu_'\n  AND kv.key !~ '^sigma_'\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Market flow — other params (p₀, shape/scale, wb_*, xi/beta/u, …)",
+      "title": "Local market flow model — other params (p₀, shape/scale, wb_*, xi/beta/u, …)",
       "type": "timeseries"
     },
     {
@@ -363,6 +363,144 @@
         "w": 24,
         "x": 0,
         "y": 58
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('global_market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'global_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^mu_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global market flow model — μ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       ('global_market_flow_model.' || kv.key) AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM mm_events e,\nLATERAL jsonb_each(COALESCE(e.payload->'global_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${decisions_topic}'\n  AND e.event_type = 'StrategyDecision'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND jsonb_typeof(kv.value) = 'number'\n  AND kv.key ~ '^sigma_'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global market flow model — σ",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "id": 42,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", metric, value FROM (\n  SELECT e.ts AS ts,\n         ('global_market_flow_model.' || kv.key) AS metric,\n         (kv.value #>> '{}')::double precision AS value\n  FROM mm_events e,\n  LATERAL jsonb_each(COALESCE(e.payload->'global_market_flow_model'->'params', '{}'::jsonb)) AS kv(key, value)\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND jsonb_typeof(kv.value) = 'number'\n    AND kv.key !~ '^mu_'\n    AND kv.key !~ '^sigma_'\n  UNION ALL\n  SELECT e.ts,\n         'global_market_flow_model.active_in_mpc' AS metric,\n         CASE WHEN e.payload->'global_market_flow_model'->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n    AND e.payload->'global_market_flow_model' ? 'active_in_mpc'\n) u\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global market flow model — other params + active_in_mpc",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 82
       },
       "id": 30,
       "options": {
@@ -389,7 +527,7 @@
           "refId": "A"
         }
       ],
-      "title": "Global price — μ (deltas)",
+      "title": "Global price model — μ (deltas)",
       "type": "timeseries"
     },
     {
@@ -408,7 +546,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 66
+        "y": 90
       },
       "id": 31,
       "options": {
@@ -435,7 +573,7 @@
           "refId": "A"
         }
       ],
-      "title": "Global price — σ",
+      "title": "Global price model — σ",
       "type": "timeseries"
     },
     {
@@ -454,7 +592,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 98
       },
       "id": 32,
       "options": {
@@ -481,7 +619,7 @@
           "refId": "A"
         }
       ],
-      "title": "Global price — other (decay, …) + active_in_mpc",
+      "title": "Global price model — other (decay, …) + active_in_mpc",
       "type": "timeseries"
     },
     {
@@ -490,7 +628,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 106
       },
       "id": 100,
       "panels": [],
@@ -513,7 +651,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 83
+        "y": 107
       },
       "id": 101,
       "options": {
@@ -536,7 +674,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", model AS metric,\n  (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", model AS metric,\n  (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'nll'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -560,7 +698,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 115
       },
       "id": 104,
       "options": {
@@ -579,7 +717,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT model AS model,\n  COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,\n  COUNT(*) AS count\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['price','market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''\nGROUP BY 1, 2\nORDER BY count DESC",
+          "rawSql": "SELECT model AS model,\n  COALESCE(e.payload #>> ARRAY['models', model, 'skip_reason'], '') AS skip_reason,\n  COUNT(*) AS count\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] IS NOT NULL\n  AND e.payload #>> ARRAY['models', model, 'skip_reason'] <> ''\nGROUP BY 1, 2\nORDER BY count DESC",
           "refId": "A"
         }
       ],
