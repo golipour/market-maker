@@ -68,7 +68,7 @@ def _private_snapshot(
 def _live_buy(
     order_id: str,
     *,
-    actor_id: str = "actor-1",
+    actor_id: str | None = "actor-1",
     price: float = 100.0,
     qty: float = 8.0,
 ) -> OpenOrder:
@@ -165,6 +165,32 @@ def test_additive_replacement_approves_under_net_delta_rejected_by_order_level()
     )
     assert runtime_result.approved == ()
     assert runtime_result.rejection_counts.get("max_open_notional", 0) >= 1
+
+
+def test_venue_transition_ignores_unattributed_live_orders() -> None:
+    live = _live_buy("exchange-live-1", actor_id=None, price=100.0, qty=4.0)
+    snapshot = _private_snapshot(
+        quote_free=100.0,
+        quote_locked=400.0,
+        open_orders={"exchange-live-1": live},
+    )
+    ledger = _venue_ledger_from_private(snapshot)
+    target = VenueTargetBook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 5.0),),
+    )
+
+    ok, reasons, exposure = evaluate_venue_target_transition(
+        ledger=ledger,
+        target=target,
+        limits=VenueRiskLimits(min_cash=0.0),
+    )
+
+    assert not ok
+    assert "insufficient_quote_for_buys" in reasons
+    assert exposure.actor_locked_quote == 0.0
 
 
 def test_evaluate_venue_transition_rejects_insufficient_quote_for_buys() -> None:

@@ -113,3 +113,34 @@ async def test_execution_reconciler_mirrors_private_open_orders() -> None:
         assert filled.live_order_count == 0
     finally:
         await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_cancel_actor_orders_ignores_unattributed_open_orders() -> None:
+    commands = FakeOrderCommandAdapter()
+    manager = OrderManager("nobitex", commands, clock_ms=lambda: 1000)
+    manager._live_orders = {
+        "external": OpenOrder(
+            exchange_order_id="external",
+            actor_id=None,
+            order=Order("nobitex", "BTC_IRT", "buy", 100.0, 1.0),
+            remaining_qty=1.0,
+            filled_qty=0.0,
+            status="open",
+            timestamp_ms=1000,
+        ),
+        "own": OpenOrder(
+            exchange_order_id="own",
+            actor_id="actor-1",
+            order=Order("nobitex", "BTC_IRT", "sell", 101.0, 1.0),
+            remaining_qty=1.0,
+            filled_qty=0.0,
+            status="open",
+            timestamp_ms=1000,
+        ),
+    }
+
+    await manager.cancel_actor_orders("actor-1")
+
+    assert commands.cancelled == ["own"]
+    assert set(manager.live_orders) == {"external"}

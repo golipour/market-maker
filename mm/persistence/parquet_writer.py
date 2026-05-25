@@ -107,10 +107,11 @@ class ParquetEventWriter:
                 import pyarrow as pa
                 import pyarrow.parquet as pq
 
-                table = pa.Table.from_pylist(rows)
+                schema = _parquet_schema(pa)
+                table = pa.Table.from_pylist(rows, schema=schema)
                 tmp = path.with_suffix(path.suffix + ".tmp")
                 if path.exists():
-                    existing = pq.read_table(path)
+                    existing = _read_existing_parquet(pa, pq, path, schema)
                     table = pa.concat_tables([existing, table], promote_options="default")
                 pq.write_table(table, tmp)
                 os.replace(tmp, path)
@@ -211,6 +212,44 @@ def _row(envelope: EventEnvelope) -> dict[str, Any]:
         "payload_json": json.dumps(envelope.payload, ensure_ascii=False),
         "envelope_json": json.dumps(envelope.as_dict(), ensure_ascii=False),
     }
+
+
+def _parquet_schema(pa: Any) -> Any:
+    return pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("schema", pa.string()),
+            ("version", pa.int64()),
+            ("run_id", pa.string()),
+            ("source", pa.string()),
+            ("topic", pa.string()),
+            ("event_type", pa.string()),
+            ("exchange", pa.string()),
+            ("symbol", pa.string()),
+            ("actor_id", pa.string()),
+            ("timestamp_ms", pa.int64()),
+            ("payload_json", pa.string()),
+            ("envelope_json", pa.string()),
+        ]
+    )
+
+
+def _read_existing_parquet(pa: Any, pq: Any, path: Path, schema: Any) -> Any:
+    # pq.read_table() can infer Hive partition columns from event_date=/exchange=/
+    # directories and then collide with the real string columns stored in the file.
+    table = pq.ParquetFile(path).read()
+    return _align_table_to_schema(pa, table, schema)
+
+
+def _align_table_to_schema(pa: Any, table: Any, schema: Any) -> Any:
+    arrays = []
+    names = set(table.column_names)
+    for field in schema:
+        if field.name in names:
+            arrays.append(table[field.name].cast(field.type))
+        else:
+            arrays.append(pa.nulls(table.num_rows, type=field.type))
+    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def _elapsed_ms(started_ns: int) -> float:

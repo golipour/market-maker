@@ -32,17 +32,17 @@ def _scope_actor_live_orders(
     exchange: str,
     symbol: str,
 ) -> dict[str, OpenOrder]:
-    ex = exchange.lower().strip()
-    sym = symbol.strip()
-    actor = actor_id.strip()
+    ex = str(exchange or "").lower().strip()
+    sym = str(symbol or "").strip()
+    actor = str(actor_id or "").strip()
     scoped: dict[str, OpenOrder] = {}
     for order_id, open_order in live_orders.items():
-        if open_order.actor_id.strip() != actor:
+        if (open_order.actor_id or "").strip() != actor:
             continue
         order = open_order.order
-        if order.exchange.lower().strip() != ex:
+        if str(order.exchange or "").lower().strip() != ex:
             continue
-        if order.symbol.strip() != sym:
+        if str(order.symbol or "").strip() != sym:
             continue
         scoped[order_id] = open_order
     return scoped

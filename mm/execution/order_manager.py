@@ -185,11 +185,11 @@ class OrderManager(AbstractOrderManager):
         return report
 
     async def cancel_actor_orders(self, actor_id: str, *, reason: str = "") -> None:
-        actor = actor_id.strip()
+        actor = str(actor_id or "").strip()
         order_ids = [
             order_id
             for order_id, open_order in self._live_orders.items()
-            if open_order.actor_id.strip() == actor
+            if (open_order.actor_id or "").strip() == actor
         ]
         if not order_ids:
             return
@@ -204,7 +204,20 @@ class OrderManager(AbstractOrderManager):
                 "timestamp_ms": self.clock_ms(),
             },
         )
-        await self._cancel_order_ids(order_ids)
+        await self.command_adapter.cancel_orders(order_ids)
+        for order_id in order_ids:
+            self._live_orders.pop(order_id, None)
+        await self._publish(
+            "execution:orders",
+            {
+                "type": "CancelOrdersAccepted",
+                "exchange": self.exchange,
+                "actor_id": actor,
+                "order_ids": order_ids,
+                "timestamp_ms": self.clock_ms(),
+            },
+        )
+        await self._publish_snapshot()
 
     def apply_private_snapshot(self, snapshot: PrivateStateSnapshot) -> ExecutionSnapshot:
         self._live_orders = {
