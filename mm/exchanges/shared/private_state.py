@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 from mm.core.asset_aliases import canonical_asset_code
 from mm.core.wallet import make_balance
@@ -27,7 +28,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         exchange: str,
         symbol: str,
         *,
-        api_token: str | None,
+        api_token: Any,
         poll_interval_ms: int = 5000,
     ):
         self.exchange = exchange.lower().strip()

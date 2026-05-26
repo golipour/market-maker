@@ -184,14 +184,14 @@ async def build_runtime_components(
         private_config = config.private_config_for(source.role)
         if private_config is None:
             continue
-        api_token = private_config.resolved_api_token(source.normalized_exchange())
-        if not api_token:
+        api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
+        if not api_credentials:
             continue
         private_selection = select_private_state_adapter(
             source.normalized_exchange(),
             source.symbol,
             mode=private_config.mode,
-            api_token=api_token,
+            api_token=api_credentials,
             poll_interval_ms=private_config.poll_interval_ms,
         )
         private_selections[source.role] = private_selection
@@ -207,7 +207,7 @@ async def build_runtime_components(
             order_selection = select_order_command_adapter(
                 source.normalized_exchange(),
                 source.symbol,
-                api_token=api_token,
+                api_token=api_credentials,
                 placement_max_concurrency=placement_max_concurrency,
             )
             order_command_selections[source.role] = order_selection

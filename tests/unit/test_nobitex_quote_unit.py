@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+
+import requests
+
 from mm.exchanges.nobitex import private_rest
 from mm.exchanges.nobitex.quote_unit import (
     nobitex_irt_quoted_pair,
@@ -51,3 +55,61 @@ def test_place_limit_order_scales_price_for_irt_pair(monkeypatch):
 
     private_rest.place_limit_order("BTC_USDT", "buy", "0.1", 50_000.0, "token")
     assert captured["data"]["price"] == "50000.0"
+
+
+def test_nobitex_token_header_does_not_double_prefix():
+    assert private_rest._token_authorization_header("abc") == "Token abc"
+    assert private_rest._token_authorization_header("Token abc") == "Token abc"
+    assert private_rest._token_authorization_header("Bearer abc") == "Bearer abc"
+
+
+def test_nobitex_api_key_signs_open_order_query(monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    auth = private_rest.NobitexApiKeyAuth("public-key", private_pem)
+    captured: dict = {}
+    real_session = requests.sessions.Session()
+
+    class FakeResponse:
+        ok = True
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ok", "orders": []}
+
+    class FakeSession:
+        def prepare_request(self, request):
+            return real_session.prepare_request(request)
+
+        def send(self, prepared, timeout):
+            captured["path_url"] = prepared.path_url
+            captured["headers"] = dict(prepared.headers)
+            captured["body"] = prepared.body
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(private_rest.requests, "Session", lambda: FakeSession())
+    monkeypatch.setattr(private_rest.time, "time", lambda: 1_700_000_000)
+
+    assert private_rest.list_open_orders("USDT_IRT", auth) == []
+
+    assert captured["path_url"] == (
+        "/market/orders/list?status=open&srcCurrency=usdt&dstCurrency=rls&details=2"
+    )
+    assert captured["headers"]["Nobitex-Key"] == "public-key"
+    assert captured["headers"]["Nobitex-Timestamp"] == "1700000000"
+    signed_message = f"1700000000GET{captured['path_url']}".encode("utf-8")
+    public_key.verify(
+        base64.b64decode(captured["headers"]["Nobitex-Signature"]),
+        signed_message,
+    )

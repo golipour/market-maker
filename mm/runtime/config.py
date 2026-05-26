@@ -65,12 +65,22 @@ class PrivateRuntimeConfig:
     mode: str = "rest"
     api_token: str | None = None
     api_token_env: str | None = None
+    api_key: str | None = None
+    api_key_env: str | None = None
+    api_private_key: str | None = None
+    api_private_key_env: str | None = None
     poll_interval_ms: int = 5000
     enable_execution: bool = True
 
     @property
     def enabled(self) -> bool:
-        return bool(self.resolved_api_token())
+        return bool(
+            self.resolved_api_token()
+            or (
+                self.resolved_api_key()
+                and self.resolved_api_private_key()
+            )
+        )
 
     def resolved_api_token(self, exchange: str | None = None) -> str | None:
         if self.api_token:
@@ -80,6 +90,34 @@ class PrivateRuntimeConfig:
         if exchange:
             return os.environ.get(f"{exchange.upper()}_API_TOKEN")
         return None
+
+    def resolved_api_key(self, exchange: str | None = None) -> str | None:
+        if self.api_key:
+            return self.api_key
+        if self.api_key_env:
+            return os.environ.get(self.api_key_env)
+        if exchange:
+            return os.environ.get(f"{exchange.upper()}_API_KEY")
+        return None
+
+    def resolved_api_private_key(self, exchange: str | None = None) -> str | None:
+        if self.api_private_key:
+            return self.api_private_key
+        if self.api_private_key_env:
+            return os.environ.get(self.api_private_key_env)
+        if exchange:
+            return os.environ.get(f"{exchange.upper()}_API_PRIVATE_KEY")
+        return None
+
+    def resolved_api_credentials(self, exchange: str | None = None) -> Any:
+        exchange_key = str(exchange or "").lower().strip()
+        api_key = self.resolved_api_key(exchange_key or None)
+        api_private_key = self.resolved_api_private_key(exchange_key or None)
+        if exchange_key == "nobitex" and api_key and api_private_key:
+            from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
+
+            return NobitexApiKeyAuth(api_key, api_private_key)
+        return self.resolved_api_token(exchange_key or None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -558,6 +596,7 @@ def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | 
         "poll_interval_ms": private.poll_interval_ms,
         "enable_execution": private.enable_execution,
         "enabled": private.enabled,
+        "auth_type": "api_key" if private.resolved_api_key() and private.resolved_api_private_key() else "token",
     }
 
 
@@ -708,6 +747,10 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         mode=str(payload.get("mode", "rest")),
         api_token=payload.get("api_token"),
         api_token_env=payload.get("api_token_env"),
+        api_key=payload.get("api_key"),
+        api_key_env=payload.get("api_key_env"),
+        api_private_key=payload.get("api_private_key"),
+        api_private_key_env=payload.get("api_private_key_env"),
         poll_interval_ms=int(payload.get("poll_interval_ms", 5000)),
         enable_execution=bool(payload.get("enable_execution", True)),
     )

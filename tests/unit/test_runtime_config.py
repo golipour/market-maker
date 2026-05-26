@@ -12,6 +12,7 @@ from mm.runtime.config import (
     runtime_config_from_mapping,
 )
 from mm.env_loader import load_mm_env
+from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
 from mm.runtime.engine import build_runtime_components
 from mm.tools.print_events import build_print_queues
 from tests.unit.conftest import venues_payload
@@ -51,6 +52,30 @@ def test_load_mm_env_reads_repo_root_env(tmp_path, monkeypatch) -> None:
 
     assert os.environ["MM_DATABASE_URL"] == "postgresql://repo"
     assert os.environ["NOBITEX_API_TOKEN"] == "repo-token"
+
+
+def test_private_runtime_config_resolves_nobitex_api_key_auth(monkeypatch) -> None:
+    monkeypatch.setenv("NOBITEX_API_KEY", "public-key")
+    monkeypatch.setenv("NOBITEX_API_PRIVATE_KEY", "private-key")
+    config = PrivateRuntimeConfig()
+
+    credentials = config.resolved_api_credentials("nobitex")
+
+    assert isinstance(credentials, NobitexApiKeyAuth)
+    assert credentials.public_key == "public-key"
+    assert credentials.private_key == "private-key"
+
+
+def test_private_runtime_config_prefers_nobitex_api_key_auth_over_token(monkeypatch) -> None:
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "legacy-token")
+    monkeypatch.setenv("NOBITEX_API_KEY", "public-key")
+    monkeypatch.setenv("NOBITEX_API_PRIVATE_KEY", "private-key")
+    config = PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN")
+
+    credentials = config.resolved_api_credentials("nobitex")
+
+    assert isinstance(credentials, NobitexApiKeyAuth)
+    assert credentials.public_key == "public-key"
 
 
 @pytest.mark.asyncio

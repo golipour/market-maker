@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import requests
 
 BASE_URL = "https://apiv2.nobitex.ir"
+
+
+@dataclass(frozen=True, slots=True)
+class NobitexApiKeyAuth:
+    """Nobitex signed API-key credentials.
+
+    ``public_key`` is sent as ``Nobitex-Key``. ``private_key`` is an Ed25519
+    private key, preferably PEM encoded; raw hex/base64 32-byte private keys are
+    accepted for local tooling.
+    """
+
+    public_key: str
+    private_key: str
+
+
+NobitexAuth = str | NobitexApiKeyAuth
 
 
 def _nobitex_client_order_id(value: str | None, *, max_len: int = 32) -> str | None:
@@ -49,16 +69,14 @@ def merge_nobitex_wallet_balances_to_internal_toman(result: dict[str, dict[str, 
     return merge_wallet_balances_raw("nobitex", result)
 
 
-def _get_auth(path: str, api_token: str, params: dict[str, Any] | None = None) -> Any:
-    headers = {"Authorization": f"Token {api_token}"}
-    r = requests.get(f"{BASE_URL}{path}", headers=headers, params=params or {}, timeout=15)
+def _get_auth(path: str, auth: NobitexAuth, params: dict[str, Any] | None = None) -> Any:
+    r = _request_auth("GET", path, auth, params=params)
     r.raise_for_status()
     return r.json()
 
 
-def _post_auth(path: str, api_token: str, data: dict[str, Any] | None = None) -> Any:
-    headers = {"Authorization": f"Token {api_token}"}
-    r = requests.post(f"{BASE_URL}{path}", headers=headers, data=data or {}, timeout=15)
+def _post_auth(path: str, auth: NobitexAuth, data: dict[str, Any] | None = None) -> Any:
+    r = _request_auth("POST", path, auth, data=data or {})
     if not r.ok:
         detail: Any
         try:
@@ -69,7 +87,108 @@ def _post_auth(path: str, api_token: str, data: dict[str, Any] | None = None) ->
     return r.json()
 
 
-def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
+def _request_auth(
+    method: str,
+    path: str,
+    auth: NobitexAuth,
+    *,
+    params: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
+) -> requests.Response:
+    method_upper = method.upper()
+    url = f"{BASE_URL}{path}"
+    session = requests.Session()
+    if isinstance(auth, NobitexApiKeyAuth):
+        request = requests.Request(
+            method_upper,
+            url,
+            params=params or {},
+            json=data if method_upper != "GET" else None,
+            headers={"Content-Type": "application/json"},
+        )
+        prepared = session.prepare_request(request)
+        body = _prepared_body_text(prepared)
+        prepared.headers.update(_signed_headers(auth, method_upper, prepared.path_url, body))
+    else:
+        request = requests.Request(
+            method_upper,
+            url,
+            params=params or {},
+            data=data or {},
+            headers={"Authorization": _token_authorization_header(auth)},
+        )
+        prepared = session.prepare_request(request)
+    return session.send(prepared, timeout=15)
+
+
+def _token_authorization_header(api_token: str) -> str:
+    raw = str(api_token or "").strip()
+    if raw.lower().startswith(("token ", "bearer ")):
+        return raw
+    return f"Token {raw}"
+
+
+def _signed_headers(auth: NobitexApiKeyAuth, method: str, path_url: str, body: str) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    message = f"{timestamp}{method.upper()}{path_url}{body}".encode("utf-8")
+    return {
+        "Nobitex-Key": auth.public_key.strip(),
+        "Nobitex-Signature": _ed25519_signature_b64(auth.private_key, message),
+        "Nobitex-Timestamp": timestamp,
+    }
+
+
+def _prepared_body_text(prepared: requests.PreparedRequest) -> str:
+    body = prepared.body or b""
+    if isinstance(body, bytes):
+        return body.decode("utf-8")
+    return str(body)
+
+
+def _ed25519_signature_b64(private_key: str, message: bytes) -> str:
+    key = str(private_key or "").strip().replace("\\n", "\n")
+    if not key:
+        raise RuntimeError("Nobitex API-key auth requires api_private_key")
+    raw_key = _raw_private_key_bytes(key)
+    if raw_key is not None:
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+        except ImportError as exc:
+            raise RuntimeError("Nobitex API-key auth requires the 'cryptography' package") from exc
+        signature = ed25519.Ed25519PrivateKey.from_private_bytes(raw_key).sign(message)
+        return base64.b64encode(signature).decode("ascii")
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+    except ImportError as exc:
+        raise RuntimeError("Nobitex API-key auth requires the 'cryptography' package") from exc
+    loaded = serialization.load_pem_private_key(key.encode("utf-8"), password=None)
+    if not isinstance(loaded, ed25519.Ed25519PrivateKey):
+        raise RuntimeError("Nobitex API-key private key must be an Ed25519 private key")
+    signature = loaded.sign(message)
+    return base64.b64encode(signature).decode("ascii")
+
+
+def _raw_private_key_bytes(value: str) -> bytes | None:
+    compact = "".join(value.split())
+    if "BEGIN" in compact:
+        return None
+    try:
+        decoded = bytes.fromhex(compact)
+        if len(decoded) == 32:
+            return decoded
+    except ValueError:
+        pass
+    try:
+        decoded = base64.b64decode(compact, validate=True)
+        if len(decoded) == 32:
+            return decoded
+    except (binascii.Error, ValueError):
+        pass
+    return None
+
+
+def get_balances(api_token: NobitexAuth | None) -> dict[str, dict[str, float]]:
     if not api_token:
         return {}
     result: dict[str, dict[str, float]] = {}
@@ -117,7 +236,7 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
     raise RuntimeError(f"Nobitex balance fetch failed: {detail}")
 
 
-def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
+def list_open_orders(symbol: str, api_token: NobitexAuth | None) -> list[dict]:
     if not api_token:
         return []
     src, dst = split_symbol_pair(symbol)
@@ -141,7 +260,7 @@ def place_market_order(
     symbol: str,
     side: str,
     amount: str | float,
-    api_token: str | None,
+    api_token: NobitexAuth | None,
     client_order_id: str | None = None,
 ) -> dict[str, Any]:
     if not api_token:
@@ -172,7 +291,7 @@ def place_limit_order(
     side: str,
     amount: str | float,
     price: str | float | int,
-    api_token: str | None,
+    api_token: NobitexAuth | None,
     client_order_id: str | None = None,
 ) -> dict[str, Any]:
     if not api_token:
@@ -200,7 +319,7 @@ def place_limit_order(
     return out if isinstance(out, dict) else {"status": "failed", "message": "bad response"}
 
 
-def cancel_order(order_id: int, api_token: str | None) -> dict[str, Any]:
+def cancel_order(order_id: int, api_token: NobitexAuth | None) -> dict[str, Any]:
     if not api_token:
         return {"status": "failed", "message": "missing api token"}
     try:

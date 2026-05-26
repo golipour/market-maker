@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from mm.core.models.execution import Order
 from mm.core.models.private import OpenOrder
@@ -14,7 +15,7 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
         self,
         symbol: str,
         *,
-        api_token: str | None,
+        api_token: Any,
         poll_interval_ms: int = 5000,
     ):
         super().__init__(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource
@@ -116,7 +117,7 @@ def build_private_state_adapter(
     symbol: str,
     *,
     mode: PrivateStateAdapterMode,
-    api_token: str | None,
+    api_token: Any,
     poll_interval_ms: int = 5000,
 ) -> AbstractPrivateStateAdapter:
     return select_private_state_adapter(
@@ -133,7 +134,7 @@ def select_private_state_adapter(
     symbol: str,
     *,
     mode: PrivateStateAdapterMode,
-    api_token: str | None,
+    api_token: Any,
     poll_interval_ms: int = 5000,
 ) -> PrivateStateAdapterSelection:
     exchange_key = exchange.lower().strip()
@@ -170,7 +171,7 @@ def build_order_command_adapter(
     exchange: str,
     symbol: str,
     *,
-    api_token: str | None,
+    api_token: Any,
 ) -> AbstractOrderCommandAdapter:
     return select_order_command_adapter(exchange, symbol, api_token=api_token).adapter
 
@@ -179,7 +180,7 @@ def select_order_command_adapter(
     exchange: str,
     symbol: str,
     *,
-    api_token: str | None,
+    api_token: Any,
     placement_max_concurrency: int = 8,
 ) -> OrderCommandAdapterSelection:
     exchange_key = exchange.lower().strip()

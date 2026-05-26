@@ -81,6 +81,10 @@ rejected.
 }
 ```
 
+For Nobitex API-key auth, use `api_key_env` and `api_private_key_env`
+instead of `api_token_env`. The public key is sent as `Nobitex-Key`; the
+private key is used locally to sign requests with Ed25519.
+
 | Field | Effect |
 |-------|--------|
 | `api_token` / `api_token_env` | Credentials for private REST |
@@ -260,7 +264,9 @@ interval or venue changes do not leave writers subscribed to old topic names:
 
 | Variable | Purpose |
 |----------|---------|
-| `NOBITEX_API_TOKEN`, `WALLEX_API_TOKEN` | Exchange REST (names match `api_token_env`) |
+| `NOBITEX_API_TOKEN` | Legacy Nobitex account-token auth (`api_token_env`) |
+| `NOBITEX_API_KEY`, `NOBITEX_API_PRIVATE_KEY` | Nobitex signed API-key auth (`api_key_env`, `api_private_key_env`) |
+| `WALLEX_API_TOKEN` | Wallex REST API key (`api_token_env`) |
 | `MM_DATABASE_URL` | Postgres persistence |
 | `MM_PARQUET_ROOT` | Parquet files directory |
 | `MM_JSON_LOG` | `1` for JSON log lines |
