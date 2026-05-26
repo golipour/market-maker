@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Depth vs spread from mid: exchange orderbook, cleared orderbook (minus our resting orders), then MPC quote pipeline stages. Bid (green) and ask (red) on one chart each, fixed X in [-spread_max, +spread_max].",
+  "description": "Depth vs spread from mid: exchange orderbook, cleared orderbook, and quote/action views. Bid and ask are drawn without synthetic zero baseline helper lines.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**X-axis:** spread from mid (0), range **± Spread max**.\n\n**Chart 1 — Market orderbook:** raw exchange-visible book from the latest `MarketEvent` (includes our resting orders).\n\n**Chart 2 — Cleared orderbook:** local book after subtracting our live orders (`ControllerDiagnostics.cleared_orderbook`, same view the MPC optimizer uses).\n\n**Bid (green):** left = depth at deepest spread, right = 0.\n**Ask (red):** left = 0, right = depth at widest spread.",
+        "content": "**X-axis:** spread from mid (0), bounded by **+/- Spread max**.\n\n**Chart 1 — Market orderbook:** raw exchange-visible book from the latest `MarketEvent` (includes our resting orders).\n\n**Chart 2 — Cleared orderbook:** local book after subtracting our live orders (`ControllerDiagnostics.cleared_orderbook`, same view the MPC optimizer uses).\n\nBid and ask depth are drawn only where that side has data; no synthetic zero baseline is added.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -38,7 +38,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -88,6 +88,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -102,6 +118,14 @@
               {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -121,6 +145,14 @@
               {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -156,7 +188,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n    AND event_type = 'MarketEvent'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT pb.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -191,7 +223,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -241,6 +273,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -255,6 +303,14 @@
               {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -274,6 +330,14 @@
               {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -309,7 +373,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${diagnostics_topic}' AND event_type = 'ControllerDiagnostics'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE(\n      NULLIF((payload->'state'->>'mid')::double precision, 0),\n      (\n        COALESCE((payload->'cleared_orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'cleared_orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n    ) AS mid,\n    ${spread_max}::double precision AS spread_max\n  FROM latest\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT payload\n  FROM mm_events\n  WHERE topic = '${diagnostics_topic}' AND event_type = 'ControllerDiagnostics'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC\n  LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE(\n      NULLIF((payload->'state'->>'mid')::double precision, 0),\n      (\n        COALESCE((payload->'cleared_orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'cleared_orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n    ) AS mid,\n    ${spread_max}::double precision AS spread_max\n  FROM latest\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0) AS qty\n  FROM latest, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM bid_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= -pb.spread_max AND (l.price - pb.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - pb.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM ask_levels l, price_bounds pb\n  WHERE l.price IS NOT NULL\n    AND (l.price - pb.mid) >= 0 AND (l.price - pb.mid) <= pb.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -pb.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT pb.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -344,7 +408,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -394,6 +458,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -408,6 +488,14 @@
               {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -427,6 +515,14 @@
               {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -462,7 +558,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (p->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= 0\n    AND (p->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'bid', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (p->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (p->>'price')::double precision - pb.mid AS spread,\n         COALESCE((p->>'cumulative_qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'continuous_action_depth'->'ask', '[]'::jsonb)) AS p\n  WHERE p ? 'price'\n    AND (p->>'price')::double precision - pb.mid >= 0\n    AND (p->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         (SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM bid_rows)\n),\nask_rows_plot AS (\n  SELECT spread, value FROM ask_rows\n  UNION ALL\n  SELECT pb.spread_max,\n         (SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM ask_rows)\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -497,7 +593,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -547,6 +643,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -561,6 +673,14 @@
               {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -580,6 +700,14 @@
               {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -615,7 +743,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         (SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM bid_rows)\n),\nask_rows_plot AS (\n  SELECT spread, value FROM ask_rows\n  UNION ALL\n  SELECT pb.spread_max,\n         (SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM ask_rows)\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -650,7 +778,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -700,6 +828,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -714,6 +858,14 @@
               {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -733,6 +885,14 @@
               {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -768,7 +928,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         COALESCE((SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max, 0::double precision FROM price_bounds pb\n),\nask_rows_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_rows\n  UNION ALL\n  SELECT -pb.spread_max, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM price_bounds pb\n  UNION ALL\n  SELECT pb.spread_max,\n         COALESCE((SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM price_bounds pb\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT payload FROM mm_events\n  WHERE topic = '${controller_topic}' AND event_type = 'StrategyDecision'\n    AND exchange = '${exchange}' AND symbol = '${symbol}'\n  ORDER BY ts DESC LIMIT 1\n),\nprice_bounds AS (\n  SELECT\n    COALESCE((\n      SELECT (\n        COALESCE((payload->'orderbook'->'bids'->0->>'price')::double precision, 0) +\n        COALESCE((payload->'orderbook'->'asks'->0->>'price')::double precision, 0)\n      ) / 2.0\n      FROM mm_events\n      WHERE topic = CONCAT('market:events:', '${exchange}', ':', '${symbol}', ':', '${interval_ms}')\n        AND event_type = 'MarketEvent'\n      ORDER BY ts DESC\n      LIMIT 1\n    ), 0) AS mid,\n    ${spread_max}::double precision AS spread_max\n),\nbid_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= -pb.spread_max\n    AND (o->>'price')::double precision - pb.mid <= 0\n),\nask_rows AS (\n  SELECT (o->>'price')::double precision - pb.mid AS spread,\n         COALESCE((o->>'qty')::double precision, 0) AS value\n  FROM latest, price_bounds pb,\n       LATERAL jsonb_array_elements(COALESCE(payload->'executed_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n    AND o->>'price' IS NOT NULL\n    AND (o->>'price')::double precision - pb.mid >= 0\n    AND (o->>'price')::double precision - pb.mid <= pb.spread_max\n),\nbid_rows_plot AS (\n  SELECT spread, value FROM bid_rows\n  UNION ALL\n  SELECT -pb.spread_max,\n         (SELECT value FROM bid_rows ORDER BY spread ASC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM bid_rows)\n),\nask_rows_plot AS (\n  SELECT spread, value FROM ask_rows\n  UNION ALL\n  SELECT pb.spread_max,\n         (SELECT value FROM ask_rows ORDER BY spread DESC LIMIT 1)\n  FROM price_bounds pb\n  WHERE EXISTS (SELECT 1 FROM ask_rows)\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_rows_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_rows_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],

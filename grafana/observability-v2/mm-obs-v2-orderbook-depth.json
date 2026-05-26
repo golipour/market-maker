@@ -37,7 +37,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -88,6 +88,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -100,8 +116,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -119,8 +143,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -156,7 +188,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             NULLIF(m.payload #>> ARRAY['orderbook','bids','0','price'], '')::double precision +\n             NULLIF(m.payload #>> ARRAY['orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (m.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (m.payload->>'t_end_ms')::bigint DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             NULLIF(m.payload #>> ARRAY['orderbook','bids','0','price'], '')::double precision +\n             NULLIF(m.payload #>> ARRAY['orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (m.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (m.payload->>'t_end_ms')::bigint DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -191,7 +223,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -242,6 +274,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -254,8 +302,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -273,8 +329,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -310,7 +374,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -345,7 +409,7 @@
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
@@ -396,6 +460,22 @@
           },
           {
             "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
               "id": "byName",
               "options": "bid"
             },
@@ -408,8 +488,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Bid"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           },
@@ -427,8 +515,16 @@
                 }
               },
               {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
                 "id": "displayName",
                 "value": "Ask"
+              },
+              {
+                "id": "min",
+                "value": 0
               }
             ]
           }
@@ -464,7 +560,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           NULLIF(d.payload->>'mid', '')::double precision,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         d.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT d.payload, d.ts\n    FROM mm_events d\n    WHERE d.event_type = 'StrategyDecision'\n      AND d.exchange = ctx.exchange\n      AND d.symbol = ctx.symbol\n      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id\n      AND d.payload->>'t_end_ms' IS NOT NULL\n      AND (d.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(d.ts)\n    ORDER BY (d.payload->>'t_end_ms')::bigint DESC, d.ts DESC\n    LIMIT 1\n  ) d ON TRUE\n),\nbid_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n),\nask_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           NULLIF(d.payload->>'mid', '')::double precision,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         d.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT d.payload, d.ts\n    FROM mm_events d\n    WHERE d.event_type = 'StrategyDecision'\n      AND d.exchange = ctx.exchange\n      AND d.symbol = ctx.symbol\n      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id\n      AND d.payload->>'t_end_ms' IS NOT NULL\n      AND (d.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(d.ts)\n    ORDER BY (d.payload->>'t_end_ms')::bigint DESC, d.ts DESC\n    LIMIT 1\n  ) d ON TRUE\n),\nbid_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n),\nask_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],

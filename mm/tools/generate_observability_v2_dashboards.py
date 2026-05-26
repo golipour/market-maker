@@ -94,7 +94,7 @@ def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any
                 "color": {"mode": "palette-classic"},
                 "custom": {
                     "axisBorderShow": False,
-                    "axisCenteredZero": True,
+                    "axisCenteredZero": False,
                     "axisColorMode": "text",
                     "axisLabel": "qty",
                     "axisPlacement": "auto",
@@ -120,17 +120,28 @@ def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any
                     ],
                 },
                 {
+                    "matcher": {"id": "byRegexp", "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"},
+                    "properties": [
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+                {
                     "matcher": {"id": "byName", "options": "bid"},
                     "properties": [
                         {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
                         {"id": "displayName", "value": "Bid"},
+                        {"id": "min", "value": 0},
                     ],
                 },
                 {
                     "matcher": {"id": "byName", "options": "ask"},
                     "properties": [
                         {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
                         {"id": "displayName", "value": "Ask"},
+                        {"id": "min", "value": 0},
                     ],
                 },
             ],
@@ -525,9 +536,15 @@ def _orderbook_depth_sql(kind: str) -> str:
 {bid_levels},
 {ask_levels},
 {_orderbook_depth_plot_ctes()}
-SELECT 'bid'::text AS side, spread, value FROM bid_step_plot
+SELECT 'bid'::text AS side,
+       spread,
+       value
+FROM bid_step_plot
 UNION ALL
-SELECT 'ask'::text AS side, spread, value FROM ask_step_plot
+SELECT 'ask'::text AS side,
+       spread,
+       value
+FROM ask_step_plot
 ORDER BY side, spread"""
 
 
@@ -577,26 +594,20 @@ ask_step AS (
     AND (l.price - selected.mid) <= selected.spread_max
 ),
 bid_step_plot AS (
-  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step
+  SELECT spread, value FROM bid_step
   UNION ALL
   SELECT -selected.spread_max,
-         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)
+         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)
   FROM selected
-  UNION ALL
-  SELECT 0::double precision, 0::double precision FROM selected
-  UNION ALL
-  SELECT selected.spread_max, 0::double precision FROM selected
+  WHERE EXISTS (SELECT 1 FROM bid_step)
 ),
 ask_step_plot AS (
-  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step
-  UNION ALL
-  SELECT -selected.spread_max, 0::double precision FROM selected
-  UNION ALL
-  SELECT 0::double precision, 0::double precision FROM selected
+  SELECT spread, value FROM ask_step
   UNION ALL
   SELECT selected.spread_max,
-         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)
+         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)
   FROM selected
+  WHERE EXISTS (SELECT 1 FROM ask_step)
 )"""
 
 

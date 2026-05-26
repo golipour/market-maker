@@ -145,7 +145,7 @@
       "fixed_mc_samples": true,
       "horizon": 1,
       "adam_epochs": 30,
-      "adam_lr": 1e-1,
+      "adam_lr": 1e0,
       "device": "cpu",
       "local": {
         "objective_weight": 1.0,

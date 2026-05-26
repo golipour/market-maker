@@ -132,21 +132,22 @@ One venue step layout for `n_components = n`:
 
 ```text
 [bid_L1, bid_k1, bid_x0_1, ..., bid_Ln, bid_k_n, bid_x0_n,
- ask_L1, ask_k1, ask_x0_1, ..., ask_Ln, ask_k_n, ask_x0_n]
+ ask_L1, ask_k1, ask_x0_1, ..., ask_Ln, ask_k_n, ask_x0_n,
+ bid_depth_logit, ask_depth_logit]
 ```
 
 Single-venue horizon layout:
 
 ```text
-len(x_torch) = horizon * 6 * n
+len(x_torch) = horizon * (6 * n + 2)
 ```
 
 Joint-venue step layout concatenates local and global venue actions:
 
 ```text
 joint_step = [local_action, global_action]
-len(joint_step) = 2 * 6 * n
-len(x_torch) = horizon * 2 * 6 * n
+len(joint_step) = 2 * (6 * n + 2)
+len(x_torch) = horizon * 2 * (6 * n + 2)
 ```
 
 The optimizer returns the local first-step `SigmoidMixtureAction`. In joint mode
@@ -177,24 +178,78 @@ Effective depth is used by:
 
 Reviewers should treat effective depth as the true cumulative quote size.
 
-## Positive Parameters And Structural Size
+## Spread-Structured Sigmoid Decoder
 
-In default parameterization, `L` and `k` are raw unconstrained values mapped to
-positive values with `softplus`. Bounds are specified in positive parameter
-space and converted to raw optimizer bounds.
+`mm.mpc.l_param` decodes the raw optimizer vector into executable sigmoid
+curves. The current configured production mode is spread-structured when these
+per-venue fields are present under `controller.optimizer.local` or
+`controller.optimizer.global`:
 
-When `quote_size_softmax_L=true`, raw `L` slots are logits rather than literal
-depth scales. `mm.mpc.l_param` decodes raw parameters so executable depth at
-`spread_max` equals `quote_size_target_per_side`. In this mode hard quote-size
-projection is skipped because size is enforced by reparameterization.
+- `quote_size_min_per_side`
+- `quote_size_max_per_side`
+- `quote_spread_max`
+- `quote_spread_min_depth`
+- `quote_spread_k_epsilon`
 
-Spread-structured softmax mode remains supported when both are positive:
+The raw `L` slots are not literal order sizes in this mode. They are logits and
+structural controls. The decoder chooses the total cumulative size per side at
+`spread_max` from the side depth logit:
 
-- `quote_spread_target`
-- `quote_spread_ref_depth`
+```text
+q_total =
+  quote_size_min_per_side
+  + sigmoid(depth_logit)
+    * (quote_size_max_per_side - quote_size_min_per_side)
+```
 
-That mode reserves the first component on each side as a spread leg and maps the
-first bid/ask centers so their sum is capped by `quote_spread_target`.
+So the executable cumulative depth at `spread_max` is constrained to the
+configured quote-size range.
+
+The first component on each side is the spread leg. Its bid/ask centers are
+decoded jointly:
+
+```text
+scale = sigmoid(u_scale)
+[w_bid, w_ask] = softmax([u_bid, u_ask])
+[x0_bid_1, x0_ask_1] = scale * quote_spread_max * [w_bid, w_ask]
+```
+
+This bounds the first bid/ask centers so their sum is at most
+`quote_spread_max`. Tail component centers are placed between their side's first
+center and `spread_max`.
+
+`quote_spread_min_depth` is enforced at the first side center. The decoder
+solves the effective `L` values so:
+
+```text
+effective_depth(x0_1) >= quote_spread_min_depth
+effective_depth(spread_max) = q_total
+```
+
+`quote_spread_k_epsilon` controls the minimum steepness of the first component.
+The first component must be mostly off at mid:
+
+```text
+sigmoid(-k_1 * x0_1) <= quote_spread_k_epsilon
+```
+
+Smaller epsilon makes the first component sharper and more off-at-mid; larger
+epsilon makes it softer. This parameter is related to the first-component
+geometry, but it is not a size cap. Size is capped by the `q_total` solve above.
+
+Important numerical guard: the first center is floored to a tiny positive
+spread before solving `L`. Without that floor, an optimizer vector can collapse
+`x0_1` almost to zero. Since effective depth subtracts `D(0)`, the activation
+delta at a near-zero center becomes tiny, and enforcing
+`quote_spread_min_depth` would require:
+
+```text
+L_1 ~= quote_spread_min_depth / tiny_activation_delta
+```
+
+That can create impossible ladder sizes even when
+`quote_size_max_per_side = 10.0`. The center floor prevents this divide-through
+near zero in both NumPy diagnostics and Torch rollout.
 
 ## Initialization And Warm Start
 
@@ -202,7 +257,7 @@ Single-venue initialization order:
 
 1. Use previous best action if `warm_start=True` and available.
 2. Else use `_initial_action_uniform_marginal_qrange()` if
-   `quote_size_target_per_side` is positive.
+   `quote_size_min_per_side` and `quote_size_max_per_side` are configured.
 3. Else use the handcrafted default with increasing `L`, decreasing `k`, and
    centers across `[1, spread_max]`.
 
@@ -459,7 +514,7 @@ Core loop:
 for epoch in range(adam_epochs):
     loss = optimizer.step(closure)
     if loss < best_loss:
-        best_x = x_torch.detach().clone()
+        best_x = last_eval_x.detach().clone()
         best_epoch = epoch
 ```
 
@@ -467,14 +522,21 @@ The closure:
 
 1. Clears gradients.
 2. Clamps raw parameters to raw bounds.
-3. Optionally projects total quote size in default single-venue mode.
-4. Draws or reuses Monte Carlo samples.
-5. Rolls out every sample for every horizon step.
-6. Computes objective `J`.
-7. Records initial/final/best metrics.
-8. Backpropagates `loss = -J`.
-9. Clips gradients by `adam_grad_clip`.
-10. Counts nonfinite loss/gradient events.
+3. Saves `last_eval_x`, the exact clamped vector used for this objective
+   evaluation.
+4. Optionally projects total quote size in default single-venue mode.
+5. Draws or reuses Monte Carlo samples.
+6. Rolls out every sample for every horizon step.
+7. Computes objective `J`.
+8. Records initial/final/best metrics.
+9. Backpropagates `loss = -J`.
+10. Clips gradients by `adam_grad_clip`.
+11. Counts nonfinite loss/gradient events.
+
+The distinction between `last_eval_x` and `x_torch` matters because Adam updates
+`x_torch` after the closure returns. Best diagnostics and target-book conversion
+must use the clamped vector that actually produced the recorded loss, not the
+post-update vector.
 
 ## Target-Book Conversion
 
