@@ -3,7 +3,9 @@ from __future__ import annotations
 import time
 
 from mm.bus.memory import InMemoryBus
+from mm.core.models.execution import Fill, Order
 from mm.core.models.market import RawTrade
+from mm.core.models.private import OpenOrder
 from mm.diagnostics.models import (
     ActionPipelineDiagnostics,
     ControllerDiagnostics,
@@ -13,6 +15,7 @@ from mm.diagnostics.models import (
     OptimizerDiagnostics,
     RiskDiagnostics,
 )
+from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability.registry import REGISTRY
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
 
@@ -114,6 +117,84 @@ def test_observability_subscriber_clears_sync_pending_on_completion_or_failure()
         },
     )
     assert "nobitex" not in subscriber._sync_pending_ts_ms
+
+
+def test_observability_subscriber_emits_side_aware_execution_metrics() -> None:
+    subscriber = RuntimeObservabilitySubscriber(bus=InMemoryBus(), topics=())
+
+    subscriber.observe(
+        "execution:orders:nobitex",
+        {
+            "type": "PlaceOrdersAccepted",
+            "exchange": "nobitex",
+            "order_ids": ["bid-1", "ask-1"],
+            "orders": [
+                {"exchange": "nobitex", "symbol": "USDT_IRT", "side": "buy", "qty": 0.5},
+                {"exchange": "nobitex", "symbol": "USDT_IRT", "side": "sell", "qty": 0.25},
+            ],
+        },
+    )
+    subscriber.observe(
+        "execution:orders:nobitex",
+        {
+            "type": "PlaceOrdersFailed",
+            "exchange": "nobitex",
+            "error": "HTTPError",
+            "orders": [
+                {"exchange": "nobitex", "symbol": "USDT_IRT", "side": "sell", "qty": 1.5},
+            ],
+        },
+    )
+    subscriber.observe(
+        "private:state:nobitex:fills",
+        Fill(
+            exchange_order_id="bid-1",
+            actor_id="actor-1",
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            side="buy",
+            price=10.0,
+            qty=0.1,
+            fee=0.0,
+            timestamp_ms=1234,
+        ),
+    )
+    subscriber.observe(
+        "execution:state:nobitex",
+        ExecutionSnapshot(
+            exchange="nobitex",
+            timestamp_ms=1300,
+            live_order_count=2,
+            live_orders={
+                "bid-1": OpenOrder(
+                    exchange_order_id="bid-1",
+                    actor_id="actor-1",
+                    order=Order("nobitex", "USDT_IRT", "buy", 10.0, 0.5),
+                    remaining_qty=0.4,
+                    filled_qty=0.1,
+                    status="open",
+                    timestamp_ms=1300,
+                ),
+                "ask-1": OpenOrder(
+                    exchange_order_id="ask-1",
+                    actor_id="actor-1",
+                    order=Order("nobitex", "USDT_IRT", "sell", 11.0, 0.25),
+                    remaining_qty=0.25,
+                    filled_qty=0.0,
+                    status="open",
+                    timestamp_ms=1300,
+                ),
+            },
+        ),
+    )
+
+    text = REGISTRY.render()
+    assert 'mm_execution_placed_orders_total{exchange="nobitex",side="bid",symbol="USDT_IRT"} 1.0' in text
+    assert 'mm_execution_placed_qty_total{exchange="nobitex",side="ask",symbol="USDT_IRT"} 0.25' in text
+    assert 'mm_execution_failed_orders_total{exchange="nobitex",reason="httperror",side="ask",symbol="USDT_IRT"} 1.0' in text
+    assert 'mm_execution_filled_qty_total{exchange="nobitex",side="bid",symbol="USDT_IRT"} 0.1' in text
+    assert 'mm_execution_live_orders_by_side{exchange="nobitex",side="bid",symbol="USDT_IRT"} 1.0' in text
+    assert 'mm_execution_live_order_qty{exchange="nobitex",side="ask",symbol="USDT_IRT"} 0.25' in text
 
 
 def test_observability_subscriber_emits_raw_market_feed_metrics() -> None:

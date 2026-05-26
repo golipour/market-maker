@@ -378,6 +378,7 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
         "execution:errors",
         RuntimeTopics.execution_orders(config.local.normalized_exchange()),
         RuntimeTopics.execution_state(config.local.normalized_exchange()),
+        f"private:state:{config.local.normalized_exchange()}:fills",
         f"private:state:{config.local.normalized_exchange()}:errors",
         config.local.market_error_topic(),
         config.local.raw_orderbook_topic(),
@@ -390,6 +391,7 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
             [
                 RuntimeTopics.execution_orders(config.global_.normalized_exchange()),
                 RuntimeTopics.execution_state(config.global_.normalized_exchange()),
+                f"private:state:{config.global_.normalized_exchange()}:fills",
                 f"private:state:{config.global_.normalized_exchange()}:errors",
                 config.global_.market_error_topic(),
                 config.global_.raw_orderbook_topic(),

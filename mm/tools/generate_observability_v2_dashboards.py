@@ -274,11 +274,16 @@ def runtime_overview() -> dict[str, Any]:
         _panel(3, "Frame rate", "timeseries", PROM_DS, 'sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))', x=6, y=3, legend="{{exchange}} {{symbol}}"),
         _panel(4, "Decision rate", "timeseries", PROM_DS, 'sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))', x=18, y=3, w=6, legend="{{exchange}} {{symbol}}"),
         _panel(5, "Controller stage p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))', x=0, y=11, legend="{{stage}}"),
-        _panel(6, "Order sync p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))', x=12, y=11, legend="{{exchange}}"),
-        _panel(7, "Execution completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=0, y=19, legend="{{exchange}} {{__name__}}"),
-        _panel(8, "Live orders", "timeseries", PROM_DS, "mm_execution_live_orders", x=12, y=19, legend="{{exchange}} {{symbol}}"),
-        _panel(9, "Persistence errors", "timeseries", PROM_DS, 'sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))', x=0, y=27, legend="{{writer}} {{error}}"),
-        _panel(10, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=27, fmt="table"),
+        _panel(6, "Order sync p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))', x=12, y=11, w=6, legend="{{exchange}}"),
+        _panel(15, "Sync requests / sec", "timeseries", PROM_DS, 'sum by (exchange)(rate(mm_order_sync_total[$__rate_interval]))', x=18, y=11, w=6, legend="{{exchange}}"),
+        _panel(7, "Placed orders / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_placed_orders_total[$__rate_interval]))', x=0, y=19, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
+        _panel(8, "Failed orders / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side,reason)(rate(mm_execution_failed_orders_total[$__rate_interval]))', x=8, y=19, w=8, legend="{{exchange}} {{side}} {{reason}}"),
+        _panel(9, "Fill events / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_filled_orders_total[$__rate_interval]))', x=16, y=19, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
+        _panel(10, "Filled qty / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_filled_qty_total[$__rate_interval]))', x=0, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
+        _panel(11, "Live orders by side", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(mm_execution_live_orders_by_side)', x=8, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
+        _panel(12, "Live order qty by side", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(mm_execution_live_order_qty)', x=16, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
+        _panel(13, "Persistence errors", "timeseries", PROM_DS, 'sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))', x=0, y=35, legend="{{writer}} {{error}}"),
+        _panel(14, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=35, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-runtime-overview", "MM Observability v2 / 00 Runtime Overview", panels, tags=["runtime"])
 

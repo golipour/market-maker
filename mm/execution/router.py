@@ -115,6 +115,7 @@ class OrderRouter:
                     {
                         "type": "PlaceOrdersFailed",
                         "exchange": self.exchange,
+                        "orders": [_order_summary(command.order) for command in plan.place],
                         "error": type(exc).__name__,
                         "message": str(exc),
                         "timestamp_ms": self.clock_ms(),
@@ -122,14 +123,22 @@ class OrderRouter:
                 )
             else:
                 timestamp_ms = self.clock_ms()
+                accepted_orders = []
                 for command, order_id in zip(plan.place, order_ids):
                     placed.append((order_id, command.order))
+                    accepted_orders.append(
+                        {
+                            **_order_summary(command.order),
+                            "exchange_order_id": order_id,
+                        }
+                    )
                 await self._publish(
                     "execution:orders",
                     {
                         "type": "PlaceOrdersAccepted",
                         "exchange": self.exchange,
                         "order_ids": order_ids,
+                        "orders": accepted_orders,
                         "timestamp_ms": timestamp_ms,
                     },
                 )

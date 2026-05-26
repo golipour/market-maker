@@ -157,6 +157,7 @@ def test_observability_topics_include_diagnostics_risk_and_execution_errors() ->
     assert "strategy:diagnostics:mpc-controller" in topics
     assert "risk:events" in topics
     assert "execution:errors" in topics
+    assert "private:state:nobitex:fills" in topics
     assert "private:state:nobitex:errors" in topics
     assert "market:raw:nobitex:BTC_IRT:orderbook" in topics
     assert "market:raw:nobitex:BTC_IRT:trades" in topics

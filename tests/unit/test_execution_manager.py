@@ -57,6 +57,8 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
     assert requested["type"] == "ExecutionSyncRequested"
     assert placed["type"] == "PlaceOrdersRequested"
     assert accepted["type"] == "PlaceOrdersAccepted"
+    assert accepted["orders"][0]["side"] == "buy"
+    assert accepted["orders"][0]["qty"] == 0.5
     assert completed["type"] == "ExecutionSyncCompleted"
     assert completed["accepted_count"] == 1
     assert completed["target_count"] == 1
@@ -141,6 +143,8 @@ async def test_venue_target_sync_publishes_execution_snapshot() -> None:
     assert requested["type"] == "ExecutionSyncRequested"
     assert placed["type"] == "PlaceOrdersRequested"
     assert accepted["type"] == "PlaceOrdersAccepted"
+    assert accepted["orders"][0]["side"] == "buy"
+    assert accepted["orders"][0]["qty"] == 0.5
     assert completed["type"] == "ExecutionSyncCompleted"
     assert report.accepted.order_count == 1
     assert isinstance(snapshot, ExecutionSnapshot)

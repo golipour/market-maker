@@ -6,9 +6,10 @@ import time
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
-from mm.core.models.execution import Action
+from mm.core.models.execution import Action, Fill
 from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.core.models.private import OpenOrder
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability import schema as obs_schema
 from mm.observability.metrics import counter_inc, gauge, histogram_observe
@@ -28,6 +29,7 @@ class RuntimeObservabilitySubscriber:
         # Latest local frame per exchange: (t_end_ms, created_at_ms wall) for latency vs execution sync.
         self._last_local_frame_by_exchange: dict[str, tuple[int, int]] = {}
         self._last_raw_market_ts_ms: dict[tuple[str, str, str], int] = {}
+        self._live_order_side_keys: set[tuple[str, str, str]] = set()
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -71,6 +73,9 @@ class RuntimeObservabilitySubscriber:
             return
         if isinstance(event, Action):
             self._observe_action(topic, event)
+            return
+        if isinstance(event, Fill):
+            self._observe_fill(event)
             return
         if isinstance(event, ExecutionSnapshot):
             self._observe_execution_snapshot(event)
@@ -259,6 +264,7 @@ class RuntimeObservabilitySubscriber:
             labels={"exchange": str(snap.exchange)},
             help="Current live orders by exchange",
         )
+        self._observe_live_order_side_metrics(str(snap.exchange), snap.live_orders.values())
 
     def _observe_execution_snapshot_dict(self, payload: dict[str, Any]) -> None:
         ex = str(payload.get("exchange", ""))
@@ -273,6 +279,9 @@ class RuntimeObservabilitySubscriber:
                 labels={"exchange": ex},
                 help="Current live orders by exchange",
             )
+        live_orders = _payload_orders(payload.get("live_orders"))
+        if live_orders:
+            self._observe_live_order_payload_side_metrics(ex, live_orders)
 
     def _finish_sync_latency(self, exchange: str, snapshot_ts_ms: int) -> None:
         pending = self._sync_pending_ts_ms.pop(exchange.lower().strip(), None)
@@ -531,6 +540,118 @@ class RuntimeObservabilitySubscriber:
             help="Orders requested by strategy action",
         )
 
+    def _observe_fill(self, fill: Fill) -> None:
+        labels = _order_metric_labels(exchange=fill.exchange, symbol=fill.symbol, side=fill.side)
+        if labels is None:
+            return
+        counter_inc(
+            obs_schema.MM_EXECUTION_FILLED_ORDERS_TOTAL,
+            labels=labels,
+            help="Private fill events by side",
+        )
+        counter_inc(
+            obs_schema.MM_EXECUTION_FILLED_QTY_TOTAL,
+            max(0.0, float(fill.qty)),
+            labels=labels,
+            help="Private filled quantity by side",
+        )
+
+    def _observe_order_payload_counter(
+        self,
+        payload: dict[str, Any],
+        *,
+        count_metric: str,
+        qty_metric: str,
+        count_help: str,
+        qty_help: str,
+        extra_labels: dict[str, Any] | None = None,
+    ) -> None:
+        for order in _payload_orders(payload.get("orders")):
+            labels = _order_metric_labels(
+                exchange=order.get("exchange") or payload.get("exchange"),
+                symbol=order.get("symbol") or payload.get("symbol"),
+                side=order.get("side"),
+                **(extra_labels or {}),
+            )
+            if labels is None:
+                continue
+            counter_inc(count_metric, labels=labels, help=count_help)
+            qty = _order_qty(order)
+            if qty is not None:
+                counter_inc(qty_metric, max(0.0, qty), labels=labels, help=qty_help)
+
+    def _observe_live_order_side_metrics(self, exchange: str, live_orders: Any) -> None:
+        aggregates: dict[tuple[str, str, str], tuple[float, float]] = {}
+        for live_order in live_orders:
+            if not isinstance(live_order, OpenOrder):
+                continue
+            labels = _order_metric_labels(
+                exchange=exchange or live_order.order.exchange,
+                symbol=live_order.order.symbol,
+                side=live_order.order.side,
+            )
+            if labels is None:
+                continue
+            key = (labels["exchange"], labels["symbol"], labels["side"])
+            count, qty = aggregates.get(key, (0.0, 0.0))
+            aggregates[key] = (count + 1.0, qty + max(0.0, float(live_order.remaining_qty)))
+        self._publish_live_order_side_aggregates(exchange, aggregates)
+
+    def _observe_live_order_payload_side_metrics(self, exchange: str, live_orders: list[dict[str, Any]]) -> None:
+        aggregates: dict[tuple[str, str, str], tuple[float, float]] = {}
+        for live_order in live_orders:
+            labels = _order_metric_labels(
+                exchange=live_order.get("exchange") or exchange,
+                symbol=live_order.get("symbol"),
+                side=live_order.get("side"),
+            )
+            if labels is None:
+                continue
+            key = (labels["exchange"], labels["symbol"], labels["side"])
+            count, qty = aggregates.get(key, (0.0, 0.0))
+            aggregates[key] = (count + 1.0, qty + max(0.0, _order_qty(live_order) or 0.0))
+        self._publish_live_order_side_aggregates(exchange, aggregates)
+
+    def _publish_live_order_side_aggregates(
+        self,
+        exchange: str,
+        aggregates: dict[tuple[str, str, str], tuple[float, float]],
+    ) -> None:
+        exchange_key = str(exchange or "").strip()
+        current_keys = set(aggregates)
+        previous_keys = {key for key in self._live_order_side_keys if key[0] == exchange_key}
+        for key in previous_keys - current_keys:
+            labels = {"exchange": key[0], "symbol": key[1], "side": key[2]}
+            gauge(
+                obs_schema.MM_EXECUTION_LIVE_ORDERS_BY_SIDE,
+                0.0,
+                labels=labels,
+                help="Current live order count by side",
+            )
+            gauge(
+                obs_schema.MM_EXECUTION_LIVE_ORDER_QTY,
+                0.0,
+                labels=labels,
+                help="Current live remaining order quantity by side",
+            )
+        for key, (count, qty) in aggregates.items():
+            labels = {"exchange": key[0], "symbol": key[1], "side": key[2]}
+            gauge(
+                obs_schema.MM_EXECUTION_LIVE_ORDERS_BY_SIDE,
+                count,
+                labels=labels,
+                help="Current live order count by side",
+            )
+            gauge(
+                obs_schema.MM_EXECUTION_LIVE_ORDER_QTY,
+                qty,
+                labels=labels,
+                help="Current live remaining order quantity by side",
+            )
+        self._live_order_side_keys = {
+            key for key in self._live_order_side_keys if key[0] != exchange_key
+        } | current_keys
+
     def _observe_execution_event(self, topic: str, payload: dict[str, Any]) -> None:
         labels = {
             "exchange": str(payload.get("exchange", "")),
@@ -587,6 +708,22 @@ class RuntimeObservabilitySubscriber:
                     labels={"exchange": labels["exchange"]},
                     help="Venue-accepted new orders (len order_ids)",
                 )
+            self._observe_order_payload_counter(
+                payload,
+                count_metric=obs_schema.MM_EXECUTION_PLACED_ORDERS_TOTAL,
+                qty_metric=obs_schema.MM_EXECUTION_PLACED_QTY_TOTAL,
+                count_help="Venue-accepted new orders by side",
+                qty_help="Venue-accepted new order quantity by side",
+            )
+        if etype == "PlaceOrdersFailed":
+            self._observe_order_payload_counter(
+                payload,
+                count_metric=obs_schema.MM_EXECUTION_FAILED_ORDERS_TOTAL,
+                qty_metric=obs_schema.MM_EXECUTION_FAILED_QTY_TOTAL,
+                count_help="Failed order placements by side",
+                qty_help="Failed order placement quantity by side",
+                extra_labels={"reason": str(payload.get("error", "unknown"))},
+            )
         if etype == "CancelOrdersAccepted":
             oids = payload.get("order_ids") or ()
             n = len(oids) if isinstance(oids, (list, tuple)) else 0
@@ -639,6 +776,26 @@ class RuntimeObservabilitySubscriber:
             help="Orders dropped before REST due to venue limits",
         )
         log_event(obs_schema.EVENT_ORDER_VALIDATION_REJECTED, payload)
+        labels = _order_metric_labels(
+            exchange=payload.get("exchange"),
+            symbol=payload.get("symbol"),
+            side=payload.get("side"),
+            reason=payload.get("reason"),
+        )
+        if labels is not None:
+            counter_inc(
+                obs_schema.MM_EXECUTION_FAILED_ORDERS_TOTAL,
+                labels=labels,
+                help="Failed order placements by side",
+            )
+            qty = _as_float(payload.get("qty"))
+            if qty is not None:
+                counter_inc(
+                    obs_schema.MM_EXECUTION_FAILED_QTY_TOTAL,
+                    max(0.0, qty),
+                    labels=labels,
+                    help="Failed order placement quantity by side",
+                )
 
     def _observe_error(self, topic: str, payload: dict[str, Any]) -> None:
         labels = {
@@ -669,6 +826,56 @@ def _as_float(value: Any) -> float | None:
     if not math.isfinite(out):
         return None
     return out
+
+
+def _payload_orders(value: Any) -> list[dict[str, Any]]:
+    raw_items: list[Any]
+    if isinstance(value, dict):
+        raw_items = list(value.values())
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        return []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _side_label(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {"buy", "bid"}:
+        return "bid"
+    if text in {"sell", "ask"}:
+        return "ask"
+    return None
+
+
+def _order_metric_labels(
+    *,
+    exchange: Any,
+    symbol: Any,
+    side: Any,
+    reason: Any | None = None,
+) -> dict[str, str] | None:
+    side_label = _side_label(side)
+    exchange_label = str(exchange or "").strip()
+    symbol_label = str(symbol or "").strip()
+    if not side_label or not exchange_label or not symbol_label:
+        return None
+    labels = {
+        "exchange": exchange_label,
+        "symbol": symbol_label,
+        "side": side_label,
+    }
+    if reason is not None:
+        labels["reason"] = _bounded_reason(reason)
+    return labels
+
+
+def _order_qty(order: dict[str, Any]) -> float | None:
+    for key in ("remaining_qty", "qty", "filled_qty"):
+        qty = _as_float(order.get(key))
+        if qty is not None:
+            return qty
+    return None
 
 
 def _bounded_reason(value: Any) -> str:

@@ -368,8 +368,16 @@ Recommended gate reasons:
 | `mm_order_place_accepted_total` | counter | `exchange` | existing subscriber | Accepted places |
 | `mm_order_cancel_accepted_total` | counter | `exchange` | existing subscriber | Accepted cancels |
 | `mm_order_router_failures_total` | counter | `exchange`, `operation`, `error` | router | Adapter cancel/place failures |
+| `mm_execution_placed_orders_total` | counter | `exchange`, `symbol`, `side` | `PlaceOrdersAccepted` | Venue-accepted new orders by bid/ask side |
+| `mm_execution_placed_qty_total` | counter | `exchange`, `symbol`, `side` | `PlaceOrdersAccepted` | Venue-accepted new order base quantity by bid/ask side |
+| `mm_execution_failed_orders_total` | counter | `exchange`, `symbol`, `side`, `reason` | `PlaceOrdersFailed`, `OrderValidationRejected` | Failed or rejected order placements by bid/ask side |
+| `mm_execution_failed_qty_total` | counter | `exchange`, `symbol`, `side`, `reason` | `PlaceOrdersFailed`, `OrderValidationRejected` | Failed or rejected order base quantity by bid/ask side |
+| `mm_execution_filled_orders_total` | counter | `exchange`, `symbol`, `side` | private fill stream | Private fill events by bid/ask side |
+| `mm_execution_filled_qty_total` | counter | `exchange`, `symbol`, `side` | private fill stream | Private filled base quantity by bid/ask side |
 | `mm_order_validation_rejected_total` | counter | `exchange`, `reason` | existing subscriber | Venue rules rejected order |
 | `mm_execution_live_orders` | gauge | `exchange` | existing subscriber | Current live order count |
+| `mm_execution_live_orders_by_side` | gauge | `exchange`, `symbol`, `side` | execution snapshots | Current live order count by bid/ask side |
+| `mm_execution_live_order_qty` | gauge | `exchange`, `symbol`, `side` | execution snapshots | Current live remaining base quantity by bid/ask side |
 | `mm_order_sync_create_count` | gauge | `exchange` | existing subscriber | Last requested create count |
 | `mm_order_sync_cancel_count` | gauge | `exchange` | existing subscriber | Last requested cancel count |
 
@@ -540,9 +548,15 @@ Panels:
 | Decision rate | timeseries | Prometheus | `sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))` |
 | Controller p95 latency | timeseries | Prometheus | `histogram_quantile(0.95, sum by (le,actor_id)(rate(mm_controller_latency_ms_bucket[$__rate_interval])))` |
 | Order sync p95 latency | timeseries | Prometheus | `histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))` |
+| Sync requests | timeseries | Prometheus | `sum by (exchange)(rate(mm_order_sync_total[$__rate_interval]))` |
+| Placed orders | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_placed_orders_total[$__rate_interval]))` |
+| Failed orders | timeseries | Prometheus | `sum by (exchange,symbol,side,reason)(rate(mm_execution_failed_orders_total[$__rate_interval]))` |
+| Fill events | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_filled_orders_total[$__rate_interval]))` |
+| Filled quantity | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_filled_qty_total[$__rate_interval]))` |
+| Live orders by side | timeseries | Prometheus | `sum by (exchange,symbol,side)(mm_execution_live_orders_by_side)` |
+| Live order quantity by side | timeseries | Prometheus | `sum by (exchange,symbol,side)(mm_execution_live_order_qty)` |
 | Runtime errors | timeseries | Prometheus | `sum by (topic,error)(rate(mm_runtime_errors_total[$__rate_interval]))` |
 | Persistence errors | timeseries | Prometheus | `sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))` |
-| Live orders | timeseries | Prometheus | `mm_execution_live_orders` |
 | Kill switch | stat | Prometheus | `mm_kill_switch_state` |
 | Observe-only | stat | Prometheus | `mm_observe_only_state` |
 | Latest warnings | table | Postgres | latest `ControllerDiagnostics.warnings` |
