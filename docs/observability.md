@@ -665,25 +665,25 @@ Existing dashboard:
 
 ### 05 Action pipeline funnel
 
-Purpose: answer "where did intended quotes disappear?"
+Purpose: answer "did the joint target book reach execution?"
 
 Panels:
 
-- order count funnel:
-  - continuous
-  - ladder
-  - venue_quantized
-  - capped
-  - target_book
-  - risk_approved_target
-  - planned_place
-  - rules_valid
-  - router_accepted
-- buy/sell quantity by stage
-- buy/sell notional by stage
-- kept vs canceled
-- rejection counts by stage and reason
-- top rejection reasons table
+- desired target orders by venue from `JointTargetBook`
+- desired target quantity by venue and side
+- high-level execution contract funnel:
+  - desired target
+  - risk approved
+  - router accepted
+- blocked/rejected reasons, grouped into readable domains such as risk,
+  exchange rules, router, order shaping, and venue limits
+- latest execution summary with friendly command counts for new orders,
+  cancels, unchanged existing orders, and blocked reasons
+
+Low-level planner fields such as `planned_place`, `planned_cancel`, `kept`, and
+`rules_valid` are still present in `ControllerDiagnostics.action_pipeline` for
+debugging, but the v2 dashboard intentionally does not plot them as the primary
+funnel.
 - sample rejected orders table when included in diagnostics
 
 Existing dashboards:

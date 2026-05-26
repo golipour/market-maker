@@ -581,12 +581,17 @@ def optimizer_diagnostics() -> dict[str, Any]:
 
 def action_pipeline() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Target-book execution funnel. Early stages are optimizer/order shaping; target_book and later stages are the current risk, planner, rules, and router path.", y=0),
-        _panel(2, "Order count funnel", "timeseries", PROM_DS, 'mm_action_stage_orders{actor_id=~"${actor_id:regex}",side="all"}', x=0, y=3, legend="{{exchange}} {{stage}}"),
-        _panel(3, "Qty by stage", "timeseries", PROM_DS, 'mm_action_stage_qty{actor_id=~"${actor_id:regex}"}', x=12, y=3, legend="{{exchange}} {{stage}} {{side}}"),
-        _panel(4, "Notional by stage", "timeseries", PROM_DS, 'mm_action_stage_notional{actor_id=~"${actor_id:regex}"}', x=0, y=11, legend="{{exchange}} {{stage}} {{side}}"),
-        _panel(5, "Action rejections", "timeseries", PROM_DS, 'sum by (stage,reason)(rate(mm_action_rejected_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11, legend="{{stage}} {{reason}}"),
-        _panel(6, "Pipeline stage rows", "table", PG_DS, _action_pipeline_table_sql(), x=0, y=19, w=24, fmt="table"),
+        _text(
+            1,
+            "Scope",
+            "Joint target-book execution path. The main funnel is intentionally collapsed to the runtime contract: desired target book, risk-approved target, and router-accepted orders. Planner internals are summarized in the table.",
+            y=0,
+        ),
+        _panel(2, "Desired target orders", "timeseries", PG_DS, _target_book_count_sql(), x=0, y=3, w=12),
+        _panel(3, "Desired target qty", "timeseries", PG_DS, _target_book_qty_sql(), x=12, y=3, w=12),
+        _panel(4, "Execution contract funnel", "timeseries", PG_DS, _action_contract_funnel_sql(), x=0, y=11, w=12),
+        _panel(5, "Blocked/rejected reasons", "timeseries", PG_DS, _action_rejection_reason_sql(), x=12, y=11, w=12),
+        _panel(6, "Latest execution summary", "table", PG_DS, _action_execution_summary_sql(), x=0, y=19, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-action-pipeline", "MM Observability v2 / 05 Action Pipeline Funnel", panels, tags=["actions"])
 
@@ -1092,20 +1097,66 @@ WHERE {_diagnostics_filter()}
 ORDER BY 1"""
 
 
-def _action_pipeline_table_sql() -> str:
+def _action_contract_funnel_sql() -> str:
     order_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'order_count']")
-    buy_qty = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty']")
-    sell_qty = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty']")
-    return f"""SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,
-       {order_count} AS order_count,
-       {buy_qty} AS buy_qty,
-       {sell_qty} AS sell_qty,
-       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts
+    return f"""SELECT e.ts AS "time", label AS metric,
+       {order_count} AS value
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage
+CROSS JOIN LATERAL (
+  VALUES
+    ('target_book', 'desired target'),
+    ('risk_approved_target', 'risk approved'),
+    ('router_accepted', 'router accepted')
+) AS stages(stage, label)
 WHERE {_diagnostics_filter()}
-ORDER BY e.ts DESC, stage
-LIMIT 300"""
+ORDER BY 1"""
+
+
+def _action_rejection_reason_sql() -> str:
+    count_value = _numeric_sql("reason.value", default="0.0")
+    return f"""SELECT e.ts AS "time",
+       (stage_label || ': ' || reason.key) AS metric,
+       {count_value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('venue_quantized', 'venue limits'),
+    ('capped', 'order shaping'),
+    ('risk_approved_target', 'risk'),
+    ('rules_valid', 'exchange rules'),
+    ('router_accepted', 'router')
+) AS stages(stage, stage_label)
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'], '{{}}'::jsonb)
+) AS reason(key, value)
+WHERE {_diagnostics_filter()}
+ORDER BY 1"""
+
+
+def _action_execution_summary_sql() -> str:
+    desired = _numeric_sql("e.payload #>> ARRAY['action_pipeline','target_book','order_count']")
+    approved = _numeric_sql("e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count']")
+    accepted = _numeric_sql("e.payload #>> ARRAY['action_pipeline','router_accepted','order_count']")
+    new_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_place','order_count']")
+    cancel_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count']")
+    kept_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','kept','order_count']")
+    return f"""SELECT e.ts,
+       e.actor_id,
+       e.exchange,
+       e.symbol,
+       {desired} AS desired_orders,
+       {approved} AS risk_approved_orders,
+       {accepted} AS router_accepted_orders,
+       {new_orders} AS new_order_commands,
+       {cancel_orders} AS cancel_commands,
+       {kept_orders} AS unchanged_existing_orders,
+       COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{{}}'::jsonb) AS risk_blocks,
+       COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{{}}'::jsonb) AS rule_blocks,
+       COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{{}}'::jsonb) AS router_blocks
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+ORDER BY e.ts DESC
+LIMIT 50"""
 
 
 def _recent_execution_events_sql(limit: int = 50) -> str:

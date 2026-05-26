@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Target-book execution funnel. Early stages are optimizer/order shaping; target_book and later stages are the current risk, planner, rules, and router path.",
+        "content": "Joint target-book execution path. The main funnel is intentionally collapsed to the runtime contract: desired target book, risk-approved target, and router-accepted orders. Planner internals are summarized in the table.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -27,8 +27,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -47,15 +47,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "mm_action_stage_orders{actor_id=~\"${actor_id:regex}\",side=\"all\"}",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{stage}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", venue AS metric, jsonb_array_length(COALESCE(book->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events\nCROSS JOIN LATERAL (\n  VALUES ('local', payload->'local'), ('global', payload->'global')\n) AS v(venue, book)\nWHERE topic = '${target_books_topic}'\n  AND event_type = 'JointTargetBook'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND book IS NOT NULL\n  AND $__timeFilter(ts)\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Order count funnel",
+      "title": "Desired target orders",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -71,8 +73,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -91,15 +93,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "mm_action_stage_qty{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{stage}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM(CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', e.payload->'local'), ('global', e.payload->'global')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Qty by stage",
+      "title": "Desired target qty",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -115,8 +119,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -135,15 +139,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "mm_action_stage_notional{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{stage}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", label AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('target_book', 'desired target'),\n    ('risk_approved_target', 'risk approved'),\n    ('router_accepted', 'router accepted')\n) AS stages(stage, label)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Notional by stage",
+      "title": "Execution contract funnel",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -159,8 +165,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -179,15 +185,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (stage,reason)(rate(mm_action_rejected_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{stage}} {{reason}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       (stage_label || ': ' || reason.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'order shaping'),\n    ('risk_approved_target', 'risk'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n) AS stages(stage, stage_label)\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'], '{}'::jsonb)\n) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Action rejections",
+      "title": "Blocked/rejected reasons",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -229,11 +237,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS order_count,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'], ''))::double precision\n  ELSE 0.0\nEND AS buy_qty,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'], ''))::double precision\n  ELSE 0.0\nEND AS sell_qty,\n       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC, stage\nLIMIT 300",
+          "rawSql": "SELECT e.ts,\n       e.actor_id,\n       e.exchange,\n       e.symbol,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS desired_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS risk_approved_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS router_accepted_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS new_order_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS cancel_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS unchanged_existing_orders,\n       COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{}'::jsonb) AS risk_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{}'::jsonb) AS rule_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{}'::jsonb) AS router_blocks\nFROM mm_events e\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 50",
           "refId": "A"
         }
       ],
-      "title": "Pipeline stage rows",
+      "title": "Latest execution summary",
       "type": "table",
       "options": {
         "cellHeight": "sm",
