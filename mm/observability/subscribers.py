@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.execution import Action
 from mm.core.models.joint_strategy import JointStrategyFrame
+from mm.core.models.market import RawOrderbook, RawTrade
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.observability import schema as obs_schema
 from mm.observability.metrics import counter_inc, gauge, histogram_observe
@@ -25,6 +27,7 @@ class RuntimeObservabilitySubscriber:
         self._sync_pending_ts_ms: dict[str, int] = {}
         # Latest local frame per exchange: (t_end_ms, created_at_ms wall) for latency vs execution sync.
         self._last_local_frame_by_exchange: dict[str, tuple[int, int]] = {}
+        self._last_raw_market_ts_ms: dict[tuple[str, str, str], int] = {}
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -47,6 +50,22 @@ class RuntimeObservabilitySubscriber:
             raise
 
     def observe(self, topic: str, event: Any) -> None:
+        if isinstance(event, RawOrderbook):
+            self._observe_raw_market_event(
+                exchange=event.exchange,
+                symbol=event.symbol,
+                kind="orderbook",
+                timestamp_ms=event.timestamp_ms,
+            )
+            return
+        if isinstance(event, RawTrade):
+            self._observe_raw_market_event(
+                exchange=event.exchange,
+                symbol=event.symbol,
+                kind="trade",
+                timestamp_ms=event.timestamp_ms,
+            )
+            return
         if isinstance(event, JointStrategyFrame):
             self._observe_joint_strategy_frame(topic, event)
             return
@@ -57,6 +76,9 @@ class RuntimeObservabilitySubscriber:
             self._observe_execution_snapshot(event)
             return
         if isinstance(event, dict):
+            if topic.startswith("market:raw:"):
+                self._observe_raw_market_payload(topic, event)
+                return
             kind = str(event.get("type", ""))
             if kind == "ControllerDiagnostics":
                 self._observe_controller_diagnostics(event)
@@ -85,6 +107,71 @@ class RuntimeObservabilitySubscriber:
             if event.get("exchange") is not None and "live_order_count" in event:
                 self._observe_execution_snapshot_dict(event)
                 return
+
+    def _observe_raw_market_payload(self, topic: str, payload: dict[str, Any]) -> None:
+        parts = topic.split(":")
+        topic_exchange = parts[2] if len(parts) >= 5 else ""
+        topic_symbol = parts[3] if len(parts) >= 5 else ""
+        topic_kind = parts[4] if len(parts) >= 5 else ""
+        kind = "orderbook" if topic_kind == "orderbook" else "trade" if topic_kind == "trades" else topic_kind
+        self._observe_raw_market_event(
+            exchange=str(payload.get("exchange") or topic_exchange),
+            symbol=str(payload.get("symbol") or topic_symbol),
+            kind=kind,
+            timestamp_ms=payload.get("timestamp_ms"),
+        )
+
+    def _observe_raw_market_event(self, *, exchange: str, symbol: str, kind: str, timestamp_ms: Any) -> None:
+        if not exchange or not symbol or timestamp_ms is None:
+            return
+        try:
+            event_ts_ms = int(timestamp_ms)
+        except Exception:
+            return
+        labels = {"exchange": exchange, "symbol": symbol, "kind": kind or "unknown"}
+        now_ms = int(time.time() * 1000)
+        counter_inc(
+            obs_schema.MM_RAW_MARKET_EVENTS_TOTAL,
+            labels=labels,
+            help="Raw upstream market data events consumed before interval aggregation",
+        )
+        gauge(
+            obs_schema.MM_RAW_MARKET_EVENT_TIMESTAMP_MS,
+            float(event_ts_ms),
+            labels=labels,
+            help="Latest raw upstream market event timestamp in Unix milliseconds",
+        )
+        ingest_lag_ms = max(0.0, float(now_ms - event_ts_ms))
+        gauge(
+            obs_schema.MM_RAW_MARKET_INGEST_LAG_LATEST_MS,
+            ingest_lag_ms,
+            labels=labels,
+            help="Latest wall-clock lag observed when raw upstream market data reaches the runtime",
+        )
+        histogram_observe(
+            obs_schema.MM_RAW_MARKET_INGEST_LAG_MS,
+            ingest_lag_ms,
+            labels=labels,
+            help="Wall-clock lag observed when raw upstream market data reaches the runtime",
+        )
+        key = (exchange, symbol, labels["kind"])
+        previous_ts_ms = self._last_raw_market_ts_ms.get(key)
+        if previous_ts_ms is not None and event_ts_ms >= previous_ts_ms:
+            gap_ms = float(event_ts_ms - previous_ts_ms)
+            gauge(
+                obs_schema.MM_RAW_MARKET_EVENT_GAP_LATEST_MS,
+                gap_ms,
+                labels=labels,
+                help="Latest timestamp gap between consecutive raw upstream market data events",
+            )
+            histogram_observe(
+                obs_schema.MM_RAW_MARKET_EVENT_GAP_MS,
+                gap_ms,
+                labels=labels,
+                help="Timestamp gap between consecutive raw upstream market data events",
+            )
+        if previous_ts_ms is None or event_ts_ms >= previous_ts_ms:
+            self._last_raw_market_ts_ms[key] = event_ts_ms
 
     def _observe_joint_strategy_frame(self, topic: str, frame: JointStrategyFrame) -> None:
         local = frame.local_market

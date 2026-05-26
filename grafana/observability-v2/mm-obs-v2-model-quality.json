@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Model NLL, residuals, and skip reasons emitted from `ControllerDiagnostics.models`.",
+        "content": "Model NLL and latest model scores emitted from `ControllerDiagnostics.models`.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -39,7 +39,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 3
       },
@@ -71,94 +71,6 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 3
-      },
-      "id": 3,
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
-          },
-          "expr": "mm_model_standardized_residual{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "title": "Standardized residual",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 11
-      },
-      "id": 4,
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
-          },
-          "expr": "sum by (model,reason)(rate(mm_model_score_skipped_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{model}} {{reason}}"
-        }
-      ],
-      "title": "Score skipped",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
         "type": "postgres",
         "uid": "postgres-mm"
       },
@@ -173,9 +85,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 11
       },
-      "id": 5,
+      "id": 3,
       "targets": [
         {
           "datasource": {

@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Inventory, cash, wealth, and step economics.",
+        "content": "Inventory, cash, total marked value, wealth, and step economics.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -165,8 +165,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -185,15 +185,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "mm_risk_exposure{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{phase}} {{field}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE((e.payload #>> ARRAY['state','local_cash'])::double precision, 0.0) AS local_cash,\n         COALESCE((e.payload #>> ARRAY['state','global_cash'])::double precision, 0.0) AS global_cash,\n         COALESCE((e.payload #>> ARRAY['state','local_inventory'])::double precision, 0.0) AS local_inventory,\n         COALESCE((e.payload #>> ARRAY['state','global_inventory'])::double precision, 0.0) AS global_inventory,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['optimizer','config','reference_price'], '')::double precision,\n           NULLIF(e.payload #>> ARRAY['state','global_sell_vwap'], '')::double precision,\n           NULLIF(e.payload #>> ARRAY['state','local_sell_vwap'], '')::double precision,\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           0.0\n         ) AS reference_vwap\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n)\nSELECT \"time\", 'total_cash' AS metric,\n       (local_cash + global_cash) AS value\nFROM state_rows\nUNION ALL\nSELECT \"time\", 'total_inventory_value',\n       ((local_inventory + global_inventory) * reference_vwap) AS value\nFROM state_rows\nUNION ALL\nSELECT \"time\", 'total_wealth',\n       (local_cash + global_cash + (local_inventory + global_inventory) * reference_vwap) AS value\nFROM state_rows\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Risk exposure",
+      "title": "Total cash / inventory value / wealth",
       "type": "timeseries",
       "options": {
         "legend": {

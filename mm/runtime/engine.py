@@ -380,6 +380,8 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
         RuntimeTopics.execution_state(config.local.normalized_exchange()),
         f"private:state:{config.local.normalized_exchange()}:errors",
         config.local.market_error_topic(),
+        config.local.raw_orderbook_topic(),
+        config.local.raw_trade_topic(),
     ]
     if topics.strategy_diagnostics is not None:
         observed_topics.append(topics.strategy_diagnostics)
@@ -390,6 +392,8 @@ def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: Abstract
                 RuntimeTopics.execution_state(config.global_.normalized_exchange()),
                 f"private:state:{config.global_.normalized_exchange()}:errors",
                 config.global_.market_error_topic(),
+                config.global_.raw_orderbook_topic(),
+                config.global_.raw_trade_topic(),
             ]
         )
     return (RuntimeObservabilitySubscriber(bus=bus, topics=tuple(observed_topics)),)

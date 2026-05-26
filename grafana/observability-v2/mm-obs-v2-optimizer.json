@@ -32,14 +32,14 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 3
+          "unit": "sci",
+          "decimals": 4
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 3
       },
@@ -86,56 +86,10 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 3
-      },
-      "id": 3,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','improvement'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Objective improvement",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
         "y": 11
       },
-      "id": 4,
+      "id": 3,
       "targets": [
         {
           "datasource": {
@@ -181,7 +135,7 @@
         "x": 12,
         "y": 11
       },
-      "id": 5,
+      "id": 4,
       "targets": [
         {
           "datasource": {
@@ -227,7 +181,7 @@
         "x": 0,
         "y": 19
       },
-      "id": 6,
+      "id": 5,
       "targets": [
         {
           "datasource": {

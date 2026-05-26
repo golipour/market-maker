@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import time
+
 from mm.bus.memory import InMemoryBus
+from mm.core.models.market import RawTrade
 from mm.diagnostics.models import (
     ActionPipelineDiagnostics,
     ControllerDiagnostics,
@@ -111,3 +114,37 @@ def test_observability_subscriber_clears_sync_pending_on_completion_or_failure()
         },
     )
     assert "nobitex" not in subscriber._sync_pending_ts_ms
+
+
+def test_observability_subscriber_emits_raw_market_feed_metrics() -> None:
+    subscriber = RuntimeObservabilitySubscriber(bus=InMemoryBus(), topics=())
+    ts_ms = int(time.time() * 1000) - 2_000
+    first = RawTrade(
+        trade_id="raw-metric-1",
+        timestamp_ms=ts_ms,
+        price=100.0,
+        qty=1.0,
+        side="buy",
+        exchange="rawtest",
+        symbol="RAW_TEST",
+    )
+    second = RawTrade(
+        trade_id="raw-metric-2",
+        timestamp_ms=ts_ms + 1_000,
+        price=101.0,
+        qty=1.0,
+        side="sell",
+        exchange="rawtest",
+        symbol="RAW_TEST",
+    )
+
+    subscriber.observe("market:raw:rawtest:RAW_TEST:trades", first)
+    subscriber.observe("market:raw:rawtest:RAW_TEST:trades", second)
+
+    text = REGISTRY.render()
+    assert 'mm_raw_market_events_total{exchange="rawtest",kind="trade",symbol="RAW_TEST"} 2.0' in text
+    assert f'mm_raw_market_event_timestamp_ms{{exchange="rawtest",kind="trade",symbol="RAW_TEST"}} {float(second.timestamp_ms)}' in text
+    assert 'mm_raw_market_ingest_lag_latest_ms{exchange="rawtest",kind="trade",symbol="RAW_TEST"}' in text
+    assert 'mm_raw_market_event_gap_latest_ms{exchange="rawtest",kind="trade",symbol="RAW_TEST"} 1000.0' in text
+    assert "mm_raw_market_ingest_lag_ms_bucket" in text
+    assert "mm_raw_market_event_gap_ms_bucket" in text

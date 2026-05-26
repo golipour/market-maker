@@ -60,11 +60,12 @@ def _panel(
     h: int = 8,
     fmt: str = "time_series",
     unit: str = "short",
+    decimals: int = 3,
     legend: str | None = None,
 ) -> dict[str, Any]:
     panel: dict[str, Any] = {
         "datasource": datasource,
-        "fieldConfig": {"defaults": {"unit": unit, "decimals": 3}, "overrides": []},
+        "fieldConfig": {"defaults": {"unit": unit, "decimals": decimals}, "overrides": []},
         "gridPos": {"h": h, "w": w, "x": x, "y": y},
         "id": id_,
         "targets": [_target(datasource, expr, fmt=fmt, legend=legend)],
@@ -192,13 +193,15 @@ def runtime_overview() -> dict[str, Any]:
 
 def market_data_quality() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Market data quality from persisted `MarketEvent` rows.", y=0),
-        _panel(2, "Market event rate", "timeseries", PG_DS, _market_event_rate_sql(), x=0, y=3),
-        _panel(3, "Market event age ms", "timeseries", PG_DS, _market_age_sql(), x=12, y=3),
-        _panel(4, "Best bid / ask", "timeseries", PG_DS, _best_bid_ask_sql(), x=0, y=11),
-        _panel(5, "Spread", "timeseries", PG_DS, _spread_sql(), x=12, y=11),
-        _panel(6, "Buy / sell volume", "timeseries", PG_DS, _volume_sql(), x=0, y=19),
-        _panel(7, "Latency skew", "timeseries", PROM_DS, "mm_latency_skew_ms", x=12, y=19, legend="{{exchange}} {{symbol}}"),
+        _text(1, "Scope", "Raw orderbook/trade feed health before interval aggregation, plus local/global price-volume comparison.", y=0),
+        _panel(2, "Raw feed rate / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,kind)(rate(mm_raw_market_events_total{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}[$__rate_interval]))', x=0, y=3, w=6, unit="ops", legend="{{exchange}} {{kind}}"),
+        _panel(3, "Raw feed freshness ms", "timeseries", PROM_DS, '(time() * 1000) - max by (exchange,symbol,kind)(mm_raw_market_event_timestamp_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=6, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
+        _panel(4, "Raw receive lag latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=12, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
+        _panel(5, "Raw event gap latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_event_gap_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=18, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
+        _panel(6, "Local best bid / ask / VWAP", "timeseries", PG_DS, _role_price_vwap_sql("local"), x=0, y=11),
+        _panel(7, "Global best bid / ask / VWAP", "timeseries", PG_DS, _role_price_vwap_sql("global"), x=12, y=11),
+        _panel(8, "Local buy / sell volume", "timeseries", PG_DS, _role_volume_sql("local"), x=0, y=19),
+        _panel(9, "Global buy / sell volume", "timeseries", PG_DS, _role_volume_sql("global"), x=12, y=19),
     ]
     return _dashboard("mm-obs-v2-market-data", "MM Observability v2 / 01 Market Data Quality", panels, tags=["market-data"])
 
@@ -217,11 +220,9 @@ def controller_health() -> dict[str, Any]:
 
 def model_quality() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Model NLL, residuals, and skip reasons emitted from `ControllerDiagnostics.models`.", y=0),
-        _panel(2, "Model NLL p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=3, legend="{{model}}"),
-        _panel(3, "Standardized residual", "timeseries", PROM_DS, 'mm_model_standardized_residual{actor_id=~"${actor_id:regex}"}', x=12, y=3, legend="{{model}}"),
-        _panel(4, "Score skipped", "timeseries", PROM_DS, 'sum by (model,reason)(rate(mm_model_score_skipped_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11, legend="{{model}} {{reason}}"),
-        _panel(5, "Latest model scores", "table", PG_DS, _latest_model_scores_sql(), x=0, y=19, w=24, fmt="table"),
+        _text(1, "Scope", "Model NLL and latest model scores emitted from `ControllerDiagnostics.models`.", y=0),
+        _panel(2, "Model NLL p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=3, w=24, legend="{{model}}"),
+        _panel(3, "Latest model scores", "table", PG_DS, _latest_model_scores_sql(), x=0, y=11, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-model-quality", "MM Observability v2 / 03 Strategy Model Quality", panels, tags=["models"])
 
@@ -229,11 +230,10 @@ def model_quality() -> dict[str, Any]:
 def optimizer_diagnostics() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Optimizer objective, contribution fractions, timing, and gradient health.", y=0),
-        _panel(2, "Objective value", "timeseries", PG_DS, _optimizer_objective_sql(), x=0, y=3),
-        _panel(3, "Objective improvement", "timeseries", PG_DS, _optimizer_improvement_sql(), x=12, y=3),
-        _panel(4, "Contribution fractions", "timeseries", PG_DS, _optimizer_contrib_sql(), x=0, y=11),
-        _panel(5, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11),
-        _panel(6, "Nonfinite counts", "timeseries", PG_DS, _optimizer_gradients_sql(), x=0, y=19, w=24),
+        _panel(2, "Objective value", "timeseries", PG_DS, _optimizer_objective_sql(), x=0, y=3, w=24, unit="sci", decimals=4),
+        _panel(3, "Contribution fractions", "timeseries", PG_DS, _optimizer_contrib_sql(), x=0, y=11),
+        _panel(4, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11),
+        _panel(5, "Nonfinite counts", "timeseries", PG_DS, _optimizer_gradients_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
@@ -266,11 +266,11 @@ def risk_execution() -> dict[str, Any]:
 
 def portfolio_pnl() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Inventory, cash, wealth, and step economics.", y=0),
+        _text(1, "Scope", "Inventory, cash, total marked value, wealth, and step economics.", y=0),
         _panel(2, "Inventory", "timeseries", PG_DS, _portfolio_field_sql("local_inventory", "global_inventory"), x=0, y=3),
         _panel(3, "Cash", "timeseries", PG_DS, _portfolio_field_sql("local_cash", "global_cash"), x=12, y=3),
         _panel(4, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=11),
-        _panel(5, "Risk exposure", "timeseries", PROM_DS, 'mm_risk_exposure{actor_id=~"${actor_id:regex}"}', x=12, y=11, legend="{{exchange}} {{phase}} {{field}}"),
+        _panel(5, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=11),
         _panel(6, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
@@ -328,31 +328,6 @@ ORDER BY e.ts DESC
 LIMIT {limit}"""
 
 
-def _market_event_rate_sql() -> str:
-    return """SELECT $__timeGroupAlias(ts, $__interval),
-       (exchange || ' ' || symbol) AS metric,
-       COUNT(*)::double precision AS value
-FROM mm_events
-WHERE event_type = 'MarketEvent'
-  AND exchange IN (${exchange:sqlstring})
-  AND symbol IN (${symbol:sqlstring})
-  AND $__timeFilter(ts)
-GROUP BY 1, exchange, symbol
-ORDER BY 1"""
-
-
-def _market_age_sql() -> str:
-    return """SELECT ts AS "time",
-       (exchange || ' ' || symbol) AS metric,
-       GREATEST(0, EXTRACT(EPOCH FROM now()) * 1000 - (payload->>'t_end_ms')::double precision) AS value
-FROM mm_events
-WHERE event_type = 'MarketEvent'
-  AND exchange IN (${exchange:sqlstring})
-  AND symbol IN (${symbol:sqlstring})
-  AND $__timeFilter(ts)
-ORDER BY 1"""
-
-
 def _best_bid_ask_sql() -> str:
     return """SELECT ts AS "time", (exchange || ' best_bid') AS metric,
        (payload->'orderbook'->'bids'->0->>'price')::double precision AS value
@@ -363,6 +338,135 @@ SELECT ts AS "time", (exchange || ' best_ask') AS metric,
        (payload->'orderbook'->'asks'->0->>'price')::double precision AS value
 FROM mm_events
 WHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)
+ORDER BY 1"""
+
+
+def _role_exchange_cte() -> str:
+    return """role_exchange AS (
+  SELECT DISTINCT role, exchange, symbol
+  FROM (
+    SELECT 'local'::text AS role, e.exchange AS exchange, e.symbol AS symbol
+    FROM mm_events e
+    WHERE e.topic = '${diagnostics_topic}'
+      AND e.event_type = 'ControllerDiagnostics'
+      AND e.symbol IN (${symbol:sqlstring})
+      AND e.actor_id IN (${actor_id:sqlstring})
+      AND $__timeFilter(e.ts)
+    UNION ALL
+    SELECT gates.value->>'role' AS role, gates.key AS exchange, e.symbol AS symbol
+    FROM mm_events e
+    CROSS JOIN LATERAL jsonb_each(
+      COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)
+    ) AS gates(key, value)
+    WHERE e.topic = '${diagnostics_topic}'
+      AND e.event_type = 'ControllerDiagnostics'
+      AND e.symbol IN (${symbol:sqlstring})
+      AND e.actor_id IN (${actor_id:sqlstring})
+      AND $__timeFilter(e.ts)
+      AND gates.value->>'role' IN ('local', 'global')
+    UNION ALL
+    SELECT 'local'::text,
+           jf.payload #>> ARRAY['local_market','exchange'],
+           jf.payload #>> ARRAY['local_market','symbol']
+    FROM mm_events jf
+    WHERE jf.event_type = 'JointStrategyFrame'
+      AND (jf.payload #>> ARRAY['local_market','symbol']) IN (${symbol:sqlstring})
+      AND $__timeFilter(jf.ts)
+    UNION ALL
+    SELECT 'global'::text,
+           jf.payload #>> ARRAY['global_market','exchange'],
+           jf.payload #>> ARRAY['global_market','symbol']
+    FROM mm_events jf
+    WHERE jf.event_type = 'JointStrategyFrame'
+      AND (jf.payload #>> ARRAY['global_market','exchange']) IS NOT NULL
+      AND (jf.payload #>> ARRAY['global_market','symbol']) IN (${symbol:sqlstring})
+      AND $__timeFilter(jf.ts)
+  ) r
+  WHERE role IN ('local', 'global')
+    AND exchange IS NOT NULL AND exchange <> ''
+    AND symbol IS NOT NULL AND symbol <> ''
+)"""
+
+
+def _role_price_vwap_sql(role: str) -> str:
+    role_key = "global" if role == "global" else "local"
+    if role_key == "local":
+        vwap_join = "r.role = 'local' AND r.exchange = e.exchange AND r.symbol = e.symbol"
+        buy_field = "local_buy_vwap"
+        sell_field = "local_sell_vwap"
+    else:
+        vwap_join = "r.role = 'global' AND r.symbol = e.symbol"
+        buy_field = "global_buy_vwap"
+        sell_field = "global_sell_vwap"
+    return f"""WITH {_role_exchange_cte()}
+SELECT m.ts AS "time", (m.exchange || ' best_bid') AS metric,
+       (m.payload->'orderbook'->'bids'->0->>'price')::double precision AS value
+FROM mm_events m
+JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
+WHERE m.event_type = 'MarketEvent'
+  AND m.exchange IN (${{exchange:sqlstring}})
+  AND m.symbol IN (${{symbol:sqlstring}})
+  AND (m.payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
+  AND $__timeFilter(m.ts)
+UNION ALL
+SELECT m.ts AS "time", (m.exchange || ' best_ask') AS metric,
+       (m.payload->'orderbook'->'asks'->0->>'price')::double precision AS value
+FROM mm_events m
+JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
+WHERE m.event_type = 'MarketEvent'
+  AND m.exchange IN (${{exchange:sqlstring}})
+  AND m.symbol IN (${{symbol:sqlstring}})
+  AND (m.payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
+  AND $__timeFilter(m.ts)
+UNION ALL
+SELECT e.ts AS "time", (r.exchange || ' buy_vwap') AS metric,
+       (e.payload #>> ARRAY['state','{buy_field}'])::double precision AS value
+FROM mm_events e
+JOIN role_exchange r ON {vwap_join}
+WHERE e.topic = '${{diagnostics_topic}}'
+  AND e.event_type = 'ControllerDiagnostics'
+  AND e.symbol IN (${{symbol:sqlstring}})
+  AND e.actor_id IN (${{actor_id:sqlstring}})
+  AND r.exchange IN (${{exchange:sqlstring}})
+  AND (e.payload #>> ARRAY['state','{buy_field}']) IS NOT NULL
+  AND $__timeFilter(e.ts)
+UNION ALL
+SELECT e.ts AS "time", (r.exchange || ' sell_vwap') AS metric,
+       (e.payload #>> ARRAY['state','{sell_field}'])::double precision AS value
+FROM mm_events e
+JOIN role_exchange r ON {vwap_join}
+WHERE e.topic = '${{diagnostics_topic}}'
+  AND e.event_type = 'ControllerDiagnostics'
+  AND e.symbol IN (${{symbol:sqlstring}})
+  AND e.actor_id IN (${{actor_id:sqlstring}})
+  AND r.exchange IN (${{exchange:sqlstring}})
+  AND (e.payload #>> ARRAY['state','{sell_field}']) IS NOT NULL
+  AND $__timeFilter(e.ts)
+ORDER BY 1"""
+
+
+def _role_volume_sql(role: str) -> str:
+    role_key = "global" if role == "global" else "local"
+    return f"""WITH {_role_exchange_cte()}
+SELECT m.ts AS "time", (m.exchange || ' buy_volume') AS metric,
+       (m.payload->>'buy_volume')::double precision AS value
+FROM mm_events m
+JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
+WHERE m.event_type = 'MarketEvent'
+  AND m.exchange IN (${{exchange:sqlstring}})
+  AND m.symbol IN (${{symbol:sqlstring}})
+  AND (m.payload->>'buy_volume') IS NOT NULL
+  AND $__timeFilter(m.ts)
+UNION ALL
+SELECT m.ts AS "time", (m.exchange || ' sell_volume') AS metric,
+       (m.payload->>'sell_volume')::double precision AS value
+FROM mm_events m
+JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
+WHERE m.event_type = 'MarketEvent'
+  AND m.exchange IN (${{exchange:sqlstring}})
+  AND m.symbol IN (${{symbol:sqlstring}})
+  AND (m.payload->>'sell_volume') IS NOT NULL
+  AND $__timeFilter(m.ts)
 ORDER BY 1"""
 
 
@@ -484,6 +588,37 @@ WHERE {_diagnostics_filter()}
   AND e.payload #>> ARRAY['state','{field}'] IS NOT NULL"""
         )
     return "\nUNION ALL\n".join(selects) + "\nORDER BY 1"
+
+
+def _portfolio_total_value_sql() -> str:
+    return f"""WITH state_rows AS (
+  SELECT e.ts AS "time",
+         COALESCE((e.payload #>> ARRAY['state','local_cash'])::double precision, 0.0) AS local_cash,
+         COALESCE((e.payload #>> ARRAY['state','global_cash'])::double precision, 0.0) AS global_cash,
+         COALESCE((e.payload #>> ARRAY['state','local_inventory'])::double precision, 0.0) AS local_inventory,
+         COALESCE((e.payload #>> ARRAY['state','global_inventory'])::double precision, 0.0) AS global_inventory,
+         COALESCE(
+           NULLIF(e.payload #>> ARRAY['optimizer','config','reference_price'], '')::double precision,
+           NULLIF(e.payload #>> ARRAY['state','global_sell_vwap'], '')::double precision,
+           NULLIF(e.payload #>> ARRAY['state','local_sell_vwap'], '')::double precision,
+           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,
+           0.0
+         ) AS reference_vwap
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+)
+SELECT "time", 'total_cash' AS metric,
+       (local_cash + global_cash) AS value
+FROM state_rows
+UNION ALL
+SELECT "time", 'total_inventory_value',
+       ((local_inventory + global_inventory) * reference_vwap) AS value
+FROM state_rows
+UNION ALL
+SELECT "time", 'total_wealth',
+       (local_cash + global_cash + (local_inventory + global_inventory) * reference_vwap) AS value
+FROM state_rows
+ORDER BY 1"""
 
 
 def _step_economics_sql() -> str:

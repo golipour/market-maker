@@ -6,6 +6,12 @@ Label policy: ``service``, ``env``, exchange/symbol/actor where bounded — neve
 
 # Metrics
 MM_STRATEGY_FRAMES_TOTAL = "mm_strategy_frames_total"
+MM_RAW_MARKET_EVENTS_TOTAL = "mm_raw_market_events_total"
+MM_RAW_MARKET_EVENT_TIMESTAMP_MS = "mm_raw_market_event_timestamp_ms"
+MM_RAW_MARKET_INGEST_LAG_MS = "mm_raw_market_ingest_lag_ms"
+MM_RAW_MARKET_INGEST_LAG_LATEST_MS = "mm_raw_market_ingest_lag_latest_ms"
+MM_RAW_MARKET_EVENT_GAP_MS = "mm_raw_market_event_gap_ms"
+MM_RAW_MARKET_EVENT_GAP_LATEST_MS = "mm_raw_market_event_gap_latest_ms"
 MM_CONTROLLER_DECISIONS_TOTAL = "mm_controller_decisions_total"
 MM_CONTROLLER_LATENCY_MS = "mm_controller_latency_ms"
 MM_CONTROLLER_ORDER_COUNT = "mm_controller_order_count"
