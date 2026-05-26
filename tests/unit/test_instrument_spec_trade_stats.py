@@ -1,6 +1,39 @@
 from __future__ import annotations
 
+from mm.integrations import trade_stats
 from mm.exchanges.shared.instrument_spec_trade_stats import instrument_spec_from_trade_stats
+
+
+class _ExchangeInfoAdapter:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.calls: list[str] = []
+
+    def exchange_info(self, symbol: str) -> dict:
+        self.calls.append(symbol)
+        return {"exchange": self.name, "symbol": symbol}
+
+
+def test_get_exchange_info_uses_exchange_specific_cache(monkeypatch) -> None:
+    nobitex = _ExchangeInfoAdapter("nobitex")
+    wallex = _ExchangeInfoAdapter("wallex")
+    monkeypatch.setattr(trade_stats, "EXCHANGES", {"nobitex": nobitex, "wallex": wallex})
+    monkeypatch.setattr(trade_stats, "_exchange_info_cache", {})
+
+    assert trade_stats.get_exchange_info("USDT_IRT", "nobitex") == {
+        "exchange": "nobitex",
+        "symbol": "USDT_IRT",
+    }
+    assert trade_stats.get_exchange_info("USDT_IRT", "wallex") == {
+        "exchange": "wallex",
+        "symbol": "USDT_IRT",
+    }
+    assert trade_stats.get_exchange_info("USDT_IRT", " NOBITEX ") == {
+        "exchange": "nobitex",
+        "symbol": "USDT_IRT",
+    }
+    assert nobitex.calls == ["USDT_IRT"]
+    assert wallex.calls == ["USDT_IRT"]
 
 
 def test_instrument_spec_from_exchange_info_filters(monkeypatch) -> None:

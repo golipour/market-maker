@@ -281,7 +281,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_latency_skew_ms",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{symbol}}"
         }
       ],
       "title": "Latency skew",

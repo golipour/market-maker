@@ -51,7 +51,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_frame_sync_ready{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{symbol}}"
         }
       ],
       "title": "Readiness flags",
@@ -94,7 +95,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_latency_skew_ms{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{symbol}}"
         }
       ],
       "title": "Latency skew",

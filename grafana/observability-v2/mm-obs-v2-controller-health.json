@@ -51,7 +51,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_frame_age_ms{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{symbol}}"
         }
       ],
       "title": "Frame age",
@@ -94,7 +95,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_frame_sync_ready{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{symbol}}"
         }
       ],
       "title": "Frame readiness",
@@ -137,7 +139,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket{actor_id=~\"${actor_id:regex}\"}[$__rate_interval])))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{stage}}"
         }
       ],
       "title": "Stage latency p95",
@@ -180,7 +183,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (reason)(rate(mm_controller_warnings_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{reason}}"
         }
       ],
       "title": "Warnings",

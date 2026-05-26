@@ -51,7 +51,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_risk_approved{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}}"
         }
       ],
       "title": "Risk approved",
@@ -94,7 +95,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (reason)(rate(mm_risk_reject_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{reason}}"
         }
       ],
       "title": "Risk rejects",
@@ -137,7 +139,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{reason}}"
         }
       ],
       "title": "Execution gate blocks",
@@ -180,7 +183,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (exchange,__name__)(rate({__name__=~\"mm_execution_sync_completed_total|mm_execution_sync_failed_total\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{__name__}}"
         }
       ],
       "title": "Sync completed / failed",
@@ -223,7 +227,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{operation}} {{error}}"
         }
       ],
       "title": "Router failures",
@@ -266,7 +271,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{reason}}"
         }
       ],
       "title": "Validation rejects",

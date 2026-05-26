@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Action pipeline funnel from continuous depth through venue/router acceptance.",
+        "content": "Target-book execution funnel. Early stages are optimizer/order shaping; target_book and later stages are the current risk, planner, rules, and router path.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -51,7 +51,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_action_stage_orders{actor_id=~\"${actor_id:regex}\",side=\"all\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{stage}}"
         }
       ],
       "title": "Order count funnel",
@@ -94,7 +95,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_action_stage_qty{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{stage}} {{side}}"
         }
       ],
       "title": "Qty by stage",
@@ -137,7 +139,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_action_stage_notional{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{stage}} {{side}}"
         }
       ],
       "title": "Notional by stage",
@@ -180,7 +183,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (stage,reason)(rate(mm_action_rejected_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{stage}} {{reason}}"
         }
       ],
       "title": "Action rejections",
@@ -225,7 +229,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision AS order_count,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'])::double precision AS buy_qty,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'])::double precision AS sell_qty,\n       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_place','rules_valid','router_accepted','kept']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC, stage\nLIMIT 300",
+          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision AS order_count,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'])::double precision AS buy_qty,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'])::double precision AS sell_qty,\n       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC, stage\nLIMIT 300",
           "refId": "A"
         }
       ],

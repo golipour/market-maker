@@ -51,7 +51,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~\"${actor_id:regex}\"}[$__rate_interval])))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{model}}"
         }
       ],
       "title": "Model NLL p95",
@@ -94,7 +95,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_model_standardized_residual{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{model}}"
         }
       ],
       "title": "Standardized residual",
@@ -137,7 +139,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "sum by (model,reason)(rate(mm_model_score_skipped_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{model}} {{reason}}"
         }
       ],
       "title": "Score skipped",

@@ -19,11 +19,24 @@ PG_DS = {"type": "postgres", "uid": "postgres-mm"}
 LOKI_DS = {"type": "loki", "uid": "loki-mm"}
 
 
-def _target(datasource: dict[str, str], expr: str, *, ref: str = "A", fmt: str = "time_series") -> dict[str, Any]:
+def _target(
+    datasource: dict[str, str],
+    expr: str,
+    *,
+    ref: str = "A",
+    fmt: str = "time_series",
+    legend: str | None = None,
+) -> dict[str, Any]:
     if datasource["type"] == "prometheus":
-        return {"datasource": datasource, "expr": expr, "refId": ref}
+        target = {"datasource": datasource, "expr": expr, "refId": ref}
+        if legend:
+            target["legendFormat"] = legend
+        return target
     if datasource["type"] == "loki":
-        return {"datasource": datasource, "expr": expr, "refId": ref}
+        target = {"datasource": datasource, "expr": expr, "refId": ref}
+        if legend:
+            target["legendFormat"] = legend
+        return target
     return {
         "datasource": datasource,
         "editorMode": "code",
@@ -47,13 +60,14 @@ def _panel(
     h: int = 8,
     fmt: str = "time_series",
     unit: str = "short",
+    legend: str | None = None,
 ) -> dict[str, Any]:
     panel: dict[str, Any] = {
         "datasource": datasource,
         "fieldConfig": {"defaults": {"unit": unit, "decimals": 3}, "overrides": []},
         "gridPos": {"h": h, "w": w, "x": x, "y": y},
         "id": id_,
-        "targets": [_target(datasource, expr, fmt=fmt)],
+        "targets": [_target(datasource, expr, fmt=fmt, legend=legend)],
         "title": title,
         "type": panel_type,
     }
@@ -163,14 +177,14 @@ def _custom_var(name: str, label: str, query: str) -> dict[str, Any]:
 def runtime_overview() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Fast runtime health from Prometheus, plus latest controller warnings from PostgreSQL.", y=0),
-        _panel(2, "Scrape up", "stat", PROM_DS, 'up{job="market_maker"}', x=0, y=3, w=6, h=4),
-        _panel(3, "Frame rate", "timeseries", PROM_DS, 'sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))', x=6, y=3),
-        _panel(4, "Decision rate", "timeseries", PROM_DS, 'sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))', x=18, y=3, w=6),
-        _panel(5, "Controller stage p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))', x=0, y=11),
-        _panel(6, "Order sync p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))', x=12, y=11),
-        _panel(7, "Execution completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=0, y=19),
-        _panel(8, "Live orders", "timeseries", PROM_DS, "mm_execution_live_orders", x=12, y=19),
-        _panel(9, "Persistence errors", "timeseries", PROM_DS, 'sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))', x=0, y=27),
+        _panel(2, "Scrape up", "stat", PROM_DS, 'up{job="market_maker"}', x=0, y=3, w=6, h=4, legend="{{job}}"),
+        _panel(3, "Frame rate", "timeseries", PROM_DS, 'sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))', x=6, y=3, legend="{{exchange}} {{symbol}}"),
+        _panel(4, "Decision rate", "timeseries", PROM_DS, 'sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))', x=18, y=3, w=6, legend="{{exchange}} {{symbol}}"),
+        _panel(5, "Controller stage p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))', x=0, y=11, legend="{{stage}}"),
+        _panel(6, "Order sync p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))', x=12, y=11, legend="{{exchange}}"),
+        _panel(7, "Execution completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=0, y=19, legend="{{exchange}} {{__name__}}"),
+        _panel(8, "Live orders", "timeseries", PROM_DS, "mm_execution_live_orders", x=12, y=19, legend="{{exchange}} {{symbol}}"),
+        _panel(9, "Persistence errors", "timeseries", PROM_DS, 'sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))', x=0, y=27, legend="{{writer}} {{error}}"),
         _panel(10, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=27, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-runtime-overview", "MM Observability v2 / 00 Runtime Overview", panels, tags=["runtime"])
@@ -184,7 +198,7 @@ def market_data_quality() -> dict[str, Any]:
         _panel(4, "Best bid / ask", "timeseries", PG_DS, _best_bid_ask_sql(), x=0, y=11),
         _panel(5, "Spread", "timeseries", PG_DS, _spread_sql(), x=12, y=11),
         _panel(6, "Buy / sell volume", "timeseries", PG_DS, _volume_sql(), x=0, y=19),
-        _panel(7, "Latency skew", "timeseries", PROM_DS, "mm_latency_skew_ms", x=12, y=19),
+        _panel(7, "Latency skew", "timeseries", PROM_DS, "mm_latency_skew_ms", x=12, y=19, legend="{{exchange}} {{symbol}}"),
     ]
     return _dashboard("mm-obs-v2-market-data", "MM Observability v2 / 01 Market Data Quality", panels, tags=["market-data"])
 
@@ -192,10 +206,10 @@ def market_data_quality() -> dict[str, Any]:
 def controller_health() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Controller frame freshness, readiness, warnings, and stage timings.", y=0),
-        _panel(2, "Frame age", "timeseries", PROM_DS, 'mm_frame_age_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=0, y=3),
-        _panel(3, "Frame readiness", "timeseries", PROM_DS, 'mm_frame_sync_ready{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=12, y=3),
-        _panel(4, "Stage latency p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=11),
-        _panel(5, "Warnings", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_controller_warnings_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11),
+        _panel(2, "Frame age", "timeseries", PROM_DS, 'mm_frame_age_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=0, y=3, legend="{{exchange}} {{symbol}}"),
+        _panel(3, "Frame readiness", "timeseries", PROM_DS, 'mm_frame_sync_ready{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=12, y=3, legend="{{exchange}} {{symbol}}"),
+        _panel(4, "Stage latency p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=11, legend="{{stage}}"),
+        _panel(5, "Warnings", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_controller_warnings_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11, legend="{{reason}}"),
         _panel(6, "Recent diagnostics warnings", "table", PG_DS, _latest_warnings_sql(limit=100), x=0, y=19, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-controller-health", "MM Observability v2 / 02 Frame And Controller Health", panels, tags=["controller"])
@@ -204,9 +218,9 @@ def controller_health() -> dict[str, Any]:
 def model_quality() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Model NLL, residuals, and skip reasons emitted from `ControllerDiagnostics.models`.", y=0),
-        _panel(2, "Model NLL p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=3),
-        _panel(3, "Standardized residual", "timeseries", PROM_DS, 'mm_model_standardized_residual{actor_id=~"${actor_id:regex}"}', x=12, y=3),
-        _panel(4, "Score skipped", "timeseries", PROM_DS, 'sum by (model,reason)(rate(mm_model_score_skipped_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11),
+        _panel(2, "Model NLL p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=3, legend="{{model}}"),
+        _panel(3, "Standardized residual", "timeseries", PROM_DS, 'mm_model_standardized_residual{actor_id=~"${actor_id:regex}"}', x=12, y=3, legend="{{model}}"),
+        _panel(4, "Score skipped", "timeseries", PROM_DS, 'sum by (model,reason)(rate(mm_model_score_skipped_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11, legend="{{model}} {{reason}}"),
         _panel(5, "Latest model scores", "table", PG_DS, _latest_model_scores_sql(), x=0, y=19, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-model-quality", "MM Observability v2 / 03 Strategy Model Quality", panels, tags=["models"])
@@ -226,11 +240,11 @@ def optimizer_diagnostics() -> dict[str, Any]:
 
 def action_pipeline() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Action pipeline funnel from continuous depth through venue/router acceptance.", y=0),
-        _panel(2, "Order count funnel", "timeseries", PROM_DS, 'mm_action_stage_orders{actor_id=~"${actor_id:regex}",side="all"}', x=0, y=3),
-        _panel(3, "Qty by stage", "timeseries", PROM_DS, 'mm_action_stage_qty{actor_id=~"${actor_id:regex}"}', x=12, y=3),
-        _panel(4, "Notional by stage", "timeseries", PROM_DS, 'mm_action_stage_notional{actor_id=~"${actor_id:regex}"}', x=0, y=11),
-        _panel(5, "Action rejections", "timeseries", PROM_DS, 'sum by (stage,reason)(rate(mm_action_rejected_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11),
+        _text(1, "Scope", "Target-book execution funnel. Early stages are optimizer/order shaping; target_book and later stages are the current risk, planner, rules, and router path.", y=0),
+        _panel(2, "Order count funnel", "timeseries", PROM_DS, 'mm_action_stage_orders{actor_id=~"${actor_id:regex}",side="all"}', x=0, y=3, legend="{{exchange}} {{stage}}"),
+        _panel(3, "Qty by stage", "timeseries", PROM_DS, 'mm_action_stage_qty{actor_id=~"${actor_id:regex}"}', x=12, y=3, legend="{{exchange}} {{stage}} {{side}}"),
+        _panel(4, "Notional by stage", "timeseries", PROM_DS, 'mm_action_stage_notional{actor_id=~"${actor_id:regex}"}', x=0, y=11, legend="{{exchange}} {{stage}} {{side}}"),
+        _panel(5, "Action rejections", "timeseries", PROM_DS, 'sum by (stage,reason)(rate(mm_action_rejected_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11, legend="{{stage}} {{reason}}"),
         _panel(6, "Pipeline stage rows", "table", PG_DS, _action_pipeline_table_sql(), x=0, y=19, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-action-pipeline", "MM Observability v2 / 05 Action Pipeline Funnel", panels, tags=["actions"])
@@ -239,12 +253,12 @@ def action_pipeline() -> dict[str, Any]:
 def risk_execution() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Risk decisions, execution gates, order sync lifecycle, and adapter health.", y=0),
-        _panel(2, "Risk approved", "timeseries", PROM_DS, 'mm_risk_approved{actor_id=~"${actor_id:regex}"}', x=0, y=3),
-        _panel(3, "Risk rejects", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_risk_reject_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=3),
-        _panel(4, "Execution gate blocks", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11),
-        _panel(5, "Sync completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=12, y=11),
-        _panel(6, "Router failures", "timeseries", PROM_DS, 'sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))', x=0, y=19),
-        _panel(7, "Validation rejects", "timeseries", PROM_DS, 'sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))', x=12, y=19),
+        _panel(2, "Risk approved", "timeseries", PROM_DS, 'mm_risk_approved{actor_id=~"${actor_id:regex}"}', x=0, y=3, legend="{{exchange}}"),
+        _panel(3, "Risk rejects", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_risk_reject_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=3, legend="{{reason}}"),
+        _panel(4, "Execution gate blocks", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11, legend="{{reason}}"),
+        _panel(5, "Sync completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=12, y=11, legend="{{exchange}} {{__name__}}"),
+        _panel(6, "Router failures", "timeseries", PROM_DS, 'sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))', x=0, y=19, legend="{{exchange}} {{operation}} {{error}}"),
+        _panel(7, "Validation rejects", "timeseries", PROM_DS, 'sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))', x=12, y=19, legend="{{exchange}} {{reason}}"),
         _panel(8, "Recent execution events", "table", PG_DS, _recent_execution_events_sql(), x=0, y=27, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-risk-execution", "MM Observability v2 / 06 Risk And Execution", panels, tags=["risk", "execution"])
@@ -256,7 +270,7 @@ def portfolio_pnl() -> dict[str, Any]:
         _panel(2, "Inventory", "timeseries", PG_DS, _portfolio_field_sql("local_inventory", "global_inventory"), x=0, y=3),
         _panel(3, "Cash", "timeseries", PG_DS, _portfolio_field_sql("local_cash", "global_cash"), x=12, y=3),
         _panel(4, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=11),
-        _panel(5, "Risk exposure", "timeseries", PROM_DS, 'mm_risk_exposure{actor_id=~"${actor_id:regex}"}', x=12, y=11),
+        _panel(5, "Risk exposure", "timeseries", PROM_DS, 'mm_risk_exposure{actor_id=~"${actor_id:regex}"}', x=12, y=11, legend="{{exchange}} {{phase}} {{field}}"),
         _panel(6, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
@@ -265,8 +279,8 @@ def portfolio_pnl() -> dict[str, Any]:
 def liquidity_sourcing() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Local/global readiness and joint target-book routing.", y=0),
-        _panel(2, "Readiness flags", "timeseries", PROM_DS, 'mm_frame_sync_ready{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=0, y=3),
-        _panel(3, "Latency skew", "timeseries", PROM_DS, 'mm_latency_skew_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=12, y=3),
+        _panel(2, "Readiness flags", "timeseries", PROM_DS, 'mm_frame_sync_ready{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=0, y=3, legend="{{exchange}} {{symbol}}"),
+        _panel(3, "Latency skew", "timeseries", PROM_DS, 'mm_latency_skew_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=12, y=3, legend="{{exchange}} {{symbol}}"),
         _panel(4, "Venue gates", "table", PG_DS, _venue_gates_sql(), x=0, y=11, w=24, fmt="table"),
         _panel(5, "Target book order count", "timeseries", PG_DS, _target_book_count_sql(), x=0, y=19),
         _panel(6, "Target book qty", "timeseries", PG_DS, _target_book_qty_sql(), x=12, y=19),
@@ -277,7 +291,7 @@ def liquidity_sourcing() -> dict[str, Any]:
 def runtime_logs() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Structured runtime logs from Loki.", y=0),
-        _panel(2, "Log volume by event", "timeseries", LOKI_DS, 'sum by (event) (count_over_time({job="market-maker-runtime"} | json [$__interval]))', x=0, y=3, w=24),
+        _panel(2, "Log volume by event", "timeseries", LOKI_DS, 'sum by (event) (count_over_time({job="market-maker-runtime"} | json [$__interval]))', x=0, y=3, w=24, legend="{{event}}"),
         _panel(3, "Warnings and errors", "logs", LOKI_DS, '{job="market-maker-runtime"} | json | level=~"warning|error"', x=0, y=11, w=24, h=10),
         _panel(4, "Execution failures", "logs", LOKI_DS, '{job="market-maker-runtime"} | json | event=~"execution_sync_failed|adapter_request_failed"', x=0, y=21, w=24, h=10),
     ]
@@ -442,7 +456,7 @@ def _action_pipeline_table_sql() -> str:
        (e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'])::double precision AS sell_qty,
        e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts
 FROM mm_events e
-CROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_place','rules_valid','router_accepted','kept']) AS stage
+CROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage
 WHERE {_diagnostics_filter()}
 ORDER BY e.ts DESC, stage
 LIMIT 300"""

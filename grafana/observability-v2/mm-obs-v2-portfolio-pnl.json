@@ -189,7 +189,8 @@
             "uid": "prometheus-mm"
           },
           "expr": "mm_risk_exposure{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{exchange}} {{phase}} {{field}}"
         }
       ],
       "title": "Risk exposure",

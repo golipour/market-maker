@@ -83,8 +83,13 @@ def test_example_runtime_config_loads() -> None:
 
     assert config.local.normalized_exchange() == "nobitex"
     assert config.local.symbol == "USDT_IRT"
+    assert config.binding.local.exchange == "nobitex"
+    assert config.binding.local.symbol == "USDT_IRT"
     assert config.global_ is not None
     assert config.global_.normalized_exchange() == "wallex"
+    assert config.binding.global_ is not None
+    assert config.binding.global_.exchange == "wallex"
+    assert config.binding.global_.symbol == "USDT_IRT"
     assert config.interval_ms == 10000
     assert config.controller is not None
     assert config.controller.enabled is True
