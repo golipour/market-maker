@@ -85,13 +85,16 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
         "/v1/account/profile",
         "/v1/account",
     ]
+    errors: list[str] = []
     for path in candidates:
         try:
             out = _get_auth(path, api_token)
-        except Exception:
+        except Exception as exc:
+            errors.append(f"{path} {type(exc).__name__}: {exc}")
             continue
         result: dict[str, dict[str, float]] = {}
         if isinstance(out, dict) and out.get("success") is False:
+            errors.append(f"{path} success=false")
             continue
         payload = out.get("result", out) if isinstance(out, dict) else {}
         rows = None
@@ -150,7 +153,9 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
             from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 
             return merge_wallet_balances_raw("wallex", result)
-    return {}
+        errors.append(f"{path} empty balance response")
+    detail = "; ".join(errors[-4:]) or "empty balance response"
+    raise RuntimeError(f"Wallex balance fetch failed: {detail}")
 
 
 def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
@@ -159,14 +164,14 @@ def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
     sym = api_symbol(symbol)
     try:
         out = _get_auth("/v1/account/openOrders", api_token, params={"symbol": sym})
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError(f"Wallex open-order fetch failed: {type(exc).__name__}: {exc}") from exc
     if not isinstance(out, dict) or not out.get("success"):
-        return []
+        raise RuntimeError("Wallex open-order fetch failed: success=false")
     result = out.get("result") or {}
     orders = result.get("orders") or []
     if not isinstance(orders, list):
-        return []
+        raise RuntimeError("Wallex open-order fetch failed: orders is not a list")
     return [o for o in orders if isinstance(o, dict)]
 
 

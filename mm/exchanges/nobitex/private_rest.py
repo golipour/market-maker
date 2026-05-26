@@ -73,9 +73,10 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
     if not api_token:
         return {}
     result: dict[str, dict[str, float]] = {}
+    errors: list[str] = []
     try:
         out = _get_auth("/users/wallets/list", api_token)
-        if out.get("status") == "ok":
+        if isinstance(out, dict) and out.get("status") == "ok":
             wallets = out.get("wallets") or []
             if isinstance(wallets, list):
                 for w in wallets:
@@ -88,17 +89,19 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
                     locked = _safe_float(w.get("blockedBalance", 0))
                     total = _safe_float(w.get("balance", free + locked))
                     result[asset] = {"free": free, "locked": locked, "total": total}
-    except Exception:
-        pass
+        else:
+            errors.append(f"/users/wallets/list status={getattr(out, 'get', lambda *_: None)('status')!r}")
+    except Exception as exc:
+        errors.append(f"/users/wallets/list {type(exc).__name__}: {exc}")
     if result:
         return merge_nobitex_wallet_balances_to_internal_toman(result)
     try:
         out = _get_auth("/v2/wallets", api_token)
-        if out.get("status") != "ok":
-            return {}
+        if not isinstance(out, dict) or out.get("status") != "ok":
+            raise RuntimeError(f"status={getattr(out, 'get', lambda *_: None)('status')!r}")
         wallets = out.get("wallets") or {}
         if not isinstance(wallets, dict):
-            return {}
+            raise RuntimeError("wallets is not an object")
         for asset, w in wallets.items():
             if not isinstance(w, dict):
                 continue
@@ -106,9 +109,12 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
             locked = _safe_float(w.get("blocked", 0))
             total = free + locked
             result[str(asset).upper()] = {"free": free, "locked": locked, "total": total}
-    except Exception:
-        return {}
-    return merge_nobitex_wallet_balances_to_internal_toman(result) if result else {}
+    except Exception as exc:
+        errors.append(f"/v2/wallets {type(exc).__name__}: {exc}")
+    if result:
+        return merge_nobitex_wallet_balances_to_internal_toman(result)
+    detail = "; ".join(errors[-3:]) or "empty balance response"
+    raise RuntimeError(f"Nobitex balance fetch failed: {detail}")
 
 
 def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
@@ -121,11 +127,13 @@ def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
             api_token,
             params={"status": "open", "srcCurrency": src, "dstCurrency": dst, "details": 2},
         )
-    except Exception:
-        return []
-    if out.get("status") != "ok":
-        return []
+    except Exception as exc:
+        raise RuntimeError(f"Nobitex open-order fetch failed: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(out, dict) or out.get("status") != "ok":
+        raise RuntimeError(f"Nobitex open-order fetch failed: status={getattr(out, 'get', lambda *_: None)('status')!r}")
     orders = out.get("orders") or []
+    if not isinstance(orders, list):
+        raise RuntimeError("Nobitex open-order fetch failed: orders is not a list")
     return [o for o in orders if isinstance(o, dict)]
 
 

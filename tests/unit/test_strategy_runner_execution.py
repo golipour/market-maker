@@ -131,6 +131,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    error_queue = bus.subscribe_queue("execution:errors")
     manager = _SlowOrderManager(delay_s=0.2)
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
@@ -151,6 +152,11 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
     assert "execution_sync_timeout" in diagnostics["execution_gates"]["blocked_reasons"]
     assert diagnostics["execution_gates"]["executed"] is False
     assert manager.sync_calls == 1
+    error = await asyncio.wait_for(error_queue.get(), timeout=1.0)
+    assert error["type"] == "ExecutionSyncFailed"
+    assert error["error"] == "ExecutionSyncTimeout"
+    assert error["latency_ms"] >= 50.0
+    assert "timestamp_ms" in error
 
 
 @pytest.mark.asyncio
@@ -162,6 +168,7 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_error(monkeypatc
 
     bus = InMemoryBus()
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    error_queue = bus.subscribe_queue("execution:errors")
     manager = _FailingOrderManager()
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
@@ -180,6 +187,11 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_error(monkeypatc
     assert any("ExecutionSyncError" in warning for warning in diagnostics["warnings"])
     assert "execution_sync_error" in diagnostics["execution_gates"]["blocked_reasons"]
     assert manager.sync_calls == 1
+    error = await asyncio.wait_for(error_queue.get(), timeout=1.0)
+    assert error["type"] == "ExecutionSyncFailed"
+    assert error["error"] == "ExecutionSyncError"
+    assert error["latency_ms"] >= 0.0
+    assert "timestamp_ms" in error
 
 
 @pytest.mark.asyncio

@@ -128,7 +128,10 @@ def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
                     "{local_execution_orders_topic}",
                     "{global_execution_state_topic}",
                     "{local_private_snapshot_topic}",
+                    "{local_private_errors_topic}",
                     "{global_private_snapshot_topic}",
+                    "{global_private_errors_topic}",
+                    "{execution_errors_topic}",
                     "{ledger_topic}",
                 ],
             },
@@ -142,7 +145,10 @@ def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
         "execution:orders:nobitex",
         "execution:state:wallex",
         "private:state:nobitex:snapshot",
+        "private:state:nobitex:errors",
         "private:state:wallex:snapshot",
+        "private:state:wallex:errors",
+        "execution:errors",
         "ledger:snapshot",
     )
     assert config.effective_persistence_topics == config.resolved_persistence_topics
@@ -168,6 +174,9 @@ def test_persistence_topics_default_when_unset() -> None:
     assert "strategy:joint:frames:nobitex:USDT_IRT:2500" in config.effective_persistence_topics
     assert "strategy:diagnostics:mpc-controller" in config.effective_persistence_topics
     assert "strategy:target_books:mpc-controller" in config.effective_persistence_topics
+    assert "execution:errors" in config.effective_persistence_topics
+    assert "private:state:nobitex:errors" in config.effective_persistence_topics
+    assert "private:state:wallex:errors" in config.effective_persistence_topics
 
 
 def test_persistence_topic_template_rejects_unknown_placeholder() -> None:

@@ -51,6 +51,10 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             self.fetch_balances(),
             self.fetch_open_orders(),
         )
+        if not isinstance(raw_balances, dict) or not raw_balances:
+            raise RuntimeError(f"{self.exchange} private balance fetch returned no balances")
+        if not isinstance(raw_orders, list):
+            raise RuntimeError(f"{self.exchange} private open-order fetch returned invalid payload")
         balances = self.normalize_balances(raw_balances, timestamp_ms=timestamp_ms)
         open_orders = self.normalize_open_orders(raw_orders, timestamp_ms=timestamp_ms)
         return PrivateStateSnapshot(
@@ -260,4 +264,3 @@ def _inject_missing_economy_balances(
                 timestamp_ms=timestamp_ms,
                 total=0.0,
             )
-

@@ -214,6 +214,32 @@ class _StubRestPolling(RestPollingPrivateStateAdapter):
         return await super().snapshot()
 
 
+class _EmptyBalanceRestPolling(RestPollingPrivateStateAdapter):
+    def __init__(self) -> None:
+        super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
+
+    async def fetch_balances(self) -> dict:
+        return {}
+
+    async def fetch_open_orders(self) -> list[dict]:
+        return []
+
+
+class _FlakyRestPolling(RestPollingPrivateStateAdapter):
+    def __init__(self) -> None:
+        super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
+        self.balance_calls = 0
+
+    async def fetch_balances(self) -> dict:
+        self.balance_calls += 1
+        if self.balance_calls == 1:
+            return {"BTC": {"free": "0.25", "locked": "0.0"}}
+        raise RuntimeError("wallet endpoint failed")
+
+    async def fetch_open_orders(self) -> list[dict]:
+        return []
+
+
 @pytest.mark.asyncio
 async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
     adapter = _StubRestPolling()
@@ -254,3 +280,38 @@ def test_rest_private_state_normalize_injects_missing_economy_balances() -> None
     assert set(out) == {"BTC", "IRT"}
     assert out["IRT"].free == pytest.approx(0.0)
     assert out["IRT"].locked == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_rest_private_state_snapshot_rejects_empty_balance_fetch() -> None:
+    adapter = _EmptyBalanceRestPolling()
+    await adapter.connect()
+    try:
+        with pytest.raises(RuntimeError, match="private balance fetch returned no balances"):
+            await adapter.snapshot()
+    finally:
+        await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_rest_polling_reconciler_keeps_last_snapshot_on_fetch_failure() -> None:
+    adapter = _FlakyRestPolling()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    snapshots = bus.subscribe_queue("private:state:nobitex:snapshot")
+    errors = bus.subscribe_queue("private:state:nobitex:errors")
+
+    try:
+        await reconciler.start()
+        first = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        assert first.balances["BTC"].free == pytest.approx(0.25)
+
+        error = await asyncio.wait_for(errors.get(), timeout=1.0)
+        assert error["source"] == "unified_rest_poll"
+        assert error["error"] == "RuntimeError"
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(snapshots.get(), timeout=0.05)
+        assert reconciler.snapshot().balances["BTC"].free == pytest.approx(0.25)
+    finally:
+        await reconciler.stop()

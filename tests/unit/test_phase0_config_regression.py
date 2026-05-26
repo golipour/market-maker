@@ -100,6 +100,9 @@ def test_example_runtime_config_loads() -> None:
     assert "market:events:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "market:events:wallex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "execution:errors" in config.effective_persistence_topics
+    assert "private:state:nobitex:errors" in config.effective_persistence_topics
+    assert "private:state:wallex:errors" in config.effective_persistence_topics
 
 
 def test_single_venue_runtime_config_dataclass() -> None:

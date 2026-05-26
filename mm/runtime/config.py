@@ -406,6 +406,8 @@ class MarketMakerRuntimeConfig:
             "local_execution_state_topic": f"execution:state:{self.local.normalized_exchange()}",
             "local_private_snapshot_topic": f"private:state:{self.local.normalized_exchange()}:snapshot",
             "local_private_fills_topic": f"private:state:{self.local.normalized_exchange()}:fills",
+            "local_private_errors_topic": f"private:state:{self.local.normalized_exchange()}:errors",
+            "execution_errors_topic": "execution:errors",
             "ledger_topic": "ledger:snapshot",
             "frame_topic": self.frame_topic,
             "joint_frame_topic": self.joint_frame_topic,
@@ -420,6 +422,7 @@ class MarketMakerRuntimeConfig:
                     "global_execution_state_topic": f"execution:state:{self.global_.normalized_exchange()}",
                     "global_private_snapshot_topic": f"private:state:{self.global_.normalized_exchange()}:snapshot",
                     "global_private_fills_topic": f"private:state:{self.global_.normalized_exchange()}:fills",
+                    "global_private_errors_topic": f"private:state:{self.global_.normalized_exchange()}:errors",
                 }
             )
         if self.controller is not None:
@@ -453,9 +456,12 @@ class MarketMakerRuntimeConfig:
             self.joint_frame_topic,
             "ledger:snapshot",
             self.controller.normalized_action_topic if self.controller is not None else "strategy:actions",
+            "execution:errors",
             f"execution:orders:{local_exchange}",
             f"execution:state:{local_exchange}",
             f"private:state:{local_exchange}:snapshot",
+            f"private:state:{local_exchange}:fills",
+            f"private:state:{local_exchange}:errors",
         ]
         if self.controller is not None:
             topics.append(self.controller.normalized_decisions_topic)
@@ -469,7 +475,8 @@ class MarketMakerRuntimeConfig:
                     f"execution:orders:{global_exchange}",
                     f"execution:state:{global_exchange}",
                     f"private:state:{global_exchange}:snapshot",
-                    f"private:state:{local_exchange}:fills",
+                    f"private:state:{global_exchange}:fills",
+                    f"private:state:{global_exchange}:errors",
                 ]
             )
         return tuple(dict.fromkeys(topics))

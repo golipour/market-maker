@@ -387,6 +387,7 @@ class StrategyRunner:
         ctx: DecisionContext,
     ) -> ExecutionSyncReport | None:
         timeout_ms = int(self.config.placement_timeout_ms)
+        started_ns = time.monotonic_ns()
         try:
             coro = route_joint_target_book_with_report(
                 execution_book,
@@ -404,7 +405,7 @@ class StrategyRunner:
                 executed=False,
                 blocked_reasons=[*ctx.blocked_reasons, "execution_sync_timeout"],
             )
-            await self._publish_execution_error(ctx, message)
+            await self._publish_execution_error(ctx, message, latency_ms=_elapsed_ms(started_ns))
             return None
         except Exception as exc:
             message = f"ExecutionSyncError: {type(exc).__name__}: {exc}"
@@ -413,10 +414,16 @@ class StrategyRunner:
                 executed=False,
                 blocked_reasons=[*ctx.blocked_reasons, "execution_sync_error"],
             )
-            await self._publish_execution_error(ctx, message)
+            await self._publish_execution_error(ctx, message, latency_ms=_elapsed_ms(started_ns))
             return None
 
-    async def _publish_execution_error(self, ctx: DecisionContext, message: str) -> None:
+    async def _publish_execution_error(
+        self,
+        ctx: DecisionContext,
+        message: str,
+        *,
+        latency_ms: float | None = None,
+    ) -> None:
         if self.bus is None:
             return
         payload = {
@@ -429,7 +436,10 @@ class StrategyRunner:
             "error": message.split(":", 1)[0],
             "message": message,
             "retryable": True,
+            "timestamp_ms": int(time.time() * 1000),
         }
+        if latency_ms is not None:
+            payload["latency_ms"] = max(0.0, float(latency_ms))
         log_event("execution_sync_failed", payload)
         await self.bus.publish("execution:errors", payload)
 

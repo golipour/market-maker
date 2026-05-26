@@ -482,6 +482,14 @@ class RuntimeObservabilitySubscriber:
                 },
                 help="Order manager sync rounds failed",
             )
+            latency = payload.get("latency_ms")
+            if latency is not None:
+                histogram_observe(
+                    obs_schema.MM_ORDER_SYNC_LATENCY_MS,
+                    max(0.0, float(latency)),
+                    labels={"exchange": labels["exchange"]},
+                    help="Wall time for failed order manager sync rounds",
+                )
         if etype == "PlaceOrdersAccepted":
             oids = payload.get("order_ids") or ()
             n = len(oids) if isinstance(oids, (list, tuple)) else 0

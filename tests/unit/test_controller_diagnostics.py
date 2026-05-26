@@ -140,6 +140,8 @@ def test_default_persistence_topics_include_diagnostics() -> None:
     )
     topics = _default_persistence_topics(runtime)
     assert "strategy:diagnostics:mpc-controller" in topics
+    assert "execution:errors" in topics
+    assert "private:state:nobitex:errors" in topics
 
 
 def test_observability_topics_include_diagnostics_risk_and_execution_errors() -> None:
@@ -155,6 +157,7 @@ def test_observability_topics_include_diagnostics_risk_and_execution_errors() ->
     assert "strategy:diagnostics:mpc-controller" in topics
     assert "risk:events" in topics
     assert "execution:errors" in topics
+    assert "private:state:nobitex:errors" in topics
 
 
 @pytest.mark.asyncio

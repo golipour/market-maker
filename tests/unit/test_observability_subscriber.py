@@ -92,9 +92,11 @@ def test_observability_subscriber_clears_sync_pending_on_completion_or_failure()
             "type": "ExecutionSyncFailed",
             "exchange": "nobitex",
             "error": "ExecutionSyncTimeout",
+            "latency_ms": 50.0,
         },
     )
     assert "nobitex" not in subscriber._sync_pending_ts_ms
+    assert "mm_order_sync_latency_ms_bucket" in REGISTRY.render()
 
     subscriber.observe(
         "execution:orders:nobitex",

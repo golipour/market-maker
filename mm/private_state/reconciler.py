@@ -37,8 +37,11 @@ class PrivateStateReconciler:
 
     async def start(self) -> None:
         await self.adapter.connect()
-        snapshot = await self.adapter.snapshot()
-        await self._publish_snapshot(self.store.apply_snapshot(snapshot))
+        try:
+            snapshot = await self.adapter.snapshot()
+            await self._publish_snapshot(self.store.apply_snapshot(snapshot))
+        except Exception as exc:
+            await self._publish_adapter_error("initial_snapshot", exc)
         if isinstance(self.adapter, RestPollingPrivateStateAdapter):
             # One authoritative snapshot per poll: balances + open orders from the same fetch.
             # Avoids incremental diff streams that inferred synthetic zeros when an asset vanished
@@ -87,6 +90,8 @@ class PrivateStateReconciler:
                 except Exception as exc:
                     if callable(publish_errors):
                         await publish_errors("unified_rest_poll", exc)  # type: ignore[misc]
+                    else:
+                        await self._publish_adapter_error("unified_rest_poll", exc)
         except asyncio.CancelledError:
             raise
 
@@ -135,6 +140,20 @@ class PrivateStateReconciler:
 
     async def _publish_snapshot(self, snapshot: PrivateStateSnapshot) -> None:
         await self._publish(f"private:state:{self.exchange}:snapshot", snapshot)
+
+    async def _publish_adapter_error(self, source: str, exc: Exception) -> None:
+        publish_errors = getattr(self.adapter, "_publish_error", None)
+        if callable(publish_errors):
+            await publish_errors(source, exc)  # type: ignore[misc]
+            return
+        await self._publish(
+            f"private:state:{self.exchange}:errors",
+            {
+                "source": source,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
 
     async def _publish(self, topic: str, event: Balance | OpenOrder | OrderUpdate | Fill | PrivateStateSnapshot | dict) -> None:
         if self.bus is not None:
