@@ -86,6 +86,80 @@ def _panel(
     return panel
 
 
+def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
+    return {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                    "axisBorderShow": False,
+                    "axisCenteredZero": True,
+                    "axisColorMode": "text",
+                    "axisLabel": "qty",
+                    "axisPlacement": "auto",
+                    "hideFrom": {"legend": False, "tooltip": False, "viz": False},
+                    "lineInterpolation": "linear",
+                    "lineStyle": {"fill": "solid"},
+                    "lineWidth": 2,
+                    "pointSize": {"fixed": 4, "max": 20, "min": 1},
+                    "scaleDistribution": {"type": "linear"},
+                    "show": "lines",
+                    "spanNulls": False,
+                },
+                "unit": "short",
+                "decimals": 3,
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "spread"},
+                    "properties": [
+                        {"id": "custom.axisLabel", "value": "price - mid"},
+                        {"id": "custom.axisCenteredZero", "value": True},
+                        {"id": "decimals", "value": 1},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "bid"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Bid"},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "ask"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Ask"},
+                    ],
+                },
+            ],
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": True},
+            "mapping": "auto",
+            "series": [],
+            "tooltip": {"mode": "multi", "sort": "none"},
+        },
+        "targets": [_target(PG_DS, expr, fmt="table")],
+        "title": title,
+        "type": "xychart",
+        "pluginVersion": "13.0.0",
+        "transformations": [
+            {
+                "id": "partitionByValues",
+                "options": {
+                    "fields": ["side"],
+                    "keepFields": False,
+                    "naming": {"mode": "as_is", "asLabels": False},
+                },
+            }
+        ],
+    }
+
+
 def _text(id_: int, title: str, content: str, *, y: int) -> dict[str, Any]:
     return {
         "gridPos": {"h": 3, "w": 24, "x": 0, "y": y},
@@ -101,7 +175,14 @@ def _row(id_: int, title: str, *, y: int) -> dict[str, Any]:
     return {"collapsed": False, "gridPos": {"h": 1, "w": 24, "x": 0, "y": y}, "id": id_, "panels": [], "title": title, "type": "row"}
 
 
-def _dashboard(uid: str, title: str, panels: list[dict[str, Any]], *, tags: list[str]) -> dict[str, Any]:
+def _dashboard(
+    uid: str,
+    title: str,
+    panels: list[dict[str, Any]],
+    *,
+    tags: list[str],
+    extra_templating: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "annotations": {"list": []},
         "editable": True,
@@ -115,7 +196,7 @@ def _dashboard(uid: str, title: str, panels: list[dict[str, Any]], *, tags: list
         "schemaVersion": 39,
         "style": "dark",
         "tags": ["market-maker", "observability-v2", *tags],
-        "templating": {"list": _templating()},
+        "templating": {"list": [*_templating(), *(extra_templating or [])]},
         "time": {"from": "now-6h", "to": "now"},
         "timepicker": {},
         "timezone": "browser",
@@ -204,6 +285,27 @@ def market_data_quality() -> dict[str, Any]:
         _panel(9, "Global buy / sell volume", "timeseries", PG_DS, _role_volume_sql("global"), x=12, y=19),
     ]
     return _dashboard("mm-obs-v2-market-data", "MM Observability v2 / 01 Market Data Quality", panels, tags=["market-data"])
+
+
+def orderbook_depth() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Depth curves use `price - mid` on the x-axis, so zero is the selected frame mid. Bid and ask depth are shown together on each chart.",
+            y=0,
+        ),
+        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw"), y=3),
+        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean"), y=11),
+        _xy_depth_panel(4, "Action ladder depth", _orderbook_depth_sql("ladder"), y=19),
+    ]
+    return _dashboard(
+        "mm-obs-v2-orderbook-depth",
+        "MM Observability v2 / 01B Orderbook Depth",
+        panels,
+        tags=["orderbook"],
+        extra_templating=[_custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100")],
+    )
 
 
 def controller_health() -> dict[str, Any]:
@@ -326,6 +428,176 @@ CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'warnings', '[]
 WHERE {_diagnostics_filter()}
 ORDER BY e.ts DESC
 LIMIT {limit}"""
+
+
+def _orderbook_depth_sql(kind: str) -> str:
+    if kind == "raw":
+        selected = """selected AS (
+  SELECT COALESCE(
+           NULLIF(ctx.mid, 0.0),
+           (
+             NULLIF(m.payload #>> ARRAY['orderbook','bids','0','price'], '')::double precision +
+             NULLIF(m.payload #>> ARRAY['orderbook','asks','0','price'], '')::double precision
+           ) / 2.0,
+           0.0
+         ) AS mid,
+         ctx.spread_max,
+         m.payload
+  FROM ctx
+  LEFT JOIN LATERAL (
+    SELECT m.payload, m.ts
+    FROM mm_events m
+    WHERE m.event_type = 'MarketEvent'
+      AND m.exchange = ctx.exchange
+      AND m.symbol = ctx.symbol
+      AND m.payload->>'t_end_ms' IS NOT NULL
+      AND (m.payload->>'t_end_ms')::bigint <= ctx.t_end_ms
+      AND $__timeFilter(m.ts)
+    ORDER BY (m.payload->>'t_end_ms')::bigint DESC, m.ts DESC
+    LIMIT 1
+  ) m ON TRUE
+)"""
+        bid_levels = """bid_levels AS (
+  SELECT (b->>'price')::double precision AS price,
+         COALESCE((b->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b
+)"""
+        ask_levels = """ask_levels AS (
+  SELECT (a->>'price')::double precision AS price,
+         COALESCE((a->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a
+)"""
+    elif kind == "clean":
+        selected = """selected AS (
+  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload
+  FROM ctx
+)"""
+        bid_levels = """bid_levels AS (
+  SELECT (b->>'price')::double precision AS price,
+         COALESCE((b->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b
+)"""
+        ask_levels = """ask_levels AS (
+  SELECT (a->>'price')::double precision AS price,
+         COALESCE((a->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a
+)"""
+    elif kind == "ladder":
+        selected = """selected AS (
+  SELECT COALESCE(
+           NULLIF(ctx.mid, 0.0),
+           NULLIF(d.payload->>'mid', '')::double precision,
+           0.0
+         ) AS mid,
+         ctx.spread_max,
+         d.payload
+  FROM ctx
+  LEFT JOIN LATERAL (
+    SELECT d.payload, d.ts
+    FROM mm_events d
+    WHERE d.event_type = 'StrategyDecision'
+      AND d.exchange = ctx.exchange
+      AND d.symbol = ctx.symbol
+      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id
+      AND d.payload->>'t_end_ms' IS NOT NULL
+      AND (d.payload->>'t_end_ms')::bigint <= ctx.t_end_ms
+      AND $__timeFilter(d.ts)
+    ORDER BY (d.payload->>'t_end_ms')::bigint DESC, d.ts DESC
+    LIMIT 1
+  ) d ON TRUE
+)"""
+        bid_levels = """bid_levels AS (
+  SELECT (o->>'price')::double precision AS price,
+         COALESCE((o->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o
+  WHERE lower(trim(o->>'side')) = 'buy'
+)"""
+        ask_levels = """ask_levels AS (
+  SELECT (o->>'price')::double precision AS price,
+         COALESCE((o->>'qty')::double precision, 0.0) AS qty
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o
+  WHERE lower(trim(o->>'side')) = 'sell'
+)"""
+    else:
+        raise ValueError(f"unknown orderbook depth kind: {kind}")
+    return f"""WITH {_orderbook_context_cte()},
+{selected},
+{bid_levels},
+{ask_levels},
+{_orderbook_depth_plot_ctes()}
+SELECT 'bid'::text AS side, spread, value FROM bid_step_plot
+UNION ALL
+SELECT 'ask'::text AS side, spread, value FROM ask_step_plot
+ORDER BY side, spread"""
+
+
+def _orderbook_context_cte() -> str:
+    return f"""ctx AS (
+  SELECT e.ts AS diag_ts,
+         e.payload AS diag_payload,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,
+         COALESCE(
+           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,
+           (
+             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +
+             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision
+           ) / 2.0,
+           0.0
+         ) AS mid,
+         GREATEST(${{spread_max}}::double precision, 1.0) AS spread_max
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+  ORDER BY e.ts DESC
+  LIMIT 1
+)"""
+
+
+def _orderbook_depth_plot_ctes() -> str:
+    return """bid_step AS (
+  SELECT (l.price - selected.mid) AS spread,
+         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
+  FROM selected
+  JOIN bid_levels l ON TRUE
+  WHERE l.price IS NOT NULL
+    AND l.qty > 0
+    AND (l.price - selected.mid) >= -selected.spread_max
+    AND (l.price - selected.mid) <= 0
+),
+ask_step AS (
+  SELECT (l.price - selected.mid) AS spread,
+         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
+  FROM selected
+  JOIN ask_levels l ON TRUE
+  WHERE l.price IS NOT NULL
+    AND l.qty > 0
+    AND (l.price - selected.mid) >= 0
+    AND (l.price - selected.mid) <= selected.spread_max
+),
+bid_step_plot AS (
+  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step
+  UNION ALL
+  SELECT -selected.spread_max,
+         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)
+  FROM selected
+  UNION ALL
+  SELECT 0::double precision, 0::double precision FROM selected
+  UNION ALL
+  SELECT selected.spread_max, 0::double precision FROM selected
+),
+ask_step_plot AS (
+  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step
+  UNION ALL
+  SELECT -selected.spread_max, 0::double precision FROM selected
+  UNION ALL
+  SELECT 0::double precision, 0::double precision FROM selected
+  UNION ALL
+  SELECT selected.spread_max,
+         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)
+  FROM selected
+)"""
 
 
 def _best_bid_ask_sql() -> str:
@@ -708,6 +980,7 @@ def dashboards() -> list[dict[str, Any]]:
     return [
         runtime_overview(),
         market_data_quality(),
+        orderbook_depth(),
         controller_health(),
         model_quality(),
         optimizer_diagnostics(),

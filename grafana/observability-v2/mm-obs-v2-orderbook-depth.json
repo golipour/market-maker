@@ -1,0 +1,706 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Depth curves use `price - mid` on the x-axis, so zero is the selected frame mid. Bid and ask depth are shown together on each chart.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price - mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             NULLIF(m.payload #>> ARRAY['orderbook','bids','0','price'], '')::double precision +\n             NULLIF(m.payload #>> ARRAY['orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (m.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (m.payload->>'t_end_ms')::bigint DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Orderbook depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price - mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT (b->>'price')::double precision AS price,\n         COALESCE((b->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT (a->>'price')::double precision AS price,\n         COALESCE((a->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Clean orderbook depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price - mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,\n         COALESCE(\n           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,\n           (\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +\n             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(${spread_max}::double precision, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           NULLIF(d.payload->>'mid', '')::double precision,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         d.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT d.payload, d.ts\n    FROM mm_events d\n    WHERE d.event_type = 'StrategyDecision'\n      AND d.exchange = ctx.exchange\n      AND d.symbol = ctx.symbol\n      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id\n      AND d.payload->>'t_end_ms' IS NOT NULL\n      AND (d.payload->>'t_end_ms')::bigint <= ctx.t_end_ms\n      AND $__timeFilter(d.ts)\n    ORDER BY (d.payload->>'t_end_ms')::bigint DESC, d.ts DESC\n    LIMIT 1\n  ) d ON TRUE\n),\nbid_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n),\nask_levels AS (\n  SELECT (o->>'price')::double precision AS price,\n         COALESCE((o->>'qty')::double precision, 0.0) AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         COALESCE((SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1), 0::double precision)\n  FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max, 0::double precision FROM selected\n),\nask_step_plot AS (\n  SELECT spread, COALESCE(value, 0::double precision) AS value FROM ask_step\n  UNION ALL\n  SELECT -selected.spread_max, 0::double precision FROM selected\n  UNION ALL\n  SELECT 0::double precision, 0::double precision FROM selected\n  UNION ALL\n  SELECT selected.spread_max,\n         COALESCE((SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1), 0::double precision)\n  FROM selected\n)\nSELECT 'bid'::text AS side, spread, value FROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side, spread, value FROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Action ladder depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "orderbook"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "2000",
+          "value": "2000"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Spread max",
+        "multi": false,
+        "name": "spread_max",
+        "options": [
+          {
+            "selected": true,
+            "text": "2000",
+            "value": "2000"
+          },
+          {
+            "selected": false,
+            "text": "5000",
+            "value": "5000"
+          },
+          {
+            "selected": false,
+            "text": "10000",
+            "value": "10000"
+          },
+          {
+            "selected": false,
+            "text": "20000",
+            "value": "20000"
+          },
+          {
+            "selected": false,
+            "text": "500",
+            "value": "500"
+          },
+          {
+            "selected": false,
+            "text": "200",
+            "value": "200"
+          },
+          {
+            "selected": false,
+            "text": "100",
+            "value": "100"
+          }
+        ],
+        "query": "2000,5000,10000,20000,500,200,100",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 01B Orderbook Depth",
+  "uid": "mm-obs-v2-orderbook-depth",
+  "version": 1,
+  "weekStart": ""
+}

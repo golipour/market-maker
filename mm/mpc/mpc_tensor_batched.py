@@ -841,6 +841,7 @@ class MonteCarloMPCTensorBatched:
         captured_initial_components = False
         nonfinite_loss_count = 0
         nonfinite_grad_count = 0
+        last_eval_x = best_x.detach().clone()
         t0 = time.perf_counter()
 
         for epoch in range(self.adam_epochs):
@@ -849,11 +850,13 @@ class MonteCarloMPCTensorBatched:
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
             def closure():
-                nonlocal batch_time_sec, captured_initial_components, initial_metrics, final_metrics
-                nonlocal nonfinite_loss_count, nonfinite_grad_count
+                nonlocal batch_time_sec, captured_initial_components
+                nonlocal initial_metrics, final_metrics
+                nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
                 optimizer.zero_grad()
                 with torch_mod.no_grad():
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
+                    last_eval_x = x_torch.detach().clone()
 
                 if self.fixed_mc_samples:
                     buy_vol, sell_vol, eps_buy, eps_sell = (
@@ -1048,7 +1051,7 @@ class MonteCarloMPCTensorBatched:
             loss = optimizer.step(closure)
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
-                best_x = x_torch.detach().clone()
+                best_x = last_eval_x.detach().clone()
                 best_epoch = epoch
                 if final_metrics is not None:
                     best_metrics = final_metrics

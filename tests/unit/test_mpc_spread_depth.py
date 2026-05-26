@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 import torch
 
@@ -129,6 +130,57 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
     expected_ask_quote = float(ask_eff[2] - ask_eff[0])
     assert math.isclose(expected_bid_quote, expected_ask_quote, rel_tol=1e-12)
     assert abs(float(inv_delta[0])) < 1e-6
+
+
+def test_spread_structured_decoder_keeps_collapsed_center_depth_bounded() -> None:
+    from mm.mpc.l_param import (
+        LParamConfig,
+        action_param_len,
+        effective_depth_at_center_from_flat_np,
+        effective_qrange_from_flat_np,
+    )
+    from mm.mpc.state_tensor import effective_depth_bid_tensor
+
+    n_components = 4
+    l_param = LParamConfig(
+        quote_size_min=0.3,
+        quote_size_max=10.0,
+        spread_max=200.0,
+        n_components=n_components,
+        quote_spread_max=100.0,
+        quote_spread_min_depth=0.3,
+        quote_spread_k_epsilon=0.01,
+    )
+    flat = np.zeros(action_param_len(n_components), dtype=np.float64)
+    flat[0] = -30.0
+    flat[2] = 30.0
+    flat[3 * n_components + 2] = -30.0
+    flat[6 * n_components] = 30.0
+    flat[6 * n_components + 1] = 30.0
+
+    np_qrange = effective_qrange_from_flat_np(
+        flat,
+        n_components,
+        side_off=0,
+        spread_max=200.0,
+        l_param=l_param,
+    )
+    np_center_depth = effective_depth_at_center_from_flat_np(
+        flat,
+        n_components,
+        side_off=0,
+        l_param=l_param,
+    )
+    torch_qrange = effective_depth_bid_tensor(
+        torch.tensor(flat, dtype=torch.float64),
+        torch.tensor([200.0], dtype=torch.float64),
+        n_components,
+        l_param=l_param,
+    )[0]
+
+    assert np_qrange == pytest.approx(10.0, rel=1e-9)
+    assert np_center_depth == pytest.approx(0.3, rel=1e-9)
+    assert float(torch_qrange) == pytest.approx(10.0, rel=1e-9)
 
 
 def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:

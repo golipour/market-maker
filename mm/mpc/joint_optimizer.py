@@ -245,6 +245,7 @@ def optimize_joint_with_diagnostics(
     best_metrics: EpochObjectiveMetrics | None = None
     nonfinite_loss_count = 0
     nonfinite_grad_count = 0
+    last_eval_x = best_x.detach().clone()
     joint_diag_accum = {
         "local_fill_bid_mean": 0.0,
         "local_fill_ask_mean": 0.0,
@@ -265,10 +266,12 @@ def optimize_joint_with_diagnostics(
             )
 
         def closure():
-            nonlocal batch_time_sec, initial_metrics, final_metrics, nonfinite_loss_count, nonfinite_grad_count
+            nonlocal batch_time_sec, initial_metrics, final_metrics
+            nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
             optimizer.zero_grad()
             with torch_mod.no_grad():
                 x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
+                last_eval_x = x_torch.detach().clone()
 
             if mpc.fixed_mc_samples:
                 (
@@ -547,7 +550,7 @@ def optimize_joint_with_diagnostics(
         loss = optimizer.step(closure)
         if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
             best_loss = loss.item()
-            best_x = x_torch.detach().clone()
+            best_x = last_eval_x.detach().clone()
             best_epoch = epoch
             if final_metrics is not None:
                 best_metrics = final_metrics

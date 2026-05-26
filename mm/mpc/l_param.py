@@ -127,6 +127,15 @@ def _softmax_np(logits: np.ndarray) -> np.ndarray:
     return w / max(float(w.sum()), 1e-12)
 
 
+def _min_structured_center(spread_cap: float) -> float:
+    """Small positive center floor for spread-structured quote legs."""
+
+    cap = max(0.0, float(spread_cap))
+    if cap <= 0.0:
+        return 0.0
+    return min(max(1e-6, cap * 1e-6), cap * 0.5)
+
+
 def k1_min_np(x0_1: float, epsilon: float) -> float:
     """Minimum k so sigmoid(-k * x0_1) <= epsilon."""
     x0_1 = max(float(x0_1), 1e-6)
@@ -175,7 +184,8 @@ def _spread_centers_from_flat(
     u_ask = float(flat[3 * n + 2])
     scale = _sigmoid_np(u_scale)
     w = _softmax_np(np.array([u_bid, u_ask], dtype=np.float64))
-    centers = scale * float(quote_spread_max) * w
+    spread_cap = float(quote_spread_max)
+    centers = np.maximum(scale * spread_cap * w, _min_structured_center(spread_cap))
     return float(centers[0]), float(centers[1])
 
 
@@ -431,7 +441,12 @@ def materialize_side_torch(
         spread_cap = float(l_param.quote_spread_max)
         scale = torch.sigmoid(u_scale)
         spread_w = torch.softmax(torch.stack([u_bid, u_ask]), dim=0)
-        centers = scale * spread_cap * spread_w
+        min_center = torch.tensor(
+            _min_structured_center(spread_cap),
+            dtype=params.dtype,
+            device=params.device,
+        )
+        centers = torch.clamp(scale * spread_cap * spread_w, min=min_center)
         x0_first = centers[0] if side_off == 0 else centers[1]
         x0_eff = torch.zeros(n, dtype=params.dtype, device=params.device)
         x0_eff[0] = x0_first
