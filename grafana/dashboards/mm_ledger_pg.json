@@ -78,7 +78,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('local_private_age_ms', ARRAY['freshness','local_private_age_ms']),\n    ('global_private_age_ms', ARRAY['freshness','global_private_age_ms']),\n    ('local_market_age_ms', ARRAY['freshness','local_market_age_ms']),\n    ('global_market_age_ms', ARRAY['freshness','global_market_age_ms'])\n) AS ages(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> path IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> path, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> path, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('local_private_age_ms', ARRAY['freshness','local_private_age_ms']),\n    ('global_private_age_ms', ARRAY['freshness','global_private_age_ms']),\n    ('local_market_age_ms', ARRAY['freshness','local_market_age_ms']),\n    ('global_market_age_ms', ARRAY['freshness','global_market_age_ms'])\n) AS ages(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> path IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -183,7 +183,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['local','available_base']),\n    ('available_quote', ARRAY['local','available_quote']),\n    ('locked_base', ARRAY['local','locked_base']),\n    ('locked_quote', ARRAY['local','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> path, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> path, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['local','available_base']),\n    ('available_quote', ARRAY['local','available_quote']),\n    ('locked_base', ARRAY['local','locked_base']),\n    ('locked_quote', ARRAY['local','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -229,7 +229,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_live_orders' AS metric,\n  COALESCE(jsonb_object_length(e.payload->'local'->'live_orders'), 0)::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_live_orders' AS metric,\n  COALESCE((\n    SELECT count(*)::double precision\n    FROM jsonb_object_keys(COALESCE(e.payload->'local'->'live_orders', '{}'::jsonb))\n  ), 0.0) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -275,7 +275,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'global_live_orders' AS metric,\n  COALESCE(jsonb_object_length(e.payload->'global'->'live_orders'), 0)::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'global_live_orders' AS metric,\n  COALESCE((\n    SELECT count(*)::double precision\n    FROM jsonb_object_keys(COALESCE(e.payload->'global'->'live_orders', '{}'::jsonb))\n  ), 0.0) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -334,7 +334,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['global','available_base']),\n    ('available_quote', ARRAY['global','available_quote']),\n    ('locked_base', ARRAY['global','locked_base']),\n    ('locked_quote', ARRAY['global','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> path, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> path, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('available_base', ARRAY['global','available_base']),\n    ('available_quote', ARRAY['global','available_quote']),\n    ('locked_base', ARRAY['global','locked_base']),\n    ('locked_quote', ARRAY['global','locked_quote'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\n  AND e.payload->'global' IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -393,7 +393,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('consolidated_base_inventory', ARRAY['consolidated_base_inventory']),\n    ('consolidated_quote_wealth', ARRAY['consolidated_quote_wealth']),\n    ('reference_price', ARRAY['reference_price'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> path, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> path, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('consolidated_base_inventory', ARRAY['consolidated_base_inventory']),\n    ('consolidated_quote_wealth', ARRAY['consolidated_quote_wealth']),\n    ('reference_price', ARRAY['reference_price'])\n) AS legs(metric, path)\nWHERE \n  e.topic = '${ledger_topic}'\n  AND e.event_type = 'JointLedgerSnapshot'\n  AND e.payload #>> '{local,symbol}' = '${symbol}'\n  AND e.payload #>> '{local,exchange}' = '${local_exchange}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],

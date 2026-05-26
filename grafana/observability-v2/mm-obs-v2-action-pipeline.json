@@ -229,7 +229,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision AS order_count,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'])::double precision AS buy_qty,\n       (e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'])::double precision AS sell_qty,\n       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC, stage\nLIMIT 300",
+          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS order_count,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'], ''))::double precision\n  ELSE 0.0\nEND AS buy_qty,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'], ''))::double precision\n  ELSE 0.0\nEND AS sell_qty,\n       e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC, stage\nLIMIT 300",
           "refId": "A"
         }
       ],
@@ -384,14 +384,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

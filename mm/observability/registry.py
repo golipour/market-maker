@@ -198,17 +198,25 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 _server_thread: threading.Thread | None = None
+_server_status: dict[str, Any] | None = None
 
 
-def start_server(host: str = "0.0.0.0", port: int | None = None) -> None:
+def _endpoint(host: str, port: int) -> str:
+    display_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    return f"http://{display_host}:{port}/metrics"
+
+
+def start_server(host: str = "0.0.0.0", port: int | None = None) -> dict[str, Any]:
     """Start a daemon-thread `/metrics` server when metrics are enabled."""
 
-    global _server_thread
-    if not _enabled():
-        return
-    if _server_thread is not None and _server_thread.is_alive():
-        return
+    global _server_thread, _server_status
     port = int(port if port is not None else _port())
+    if not _enabled():
+        return {"status": "disabled", "host": host, "port": port, "endpoint": _endpoint(host, port)}
+    if _server_thread is not None and _server_thread.is_alive():
+        status = dict(_server_status or {"host": host, "port": port, "endpoint": _endpoint(host, port)})
+        status["status"] = "already_running"
+        return status
     httpd = HTTPServer((host, port), _Handler)
 
     def _run() -> None:
@@ -216,3 +224,5 @@ def start_server(host: str = "0.0.0.0", port: int | None = None) -> None:
 
     _server_thread = threading.Thread(target=_run, daemon=True, name="mm-metrics")
     _server_thread.start()
+    _server_status = {"status": "started", "host": host, "port": port, "endpoint": _endpoint(host, port)}
+    return dict(_server_status)

@@ -97,7 +97,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol,\n       m.key AS model,\n       m.value->>'kind' AS kind,\n       m.value->>'skip_reason' AS skip_reason,\n       (m.value->>'nll')::double precision AS nll,\n       (m.value->>'standardized_residual')::double precision AS standardized_residual,\n       m.value->'params_after' AS params_after\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{}'::jsonb)) AS m(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 100",
+          "rawSql": "SELECT e.ts, e.actor_id, e.exchange, e.symbol,\n       m.key AS model,\n       m.value->>'kind' AS kind,\n       m.value->>'skip_reason' AS skip_reason,\n       CASE\n  WHEN trim(COALESCE(m.value->>'nll', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.value->>'nll', ''))::double precision\n  ELSE NULL\nEND AS nll,\n       CASE\n  WHEN trim(COALESCE(m.value->>'standardized_residual', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.value->>'standardized_residual', ''))::double precision\n  ELSE NULL\nEND AS standardized_residual,\n       m.value->'params_after' AS params_after\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{}'::jsonb)) AS m(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 100",
           "refId": "A"
         }
       ],
@@ -252,14 +252,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

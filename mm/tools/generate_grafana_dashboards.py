@@ -208,6 +208,29 @@ def _textbox_var(name: str, label: str, value: str) -> dict[str, Any]:
     }
 
 
+def _numeric_sql(expr: str, default: str = "0.0") -> str:
+    return f"""CASE
+  WHEN trim(COALESCE({expr}, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+  THEN trim(COALESCE({expr}, ''))::double precision
+  ELSE {default}
+END"""
+
+
+def _interval_ms_query() -> str:
+    interval_expr = "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
+    return (
+        f"SELECT DISTINCT {interval_expr} AS interval_ms "
+        f"FROM mm_events WHERE {interval_expr} IS NOT NULL ORDER BY 1"
+    )
+
+
+def _jsonb_object_count_sql(expr: str) -> str:
+    return f"""COALESCE((
+    SELECT count(*)::double precision
+    FROM jsonb_object_keys(COALESCE({expr}, '{{}}'::jsonb))
+  ), 0.0)"""
+
+
 def _panel_objective_contribution_fractions(
     id_: int,
     y: int,
@@ -237,7 +260,7 @@ def _panel_objective_contribution_fractions(
                 "rawQuery": True,
                 "rawSql": f"""SELECT e.ts AS "time",
   comp.key AS metric,
-  (comp.value)::double precision AS value
+  {_numeric_sql("comp.value", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(
@@ -278,7 +301,7 @@ def _panel_pipeline_order_counts(
         y,
         title,
         f"""SELECT e.ts AS "time", stage AS metric,
-  COALESCE((e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision, 0) AS value
+  {_numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'order_count']", default="0.0")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({stages_sql}) AS stage
 WHERE {diag_filter}
@@ -305,7 +328,7 @@ def _panel_objective_component(
         y,
         title,
         f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}'])::double precision AS value
+  {_numeric_sql(f"e.payload #>> ARRAY['optimizer','objective',stage,'components','{component_key}']", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
@@ -380,7 +403,7 @@ def _controller_diagnostics_templating() -> list[dict[str, Any]]:
         _pg_query_var(
             "interval_ms",
             "Interval ms",
-            "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+            _interval_ms_query(),
         ),
     ]
 
@@ -394,7 +417,7 @@ def controller_diagnostics_dashboard() -> dict[str, Any]:
             0,
             "Objective value (initial / final)",
             f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['optimizer','objective',stage,'value']", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
@@ -448,7 +471,7 @@ ORDER BY 1""",
             38,
             "Consolidated wealth means (main / global reward)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,field])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['optimizer','objective',stage,field]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 CROSS JOIN (
@@ -464,7 +487,7 @@ ORDER BY 1""",
             44,
             "Joint MPC expected fills (rollout)",
             f"""SELECT e.ts AS "time", kv.key AS metric,
-  (kv.value)::double precision AS value
+  {_numeric_sql("kv.value", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(e.payload #> ARRAY['optimizer','rollout','joint_diagnostics'], '{{}}'::jsonb)
@@ -478,7 +501,7 @@ ORDER BY 1""",
             50,
             "Expected total return (mean MC path return)",
             f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return']", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
@@ -490,7 +513,7 @@ ORDER BY 1""",
             58,
             "Expected total reward (mean MC delta wealth)",
             f"""SELECT e.ts AS "time", stage AS metric,
-  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward']", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest({_OPTIMIZER_OBJECTIVE_STAGES}) AS stage
 WHERE {diag_filter}
@@ -530,9 +553,9 @@ def _panel_action_pipeline_rejections(
         title,
         f"""SELECT e.ts AS "time",
   kv.key AS metric,
-  (kv.value)::double precision AS value
+  {_numeric_sql("kv.value", default="NULL")} AS value
 FROM mm_events e
-CROSS JOIN LATERAL jsonb_each(
+CROSS JOIN LATERAL jsonb_each_text(
   COALESCE({counts_expr}, '{{}}'::jsonb)
 ) AS kv
 WHERE {diag_filter}
@@ -578,7 +601,7 @@ ORDER BY 1""",
             "Target book buy/sell qty by venue",
             f"""SELECT e.ts AS "time",
   books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,
-  SUM((books.ord->>'qty')::double precision) AS value
+  SUM({_numeric_sql("books.ord->>'qty'", default="0.0")}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL (
   SELECT 'local' AS venue, ord
@@ -598,7 +621,7 @@ ORDER BY 1""",
             13,
             "Target book order count (diagnostics fallback)",
             f"""SELECT e.ts AS "time", 'target_book_total' AS metric,
-  COALESCE((e.payload #>> ARRAY['action_pipeline','target_book','order_count'])::double precision, 0) AS value
+  {_numeric_sql("e.payload #>> ARRAY['action_pipeline','target_book','order_count']", default="0.0")} AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -630,7 +653,7 @@ LIMIT 20""",
             37,
             "Risk-approved order count",
             f"""SELECT e.ts AS "time", 'risk_approved' AS metric,
-  COALESCE((e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'])::double precision, 0) AS value
+  {_numeric_sql("e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count']", default="0.0")} AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -662,7 +685,7 @@ ORDER BY 1""",
             40,
             "Execution plan notional (planned place buy/sell)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['action_pipeline','planned_place', field])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_place', field]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('buy_notional', 'buy_notional'), ('sell_notional', 'sell_notional')
@@ -676,7 +699,7 @@ ORDER BY 1""",
             40,
             "Orders kept vs canceled",
             f"""SELECT e.ts AS "time", stage AS metric,
-  COALESCE((e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision, 0) AS value
+  {_numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'order_count']", default="0.0")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['kept', 'planned_cancel']) AS stage
 WHERE {diag_filter}
@@ -841,12 +864,12 @@ def portfolio_dashboard() -> dict[str, Any]:
             4,
             "Inventory (local vs global)",
             f"""SELECT e.ts AS "time", 'local_inventory' AS metric,
-  (e.payload #>> '{{state,local_inventory}}')::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','local_inventory']", default="NULL")} AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'global_inventory',
-  (e.payload #>> '{{state,global_inventory}}')::double precision
+  {_numeric_sql("e.payload #>> ARRAY['state','global_inventory']", default="NULL")}
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -856,12 +879,12 @@ ORDER BY 1""",
             12,
             "Cash (local vs global)",
             f"""SELECT e.ts AS "time", 'local_cash' AS metric,
-  (e.payload #>> '{{state,local_cash}}')::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','local_cash']", default="NULL")} AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'global_cash',
-  (e.payload #>> '{{state,global_cash}}')::double precision
+  {_numeric_sql("e.payload #>> ARRAY['state','global_cash']", default="NULL")}
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -871,18 +894,18 @@ ORDER BY 1""",
             20,
             "Marked portfolio value (approx)",
             f"""SELECT e.ts AS "time", 'local_marked' AS metric,
-  COALESCE((e.payload #>> '{{state,local_wealth}}')::double precision,
-    (e.payload #>> '{{state,local_cash}}')::double precision
-     + (e.payload #>> '{{state,local_inventory}}')::double precision
-       * COALESCE((e.payload #>> '{{state,local_sell_vwap}}')::double precision, 0)) AS value
+  COALESCE({_numeric_sql("e.payload #>> ARRAY['state','local_wealth']", default="NULL")},
+    {_numeric_sql("e.payload #>> ARRAY['state','local_cash']", default="0.0")}
+     + {_numeric_sql("e.payload #>> ARRAY['state','local_inventory']", default="0.0")}
+       * COALESCE({_numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")}, 0.0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 UNION ALL
 SELECT e.ts, 'global_marked',
-  COALESCE((e.payload #>> '{{state,global_wealth}}')::double precision,
-    (e.payload #>> '{{state,global_cash}}')::double precision
-     + (e.payload #>> '{{state,global_inventory}}')::double precision
-       * COALESCE((e.payload #>> '{{state,global_sell_vwap}}')::double precision, 0)) AS value
+  COALESCE({_numeric_sql("e.payload #>> ARRAY['state','global_wealth']", default="NULL")},
+    {_numeric_sql("e.payload #>> ARRAY['state','global_cash']", default="0.0")}
+     + {_numeric_sql("e.payload #>> ARRAY['state','global_inventory']", default="0.0")}
+       * COALESCE({_numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")}, 0.0)) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -892,7 +915,7 @@ ORDER BY 1""",
             28,
             "Local quote wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','local_quote_wallet', leg])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','local_quote_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -905,7 +928,7 @@ ORDER BY 1""",
             36,
             "Local base wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','local_base_wallet', leg])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','local_base_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -921,8 +944,8 @@ ORDER BY 1""",
 FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES
-    ('min', (e.payload #>> ARRAY['risk','limits','local','min_inventory'])::double precision),
-    ('max', (e.payload #>> ARRAY['risk','limits','local','max_inventory'])::double precision)
+    ('min', {_numeric_sql("e.payload #>> ARRAY['risk','limits','local','min_inventory']", default="NULL")}),
+    ('max', {_numeric_sql("e.payload #>> ARRAY['risk','limits','local','max_inventory']", default="NULL")})
 ) AS t(lim, v)
 WHERE {diag_filter} AND v IS NOT NULL
 ORDER BY 1""",
@@ -932,8 +955,8 @@ ORDER BY 1""",
             52,
             "Combined inventory exposure",
             f"""SELECT e.ts AS "time", 'local_plus_global' AS metric,
-  ((e.payload #>> '{{state,local_inventory}}')::double precision
-   + (e.payload #>> '{{state,global_inventory}}')::double precision) AS value
+  ({_numeric_sql("e.payload #>> ARRAY['state','local_inventory']", default="0.0")}
+   + {_numeric_sql("e.payload #>> ARRAY['state','global_inventory']", default="0.0")}) AS value
 FROM mm_events e
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -943,7 +966,7 @@ ORDER BY 1""",
             60,
             "Global quote wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','global_quote_wallet', leg])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','global_quote_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -956,7 +979,7 @@ ORDER BY 1""",
             68,
             "Global base wallet (free / locked / total / effective)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> ARRAY['state','global_base_wallet', leg])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['state','global_base_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
@@ -968,7 +991,7 @@ ORDER BY 1""",
             20,
             76,
             "Locked collateral — before risk (ledger)",
-            f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+            f"""SELECT e.ts AS "time", kv.key AS metric, {_numeric_sql("kv.value", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(e.payload->'risk'->'exposure_before', '{{}}'::jsonb)
@@ -981,7 +1004,7 @@ ORDER BY 1""",
             21,
             84,
             "Locked collateral — after risk (target book)",
-            f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+            f"""SELECT e.ts AS "time", kv.key AS metric, {_numeric_sql("kv.value", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(e.payload->'risk'->'exposure_after', '{{}}'::jsonb)
@@ -995,7 +1018,7 @@ ORDER BY 1""",
             92,
             "Consolidated ledger exposure",
             f"""SELECT e.ts AS "time", stage || '_' || key AS metric,
-  (e.payload #>> exposure_path)::double precision AS value
+  {_numeric_sql("e.payload #>> exposure_path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1072,7 +1095,7 @@ ORDER BY 1""",
             5,
             "Frame age & latency skew (ms)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> path)::double precision AS value
+  {_numeric_sql("e.payload #>> path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1171,7 +1194,7 @@ ORDER BY 1""",
             "Target book buy/sell qty by venue",
             f"""SELECT e.ts AS "time",
   books.venue || '_' || COALESCE(books.ord->>'side', '') AS metric,
-  SUM((books.ord->>'qty')::double precision) AS value
+  SUM({_numeric_sql("books.ord->>'qty'", default="0.0")}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL (
   SELECT 'local' AS venue, ord
@@ -1211,7 +1234,7 @@ def ledger_dashboard() -> dict[str, Any]:
             5,
             "Private & market age (ms)",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> path)::double precision AS value
+  {_numeric_sql("e.payload #>> path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1243,7 +1266,7 @@ ORDER BY 1""",
             14,
             "Local available / locked collateral",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> path)::double precision AS value
+  {_numeric_sql("e.payload #>> path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1260,7 +1283,7 @@ ORDER BY 1""",
             22,
             "Local live order count",
             f"""SELECT e.ts AS "time", 'local_live_orders' AS metric,
-  COALESCE(jsonb_object_length(e.payload->'local'->'live_orders'), 0)::double precision AS value
+  {_jsonb_object_count_sql("e.payload->'local'->'live_orders'")} AS value
 FROM mm_events e
 WHERE {ledger_filter}
 ORDER BY 1""",
@@ -1271,7 +1294,7 @@ ORDER BY 1""",
             22,
             "Global live order count",
             f"""SELECT e.ts AS "time", 'global_live_orders' AS metric,
-  COALESCE(jsonb_object_length(e.payload->'global'->'live_orders'), 0)::double precision AS value
+  {_jsonb_object_count_sql("e.payload->'global'->'live_orders'")} AS value
 FROM mm_events e
 WHERE {ledger_filter}
   AND e.payload->'global' IS NOT NULL
@@ -1285,7 +1308,7 @@ ORDER BY 1""",
             31,
             "Global available / locked collateral",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> path)::double precision AS value
+  {_numeric_sql("e.payload #>> path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1304,7 +1327,7 @@ ORDER BY 1""",
             40,
             "Consolidated inventory & quote wealth",
             f"""SELECT e.ts AS "time", metric,
-  (e.payload #>> path)::double precision AS value
+  {_numeric_sql("e.payload #>> path", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
   VALUES
@@ -1372,7 +1395,7 @@ def patch_model_params_dashboard() -> None:
             y,
             "Model NLL",
             f"""SELECT e.ts AS "time", model AS metric,
-  (e.payload #>> ARRAY['models', model, 'nll'])::double precision AS value
+  {_numeric_sql("e.payload #>> ARRAY['models', model, 'nll']", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['local_price','local_market_flow','global_market_flow','global_price']) AS model
 WHERE {diag_filter}

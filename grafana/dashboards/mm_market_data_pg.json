@@ -484,13 +484,13 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

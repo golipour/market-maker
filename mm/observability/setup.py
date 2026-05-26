@@ -45,15 +45,31 @@ def configure_observability(config: ObservabilityRuntimeConfig) -> None:
         try:
             from mm.observability.registry import start_server
 
-            start_server(port=config.metrics_port)
+            status = start_server(port=config.metrics_port)
+            if status.get("status") in {"started", "already_running"}:
+                log_event(
+                    obs_schema.EVENT_OBSERVABILITY_METRICS_READY,
+                    {
+                        "component": "metrics",
+                        "status": status.get("status"),
+                        "host": status.get("host"),
+                        "port": status.get("port"),
+                        "endpoint": status.get("endpoint"),
+                    },
+                )
         except Exception as exc:
+            details = {
+                "component": "metrics",
+                "host": "0.0.0.0",
+                "port": config.metrics_port,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            }
+            if isinstance(exc, PermissionError):
+                details["hint"] = "socket creation or bind was denied; run outside a restricted sandbox or disable metrics"
             log_event(
                 obs_schema.EVENT_OBSERVABILITY_SETUP_FAILED,
-                {
-                    "component": "metrics",
-                    "error": type(exc).__name__,
-                    "message": str(exc),
-                },
+                details,
             )
     if config.run_id:
         os.environ.setdefault("MM_RUN_ID", config.run_id)

@@ -78,7 +78,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','venue_quantized','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline','venue_quantized','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -124,7 +124,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','capped','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline','capped','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -183,7 +183,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], e.payload->'risk'->'rejection_counts'), '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], e.payload->'risk'->'rejection_counts'), '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -242,7 +242,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  kv.key AS metric,\n  CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -460,14 +460,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

@@ -229,7 +229,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM((o->>'qty')::double precision) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', e.payload->'local'), ('global', e.payload->'global')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM(CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', e.payload->'local'), ('global', e.payload->'global')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -388,14 +388,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

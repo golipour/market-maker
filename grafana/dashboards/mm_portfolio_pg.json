@@ -65,7 +65,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_inventory' AS metric,\n  (e.payload #>> '{state,local_inventory}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_inventory',\n  (e.payload #>> '{state,global_inventory}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_inventory' AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_inventory',\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE NULL\nEND\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -111,7 +111,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_cash' AS metric,\n  (e.payload #>> '{state,local_cash}')::double precision AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_cash',\n  (e.payload #>> '{state,global_cash}')::double precision\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_cash' AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_cash',\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE NULL\nEND\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -157,7 +157,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_marked' AS metric,\n  COALESCE((e.payload #>> '{state,local_wealth}')::double precision,\n    (e.payload #>> '{state,local_cash}')::double precision\n     + (e.payload #>> '{state,local_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,local_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_marked',\n  COALESCE((e.payload #>> '{state,global_wealth}')::double precision,\n    (e.payload #>> '{state,global_cash}')::double precision\n     + (e.payload #>> '{state,global_inventory}')::double precision\n       * COALESCE((e.payload #>> '{state,global_sell_vwap}')::double precision, 0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_marked' AS metric,\n  COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], ''))::double precision\n  ELSE NULL\nEND,\n    CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND\n     + CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND\n       * COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT e.ts, 'global_marked',\n  COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_wealth'], ''))::double precision\n  ELSE NULL\nEND,\n    CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND\n     + CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND\n       * COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -203,7 +203,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','local_quote_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -249,7 +249,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','local_base_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -295,7 +295,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", lim AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('min', (e.payload #>> ARRAY['risk','limits','local','min_inventory'])::double precision),\n    ('max', (e.payload #>> ARRAY['risk','limits','local','max_inventory'])::double precision)\n) AS t(lim, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", lim AS metric, v AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('min', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['risk','limits','local','min_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['risk','limits','local','min_inventory'], ''))::double precision\n  ELSE NULL\nEND),\n    ('max', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['risk','limits','local','max_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['risk','limits','local','max_inventory'], ''))::double precision\n  ELSE NULL\nEND)\n) AS t(lim, v)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts) AND v IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -341,7 +341,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'local_plus_global' AS metric,\n  ((e.payload #>> '{state,local_inventory}')::double precision\n   + (e.payload #>> '{state,global_inventory}')::double precision) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", 'local_plus_global' AS metric,\n  (CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND\n   + CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -387,7 +387,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','global_quote_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -433,7 +433,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['state','global_base_wallet', leg])::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -479,7 +479,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload->'risk'->'exposure_before', '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND kv.key LIKE '%locked%'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload->'risk'->'exposure_before', '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND kv.key LIKE '%locked%'\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -525,7 +525,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload->'risk'->'exposure_after', '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND (kv.key LIKE '%locked%' OR kv.key LIKE 'consolidated_%')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload->'risk'->'exposure_after', '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND (kv.key LIKE '%locked%' OR kv.key LIKE 'consolidated_%')\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -571,7 +571,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage || '_' || key AS metric,\n  (e.payload #>> exposure_path)::double precision AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('before', 'consolidated_base_inventory'),\n    ('before', 'consolidated_quote_wealth'),\n    ('after', 'consolidated_base_inventory'),\n    ('after', 'consolidated_quote_wealth')\n) AS legs(stage, key)\nCROSS JOIN LATERAL (\n  SELECT ARRAY['risk', 'exposure_' || stage, key] AS exposure_path\n) AS paths\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> exposure_path IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage || '_' || key AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> exposure_path, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> exposure_path, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES\n    ('before', 'consolidated_base_inventory'),\n    ('before', 'consolidated_quote_wealth'),\n    ('after', 'consolidated_base_inventory'),\n    ('after', 'consolidated_quote_wealth')\n) AS legs(stage, key)\nCROSS JOIN LATERAL (\n  SELECT ARRAY['risk', 'exposure_' || stage, key] AS exposure_path\n) AS paths\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> exposure_path IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],

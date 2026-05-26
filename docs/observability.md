@@ -543,24 +543,28 @@ Panels:
 
 | Panel | Type | Datasource | Query idea |
 |-------|------|------------|------------|
-| Prometheus scrape | stat | Prometheus | `up{job="market_maker"}` |
-| Frame rate | timeseries | Prometheus | `sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))` |
-| Decision rate | timeseries | Prometheus | `sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))` |
-| Controller p95 latency | timeseries | Prometheus | `histogram_quantile(0.95, sum by (le,actor_id)(rate(mm_controller_latency_ms_bucket[$__rate_interval])))` |
-| Order sync p95 latency | timeseries | Prometheus | `histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))` |
-| Sync requests | timeseries | Prometheus | `sum by (exchange)(rate(mm_order_sync_total[$__rate_interval]))` |
-| Placed orders | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_placed_orders_total[$__rate_interval]))` |
-| Failed orders | timeseries | Prometheus | `sum by (exchange,symbol,side,reason)(rate(mm_execution_failed_orders_total[$__rate_interval]))` |
-| Fill events | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_filled_orders_total[$__rate_interval]))` |
-| Filled quantity | timeseries | Prometheus | `sum by (exchange,symbol,side)(rate(mm_execution_filled_qty_total[$__rate_interval]))` |
-| Live orders by side | timeseries | Prometheus | `sum by (exchange,symbol,side)(mm_execution_live_orders_by_side)` |
-| Live order quantity by side | timeseries | Prometheus | `sum by (exchange,symbol,side)(mm_execution_live_order_qty)` |
-| Runtime errors | timeseries | Prometheus | `sum by (topic,error)(rate(mm_runtime_errors_total[$__rate_interval]))` |
-| Persistence errors | timeseries | Prometheus | `sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))` |
-| Kill switch | stat | Prometheus | `mm_kill_switch_state` |
-| Observe-only | stat | Prometheus | `mm_observe_only_state` |
-| Latest warnings | table | Postgres | latest `ControllerDiagnostics.warnings` |
-| Recent error logs | logs | Loki | `{job="market-maker-runtime"} | json | level="error"` |
+| Prometheus scrape | stat | Prometheus | `max(up{job="market_maker"}) or vector(0)` |
+| Frame rate | timeseries | PostgreSQL | `JointStrategyFrame` rows in `mm_events`, rate-normalized |
+| Decision rate | timeseries | PostgreSQL | `StrategyDecision` rows in `mm_events`, rate-normalized |
+| Controller stage p95 latency | timeseries | PostgreSQL | p95 over `ControllerDiagnostics.optimizer.timing` values |
+| Order sync p95 latency | timeseries | PostgreSQL | p95 over `ExecutionSyncCompleted` / `ExecutionSyncFailed` `latency_ms` |
+| Sync requests | timeseries | PostgreSQL | `ExecutionSyncRequested` rows in `mm_events`, rate-normalized |
+| Placed orders | timeseries | PostgreSQL | `PlaceOrdersAccepted.payload.orders`, split by exchange/symbol/side |
+| Failed orders | timeseries | PostgreSQL | `PlaceOrdersFailed.payload.orders`, split by exchange/symbol/side/reason |
+| Fill events | timeseries | PostgreSQL | `private:state:%:fills` rows, split by exchange/symbol/side |
+| Filled quantity | timeseries | PostgreSQL | `private:state:%:fills.payload.qty`, rate-normalized |
+| Live orders by side | timeseries | PostgreSQL | `execution:state:%` snapshot `live_orders`, split by side |
+| Live order quantity by side | timeseries | PostgreSQL | `execution:state:%` snapshot `remaining_qty`, split by side |
+| Persistence errors | timeseries | Loki | `persistence_batch_failed` log events by writer/error |
+| Latest controller warnings | table | PostgreSQL | Latest warnings from `ControllerDiagnostics.warnings` |
+
+The runtime overview intentionally uses persisted events for most panels. If the
+Python runtime cannot open the `/metrics` socket, PostgreSQL-backed panels still
+show frames, decisions, diagnostics, sync attempts, and zero baselines for event
+types that did not happen in the selected time range. The metrics server emits
+`observability_metrics_ready` when `/metrics` is bound, and
+`observability_setup_failed` includes `host`, `port`, and a socket-permission hint
+when binding fails.
 
 ### 01 Market data quality
 
@@ -1087,6 +1091,15 @@ Check Prometheus output directly:
 ```bash
 curl http://localhost:8000/metrics
 ```
+
+If Prometheus shows `up{job="market_maker"} == 0`, query its target state:
+
+```bash
+curl http://localhost:9090/api/v1/targets
+```
+
+`connection refused` for `host.docker.internal:8000` means the runtime is not
+currently serving `/metrics` on port 8000, or it failed to bind that socket.
 
 Inspect recent persisted events:
 

@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Fast runtime health from Prometheus, plus latest controller warnings from PostgreSQL.",
+        "content": "Runtime health from persisted events. Prometheus scrape status is shown separately so a failed `/metrics` socket does not make the whole overview blank.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -50,12 +50,12 @@
             "type": "prometheus",
             "uid": "prometheus-mm"
           },
-          "expr": "up{job=\"market_maker\"}",
+          "expr": "max(up{job=\"market_maker\"}) or vector(0)",
           "refId": "A",
           "legendFormat": "{{job}}"
         }
       ],
-      "title": "Scrape up",
+      "title": "Prometheus scrape up",
       "type": "stat",
       "options": {
         "colorMode": "value",
@@ -65,8 +65,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -85,12 +85,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  ((e.payload #>> ARRAY['local_market','exchange']) || ' ' || (e.payload #>> ARRAY['local_market','symbol'])) AS metric,\n  COUNT(*)::double precision / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nWHERE e.event_type = 'JointStrategyFrame'\n  AND (e.payload #>> ARRAY['local_market','exchange']) IN (${exchange:sqlstring})\n  AND (e.payload #>> ARRAY['local_market','symbol']) IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no frames' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no frames' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Frame rate",
@@ -109,8 +111,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -129,12 +131,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (e.actor_id || ' ' || e.exchange || ' ' || e.symbol) AS metric,\n  COUNT(*)::double precision / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nWHERE e.event_type = 'StrategyDecision'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no decisions' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no decisions' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Decision rate",
@@ -153,12 +157,12 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "ms",
           "decimals": 3
         },
         "overrides": []
@@ -173,15 +177,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))",
-          "refId": "A",
-          "legendFormat": "{{stage}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  CASE\n  WHEN kv.key LIKE '%_sec' THEN substring(kv.key from 1 for length(kv.key) - 4)\n  WHEN kv.key LIKE '%_ms' THEN substring(kv.key from 1 for length(kv.key) - 3)\n  ELSE kv.key\nEND AS metric,\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY CASE\n  WHEN kv.key LIKE '%_sec' THEN (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0\n  ELSE (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND)\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND kv.key <> 'best_epoch'\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no stage timings' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no stage timings' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Controller stage p95",
+      "title": "Controller stage p95 ms",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -197,12 +203,12 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "ms",
           "decimals": 3
         },
         "overrides": []
@@ -217,15 +223,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))",
-          "refId": "A",
-          "legendFormat": "{{exchange}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  COALESCE(e.exchange, 'unknown') AS metric,\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY CASE\n  WHEN trim(COALESCE(e.payload->>'latency_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'latency_ms', ''))::double precision\n  ELSE NULL\nEND) AS value\nFROM mm_events e\nWHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND e.payload->>'latency_ms' IS NOT NULL\n  AND trim(e.payload->>'latency_ms') ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no sync latency' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no sync latency' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Order sync p95",
+      "title": "Order sync p95 ms",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -241,8 +249,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -261,12 +269,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange)(rate(mm_order_sync_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  COALESCE(e.exchange, 'unknown') AS metric,\n  COUNT(*)::double precision / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nWHERE e.event_type = 'ExecutionSyncRequested'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no sync requests' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no sync requests' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Sync requests / sec",
@@ -285,8 +295,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -305,12 +315,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side)(rate(mm_execution_placed_orders_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||\n   COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' ' ||\n   CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(1.0) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)\nWHERE e.event_type = 'PlaceOrdersAccepted'\n  AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${exchange:sqlstring})\n  AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no placed orders' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no placed orders' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Placed orders / sec",
@@ -329,8 +341,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -349,12 +361,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side,reason)(rate(mm_execution_failed_orders_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{side}} {{reason}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||\n   COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' ' ||\n   CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND || ' ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')) AS metric,\n  SUM(1.0) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)\nWHERE e.event_type = 'PlaceOrdersFailed'\n  AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${exchange:sqlstring})\n  AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no failed orders' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no failed orders' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Failed orders / sec",
@@ -373,8 +387,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -393,12 +407,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side)(rate(mm_execution_filled_orders_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(e.symbol, 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(1.0) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no fills' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no fills' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Fill events / sec",
@@ -417,8 +433,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -437,12 +453,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side)(rate(mm_execution_filled_qty_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  (floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(e.symbol, 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no filled qty' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no filled qty' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Filled qty / sec",
@@ -461,8 +479,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -481,12 +499,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side)(mm_execution_live_orders_by_side)",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH expanded AS (\n  SELECT\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${symbol:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nper_snapshot AS (\n  SELECT\n    ts,\n    exchange,\n    symbol,\n    side,\n    COUNT(*)::double precision AS value\n  FROM expanded\n  GROUP BY ts, exchange, symbol, side\n)\nSELECT\n  (floor(EXTRACT(EPOCH FROM (ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  AVG(value) AS value\nFROM per_snapshot\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no live orders' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no live orders' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Live orders by side",
@@ -505,8 +525,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -525,12 +545,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,side)(mm_execution_live_order_qty)",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}} {{side}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH expanded AS (\n  SELECT\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${symbol:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nper_snapshot AS (\n  SELECT\n    ts,\n    exchange,\n    symbol,\n    side,\n    SUM(qty) AS value\n  FROM expanded\n  GROUP BY ts, exchange, symbol, side\n)\nSELECT\n  (floor(EXTRACT(EPOCH FROM (ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  AVG(value) AS value\nFROM per_snapshot\nGROUP BY 1, 2\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no live order qty' AS metric, 0.0 AS value\nUNION ALL\nSELECT (floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\", 'no live order qty' AS metric, 0.0 AS value\nORDER BY 1",
+          "refId": "A"
         }
       ],
       "title": "Live order qty by side",
@@ -549,8 +571,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "loki",
+        "uid": "loki-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -569,10 +591,10 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "loki",
+            "uid": "loki-mm"
           },
-          "expr": "sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))",
+          "expr": "sum by (writer,error) (count_over_time({job=\"market-maker-runtime\"} | json | event=\"persistence_batch_failed\" [$__interval]))",
           "refId": "A",
           "legendFormat": "{{writer}} {{error}}"
         }
@@ -774,14 +796,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

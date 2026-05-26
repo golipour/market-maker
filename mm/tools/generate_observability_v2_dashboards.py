@@ -229,7 +229,7 @@ def _templating() -> list[dict[str, Any]]:
         _query_var(
             "interval_ms",
             "Interval ms",
-            "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+            _interval_ms_query(),
         ),
     ]
 
@@ -267,22 +267,245 @@ def _custom_var(name: str, label: str, query: str) -> dict[str, Any]:
     }
 
 
+def _interval_ms_query() -> str:
+    interval_expr = "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
+    return (
+        f"SELECT DISTINCT {interval_expr} AS interval_ms "
+        f"FROM mm_events WHERE {interval_expr} IS NOT NULL ORDER BY 1"
+    )
+
+
+def _time_bucket_sql(expr: str) -> str:
+    seconds = _rate_denominator_sql()
+    return f"(floor(EXTRACT(EPOCH FROM ({expr})::timestamptz) / {seconds}) * {seconds})"
+
+
+def _time_bucket_alias_sql(expr: str) -> str:
+    return f"{_time_bucket_sql(expr)} AS \"time\""
+
+
+def _zero_series_sql(metric: str) -> str:
+    return f"""SELECT {_time_bucket_sql("$__timeFrom()")} AS "time", '{metric}' AS metric, 0.0 AS value
+UNION ALL
+SELECT {_time_bucket_sql("$__timeTo()")} AS "time", '{metric}' AS metric, 0.0 AS value"""
+
+
+def _numeric_sql(expr: str, default: str = "0.0") -> str:
+    return f"""CASE
+  WHEN trim(COALESCE({expr}, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+  THEN trim(COALESCE({expr}, ''))::double precision
+  ELSE {default}
+END"""
+
+
+def _rate_denominator_sql() -> str:
+    return """GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)"""
+
+
+def _side_sql(expr: str) -> str:
+    return f"""CASE lower(trim(COALESCE({expr}, '')))
+  WHEN 'buy' THEN 'bid'
+  WHEN 'bid' THEN 'bid'
+  WHEN 'sell' THEN 'ask'
+  WHEN 'ask' THEN 'ask'
+  ELSE 'unknown'
+END"""
+
+
+def _runtime_frame_rate_sql() -> str:
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  ((e.payload #>> ARRAY['local_market','exchange']) || ' ' || (e.payload #>> ARRAY['local_market','symbol'])) AS metric,
+  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+FROM mm_events e
+WHERE e.event_type = 'JointStrategyFrame'
+  AND (e.payload #>> ARRAY['local_market','exchange']) IN (${{exchange:sqlstring}})
+  AND (e.payload #>> ARRAY['local_market','symbol']) IN (${{symbol:sqlstring}})
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql("no frames")}
+ORDER BY 1"""
+
+
+def _runtime_decision_rate_sql() -> str:
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  (e.actor_id || ' ' || e.exchange || ' ' || e.symbol) AS metric,
+  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+FROM mm_events e
+WHERE e.event_type = 'StrategyDecision'
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND e.symbol IN (${{symbol:sqlstring}})
+  AND e.actor_id IN (${{actor_id:sqlstring}})
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql("no decisions")}
+ORDER BY 1"""
+
+
+def _runtime_controller_stage_p95_sql() -> str:
+    numeric_value = _numeric_sql("kv.value", default="NULL")
+    value_ms = f"""CASE
+  WHEN kv.key LIKE '%_sec' THEN ({numeric_value}) * 1000.0
+  ELSE ({numeric_value})
+END"""
+    stage = """CASE
+  WHEN kv.key LIKE '%_sec' THEN substring(kv.key from 1 for length(kv.key) - 4)
+  WHEN kv.key LIKE '%_ms' THEN substring(kv.key from 1 for length(kv.key) - 3)
+  ELSE kv.key
+END"""
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  {stage} AS metric,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY {value_ms}) AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{{}}'::jsonb)) AS kv(key, value)
+WHERE {_diagnostics_filter()}
+  AND kv.key <> 'best_epoch'
+  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql("no stage timings")}
+ORDER BY 1"""
+
+
+def _runtime_order_sync_p95_sql() -> str:
+    latency = _numeric_sql("e.payload->>'latency_ms'", default="NULL")
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  COALESCE(e.exchange, 'unknown') AS metric,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY {latency}) AS value
+FROM mm_events e
+WHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND e.payload->>'latency_ms' IS NOT NULL
+  AND trim(e.payload->>'latency_ms') ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql("no sync latency")}
+ORDER BY 1"""
+
+
+def _runtime_execution_event_rate_sql(event_type: str, zero_metric: str) -> str:
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  COALESCE(e.exchange, 'unknown') AS metric,
+  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+FROM mm_events e
+WHERE e.event_type = '{event_type}'
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql(zero_metric)}
+ORDER BY 1"""
+
+
+def _runtime_order_payload_rate_sql(event_type: str, measure: str, *, include_reason: bool = False) -> str:
+    side = _side_sql("o.value->>'side'")
+    qty = _numeric_sql("COALESCE(o.value->>'qty', o.value->>'remaining_qty')")
+    value = "1.0" if measure == "count" else qty
+    reason = " || ' ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')" if include_reason else ""
+    zero_metric = "no failed orders" if include_reason else "no placed orders"
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
+   COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' ' ||
+   {side}{reason}) AS metric,
+  SUM({value}) / {_rate_denominator_sql()} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+WHERE e.event_type = '{event_type}'
+  AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${{exchange:sqlstring}})
+  AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${{symbol:sqlstring}})
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql(zero_metric)}
+ORDER BY 1"""
+
+
+def _runtime_fill_rate_sql(measure: str) -> str:
+    side = _side_sql("e.payload->>'side'")
+    qty = _numeric_sql("e.payload->>'qty'")
+    value = "1.0" if measure == "count" else qty
+    zero_metric = "no fills" if measure == "count" else "no filled qty"
+    return f"""SELECT
+  {_time_bucket_alias_sql("e.ts")},
+  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(e.symbol, 'unknown') || ' ' || {side}) AS metric,
+  SUM({value}) / {_rate_denominator_sql()} AS value
+FROM mm_events e
+WHERE e.topic LIKE 'private:state:%:fills'
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND e.symbol IN (${{symbol:sqlstring}})
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql(zero_metric)}
+ORDER BY 1"""
+
+
+def _runtime_live_orders_sql(measure: str) -> str:
+    side = _side_sql("open_order.value #>> ARRAY['order','side']")
+    qty = _numeric_sql("open_order.value->>'remaining_qty'")
+    value = "COUNT(*)::double precision" if measure == "count" else "SUM(qty)"
+    zero_metric = "no live orders" if measure == "count" else "no live order qty"
+    return f"""WITH expanded AS (
+  SELECT
+    e.ts,
+    COALESCE(e.exchange, 'unknown') AS exchange,
+    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,
+    {side} AS side,
+    {qty} AS qty
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{{}}'::jsonb)) AS open_order(key, value)
+  WHERE e.topic LIKE 'execution:state:%'
+    AND e.exchange IN (${{exchange:sqlstring}})
+    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${{symbol:sqlstring}})
+    AND $__timeFilter(e.ts)
+),
+per_snapshot AS (
+  SELECT
+    ts,
+    exchange,
+    symbol,
+    side,
+    {value} AS value
+  FROM expanded
+  GROUP BY ts, exchange, symbol, side
+)
+SELECT
+  {_time_bucket_alias_sql("ts")},
+  (exchange || ' ' || symbol || ' ' || side) AS metric,
+  AVG(value) AS value
+FROM per_snapshot
+GROUP BY 1, 2
+UNION ALL
+{_zero_series_sql(zero_metric)}
+ORDER BY 1"""
+
+
 def runtime_overview() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Fast runtime health from Prometheus, plus latest controller warnings from PostgreSQL.", y=0),
-        _panel(2, "Scrape up", "stat", PROM_DS, 'up{job="market_maker"}', x=0, y=3, w=6, h=4, legend="{{job}}"),
-        _panel(3, "Frame rate", "timeseries", PROM_DS, 'sum by (exchange,symbol)(rate(mm_joint_strategy_frames_total[$__rate_interval]))', x=6, y=3, legend="{{exchange}} {{symbol}}"),
-        _panel(4, "Decision rate", "timeseries", PROM_DS, 'sum by (actor_id,exchange,symbol)(rate(mm_controller_decisions_total[$__rate_interval]))', x=18, y=3, w=6, legend="{{exchange}} {{symbol}}"),
-        _panel(5, "Controller stage p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket[$__rate_interval])))', x=0, y=11, legend="{{stage}}"),
-        _panel(6, "Order sync p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,exchange)(rate(mm_order_sync_latency_ms_bucket[$__rate_interval])))', x=12, y=11, w=6, legend="{{exchange}}"),
-        _panel(15, "Sync requests / sec", "timeseries", PROM_DS, 'sum by (exchange)(rate(mm_order_sync_total[$__rate_interval]))', x=18, y=11, w=6, legend="{{exchange}}"),
-        _panel(7, "Placed orders / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_placed_orders_total[$__rate_interval]))', x=0, y=19, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
-        _panel(8, "Failed orders / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side,reason)(rate(mm_execution_failed_orders_total[$__rate_interval]))', x=8, y=19, w=8, legend="{{exchange}} {{side}} {{reason}}"),
-        _panel(9, "Fill events / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_filled_orders_total[$__rate_interval]))', x=16, y=19, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
-        _panel(10, "Filled qty / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(rate(mm_execution_filled_qty_total[$__rate_interval]))', x=0, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
-        _panel(11, "Live orders by side", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(mm_execution_live_orders_by_side)', x=8, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
-        _panel(12, "Live order qty by side", "timeseries", PROM_DS, 'sum by (exchange,symbol,side)(mm_execution_live_order_qty)', x=16, y=27, w=8, legend="{{exchange}} {{symbol}} {{side}}"),
-        _panel(13, "Persistence errors", "timeseries", PROM_DS, 'sum by (writer,error)(rate(mm_persistence_errors_total[$__rate_interval]))', x=0, y=35, legend="{{writer}} {{error}}"),
+        _text(1, "Scope", "Runtime health from persisted events. Prometheus scrape status is shown separately so a failed `/metrics` socket does not make the whole overview blank.", y=0),
+        _panel(2, "Prometheus scrape up", "stat", PROM_DS, 'max(up{job="market_maker"}) or vector(0)', x=0, y=3, w=6, h=4, legend="{{job}}"),
+        _panel(3, "Frame rate", "timeseries", PG_DS, _runtime_frame_rate_sql(), x=6, y=3),
+        _panel(4, "Decision rate", "timeseries", PG_DS, _runtime_decision_rate_sql(), x=18, y=3, w=6),
+        _panel(5, "Controller stage p95 ms", "timeseries", PG_DS, _runtime_controller_stage_p95_sql(), x=0, y=11, unit="ms"),
+        _panel(6, "Order sync p95 ms", "timeseries", PG_DS, _runtime_order_sync_p95_sql(), x=12, y=11, w=6, unit="ms"),
+        _panel(15, "Sync requests / sec", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested", "no sync requests"), x=18, y=11, w=6),
+        _panel(7, "Placed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=8),
+        _panel(8, "Failed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=8, y=19, w=8),
+        _panel(9, "Fill events / sec", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=16, y=19, w=8),
+        _panel(10, "Filled qty / sec", "timeseries", PG_DS, _runtime_fill_rate_sql("qty"), x=0, y=27, w=8),
+        _panel(11, "Live orders by side", "timeseries", PG_DS, _runtime_live_orders_sql("count"), x=8, y=27, w=8),
+        _panel(12, "Live order qty by side", "timeseries", PG_DS, _runtime_live_orders_sql("qty"), x=16, y=27, w=8),
+        _panel(13, "Persistence errors", "timeseries", LOKI_DS, 'sum by (writer,error) (count_over_time({job="market-maker-runtime"} | json | event="persistence_batch_failed" [$__interval]))', x=0, y=35, legend="{{writer}} {{error}}"),
         _panel(14, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=35, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-runtime-overview", "MM Observability v2 / 00 Runtime Overview", panels, tags=["runtime"])
@@ -448,12 +671,15 @@ LIMIT {limit}"""
 
 def _orderbook_depth_sql(kind: str) -> str:
     if kind == "raw":
-        selected = """selected AS (
+        raw_bid_price = _numeric_sql("m.payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+        raw_ask_price = _numeric_sql("m.payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
+        raw_t_end_ms = _numeric_sql("m.payload->>'t_end_ms'", default="NULL")
+        selected = f"""selected AS (
   SELECT COALESCE(
            NULLIF(ctx.mid, 0.0),
            (
-             NULLIF(m.payload #>> ARRAY['orderbook','bids','0','price'], '')::double precision +
-             NULLIF(m.payload #>> ARRAY['orderbook','asks','0','price'], '')::double precision
+             {raw_bid_price} +
+             {raw_ask_price}
            ) / 2.0,
            0.0
          ) AS mid,
@@ -467,20 +693,20 @@ def _orderbook_depth_sql(kind: str) -> str:
       AND m.exchange = ctx.exchange
       AND m.symbol = ctx.symbol
       AND m.payload->>'t_end_ms' IS NOT NULL
-      AND (m.payload->>'t_end_ms')::bigint <= ctx.t_end_ms
+      AND ({raw_t_end_ms}) <= ctx.t_end_ms
       AND $__timeFilter(m.ts)
-    ORDER BY (m.payload->>'t_end_ms')::bigint DESC, m.ts DESC
+    ORDER BY ({raw_t_end_ms}) DESC, m.ts DESC
     LIMIT 1
   ) m ON TRUE
 )"""
-        bid_levels = """bid_levels AS (
-  SELECT (b->>'price')::double precision AS price,
-         COALESCE((b->>'qty')::double precision, 0.0) AS qty
+        bid_levels = f"""bid_levels AS (
+  SELECT {_numeric_sql("b->>'price'", default="NULL")} AS price,
+         {_numeric_sql("b->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b
 )"""
-        ask_levels = """ask_levels AS (
-  SELECT (a->>'price')::double precision AS price,
-         COALESCE((a->>'qty')::double precision, 0.0) AS qty
+        ask_levels = f"""ask_levels AS (
+  SELECT {_numeric_sql("a->>'price'", default="NULL")} AS price,
+         {_numeric_sql("a->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a
 )"""
     elif kind == "clean":
@@ -488,21 +714,23 @@ def _orderbook_depth_sql(kind: str) -> str:
   SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload
   FROM ctx
 )"""
-        bid_levels = """bid_levels AS (
-  SELECT (b->>'price')::double precision AS price,
-         COALESCE((b->>'qty')::double precision, 0.0) AS qty
+        bid_levels = f"""bid_levels AS (
+  SELECT {_numeric_sql("b->>'price'", default="NULL")} AS price,
+         {_numeric_sql("b->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b
 )"""
-        ask_levels = """ask_levels AS (
-  SELECT (a->>'price')::double precision AS price,
-         COALESCE((a->>'qty')::double precision, 0.0) AS qty
+        ask_levels = f"""ask_levels AS (
+  SELECT {_numeric_sql("a->>'price'", default="NULL")} AS price,
+         {_numeric_sql("a->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a
 )"""
     elif kind == "ladder":
-        selected = """selected AS (
+        decision_mid = _numeric_sql("d.payload->>'mid'", default="NULL")
+        decision_t_end_ms = _numeric_sql("d.payload->>'t_end_ms'", default="NULL")
+        selected = f"""selected AS (
   SELECT COALESCE(
            NULLIF(ctx.mid, 0.0),
-           NULLIF(d.payload->>'mid', '')::double precision,
+           {decision_mid},
            0.0
          ) AS mid,
          ctx.spread_max,
@@ -516,21 +744,21 @@ def _orderbook_depth_sql(kind: str) -> str:
       AND d.symbol = ctx.symbol
       AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id
       AND d.payload->>'t_end_ms' IS NOT NULL
-      AND (d.payload->>'t_end_ms')::bigint <= ctx.t_end_ms
+      AND ({decision_t_end_ms}) <= ctx.t_end_ms
       AND $__timeFilter(d.ts)
-    ORDER BY (d.payload->>'t_end_ms')::bigint DESC, d.ts DESC
+    ORDER BY ({decision_t_end_ms}) DESC, d.ts DESC
     LIMIT 1
   ) d ON TRUE
 )"""
-        bid_levels = """bid_levels AS (
-  SELECT (o->>'price')::double precision AS price,
-         COALESCE((o->>'qty')::double precision, 0.0) AS qty
+        bid_levels = f"""bid_levels AS (
+  SELECT {_numeric_sql("o->>'price'", default="NULL")} AS price,
+         {_numeric_sql("o->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o
   WHERE lower(trim(o->>'side')) = 'buy'
 )"""
-        ask_levels = """ask_levels AS (
-  SELECT (o->>'price')::double precision AS price,
-         COALESCE((o->>'qty')::double precision, 0.0) AS qty
+        ask_levels = f"""ask_levels AS (
+  SELECT {_numeric_sql("o->>'price'", default="NULL")} AS price,
+         {_numeric_sql("o->>'qty'")} AS qty
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o
   WHERE lower(trim(o->>'side')) = 'sell'
 )"""
@@ -554,22 +782,27 @@ ORDER BY side, spread"""
 
 
 def _orderbook_context_cte() -> str:
+    t_end_ms = _numeric_sql("e.payload->>'t_end_ms'")
+    state_mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    clean_bid = _numeric_sql("e.payload #>> ARRAY['cleared_orderbook','bids','0','price']", default="NULL")
+    clean_ask = _numeric_sql("e.payload #>> ARRAY['cleared_orderbook','asks','0','price']", default="NULL")
+    spread_max = _numeric_sql("'${spread_max}'", default="100.0")
     return f"""ctx AS (
   SELECT e.ts AS diag_ts,
          e.payload AS diag_payload,
          e.exchange,
          e.symbol,
          e.actor_id,
-         COALESCE(NULLIF(e.payload->>'t_end_ms', '')::bigint, 0) AS t_end_ms,
+         {t_end_ms} AS t_end_ms,
          COALESCE(
-           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,
+           {state_mid},
            (
-             NULLIF(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')::double precision +
-             NULLIF(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')::double precision
+             {clean_bid} +
+             {clean_ask}
            ) / 2.0,
            0.0
          ) AS mid,
-         GREATEST(${{spread_max}}::double precision, 1.0) AS spread_max
+         GREATEST({spread_max}, 1.0) AS spread_max
   FROM mm_events e
   WHERE {_diagnostics_filter()}
   ORDER BY e.ts DESC
@@ -617,15 +850,17 @@ ask_step_plot AS (
 
 
 def _best_bid_ask_sql() -> str:
-    return """SELECT ts AS "time", (exchange || ' best_bid') AS metric,
-       (payload->'orderbook'->'bids'->0->>'price')::double precision AS value
+    best_bid = _numeric_sql("payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+    best_ask = _numeric_sql("payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
+    return f"""SELECT ts AS "time", (exchange || ' best_bid') AS metric,
+       {best_bid} AS value
 FROM mm_events
-WHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)
+WHERE event_type = 'MarketEvent' AND exchange IN (${{exchange:sqlstring}}) AND symbol IN (${{symbol:sqlstring}}) AND $__timeFilter(ts)
 UNION ALL
 SELECT ts AS "time", (exchange || ' best_ask') AS metric,
-       (payload->'orderbook'->'asks'->0->>'price')::double precision AS value
+       {best_ask} AS value
 FROM mm_events
-WHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)
+WHERE event_type = 'MarketEvent' AND exchange IN (${{exchange:sqlstring}}) AND symbol IN (${{symbol:sqlstring}}) AND $__timeFilter(ts)
 ORDER BY 1"""
 
 
@@ -678,6 +913,8 @@ def _role_exchange_cte() -> str:
 
 def _role_price_vwap_sql(role: str) -> str:
     role_key = "global" if role == "global" else "local"
+    best_bid = _numeric_sql("m.payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+    best_ask = _numeric_sql("m.payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
     if role_key == "local":
         vwap_join = "r.role = 'local' AND r.exchange = e.exchange AND r.symbol = e.symbol"
         buy_field = "local_buy_vwap"
@@ -686,9 +923,11 @@ def _role_price_vwap_sql(role: str) -> str:
         vwap_join = "r.role = 'global' AND r.symbol = e.symbol"
         buy_field = "global_buy_vwap"
         sell_field = "global_sell_vwap"
+    buy_vwap = _numeric_sql(f"e.payload #>> ARRAY['state','{buy_field}']", default="NULL")
+    sell_vwap = _numeric_sql(f"e.payload #>> ARRAY['state','{sell_field}']", default="NULL")
     return f"""WITH {_role_exchange_cte()}
 SELECT m.ts AS "time", (m.exchange || ' best_bid') AS metric,
-       (m.payload->'orderbook'->'bids'->0->>'price')::double precision AS value
+       {best_bid} AS value
 FROM mm_events m
 JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
 WHERE m.event_type = 'MarketEvent'
@@ -698,7 +937,7 @@ WHERE m.event_type = 'MarketEvent'
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT m.ts AS "time", (m.exchange || ' best_ask') AS metric,
-       (m.payload->'orderbook'->'asks'->0->>'price')::double precision AS value
+       {best_ask} AS value
 FROM mm_events m
 JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
 WHERE m.event_type = 'MarketEvent'
@@ -708,7 +947,7 @@ WHERE m.event_type = 'MarketEvent'
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' buy_vwap') AS metric,
-       (e.payload #>> ARRAY['state','{buy_field}'])::double precision AS value
+       {buy_vwap} AS value
 FROM mm_events e
 JOIN role_exchange r ON {vwap_join}
 WHERE e.topic = '${{diagnostics_topic}}'
@@ -720,7 +959,7 @@ WHERE e.topic = '${{diagnostics_topic}}'
   AND $__timeFilter(e.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' sell_vwap') AS metric,
-       (e.payload #>> ARRAY['state','{sell_field}'])::double precision AS value
+       {sell_vwap} AS value
 FROM mm_events e
 JOIN role_exchange r ON {vwap_join}
 WHERE e.topic = '${{diagnostics_topic}}'
@@ -735,9 +974,11 @@ ORDER BY 1"""
 
 def _role_volume_sql(role: str) -> str:
     role_key = "global" if role == "global" else "local"
+    buy_volume = _numeric_sql("m.payload->>'buy_volume'", default="NULL")
+    sell_volume = _numeric_sql("m.payload->>'sell_volume'", default="NULL")
     return f"""WITH {_role_exchange_cte()}
 SELECT m.ts AS "time", (m.exchange || ' buy_volume') AS metric,
-       (m.payload->>'buy_volume')::double precision AS value
+       {buy_volume} AS value
 FROM mm_events m
 JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
 WHERE m.event_type = 'MarketEvent'
@@ -747,7 +988,7 @@ WHERE m.event_type = 'MarketEvent'
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT m.ts AS "time", (m.exchange || ' sell_volume') AS metric,
-       (m.payload->>'sell_volume')::double precision AS value
+       {sell_volume} AS value
 FROM mm_events m
 JOIN role_exchange r ON r.role = '{role_key}' AND r.exchange = m.exchange AND r.symbol = m.symbol
 WHERE m.event_type = 'MarketEvent'
@@ -759,35 +1000,40 @@ ORDER BY 1"""
 
 
 def _spread_sql() -> str:
-    return """SELECT ts AS "time", (exchange || ' spread') AS metric,
-       ((payload->'orderbook'->'asks'->0->>'price')::double precision -
-        (payload->'orderbook'->'bids'->0->>'price')::double precision) AS value
+    best_bid = _numeric_sql("payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+    best_ask = _numeric_sql("payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
+    return f"""SELECT ts AS "time", (exchange || ' spread') AS metric,
+       ({best_ask} - {best_bid}) AS value
 FROM mm_events
 WHERE event_type = 'MarketEvent'
-  AND exchange IN (${exchange:sqlstring})
-  AND symbol IN (${symbol:sqlstring})
+  AND exchange IN (${{exchange:sqlstring}})
+  AND symbol IN (${{symbol:sqlstring}})
   AND $__timeFilter(ts)
 ORDER BY 1"""
 
 
 def _volume_sql() -> str:
-    return """SELECT ts AS "time", (exchange || ' buy_volume') AS metric, (payload->>'buy_volume')::double precision AS value
+    buy_volume = _numeric_sql("payload->>'buy_volume'", default="NULL")
+    sell_volume = _numeric_sql("payload->>'sell_volume'", default="NULL")
+    return f"""SELECT ts AS "time", (exchange || ' buy_volume') AS metric, {buy_volume} AS value
 FROM mm_events
-WHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)
+WHERE event_type = 'MarketEvent' AND exchange IN (${{exchange:sqlstring}}) AND symbol IN (${{symbol:sqlstring}}) AND $__timeFilter(ts)
 UNION ALL
-SELECT ts AS "time", (exchange || ' sell_volume') AS metric, (payload->>'sell_volume')::double precision AS value
+SELECT ts AS "time", (exchange || ' sell_volume') AS metric, {sell_volume} AS value
 FROM mm_events
-WHERE event_type = 'MarketEvent' AND exchange IN (${exchange:sqlstring}) AND symbol IN (${symbol:sqlstring}) AND $__timeFilter(ts)
+WHERE event_type = 'MarketEvent' AND exchange IN (${{exchange:sqlstring}}) AND symbol IN (${{symbol:sqlstring}}) AND $__timeFilter(ts)
 ORDER BY 1"""
 
 
 def _latest_model_scores_sql() -> str:
+    nll = _numeric_sql("m.value->>'nll'", default="NULL")
+    standardized_residual = _numeric_sql("m.value->>'standardized_residual'", default="NULL")
     return f"""SELECT e.ts, e.actor_id, e.exchange, e.symbol,
        m.key AS model,
        m.value->>'kind' AS kind,
        m.value->>'skip_reason' AS skip_reason,
-       (m.value->>'nll')::double precision AS nll,
-       (m.value->>'standardized_residual')::double precision AS standardized_residual,
+       {nll} AS nll,
+       {standardized_residual} AS standardized_residual,
        m.value->'params_after' AS params_after
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{{}}'::jsonb)) AS m(key, value)
@@ -797,8 +1043,9 @@ LIMIT 100"""
 
 
 def _optimizer_objective_sql() -> str:
+    value = _numeric_sql("e.payload #>> ARRAY['optimizer','objective',stage,'value']", default="NULL")
     return f"""SELECT e.ts AS "time", stage AS metric,
-       (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value
+       {value} AS value
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage
 WHERE {_diagnostics_filter()}
@@ -807,7 +1054,8 @@ ORDER BY 1"""
 
 
 def _optimizer_improvement_sql() -> str:
-    return f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','improvement'], '{{}}'::jsonb)) AS kv
 WHERE {_diagnostics_filter()}
@@ -815,7 +1063,8 @@ ORDER BY 1"""
 
 
 def _optimizer_contrib_sql() -> str:
-    return f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{{}}'::jsonb)) AS kv
 WHERE {_diagnostics_filter()}
@@ -823,29 +1072,34 @@ ORDER BY 1"""
 
 
 def _optimizer_timing_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
     return f"""SELECT e.ts AS "time", kv.key AS metric,
-       CASE WHEN kv.key LIKE '%_sec' THEN (kv.value)::double precision * 1000.0 ELSE (kv.value)::double precision END AS value
+       CASE WHEN kv.key LIKE '%_sec' THEN ({value}) * 1000.0 ELSE ({value}) END AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{{}}'::jsonb)) AS kv
 WHERE {_diagnostics_filter()}
-  AND kv.value ~ '^-?[0-9]+(\\.[0-9]+)?$'
+  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
 ORDER BY 1"""
 
 
 def _optimizer_gradients_sql() -> str:
-    return f"""SELECT e.ts AS "time", kv.key AS metric, (kv.value)::double precision AS value
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','gradients'], '{{}}'::jsonb)) AS kv
 WHERE {_diagnostics_filter()}
-  AND kv.value ~ '^-?[0-9]+(\\.[0-9]+)?$'
+  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
 ORDER BY 1"""
 
 
 def _action_pipeline_table_sql() -> str:
+    order_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'order_count']")
+    buy_qty = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty']")
+    sell_qty = _numeric_sql("e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty']")
     return f"""SELECT e.ts, e.actor_id, e.exchange, e.symbol, stage,
-       (e.payload #>> ARRAY['action_pipeline', stage, 'order_count'])::double precision AS order_count,
-       (e.payload #>> ARRAY['action_pipeline', stage, 'buy_qty'])::double precision AS buy_qty,
-       (e.payload #>> ARRAY['action_pipeline', stage, 'sell_qty'])::double precision AS sell_qty,
+       {order_count} AS order_count,
+       {buy_qty} AS buy_qty,
+       {sell_qty} AS sell_qty,
        e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'] AS rejection_counts
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped','target_book','risk_approved_target','planned_cancel','planned_place','rules_valid','router_accepted','kept']) AS stage
@@ -868,9 +1122,10 @@ LIMIT {limit}"""
 def _portfolio_field_sql(*fields: str) -> str:
     selects = []
     for field in fields:
+        value = _numeric_sql(f"e.payload #>> ARRAY['state','{field}']", default="NULL")
         selects.append(
             f"""SELECT e.ts AS "time", '{field}' AS metric,
-       (e.payload #>> ARRAY['state','{field}'])::double precision AS value
+       {value} AS value
 FROM mm_events e
 WHERE {_diagnostics_filter()}
   AND e.payload #>> ARRAY['state','{field}'] IS NOT NULL"""
@@ -879,17 +1134,25 @@ WHERE {_diagnostics_filter()}
 
 
 def _portfolio_total_value_sql() -> str:
+    local_cash = _numeric_sql("e.payload #>> ARRAY['state','local_cash']")
+    global_cash = _numeric_sql("e.payload #>> ARRAY['state','global_cash']")
+    local_inventory = _numeric_sql("e.payload #>> ARRAY['state','local_inventory']")
+    global_inventory = _numeric_sql("e.payload #>> ARRAY['state','global_inventory']")
+    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
+    global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
+    local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
-         COALESCE((e.payload #>> ARRAY['state','local_cash'])::double precision, 0.0) AS local_cash,
-         COALESCE((e.payload #>> ARRAY['state','global_cash'])::double precision, 0.0) AS global_cash,
-         COALESCE((e.payload #>> ARRAY['state','local_inventory'])::double precision, 0.0) AS local_inventory,
-         COALESCE((e.payload #>> ARRAY['state','global_inventory'])::double precision, 0.0) AS global_inventory,
+         {local_cash} AS local_cash,
+         {global_cash} AS global_cash,
+         {local_inventory} AS local_inventory,
+         {global_inventory} AS global_inventory,
          COALESCE(
-           NULLIF(e.payload #>> ARRAY['optimizer','config','reference_price'], '')::double precision,
-           NULLIF(e.payload #>> ARRAY['state','global_sell_vwap'], '')::double precision,
-           NULLIF(e.payload #>> ARRAY['state','local_sell_vwap'], '')::double precision,
-           NULLIF(e.payload #>> ARRAY['state','mid'], '')::double precision,
+           {reference_price},
+           {global_sell_vwap},
+           {local_sell_vwap},
+           {mid},
            0.0
          ) AS reference_vwap
   FROM mm_events e
@@ -954,17 +1217,18 @@ ORDER BY 1"""
 
 
 def _target_book_qty_sql() -> str:
-    return """SELECT e.ts AS "time", (venue || ' ' || (o->>'side')) AS metric,
-       SUM((o->>'qty')::double precision) AS value
+    qty = _numeric_sql("o->>'qty'")
+    return f"""SELECT e.ts AS "time", (venue || ' ' || (o->>'side')) AS metric,
+       SUM({qty}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES ('local', e.payload->'local'), ('global', e.payload->'global')
 ) AS v(venue, book)
 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o
-WHERE e.topic = '${target_books_topic}'
+WHERE e.topic = '${{target_books_topic}}'
   AND e.event_type = 'JointTargetBook'
-  AND e.exchange IN (${exchange:sqlstring})
-  AND e.symbol IN (${symbol:sqlstring})
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND e.symbol IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
 GROUP BY 1, venue, (o->>'side')
 ORDER BY 1"""

@@ -49,7 +49,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'value'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -97,7 +97,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n  comp.key AS metric,\n  (comp.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],\n    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],\n    '{}'::jsonb\n  )\n) AS comp(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\",\n  comp.key AS metric,\n  CASE\n  WHEN trim(COALESCE(comp.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(comp.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],\n    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],\n    '{}'::jsonb\n  )\n) AS comp(key, value)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -143,7 +143,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','risk_adjusted_return'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -189,7 +189,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -235,7 +235,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -281,7 +281,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -327,7 +327,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,field])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nCROSS JOIN (\n  VALUES ('main_reward_mean', 'main_reward_mean'), ('global_reward_mean', 'global_reward_mean')\n) AS fields(metric, field)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,field] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,field], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,field], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nCROSS JOIN (\n  VALUES ('main_reward_mean', 'main_reward_mean'), ('global_reward_mean', 'global_reward_mean')\n) AS fields(metric, field)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,field] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -373,7 +373,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n  (kv.value)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','rollout','joint_diagnostics'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n  CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','rollout','joint_diagnostics'], '{}'::jsonb)\n) AS kv\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -419,7 +419,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_return'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -465,7 +465,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  (e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'])::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'expected_total_reward'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -580,14 +580,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT DISTINCT COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) AS interval_ms FROM mm_events WHERE COALESCE(payload->>'interval_ms', split_part(topic, ':', 5)) <> '' ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
