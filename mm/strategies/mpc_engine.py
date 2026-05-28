@@ -105,28 +105,6 @@ def _inventory_vwap_depth(
     return max(0.0, abs(total))
 
 
-def _side_qty_caps_for_target_book(
-    *,
-    cash: float,
-    inventory: float,
-    mid: float,
-    optimizer: Any,
-) -> dict[str, float]:
-    max_qty_raw = getattr(optimizer, "quote_size_max_per_side", None)
-    if max_qty_raw is None:
-        return {}
-    min_qty = max(0.0, float(getattr(optimizer, "quote_size_min_per_side", 0.0) or 0.0))
-    max_qty = max(0.0, float(max_qty_raw))
-    ratio = max(0.0, float(getattr(optimizer, "quote_capacity_ratio", 1.0) or 0.0))
-    mid_safe = max(1e-12, float(mid))
-    buy_cap = min(max_qty, ratio * max(0.0, float(cash)) / mid_safe)
-    sell_cap = min(max_qty, ratio * max(0.0, float(inventory)))
-    return {
-        "buy": buy_cap if buy_cap >= min_qty else 0.0,
-        "sell": sell_cap if sell_cap >= min_qty else 0.0,
-    }
-
-
 def _set_model_vwap_depth(model: Any, vwap_depth: float | None) -> None:
     if model is None or vwap_depth is None or not hasattr(model, "_target_depth_lots"):
         return
@@ -310,23 +288,10 @@ class MpcStrategyEngine:
         global_sigmoid = getattr(self._controller, "_last_global_sigmoid_action", None)
         global_event = frame.global_ if sourcing_mode == "liquidity_sourcing" else None
         global_constraints = None
-        local_side_qty_caps = _side_qty_caps_for_target_book(
-            cash=state.cash,
-            inventory=state.inventory,
-            mid=state.mid,
-            optimizer=getattr(self._controller, "local_optimizer", None),
-        )
-        global_side_qty_caps = None
         if global_event is not None and self.binding.global_ is not None:
             global_constraints = OrderConstraints.from_spec(
                 self.binding.global_,
                 max_orders_per_side=self.config.max_orders_per_side,
-            )
-            global_side_qty_caps = _side_qty_caps_for_target_book(
-                cash=state.global_cash,
-                inventory=state.global_inventory,
-                mid=float(state.global_mid or state.mid),
-                optimizer=getattr(self._controller, "global_optimizer", None),
             )
         joint_target_book, action_pipeline, ladder, _local_orders = build_joint_target_book_from_sigmoid(
             actor_id=self.config.actor_id,
@@ -334,7 +299,6 @@ class MpcStrategyEngine:
             sigmoid_action=sigmoid_action,
             orderbook_grid=self.config.orderbook_grid,
             local_constraints=order_constraints,
-            local_side_qty_caps=local_side_qty_caps,
             continuous=continuous_depth,
             mode=sourcing_mode,
             local_policy=self.execution.local.planner,
@@ -342,7 +306,6 @@ class MpcStrategyEngine:
             global_event=global_event,
             global_constraints=global_constraints,
             global_sigmoid_action=global_sigmoid,
-            global_side_qty_caps=global_side_qty_caps,
         )
         action = joint_target_book_to_action(joint_target_book)
         order_summaries = tuple(_order_summary(order) for order in action.orders)

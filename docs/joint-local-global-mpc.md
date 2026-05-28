@@ -332,7 +332,7 @@ Current behavior:
 | `target_inventory` | Yes | Venue inventory target in base units |
 | `quote_size_min_per_side` | Yes | Venue sigmoid depth lower range |
 | `quote_size_max_per_side` | Yes | Venue sigmoid depth upper range |
-| `quote_capacity_ratio` | Yes | Venue side cap ratio: bid cap uses `cash / mid`, ask cap uses inventory; below `quote_size_min_per_side` disables that side |
+| `quote_capacity_ratio` | Yes | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory, both floored at `quote_size_min_per_side` |
 | `quote_spread_max` | Yes | Venue structured spread cap |
 | `quote_spread_min_depth` | Yes | Venue structured minimum depth |
 | `quote_spread_k_epsilon` | Yes | Venue spread-parameter numerical guard |

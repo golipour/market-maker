@@ -398,37 +398,6 @@ def _soft_fill_fraction(
     return torch.sigmoid(scaled)
 
 
-def _cap_to_sample_column(
-    cap: torch.Tensor | float | None,
-    template: torch.Tensor,
-) -> torch.Tensor | None:
-    if cap is None:
-        return None
-    if torch.is_tensor(cap):
-        cap_t = cap.to(device=template.device, dtype=template.dtype)
-        if cap_t.ndim == 0:
-            cap_t = torch.full_like(template[:, :1], float(cap_t.detach().item()))
-        elif cap_t.ndim == 1:
-            cap_t = cap_t.view(-1, 1)
-        elif cap_t.ndim > 2:
-            cap_t = cap_t.reshape(cap_t.shape[0], -1)[:, :1]
-    else:
-        cap_t = torch.full_like(template[:, :1], float(cap))
-    return torch.clamp(cap_t, min=0.0)
-
-
-def _capped_quote_depth_by_sample(
-    cumulative_depth: torch.Tensor,
-    cap: torch.Tensor | float | None,
-    template: torch.Tensor,
-) -> torch.Tensor:
-    depth = cumulative_depth.unsqueeze(0).expand_as(template)
-    cap_t = _cap_to_sample_column(cap, template)
-    if cap_t is None:
-        return depth
-    return torch.minimum(depth, cap_t)
-
-
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
@@ -442,8 +411,8 @@ def soft_fill_batched(
     soft_temp: float = 1.0,
     soft_fill_activation: str = "sigmoid",
     soft_fill_queue_penalty: float = 1.0,
-    bid_quote_cap: torch.Tensor | float | None = None,
-    ask_quote_cap: torch.Tensor | float | None = None,
+    bid_quote_size_max: torch.Tensor | float | None = None,
+    ask_quote_size_max: torch.Tensor | float | None = None,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     depth_scale: float = 1.0,
@@ -465,10 +434,20 @@ def soft_fill_batched(
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
     depth_bid = effective_depth_bid_tensor(
-        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
+        params,
+        spread_grid,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=bid_quote_size_max,
     )
     depth_ask = effective_depth_ask_tensor(
-        params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
+        params,
+        spread_grid,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=ask_quote_size_max,
     )
     eps = 1e-12
 
@@ -478,10 +457,18 @@ def soft_fill_batched(
     book_bid_level = torch.clamp(book_cum_bid - book_bid_prev, min=0.0)
     book_ask_level = torch.clamp(book_cum_ask - book_ask_prev, min=0.0)
 
-    # Convert cumulative quoted depth to marginal level sizes after per-sample
-    # side caps. Bid caps come from cash/mid; ask caps come from inventory.
-    depth_bid_sample = _capped_quote_depth_by_sample(depth_bid, bid_quote_cap, book_cum_bid)
-    depth_ask_sample = _capped_quote_depth_by_sample(depth_ask, ask_quote_cap, book_cum_ask)
+    # Convert cumulative quoted depth to marginal level sizes. Dynamic bid/ask
+    # maxima are already inside the decoder above.
+    depth_bid_sample = (
+        depth_bid.unsqueeze(0).expand_as(book_cum_bid)
+        if depth_bid.ndim == 1
+        else depth_bid
+    )
+    depth_ask_sample = (
+        depth_ask.unsqueeze(0).expand_as(book_cum_ask)
+        if depth_ask.ndim == 1
+        else depth_ask
+    )
     depth_bid_prev = torch.cat(
         [torch.zeros_like(depth_bid_sample[:, :1]), depth_bid_sample[:, :-1]],
         dim=1,
@@ -591,7 +578,7 @@ def _delta_wealth_mtm_batched(
     return (W_next - W).squeeze(1)
 
 
-def _quote_capacity_caps_batched(
+def _quote_capacity_maxima_batched(
     *,
     cash: torch.Tensor,
     inventory: torch.Tensor,
@@ -605,12 +592,25 @@ def _quote_capacity_caps_batched(
     min_cap = torch.full_like(cash, max(0.0, min_qty))
     cash_qty = ratio * torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
     inventory_qty = ratio * torch.clamp(inventory, min=0.0)
-    bid_raw = torch.minimum(hard_cap, cash_qty)
-    ask_raw = torch.minimum(hard_cap, inventory_qty)
-    zero = torch.zeros_like(cash)
-    bid_cap = torch.where(bid_raw >= min_cap, bid_raw, zero)
-    ask_cap = torch.where(ask_raw >= min_cap, ask_raw, zero)
-    return bid_cap, ask_cap
+    bid_max = torch.maximum(min_cap, torch.minimum(hard_cap, cash_qty))
+    ask_max = torch.maximum(min_cap, torch.minimum(hard_cap, inventory_qty))
+    return bid_max, ask_max
+
+
+def _quote_capacity_maxima_scalar(
+    *,
+    cash: float,
+    inventory: float,
+    mid_price: float,
+    optimizer: VenueOptimizerParams,
+) -> tuple[float, float]:
+    min_qty = max(0.0, float(optimizer.quote_size_min_per_side or 0.0))
+    max_qty = max(0.0, float(optimizer.quote_size_max_per_side or 0.0))
+    ratio = max(0.0, float(optimizer.quote_capacity_ratio))
+    mid_safe = max(1e-12, float(mid_price))
+    bid_max = max(min_qty, min(max_qty, ratio * max(0.0, float(cash)) / mid_safe))
+    ask_max = max(min_qty, min(max_qty, ratio * max(0.0, float(inventory))))
+    return bid_max, ask_max
 
 
 class MonteCarloMPCTensorBatched:
@@ -798,9 +798,19 @@ class MonteCarloMPCTensorBatched:
     def _depth_call_kwargs(self, venue: str = "local") -> dict[str, Any]:
         return {"use_softplus": True, "l_param": self._l_param_config(venue)}
 
-    def _flat_to_effective_action(self, flat: np.ndarray) -> SigmoidMixtureAction:
+    def _flat_to_effective_action(
+        self,
+        flat: np.ndarray,
+        *,
+        bid_quote_size_max: float | None = None,
+        ask_quote_size_max: float | None = None,
+    ) -> SigmoidMixtureAction:
         return sigmoid_action_from_flat_raw(
-            flat, self.n_components, l_param=self._l_param_config()
+            flat,
+            self.n_components,
+            l_param=self._l_param_config(),
+            bid_quote_size_max=bid_quote_size_max,
+            ask_quote_size_max=ask_quote_size_max,
         )
 
     def optimize(self, state: State) -> SigmoidMixtureAction:
@@ -837,6 +847,12 @@ class MonteCarloMPCTensorBatched:
         wealth_0 = portfolio_wealth(cash_0, inv_0, sell_vwap_0)
         obj_inventory_target = self._resolve_inventory_target()
         obj_inventory_scale = self._resolve_inventory_scale()
+        bid_quote_size_max_0, ask_quote_size_max_0 = _quote_capacity_maxima_scalar(
+            cash=cash_0,
+            inventory=inv_0,
+            mid_price=mid_0,
+            optimizer=self.local_optimizer,
+        )
 
         ob_bids_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
         ob_asks_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
@@ -927,7 +943,11 @@ class MonteCarloMPCTensorBatched:
             round(i * self.spread_step, 12) for i in range(self.grid_levels + 1)
         )
         initial_flat = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
-        initial_action = self._flat_to_effective_action(initial_flat)
+        initial_action = self._flat_to_effective_action(
+            initial_flat,
+            bid_quote_size_max=bid_quote_size_max_0,
+            ask_quote_size_max=ask_quote_size_max_0,
+        )
         action_initial_snap = build_action_snapshot(
             initial_action, mid=mid_0, spread_levels=spread_levels
         )
@@ -1014,7 +1034,7 @@ class MonteCarloMPCTensorBatched:
                         mid_fallback_t,
                         spread_grid,
                     )
-                    bid_quote_cap_t, ask_quote_cap_t = _quote_capacity_caps_batched(
+                    bid_quote_size_max_t, ask_quote_size_max_t = _quote_capacity_maxima_batched(
                         cash=cash_t,
                         inventory=inv_t,
                         mid_price=mid_t,
@@ -1060,8 +1080,8 @@ class MonteCarloMPCTensorBatched:
                         soft_temp=self.soft_fill_temp,
                         soft_fill_activation=self.soft_fill_activation,
                         soft_fill_queue_penalty=self.soft_fill_queue_penalty,
-                        bid_quote_cap=bid_quote_cap_t,
-                        ask_quote_cap=ask_quote_cap_t,
+                        bid_quote_size_max=bid_quote_size_max_t,
+                        ask_quote_size_max=ask_quote_size_max_t,
                         **depth_kw,
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
@@ -1181,9 +1201,17 @@ class MonteCarloMPCTensorBatched:
             total_sec = loop_elapsed
         best_flat = best_x.cpu().numpy()
         best_flat_slice = best_flat[:single_len]
-        best_action = self._flat_to_effective_action(best_flat_slice)
+        best_action = self._flat_to_effective_action(
+            best_flat_slice,
+            bid_quote_size_max=bid_quote_size_max_0,
+            ask_quote_size_max=ask_quote_size_max_0,
+        )
         final_flat_slice = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
-        final_action = self._flat_to_effective_action(final_flat_slice)
+        final_action = self._flat_to_effective_action(
+            final_flat_slice,
+            bid_quote_size_max=bid_quote_size_max_0,
+            ask_quote_size_max=ask_quote_size_max_0,
+        )
         self._last_sigmoid_action = best_action
         if best_J_mean is not None and math.isfinite(float(best_J_mean)):
             self._last_E_dW = float(best_J_mean)

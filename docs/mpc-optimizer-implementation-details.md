@@ -205,29 +205,30 @@ q_total =
 So the executable cumulative depth at `spread_max` is constrained to the
 configured quote-size range.
 
-At rollout time, that configured maximum is further capped by live/simulated
-side capacity:
+At rollout time, the decoder's per-side `quote_size_max` is replaced by a
+live/simulated side-capacity maximum:
 
 ```text
-bid_capacity = min(
+bid_max_qty = max(quote_size_min_per_side, min(
   quote_size_max_per_side,
   quote_capacity_ratio * max(cash, 0) / mid
-)
+))
 
-ask_capacity = min(
+ask_max_qty = max(quote_size_min_per_side, min(
   quote_size_max_per_side,
   quote_capacity_ratio * max(inventory, 0)
-)
-
-bid_max_qty = bid_capacity if bid_capacity >= quote_size_min_per_side else 0
-ask_max_qty = ask_capacity if ask_capacity >= quote_size_min_per_side else 0
+))
 ```
 
-`min_cash` and `min_inventory` are treated as zero in this optimizer cap. If the
-capacity is below `quote_size_min_per_side`, the side is disabled instead of
-forcing an infeasible minimum-size order. The same caps are also applied when
-the continuous action is converted to a target book, so execution does not
-receive orders larger than the current cash/base capacity.
+Then the usual structural decoder uses that dynamic maximum:
+
+```text
+q_total_side =
+  quote_size_min_per_side
+  + sigmoid(depth_logit_side) * (side_max_qty - quote_size_min_per_side)
+```
+
+`min_cash` and `min_inventory` are treated as zero in this optimizer formula.
 
 The first component on each side is the spread leg. Its bid/ask centers are
 decoded jointly:

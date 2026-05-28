@@ -63,19 +63,52 @@ class LParamConfig:
     def quote_size_midpoint(self) -> float:
         return 0.5 * (float(self.quote_size_min) + float(self.quote_size_max))
 
-    def quote_size_from_depth_logit(self, u_depth: float) -> float:
+    def quote_size_from_depth_logit(
+        self,
+        u_depth: float,
+        *,
+        quote_size_max: float | None = None,
+    ) -> float:
         lo = float(self.quote_size_min)
-        hi = float(self.quote_size_max)
+        configured_hi = float(self.quote_size_max)
+        hi_raw = configured_hi if quote_size_max is None else float(quote_size_max)
+        hi = max(lo, min(configured_hi, hi_raw))
         return lo + _sigmoid_np(u_depth) * (hi - lo)
 
-    def quote_size_from_flat(self, flat: np.ndarray, *, side_off: int, n_components: int) -> float:
+    def quote_size_from_flat(
+        self,
+        flat: np.ndarray,
+        *,
+        side_off: int,
+        n_components: int,
+        quote_size_max: float | None = None,
+    ) -> float:
         idx = depth_logit_index(side_off=side_off, n_components=n_components)
-        return self.quote_size_from_depth_logit(float(flat[idx]))
+        return self.quote_size_from_depth_logit(
+            float(flat[idx]),
+            quote_size_max=quote_size_max,
+        )
 
-    def quote_size_from_depth_logit_torch(self, u_depth: Any) -> Any:
+    def quote_size_from_depth_logit_torch(
+        self,
+        u_depth: Any,
+        *,
+        quote_size_max: Any | None = None,
+    ) -> Any:
         torch = __import__("torch")
         lo = torch.tensor(float(self.quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
-        hi = torch.tensor(float(self.quote_size_max), dtype=u_depth.dtype, device=u_depth.device)
+        configured_hi = torch.tensor(
+            float(self.quote_size_max),
+            dtype=u_depth.dtype,
+            device=u_depth.device,
+        )
+        if quote_size_max is None:
+            hi = configured_hi
+        elif torch.is_tensor(quote_size_max):
+            hi = quote_size_max.to(dtype=u_depth.dtype, device=u_depth.device)
+        else:
+            hi = torch.tensor(float(quote_size_max), dtype=u_depth.dtype, device=u_depth.device)
+        hi = torch.maximum(lo, torch.minimum(configured_hi, hi))
         return lo + torch.sigmoid(u_depth) * (hi - lo)
 
 
@@ -226,6 +259,7 @@ def materialize_side_np(
     side_off: int,
     n_components: int,
     l_param: LParamConfig,
+    quote_size_max: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode one side of a flat action into effective (L, k, x0)."""
     n = n_components
@@ -258,7 +292,12 @@ def materialize_side_np(
     else:
         k_eff = np.array([_softplus_np(float(v)) for v in k_raw], dtype=np.float64)
 
-    q_total = l_param.quote_size_from_flat(flat, side_off=side_off, n_components=n)
+    q_total = l_param.quote_size_from_flat(
+        flat,
+        side_off=side_off,
+        n_components=n,
+        quote_size_max=quote_size_max,
+    )
     if l_param.spread_structured:
         q_spread = float(l_param.quote_spread_min_depth)
         delta_at_center = component_delta_at_np(k_eff, x0_eff, float(x0_eff[0]))
@@ -342,6 +381,8 @@ def sigmoid_action_from_flat_raw(
     n_components: int,
     *,
     l_param: LParamConfig,
+    bid_quote_size_max: float | None = None,
+    ask_quote_size_max: float | None = None,
     use_softplus: bool = True,
 ) -> EffectiveSigmoidMixtureAction:
     del use_softplus
@@ -349,8 +390,20 @@ def sigmoid_action_from_flat_raw(
 
     arr = np.asarray(flat, dtype=np.float64)
     n = n_components
-    bid_L, bid_k, bid_x0 = materialize_side_np(arr, side_off=0, n_components=n, l_param=l_param)
-    ask_L, ask_k, ask_x0 = materialize_side_np(arr, side_off=3 * n, n_components=n, l_param=l_param)
+    bid_L, bid_k, bid_x0 = materialize_side_np(
+        arr,
+        side_off=0,
+        n_components=n,
+        l_param=l_param,
+        quote_size_max=bid_quote_size_max,
+    )
+    ask_L, ask_k, ask_x0 = materialize_side_np(
+        arr,
+        side_off=3 * n,
+        n_components=n,
+        l_param=l_param,
+        quote_size_max=ask_quote_size_max,
+    )
     return EffectiveSigmoidMixtureAction(
         bid_L=tuple(float(x) for x in bid_L),
         bid_k=tuple(float(x) for x in bid_k),
@@ -391,20 +444,35 @@ def _solve_spread_leg_L_torch(
     n = int(delta_center.numel())
     d1_c = delta_center[0].clamp(min=1e-12)
     d1_m = delta_max[0]
-    if n == 1:
+    q_total_t = q_total
+    q_is_vector = torch.is_tensor(q_total_t) and q_total_t.ndim > 0
+    if not q_is_vector and n == 1:
         L_eff = torch.zeros(1, dtype=d1_c.dtype, device=d1_c.device)
         L_eff[0] = q_total / delta_max[0].clamp(min=1e-12)
         return L_eff
+    if q_is_vector and n == 1:
+        return q_total_t.reshape(-1, 1) / delta_max[0].clamp(min=1e-12)
     z_tm = (tail_v * delta_max[1:]).sum().clamp(min=1e-12)
     tail_c = (tail_v * delta_center[1:]).sum()
+    q_spread_t = torch.tensor(q_spread, dtype=d1_c.dtype, device=d1_c.device)
     denom = d1_c - d1_m * tail_c / z_tm
-    numer = torch.tensor(q_spread, dtype=d1_c.dtype, device=d1_c.device) - q_total * tail_c / z_tm
-    L1 = torch.where(
-        denom.abs() < 1e-12,
-        torch.tensor(q_spread, dtype=d1_c.dtype, device=d1_c.device) / d1_c,
-        numer / denom,
-    )
-    L1 = torch.maximum(L1, torch.tensor(q_spread, dtype=d1_c.dtype, device=d1_c.device) / d1_c)
+    if q_is_vector:
+        q_flat = q_total_t.reshape(-1)
+        numer = q_spread_t - q_flat * tail_c / z_tm
+        L1 = torch.where(
+            denom.abs() < 1e-12,
+            q_spread_t / d1_c,
+            numer / denom,
+        )
+        L1 = torch.maximum(L1, q_spread_t / d1_c)
+        q_tail = (q_flat - L1 * d1_m).clamp(min=0.0)
+        L_eff = torch.zeros(q_flat.shape[0], n, dtype=d1_c.dtype, device=d1_c.device)
+        L_eff[:, 0] = L1
+        L_eff[:, 1:] = q_tail.unsqueeze(1) * tail_v.unsqueeze(0) / z_tm
+        return L_eff
+    numer = q_spread_t - q_total * tail_c / z_tm
+    L1 = torch.where(denom.abs() < 1e-12, q_spread_t / d1_c, numer / denom)
+    L1 = torch.maximum(L1, q_spread_t / d1_c)
     q_tail = (q_total - L1 * d1_m).clamp(min=0.0)
     L_eff = torch.zeros(n, dtype=d1_c.dtype, device=d1_c.device)
     L_eff[0] = L1
@@ -418,6 +486,7 @@ def materialize_side_torch(
     side_off: int,
     n_components: int,
     l_param: LParamConfig,
+    quote_size_max: Any | None = None,
 ) -> tuple[Any, Any, Any]:
     torch = __import__("torch")
     n = n_components
@@ -469,7 +538,10 @@ def materialize_side_torch(
     else:
         k_eff = torch.nn.functional.softplus(k_raw) + 1e-8
 
-    q_total = l_param.quote_size_from_depth_logit_torch(u_depth)
+    q_total = l_param.quote_size_from_depth_logit_torch(
+        u_depth,
+        quote_size_max=quote_size_max,
+    )
     if l_param.spread_structured:
         q_spread = float(l_param.quote_spread_min_depth)
         delta_at_center = component_delta_at_torch(k_eff, x0_eff, float(x0_eff[0].item()))
@@ -491,7 +563,10 @@ def materialize_side_torch(
     w = torch.softmax(L_raw, dim=-1)
     delta = component_delta_spread_range_torch(k_eff, x0_eff, spread_max)
     z = (w * delta).sum().clamp(min=1e-12)
-    L_eff = q_total * w / z
+    if torch.is_tensor(q_total) and q_total.ndim > 0:
+        L_eff = q_total.reshape(-1, 1) * w.unsqueeze(0) / z
+    else:
+        L_eff = q_total * w / z
     return L_eff, k_eff, x0_eff
 
 

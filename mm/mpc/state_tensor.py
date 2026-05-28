@@ -112,6 +112,7 @@ def depth_bid_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """
     Cumulative bid depth at quote-price spread: D(δ) = sum_i L_i * sigmoid(k_i * (δ - x0_i)).
@@ -123,7 +124,11 @@ def depth_bid_tensor(
     torch = _get_torch()
     if l_param is not None:
         L, k, x0 = materialize_side_torch(
-            params, side_off=0, n_components=n_components, l_param=l_param
+            params,
+            side_off=0,
+            n_components=n_components,
+            l_param=l_param,
+            quote_size_max=quote_size_max,
         )
     else:
         from mm.mpc.l_param import positive_L_torch
@@ -148,8 +153,7 @@ def depth_bid_tensor(
     # z_i = k_i * (spread - x0_i) -> (..., n_components)
     z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
-    depth = (L * s).sum(dim=-1)
-    return depth
+    return _depth_from_materialized(L, s)
 
 
 def depth_ask_tensor(
@@ -158,6 +162,7 @@ def depth_ask_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Cumulative ask depth at quote-price spread (same formula as bid, ask-side params)."""
     from mm.mpc.l_param import materialize_side_torch
@@ -166,7 +171,11 @@ def depth_ask_tensor(
     base = 3 * n_components
     if l_param is not None:
         L, k, x0 = materialize_side_torch(
-            params, side_off=base, n_components=n_components, l_param=l_param
+            params,
+            side_off=base,
+            n_components=n_components,
+            l_param=l_param,
+            quote_size_max=quote_size_max,
         )
     else:
         from mm.mpc.l_param import positive_L_torch
@@ -189,8 +198,13 @@ def depth_ask_tensor(
             k = k_raw
     z = (spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
-    depth = (L * s).sum(dim=-1)
-    return depth
+    return _depth_from_materialized(L, s)
+
+
+def _depth_from_materialized(L: "Tensor", sigmoid_values: "Tensor") -> "Tensor":
+    if L.ndim == 1:
+        return (L * sigmoid_values).sum(dim=-1)
+    return (L.unsqueeze(1) * sigmoid_values.unsqueeze(0)).sum(dim=-1)
 
 
 def effective_depth_bid_tensor(
@@ -199,12 +213,29 @@ def effective_depth_bid_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_bid_tensor(params, spread, n_components, use_softplus=use_softplus, l_param=l_param)
+    raw = depth_bid_tensor(
+        params,
+        spread,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=quote_size_max,
+    )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_bid_tensor(params, s0, n_components, use_softplus=use_softplus, l_param=l_param)[0]
+    base = depth_bid_tensor(
+        params,
+        s0,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=quote_size_max,
+    )
+    if raw.ndim == 1:
+        return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
 
 
@@ -214,12 +245,29 @@ def effective_depth_ask_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_ask_tensor(params, spread, n_components, use_softplus=use_softplus, l_param=l_param)
+    raw = depth_ask_tensor(
+        params,
+        spread,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=quote_size_max,
+    )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_ask_tensor(params, s0, n_components, use_softplus=use_softplus, l_param=l_param)[0]
+    base = depth_ask_tensor(
+        params,
+        s0,
+        n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_max=quote_size_max,
+    )
+    if raw.ndim == 1:
+        return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
 
 

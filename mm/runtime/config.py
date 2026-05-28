@@ -1086,7 +1086,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_size_max_per_side": "venue maximum cumulative quote depth per side at spread_max",
             "quote_capacity_ratio": (
                 "venue side-cap ratio: bid max=min(config max, ratio*cash/mid); "
-                "ask max=min(config max, ratio*inventory); below quote_size_min disables the side"
+                "ask max=min(config max, ratio*inventory), then both are floored at quote_size_min"
             ),
             "quote_spread_max": "venue maximum allowed sum of first bid/ask spread centers",
             "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",

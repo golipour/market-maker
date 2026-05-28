@@ -9,7 +9,7 @@ import torch
 from mm.mpc.mpc_tensor_batched import (
     MonteCarloMPCTensorBatched,
     VenueOptimizerParams,
-    _quote_capacity_caps_batched,
+    _quote_capacity_maxima_batched,
     _soft_fill_fraction,
     soft_fill_batched,
 )
@@ -279,11 +279,11 @@ def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() ->
     assert torch.isfinite(params.grad).all()
 
 
-def test_soft_fill_side_quote_caps_limit_simulated_fill_qty() -> None:
+def test_soft_fill_dynamic_decoder_max_limits_simulated_fill_qty() -> None:
     from mm.mpc.l_param import LParamConfig
 
     l_param = LParamConfig(
-        quote_size_min=10.0,
+        quote_size_min=0.1,
         quote_size_max=10.0,
         spread_max=2.0,
         n_components=1,
@@ -305,15 +305,15 @@ def test_soft_fill_side_quote_caps_limit_simulated_fill_qty() -> None:
         maker_fee=0.0,
         soft_temp=0.01,
         soft_fill_activation="hardsigmoid",
-        bid_quote_cap=torch.tensor([[0.4]], dtype=torch.float64),
-        ask_quote_cap=torch.tensor([[0.1]], dtype=torch.float64),
+        bid_quote_size_max=torch.tensor([[0.4]], dtype=torch.float64),
+        ask_quote_size_max=torch.tensor([[0.1]], dtype=torch.float64),
         l_param=l_param,
     )
 
     assert float(inv_delta[0]) == pytest.approx(0.3, rel=1e-6)
 
 
-def test_quote_capacity_caps_disable_side_below_min_qty() -> None:
+def test_quote_capacity_maxima_use_min_as_lower_structural_bound() -> None:
     optimizer = VenueOptimizerParams(
         quote_size_min_per_side=0.3,
         quote_size_max_per_side=10.0,
@@ -323,15 +323,15 @@ def test_quote_capacity_caps_disable_side_below_min_qty() -> None:
     inventory = torch.tensor([[0.2], [0.5]], dtype=torch.float64)
     mid = torch.tensor([[100.0], [100.0]], dtype=torch.float64)
 
-    bid_cap, ask_cap = _quote_capacity_caps_batched(
+    bid_cap, ask_cap = _quote_capacity_maxima_batched(
         cash=cash,
         inventory=inventory,
         mid_price=mid,
         optimizer=optimizer,
     )
 
-    assert bid_cap[:, 0].tolist() == pytest.approx([0.0, 1.0])
-    assert ask_cap[:, 0].tolist() == pytest.approx([0.0, 0.5])
+    assert bid_cap[:, 0].tolist() == pytest.approx([0.3, 1.0])
+    assert ask_cap[:, 0].tolist() == pytest.approx([0.3, 0.5])
 
 
 def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:
