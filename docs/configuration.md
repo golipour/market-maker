@@ -180,7 +180,8 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid"
+      "soft_fill_activation": "hardsigmoid",
+      "soft_fill_queue_penalty": 1.0
     },
     "global": {
       "objective_weight": 1.0,
@@ -190,7 +191,8 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid"
+      "soft_fill_activation": "hardsigmoid",
+      "soft_fill_queue_penalty": 1.0
     }
   }
 }

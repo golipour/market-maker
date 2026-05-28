@@ -415,6 +415,7 @@ def optimize_joint_with_diagnostics(
                     maker_fee,
                     soft_temp=local_opt.soft_fill_temp,
                     soft_fill_activation=local_opt.soft_fill_activation,
+                    soft_fill_queue_penalty=local_opt.soft_fill_queue_penalty,
                     depth_scale=1.0,
                     **local_depth_kw,
                 )
@@ -435,6 +436,7 @@ def optimize_joint_with_diagnostics(
                     maker_fee,
                     soft_temp=global_opt.soft_fill_temp,
                     soft_fill_activation=global_opt.soft_fill_activation,
+                    soft_fill_queue_penalty=global_opt.soft_fill_queue_penalty,
                     depth_scale=global_mask,
                     **global_depth_kw,
                 )

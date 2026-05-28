@@ -76,6 +76,7 @@ class VenueOptimizerParams:
     quote_spread_k_epsilon: float = 0.01
     soft_fill_temp: float = 0.1
     soft_fill_activation: str = "sigmoid"
+    soft_fill_queue_penalty: float = 1.0
 
     @classmethod
     def from_mapping(
@@ -130,6 +131,10 @@ class VenueOptimizerParams:
             soft_fill_activation=_normalize_soft_fill_activation(
                 data.get("soft_fill_activation", base.soft_fill_activation)
             ),
+            soft_fill_queue_penalty=max(
+                0.0,
+                float(data.get("soft_fill_queue_penalty", base.soft_fill_queue_penalty)),
+            ),
         )
 
     def validate(self, *, spread_max: float, n_components: int, venue: str) -> None:
@@ -176,6 +181,7 @@ class VenueOptimizerParams:
             "quote_spread_k_epsilon": self.quote_spread_k_epsilon,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
+            "soft_fill_queue_penalty": self.soft_fill_queue_penalty,
         }
 
 
@@ -405,6 +411,7 @@ def soft_fill_batched(
     maker_fee: float,
     soft_temp: float = 1.0,
     soft_fill_activation: str = "sigmoid",
+    soft_fill_queue_penalty: float = 1.0,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     depth_scale: float = 1.0,
@@ -413,6 +420,7 @@ def soft_fill_batched(
     Batched soft transition using combined (book + quoted) depth:
     - soft-consume against combined cumulative book
     - split consumed volume between market book and our quotes proportionally per level
+    - optionally reduce our share by treating next-worse public depth as queue ahead
     - return next market-only orderbook levels plus cash/inventory deltas from our fills
 
     Inputs:
@@ -474,12 +482,33 @@ def soft_fill_batched(
     consumed_bid_level = comb_bid_level * fill_frac_bid
     consumed_ask_level = comb_ask_level * fill_frac_ask
 
-    # Split consumed level volumes proportionally between market book and our quotes.
+    # Split consumed level volumes between market book and our quotes. A positive
+    # queue penalty is a differentiable queue-at-back approximation: depth from
+    # the next worse public level dilutes our current-level share.
+    queue_penalty = max(0.0, float(soft_fill_queue_penalty))
+    if queue_penalty > 0.0:
+        bid_next_public = torch.cat(
+            [book_bid_level[:, 1:], torch.zeros_like(book_bid_level[:, :1])],
+            dim=1,
+        )
+        ask_next_public = torch.cat(
+            [book_ask_level[:, 1:], torch.zeros_like(book_ask_level[:, :1])],
+            dim=1,
+        )
+    else:
+        bid_next_public = torch.zeros_like(book_bid_level)
+        ask_next_public = torch.zeros_like(book_ask_level)
+    bid_share_den = comb_bid_level + queue_penalty * bid_next_public
+    ask_share_den = comb_ask_level + queue_penalty * ask_next_public
     bid_share_our = torch.where(
-        comb_bid_level > eps, our_bid_level / torch.clamp(comb_bid_level, min=eps), torch.zeros_like(comb_bid_level)
+        bid_share_den > eps,
+        our_bid_level / torch.clamp(bid_share_den, min=eps),
+        torch.zeros_like(comb_bid_level),
     )
     ask_share_our = torch.where(
-        comb_ask_level > eps, our_ask_level / torch.clamp(comb_ask_level, min=eps), torch.zeros_like(comb_ask_level)
+        ask_share_den > eps,
+        our_ask_level / torch.clamp(ask_share_den, min=eps),
+        torch.zeros_like(comb_ask_level),
     )
     fill_bid_level = consumed_bid_level * bid_share_our
     fill_ask_level = consumed_ask_level * ask_share_our
@@ -487,8 +516,14 @@ def soft_fill_batched(
     fill_ask = fill_ask_level.sum(dim=1)
 
     # Market-book next state after market-flow consumption (our resting remainder is canceled).
-    consumed_bid_market = consumed_bid_level * (1.0 - bid_share_our)
-    consumed_ask_market = consumed_ask_level * (1.0 - ask_share_our)
+    consumed_bid_market = torch.minimum(
+        torch.clamp(consumed_bid_level - fill_bid_level, min=0.0),
+        book_bid_level,
+    )
+    consumed_ask_market = torch.minimum(
+        torch.clamp(consumed_ask_level - fill_ask_level, min=0.0),
+        book_ask_level,
+    )
     ob_bids_next = torch.clamp(book_bid_level - consumed_bid_market, min=0.0)
     ob_asks_next = torch.clamp(book_ask_level - consumed_ask_market, min=0.0)
     mid_exp = mid_price.expand(-1, spread_grid.shape[0])
@@ -532,6 +567,7 @@ class MonteCarloMPCTensorBatched:
         spread_step: float = 1.0,
         soft_fill_temp: float = 0.1,
         soft_fill_activation: str = "sigmoid",
+        soft_fill_queue_penalty: float = 1.0,
         adam_lr: float = 0.05,
         adam_epochs: int = 80,
         adam_grad_clip: float = 10.0,
@@ -603,6 +639,7 @@ class MonteCarloMPCTensorBatched:
             ),
             soft_fill_temp=float(soft_fill_temp),
             soft_fill_activation=_normalize_soft_fill_activation(soft_fill_activation),
+            soft_fill_queue_penalty=max(0.0, float(soft_fill_queue_penalty)),
         )
         self.local_optimizer = (
             local_optimizer
@@ -635,6 +672,7 @@ class MonteCarloMPCTensorBatched:
         self.quote_spread_k_epsilon = self.local_optimizer.quote_spread_k_epsilon
         self.soft_fill_temp = self.local_optimizer.soft_fill_temp
         self.soft_fill_activation = self.local_optimizer.soft_fill_activation
+        self.soft_fill_queue_penalty = self.local_optimizer.soft_fill_queue_penalty
         self._last_action: SigmoidMixtureAction | None = None
         self._last_raw_flat: np.ndarray | None = None
         self._last_J_components: dict | None = None
@@ -949,6 +987,7 @@ class MonteCarloMPCTensorBatched:
                         maker_fee,
                         soft_temp=self.soft_fill_temp,
                         soft_fill_activation=self.soft_fill_activation,
+                        soft_fill_queue_penalty=self.soft_fill_queue_penalty,
                         **depth_kw,
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
@@ -1132,6 +1171,7 @@ class MonteCarloMPCTensorBatched:
                 "liquidity_sourcing": False,
                 "soft_fill_temp": self.soft_fill_temp,
                 "soft_fill_activation": self.soft_fill_activation,
+                "soft_fill_queue_penalty": self.soft_fill_queue_penalty,
             },
         )
         self._last_diagnostics = diagnostics

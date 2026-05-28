@@ -53,6 +53,7 @@ _VENUE_OPTIMIZER_KEYS = {
     "quote_spread_k_epsilon",
     "soft_fill_temp",
     "soft_fill_activation",
+    "soft_fill_queue_penalty",
 }
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
     "inv_coef": "inventory_target_penalty_weight",

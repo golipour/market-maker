@@ -37,6 +37,7 @@ def test_optimizer_stores_objective_params() -> None:
     assert mpc.target_inventory_multiplier == 1.5
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
+    assert mpc.soft_fill_queue_penalty == 1.0
 
 
 def test_resolve_inventory_target_from_quote_size_range() -> None:
@@ -218,6 +219,64 @@ def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:
     assert float(cash_delta[0]) == pytest.approx(-99.0, rel=1e-6)
 
 
+def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() -> None:
+    from mm.mpc.l_param import LParamConfig
+
+    l_param = LParamConfig(
+        quote_size_min=1.0,
+        quote_size_max=1.0,
+        spread_max=2.0,
+        n_components=1,
+    )
+    params = torch.tensor(
+        [0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    book_cum_bid = torch.tensor([[1.0, 10.0]], dtype=torch.float64)
+    book_cum_ask = torch.zeros((1, 2), dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
+    sell_vol = torch.tensor([[2.0]], dtype=torch.float64)
+    buy_vol = torch.tensor([[0.0]], dtype=torch.float64)
+
+    _, _, _, inv_pro_rata = soft_fill_batched(
+        params,
+        n_components=1,
+        mid_price=mid_price,
+        book_cum_bid=book_cum_bid,
+        book_cum_ask=book_cum_ask,
+        sell_vol=sell_vol,
+        buy_vol=buy_vol,
+        spread_grid=spread_grid,
+        maker_fee=0.0,
+        soft_temp=0.01,
+        soft_fill_activation="hardsigmoid",
+        soft_fill_queue_penalty=0.0,
+        l_param=l_param,
+    )
+    _, _, _, inv_queue_back = soft_fill_batched(
+        params,
+        n_components=1,
+        mid_price=mid_price,
+        book_cum_bid=book_cum_bid,
+        book_cum_ask=book_cum_ask,
+        sell_vol=sell_vol,
+        buy_vol=buy_vol,
+        spread_grid=spread_grid,
+        maker_fee=0.0,
+        soft_temp=0.01,
+        soft_fill_activation="hardsigmoid",
+        soft_fill_queue_penalty=1.0,
+        l_param=l_param,
+    )
+
+    assert float(inv_queue_back.detach()[0]) < float(inv_pro_rata.detach()[0])
+    inv_queue_back.sum().backward()
+    assert params.grad is not None
+    assert torch.isfinite(params.grad).all()
+
+
 def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:
     reach = torch.tensor([[-4.0, -1.0, 0.0, 1.0, 4.0]], dtype=torch.float64)
     hard = _soft_fill_fraction(reach, soft_temp=1.0, activation="hardsigmoid")
@@ -254,10 +313,12 @@ def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
         flow,
         exe,
         soft_fill_activation="hardsigmoid",
+        soft_fill_queue_penalty=1.25,
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
     )
     assert mpc.soft_fill_activation == "hardsigmoid"
+    assert mpc.soft_fill_queue_penalty == pytest.approx(1.25)
 
     with pytest.raises(ValueError, match="unsupported soft_fill_activation"):
         MonteCarloMPCTensorBatched(

@@ -352,6 +352,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "quote_size_max_per_side": 2.0,
                     "soft_fill_temp": 0.11,
                     "soft_fill_activation": "hardsigmoid",
+                    "soft_fill_queue_penalty": 0.5,
                 },
                 "global": {
                     "objective_weight": 0.4,
@@ -362,6 +363,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "quote_size_max_per_side": 5.0,
                     "soft_fill_temp": 0.33,
                     "soft_fill_activation": "sigmoid",
+                    "soft_fill_queue_penalty": 1.5,
                 },
             },
         ),
@@ -382,6 +384,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.inventory_target_penalty_weight == pytest.approx(0.02)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
+    assert controller.local_optimizer.soft_fill_queue_penalty == pytest.approx(0.5)
+    assert controller.global_optimizer.soft_fill_queue_penalty == pytest.approx(1.5)
     assert controller.reference_price_source == "local"
     assert controller._l_param_config("local").quote_size_min == pytest.approx(0.2)
     assert controller._l_param_config("global").quote_size_max == pytest.approx(5.0)

@@ -839,6 +839,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "quote_spread_k_epsilon",
             "soft_fill_temp",
             "soft_fill_activation",
+            "soft_fill_queue_penalty",
         }
         removed_venue_optimizer_aliases = {
             "inv_coef": "inventory_target_penalty_weight",
@@ -869,6 +870,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "quote_spread_k_epsilon",
                 "soft_fill_temp",
                 "soft_fill_activation",
+                "soft_fill_queue_penalty",
             )
             if key in optimizer_payload
         ]
@@ -1085,6 +1087,9 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",
             "soft_fill_temp": "venue soft-fill temperature",
             "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",
+            "soft_fill_queue_penalty": (
+                "venue queue-share penalty: default 1 treats one worse public level as ahead; 0 is pure pro-rata"
+            ),
         },
         "float_bridge": {
             "mid": "quote-per-base float",

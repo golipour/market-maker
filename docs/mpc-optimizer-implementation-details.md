@@ -375,6 +375,7 @@ Inputs include:
 - spread grid
 - maker fee
 - soft fill temperature and activation
+- soft fill queue penalty
 - `depth_scale`
 
 Process:
@@ -384,7 +385,7 @@ Process:
 3. Combine market liquidity and own quotes.
 4. Soft-consume combined depth using `sigmoid` or `hardsigmoid` reach.
 5. Allocate consumed volume between market liquidity and own quote liquidity by
-   level-size share.
+   level-size share, optionally diluted by next-worse public depth.
 6. Remove consumed market liquidity from the next market book.
 7. Convert own filled levels into cash and inventory deltas.
 
@@ -404,8 +405,26 @@ cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
 inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
 ```
 
-This is a differentiable liquidity-share model, not a venue queue-position
-model.
+By default, this is a differentiable liquidity-share model, not a venue
+queue-position model:
+
+```text
+own_share_i = own_qty_i / (public_qty_i + own_qty_i)
+```
+
+`soft_fill_queue_penalty` makes the share more conservative without adding a
+discrete queue simulator:
+
+```text
+own_share_i =
+    own_qty_i
+    / (public_qty_i + own_qty_i + soft_fill_queue_penalty * public_qty_{i+1})
+```
+
+The default `soft_fill_queue_penalty = 1` treats an order at level `i` as if
+the next worse public level is also ahead of it in the queue. Setting it to `0`
+uses the pure pro-rata split. This is still differentiable because it only
+changes the denominator of the continuous share calculation.
 
 ## Joint Objective
 

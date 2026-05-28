@@ -305,7 +305,8 @@ These optimizer parameters are separate for local and global:
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
       "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid"
+      "soft_fill_activation": "hardsigmoid",
+      "soft_fill_queue_penalty": 1.0
     },
     "global": {
       "objective_weight": 1.0,
@@ -318,7 +319,8 @@ These optimizer parameters are separate for local and global:
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
       "soft_fill_temp": 0.1,
-      "soft_fill_activation": "hardsigmoid"
+      "soft_fill_activation": "hardsigmoid",
+      "soft_fill_queue_penalty": 1.0
     }
   }
 }
@@ -339,6 +341,7 @@ Current behavior:
 | `quote_spread_k_epsilon` | Yes | Venue spread-parameter numerical guard |
 | `soft_fill_temp` | Yes | Venue fill softness |
 | `soft_fill_activation` | Yes | Venue fill activation |
+| `soft_fill_queue_penalty` | Yes | Venue queue-at-back penalty; default `1` treats one worse public level as ahead, `0` is pro-rata |
 
 Separate today:
 
