@@ -8,6 +8,8 @@ import torch
 
 from mm.mpc.mpc_tensor_batched import (
     MonteCarloMPCTensorBatched,
+    VenueOptimizerParams,
+    _quote_capacity_caps_batched,
     _soft_fill_fraction,
     soft_fill_batched,
 )
@@ -27,30 +29,30 @@ def test_optimizer_stores_objective_params() -> None:
         return_risk_aversion_beta=2.0,
         inventory_target_penalty_weight=4.0,
         target_inventory=5.0,
-        target_inventory_multiplier=1.5,
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
+        quote_capacity_ratio=0.5,
     )
     assert mpc.return_risk_aversion_beta == 2.0
     assert mpc.inventory_target_penalty_weight == 4.0
     assert mpc.target_inventory == 5.0
-    assert mpc.target_inventory_multiplier == 1.5
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
+    assert mpc.quote_capacity_ratio == 0.5
     assert mpc.soft_fill_queue_penalty == 1.0
 
 
-def test_resolve_inventory_target_from_quote_size_range() -> None:
+def test_resolve_inventory_target_uses_direct_target_inventory() -> None:
     mpc = MonteCarloMPCTensorBatched(
         object(),
         object(),
         object(),
         quote_size_min_per_side=100.0,
         quote_size_max_per_side=200.0,
-        target_inventory_multiplier=1.5,
+        target_inventory=7.0,
     )
-    assert mpc._resolve_inventory_target() == 225.0
-    assert mpc._resolve_inventory_scale() == 225.0
+    assert mpc._resolve_inventory_target() == 7.0
+    assert mpc._resolve_inventory_scale() == 7.0
 
 
 def test_terminal_objective_uses_clear_component_names() -> None:
@@ -275,6 +277,61 @@ def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() ->
     inv_queue_back.sum().backward()
     assert params.grad is not None
     assert torch.isfinite(params.grad).all()
+
+
+def test_soft_fill_side_quote_caps_limit_simulated_fill_qty() -> None:
+    from mm.mpc.l_param import LParamConfig
+
+    l_param = LParamConfig(
+        quote_size_min=10.0,
+        quote_size_max=10.0,
+        spread_max=2.0,
+        n_components=1,
+    )
+    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0], dtype=torch.float64)
+    spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    empty_book = torch.zeros((1, 2), dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
+
+    _, _, _, inv_delta = soft_fill_batched(
+        params,
+        n_components=1,
+        mid_price=mid_price,
+        book_cum_bid=empty_book,
+        book_cum_ask=empty_book,
+        sell_vol=torch.tensor([[100.0]], dtype=torch.float64),
+        buy_vol=torch.tensor([[100.0]], dtype=torch.float64),
+        spread_grid=spread_grid,
+        maker_fee=0.0,
+        soft_temp=0.01,
+        soft_fill_activation="hardsigmoid",
+        bid_quote_cap=torch.tensor([[0.4]], dtype=torch.float64),
+        ask_quote_cap=torch.tensor([[0.1]], dtype=torch.float64),
+        l_param=l_param,
+    )
+
+    assert float(inv_delta[0]) == pytest.approx(0.3, rel=1e-6)
+
+
+def test_quote_capacity_caps_disable_side_below_min_qty() -> None:
+    optimizer = VenueOptimizerParams(
+        quote_size_min_per_side=0.3,
+        quote_size_max_per_side=10.0,
+        quote_capacity_ratio=1.0,
+    )
+    cash = torch.tensor([[20.0], [100.0]], dtype=torch.float64)
+    inventory = torch.tensor([[0.2], [0.5]], dtype=torch.float64)
+    mid = torch.tensor([[100.0], [100.0]], dtype=torch.float64)
+
+    bid_cap, ask_cap = _quote_capacity_caps_batched(
+        cash=cash,
+        inventory=inventory,
+        mid_price=mid,
+        optimizer=optimizer,
+    )
+
+    assert bid_cap[:, 0].tolist() == pytest.approx([0.0, 1.0])
+    assert ask_cap[:, 0].tolist() == pytest.approx([0.0, 0.5])
 
 
 def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:

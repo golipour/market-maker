@@ -67,10 +67,10 @@ class VenueOptimizerParams:
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
     inventory_target_penalty_weight: float = 0.0
-    target_inventory: float | None = None
-    target_inventory_multiplier: float = 1.5
+    target_inventory: float = 0.0
     quote_size_min_per_side: float | None = None
     quote_size_max_per_side: float | None = None
+    quote_capacity_ratio: float = 1.0
     quote_spread_max: float | None = None
     quote_spread_min_depth: float | None = None
     quote_spread_k_epsilon: float = 0.01
@@ -87,7 +87,7 @@ class VenueOptimizerParams:
     ) -> "VenueOptimizerParams":
         base = defaults or cls()
         data = dict(payload or {})
-        explicit_target = data.get("target_inventory", base.target_inventory)
+        target_value = data.get("target_inventory", base.target_inventory)
         inv_weight = data.get(
             "inventory_target_penalty_weight",
             base.inventory_target_penalty_weight,
@@ -99,11 +99,7 @@ class VenueOptimizerParams:
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
             inventory_target_penalty_weight=max(0.0, float(inv_weight)),
-            target_inventory=float(explicit_target) if explicit_target is not None else None,
-            target_inventory_multiplier=max(
-                1e-6,
-                float(data.get("target_inventory_multiplier", base.target_inventory_multiplier)),
-            ),
+            target_inventory=float(target_value) if target_value is not None else 0.0,
             quote_size_min_per_side=(
                 float(data.get("quote_size_min_per_side"))
                 if data.get("quote_size_min_per_side") is not None
@@ -113,6 +109,10 @@ class VenueOptimizerParams:
                 float(data.get("quote_size_max_per_side"))
                 if data.get("quote_size_max_per_side") is not None
                 else base.quote_size_max_per_side
+            ),
+            quote_capacity_ratio=max(
+                0.0,
+                float(data.get("quote_capacity_ratio", base.quote_capacity_ratio)),
             ),
             quote_spread_max=(
                 float(data.get("quote_spread_max"))
@@ -159,13 +159,12 @@ class VenueOptimizerParams:
         )
 
     def inventory_target(self, *, spread_max: float, n_components: int) -> float:
-        if self.target_inventory is not None and float(self.target_inventory) > 0.0:
-            return float(self.target_inventory)
-        q_mid = self.l_param_config(spread_max=spread_max, n_components=n_components).quote_size_midpoint()
-        return float(self.target_inventory_multiplier) * q_mid
+        del spread_max, n_components
+        return float(self.target_inventory)
 
     def inventory_scale(self, *, spread_max: float, n_components: int) -> float:
-        return max(1e-8, self.inventory_target(spread_max=spread_max, n_components=n_components))
+        del spread_max, n_components
+        return max(1.0, abs(float(self.target_inventory)))
 
     def as_config(self, *, spread_max: float, n_components: int) -> dict[str, Any]:
         return {
@@ -173,9 +172,9 @@ class VenueOptimizerParams:
             "objective_weight": self.objective_weight,
             "inventory_target_penalty_weight": self.inventory_target_penalty_weight,
             "target_inventory": self.inventory_target(spread_max=spread_max, n_components=n_components),
-            "target_inventory_multiplier": self.target_inventory_multiplier,
             "quote_size_min_per_side": self.quote_size_min_per_side,
             "quote_size_max_per_side": self.quote_size_max_per_side,
+            "quote_capacity_ratio": self.quote_capacity_ratio,
             "quote_spread_max": self.quote_spread_max,
             "quote_spread_min_depth": self.quote_spread_min_depth,
             "quote_spread_k_epsilon": self.quote_spread_k_epsilon,
@@ -399,6 +398,37 @@ def _soft_fill_fraction(
     return torch.sigmoid(scaled)
 
 
+def _cap_to_sample_column(
+    cap: torch.Tensor | float | None,
+    template: torch.Tensor,
+) -> torch.Tensor | None:
+    if cap is None:
+        return None
+    if torch.is_tensor(cap):
+        cap_t = cap.to(device=template.device, dtype=template.dtype)
+        if cap_t.ndim == 0:
+            cap_t = torch.full_like(template[:, :1], float(cap_t.detach().item()))
+        elif cap_t.ndim == 1:
+            cap_t = cap_t.view(-1, 1)
+        elif cap_t.ndim > 2:
+            cap_t = cap_t.reshape(cap_t.shape[0], -1)[:, :1]
+    else:
+        cap_t = torch.full_like(template[:, :1], float(cap))
+    return torch.clamp(cap_t, min=0.0)
+
+
+def _capped_quote_depth_by_sample(
+    cumulative_depth: torch.Tensor,
+    cap: torch.Tensor | float | None,
+    template: torch.Tensor,
+) -> torch.Tensor:
+    depth = cumulative_depth.unsqueeze(0).expand_as(template)
+    cap_t = _cap_to_sample_column(cap, template)
+    if cap_t is None:
+        return depth
+    return torch.minimum(depth, cap_t)
+
+
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
@@ -412,6 +442,8 @@ def soft_fill_batched(
     soft_temp: float = 1.0,
     soft_fill_activation: str = "sigmoid",
     soft_fill_queue_penalty: float = 1.0,
+    bid_quote_cap: torch.Tensor | float | None = None,
+    ask_quote_cap: torch.Tensor | float | None = None,
     use_softplus: bool = True,
     l_param: LParamConfig | None = None,
     depth_scale: float = 1.0,
@@ -439,11 +471,6 @@ def soft_fill_batched(
         params, spread_grid, n_components, use_softplus=use_softplus, l_param=l_param
     )
     eps = 1e-12
-    # Convert cumulative quoted depth to marginal level sizes.
-    depth_bid_prev = torch.cat([torch.zeros_like(depth_bid[:1]), depth_bid[:-1]], dim=0)
-    depth_ask_prev = torch.cat([torch.zeros_like(depth_ask[:1]), depth_ask[:-1]], dim=0)
-    marg_bid = torch.clamp(depth_bid - depth_bid_prev, min=0.0)
-    marg_ask = torch.clamp(depth_ask - depth_ask_prev, min=0.0)
 
     # Recover market-book level volumes from cumulative market book.
     book_bid_prev = torch.cat([torch.zeros_like(book_cum_bid[:, :1]), book_cum_bid[:, :-1]], dim=1)
@@ -451,10 +478,25 @@ def soft_fill_batched(
     book_bid_level = torch.clamp(book_cum_bid - book_bid_prev, min=0.0)
     book_ask_level = torch.clamp(book_cum_ask - book_ask_prev, min=0.0)
 
+    # Convert cumulative quoted depth to marginal level sizes after per-sample
+    # side caps. Bid caps come from cash/mid; ask caps come from inventory.
+    depth_bid_sample = _capped_quote_depth_by_sample(depth_bid, bid_quote_cap, book_cum_bid)
+    depth_ask_sample = _capped_quote_depth_by_sample(depth_ask, ask_quote_cap, book_cum_ask)
+    depth_bid_prev = torch.cat(
+        [torch.zeros_like(depth_bid_sample[:, :1]), depth_bid_sample[:, :-1]],
+        dim=1,
+    )
+    depth_ask_prev = torch.cat(
+        [torch.zeros_like(depth_ask_sample[:, :1]), depth_ask_sample[:, :-1]],
+        dim=1,
+    )
+    marg_bid = torch.clamp(depth_bid_sample - depth_bid_prev, min=0.0)
+    marg_ask = torch.clamp(depth_ask_sample - depth_ask_prev, min=0.0)
+
     # Combine market book and our quotes on each level.
     scale = max(0.0, float(depth_scale))
-    our_bid_level = marg_bid.unsqueeze(0).expand_as(book_bid_level) * scale
-    our_ask_level = marg_ask.unsqueeze(0).expand_as(book_ask_level) * scale
+    our_bid_level = marg_bid * scale
+    our_ask_level = marg_ask * scale
     comb_bid_level = book_bid_level + our_bid_level
     comb_ask_level = book_ask_level + our_ask_level
 
@@ -549,6 +591,28 @@ def _delta_wealth_mtm_batched(
     return (W_next - W).squeeze(1)
 
 
+def _quote_capacity_caps_batched(
+    *,
+    cash: torch.Tensor,
+    inventory: torch.Tensor,
+    mid_price: torch.Tensor,
+    optimizer: VenueOptimizerParams,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    min_qty = float(optimizer.quote_size_min_per_side or 0.0)
+    max_qty = float(optimizer.quote_size_max_per_side or 0.0)
+    ratio = max(0.0, float(optimizer.quote_capacity_ratio))
+    hard_cap = torch.full_like(cash, max(0.0, max_qty))
+    min_cap = torch.full_like(cash, max(0.0, min_qty))
+    cash_qty = ratio * torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
+    inventory_qty = ratio * torch.clamp(inventory, min=0.0)
+    bid_raw = torch.minimum(hard_cap, cash_qty)
+    ask_raw = torch.minimum(hard_cap, inventory_qty)
+    zero = torch.zeros_like(cash)
+    bid_cap = torch.where(bid_raw >= min_cap, bid_raw, zero)
+    ask_cap = torch.where(ask_raw >= min_cap, ask_raw, zero)
+    return bid_cap, ask_cap
+
+
 class MonteCarloMPCTensorBatched:
     """
     Batched MC MPC: same API as MonteCarloMPCTensor but batches over n_samples
@@ -578,8 +642,7 @@ class MonteCarloMPCTensorBatched:
         verbose: bool = False,
         return_risk_aversion_beta: float = 1.0,
         inventory_target_penalty_weight: float | None = None,
-        target_inventory: float | None = None,
-        target_inventory_multiplier: float = 1.5,
+        target_inventory: float | None = 0.0,
         liquidity_sourcing_enabled: bool = False,
         global_market_flow_model: Any = None,
         global_price_model: Any = None,
@@ -588,6 +651,7 @@ class MonteCarloMPCTensorBatched:
         reference_price_source: str = "global",
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
+        quote_capacity_ratio: float | None = None,
         quote_spread_max: float | int | None = None,
         quote_spread_min_depth: float | int | None = None,
         quote_spread_k_epsilon: float | None = None,
@@ -622,13 +686,15 @@ class MonteCarloMPCTensorBatched:
                 if inventory_target_penalty_weight is not None
                 else 0.0
             ),
-            target_inventory=float(target_inventory) if target_inventory is not None else None,
-            target_inventory_multiplier=target_inventory_multiplier,
+            target_inventory=float(target_inventory) if target_inventory is not None else 0.0,
             quote_size_min_per_side=(
                 float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
             ),
             quote_size_max_per_side=(
                 float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
+            ),
+            quote_capacity_ratio=(
+                float(quote_capacity_ratio) if quote_capacity_ratio is not None else 1.0
             ),
             quote_spread_max=float(quote_spread_max) if quote_spread_max is not None else None,
             quote_spread_min_depth=(
@@ -664,9 +730,9 @@ class MonteCarloMPCTensorBatched:
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
         self.inventory_target_penalty_weight = self.local_optimizer.inventory_target_penalty_weight
         self.target_inventory = self.local_optimizer.target_inventory
-        self.target_inventory_multiplier = self.local_optimizer.target_inventory_multiplier
         self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
         self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
+        self.quote_capacity_ratio = self.local_optimizer.quote_capacity_ratio
         self.quote_spread_max = self.local_optimizer.quote_spread_max
         self.quote_spread_min_depth = self.local_optimizer.quote_spread_min_depth
         self.quote_spread_k_epsilon = self.local_optimizer.quote_spread_k_epsilon
@@ -948,6 +1014,12 @@ class MonteCarloMPCTensorBatched:
                         mid_fallback_t,
                         spread_grid,
                     )
+                    bid_quote_cap_t, ask_quote_cap_t = _quote_capacity_caps_batched(
+                        cash=cash_t,
+                        inventory=inv_t,
+                        mid_price=mid_t,
+                        optimizer=self.local_optimizer,
+                    )
                     vwap_depth_t = torch_mod.abs(inv_t)
                     if h == 0:
                         # Use upstream VWAPs computed from the initial inventory depth,
@@ -988,6 +1060,8 @@ class MonteCarloMPCTensorBatched:
                         soft_temp=self.soft_fill_temp,
                         soft_fill_activation=self.soft_fill_activation,
                         soft_fill_queue_penalty=self.soft_fill_queue_penalty,
+                        bid_quote_cap=bid_quote_cap_t,
+                        ask_quote_cap=ask_quote_cap_t,
                         **depth_kw,
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)

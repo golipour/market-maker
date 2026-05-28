@@ -831,9 +831,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "objective_weight",
             "inventory_target_penalty_weight",
             "target_inventory",
-            "target_inventory_multiplier",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
+            "quote_capacity_ratio",
             "quote_spread_max",
             "quote_spread_min_depth",
             "quote_spread_k_epsilon",
@@ -844,6 +844,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         removed_venue_optimizer_aliases = {
             "inv_coef": "inventory_target_penalty_weight",
             "target_inv": "target_inventory",
+            "target_inventory_multiplier": "target_inventory",
         }
         removed_optimizer_keys = [
             key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_payload
@@ -865,6 +866,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "target_inventory_multiplier",
                 "quote_size_min_per_side",
                 "quote_size_max_per_side",
+                "quote_capacity_ratio",
                 "quote_spread_max",
                 "quote_spread_min_depth",
                 "quote_spread_k_epsilon",
@@ -1080,9 +1082,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
             "inventory_target_penalty_weight": "venue lambda_inv inventory-capacity penalty weight",
             "target_inventory": "optional venue inventory target in base units",
-            "target_inventory_multiplier": "venue multiplier when target_inventory is unset",
             "quote_size_min_per_side": "venue minimum cumulative quote depth per side at spread_max",
             "quote_size_max_per_side": "venue maximum cumulative quote depth per side at spread_max",
+            "quote_capacity_ratio": (
+                "venue side-cap ratio: bid max=min(config max, ratio*cash/mid); "
+                "ask max=min(config max, ratio*inventory); below quote_size_min disables the side"
+            ),
             "quote_spread_max": "venue maximum allowed sum of first bid/ask spread centers",
             "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",
             "soft_fill_temp": "venue soft-fill temperature",

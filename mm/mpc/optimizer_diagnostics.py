@@ -34,7 +34,9 @@ def compute_contribution_fractions(
     fully weighted term from ``terminal_objective``.
     """
     abs_components = {str(k): abs(float(v)) for k, v in components.items()}
-    total_abs = sum(abs_components.values()) + float(eps)
+    total_abs = sum(abs_components.values())
+    if total_abs <= float(eps):
+        return {k: 0.0 for k in abs_components}
     return {k: v / total_abs for k, v in abs_components.items()}
 
 

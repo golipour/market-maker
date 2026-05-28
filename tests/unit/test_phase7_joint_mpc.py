@@ -347,9 +347,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
                     "inventory_target_penalty_weight": 0.01,
-                    "target_inventory_multiplier": 3.0,
+                    "target_inventory": 3.3,
                     "quote_size_min_per_side": 0.2,
                     "quote_size_max_per_side": 2.0,
+                    "quote_capacity_ratio": 0.8,
                     "soft_fill_temp": 0.11,
                     "soft_fill_activation": "hardsigmoid",
                     "soft_fill_queue_penalty": 0.5,
@@ -358,9 +359,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "objective_weight": 0.4,
                     "return_risk_aversion_beta": 0.8,
                     "inventory_target_penalty_weight": 0.02,
-                    "target_inventory_multiplier": 4.0,
+                    "target_inventory": 12.0,
                     "quote_size_min_per_side": 1.0,
                     "quote_size_max_per_side": 5.0,
+                    "quote_capacity_ratio": 0.6,
                     "soft_fill_temp": 0.33,
                     "soft_fill_activation": "sigmoid",
                     "soft_fill_queue_penalty": 1.5,
@@ -384,6 +386,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.inventory_target_penalty_weight == pytest.approx(0.02)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
+    assert controller.local_optimizer.quote_capacity_ratio == pytest.approx(0.8)
+    assert controller.global_optimizer.quote_capacity_ratio == pytest.approx(0.6)
     assert controller.local_optimizer.soft_fill_queue_penalty == pytest.approx(0.5)
     assert controller.global_optimizer.soft_fill_queue_penalty == pytest.approx(1.5)
     assert controller.reference_price_source == "local"

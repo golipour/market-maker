@@ -28,6 +28,7 @@ from mm.mpc.mpc_tensor_batched import (
     _grid_levels,
     _initial_action_uniform_marginal_qrange,
     _mid_from_book_best_levels_batched,
+    _quote_capacity_caps_batched,
     _spread_bucket_index,
     _spread_grid_tensor,
     soft_fill_batched,
@@ -372,6 +373,18 @@ def optimize_joint_with_diagnostics(
                     global_mid_fallback_t,
                     spread_grid,
                 )
+                local_bid_quote_cap_t, local_ask_quote_cap_t = _quote_capacity_caps_batched(
+                    cash=cash_t,
+                    inventory=inv_t,
+                    mid_price=mid_t,
+                    optimizer=local_opt,
+                )
+                global_bid_quote_cap_t, global_ask_quote_cap_t = _quote_capacity_caps_batched(
+                    cash=global_cash_t,
+                    inventory=global_inv_t,
+                    mid_price=global_mid_t,
+                    optimizer=global_opt,
+                )
                 vwap_depth_t = torch_mod.abs(
                     inv_t + global_inv_t if mpc.liquidity_sourcing_enabled else inv_t
                 )
@@ -416,6 +429,8 @@ def optimize_joint_with_diagnostics(
                     soft_temp=local_opt.soft_fill_temp,
                     soft_fill_activation=local_opt.soft_fill_activation,
                     soft_fill_queue_penalty=local_opt.soft_fill_queue_penalty,
+                    bid_quote_cap=local_bid_quote_cap_t,
+                    ask_quote_cap=local_ask_quote_cap_t,
                     depth_scale=1.0,
                     **local_depth_kw,
                 )
@@ -437,6 +452,8 @@ def optimize_joint_with_diagnostics(
                     soft_temp=global_opt.soft_fill_temp,
                     soft_fill_activation=global_opt.soft_fill_activation,
                     soft_fill_queue_penalty=global_opt.soft_fill_queue_penalty,
+                    bid_quote_cap=global_bid_quote_cap_t,
+                    ask_quote_cap=global_ask_quote_cap_t,
                     depth_scale=global_mask,
                     **global_depth_kw,
                 )

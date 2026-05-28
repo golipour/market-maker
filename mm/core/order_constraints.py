@@ -161,6 +161,84 @@ def cap_orders_per_side_with_report(
     return kept, stage_report_with_rejections(kept, rejection_counts)
 
 
+def cap_orders_total_qty_per_side_with_report(
+    orders: list[Order],
+    side_qty_caps: dict[str, float] | None,
+) -> tuple[list[Order], ActionStageReport]:
+    """Cap total buy/sell target quantity by side, preserving price priority."""
+
+    if not side_qty_caps:
+        return orders, stage_report_with_rejections(orders, {})
+    caps = {
+        "buy": _finite_nonnegative_or_none(side_qty_caps.get("buy")),
+        "sell": _finite_nonnegative_or_none(side_qty_caps.get("sell")),
+    }
+    rejection_counts: dict[str, int] = {}
+    passthrough = [order for order in orders if order.side.lower().strip() not in caps]
+    buys = sorted(
+        (order for order in orders if order.side.lower().strip() == "buy"),
+        key=lambda order: float(order.price),
+        reverse=True,
+    )
+    sells = sorted(
+        (order for order in orders if order.side.lower().strip() == "sell"),
+        key=lambda order: float(order.price),
+    )
+    out = [
+        *_cap_side_total_qty(buys, caps["buy"], "buy", rejection_counts),
+        *_cap_side_total_qty(sells, caps["sell"], "sell", rejection_counts),
+        *passthrough,
+    ]
+    return out, stage_report_with_rejections(out, rejection_counts)
+
+
+def _finite_nonnegative_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out):
+        return None
+    return max(0.0, out)
+
+
+def _cap_side_total_qty(
+    orders: list[Order],
+    cap: float | None,
+    side: str,
+    rejection_counts: dict[str, int],
+) -> list[Order]:
+    if cap is None:
+        return list(orders)
+    remaining = max(0.0, float(cap))
+    out: list[Order] = []
+    reason = f"{side}_capacity_cap"
+    for order in orders:
+        qty = max(0.0, float(order.qty))
+        if remaining <= 1e-12:
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+            continue
+        kept_qty = min(qty, remaining)
+        if kept_qty < qty - 1e-12:
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+        if kept_qty > 1e-12:
+            out.append(
+                Order(
+                    exchange=order.exchange,
+                    symbol=order.symbol,
+                    side=order.side,
+                    price=float(order.price),
+                    qty=float(kept_qty),
+                    order_type=order.order_type,
+                    client_order_id=order.client_order_id,
+                )
+            )
+            remaining -= kept_qty
+    return out
+
+
 def build_orders_from_sigmoid(
     *,
     actor_id: str,
@@ -168,6 +246,7 @@ def build_orders_from_sigmoid(
     sigmoid_action: Any,
     orderbook_grid: Any,
     constraints: OrderConstraints,
+    side_qty_caps: dict[str, float] | None = None,
 ) -> list[Order]:
     orders, _pipeline, _ladder = build_orders_from_sigmoid_with_report(
         actor_id=actor_id,
@@ -175,6 +254,7 @@ def build_orders_from_sigmoid(
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
         constraints=constraints,
+        side_qty_caps=side_qty_caps,
     )
     return orders
 
@@ -186,6 +266,7 @@ def build_orders_from_sigmoid_with_report(
     sigmoid_action: Any,
     orderbook_grid: Any,
     constraints: OrderConstraints,
+    side_qty_caps: dict[str, float] | None = None,
     continuous: dict[str, Any] | None = None,
 ) -> tuple[list[Order], ActionPipelineReport, list[Order]]:
     ladder, ladder_report = ladder_orders_from_sigmoid_with_report(
@@ -194,8 +275,13 @@ def build_orders_from_sigmoid_with_report(
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
     )
-    venued, venue_report = apply_venue_constraints_with_report(ladder, constraints)
+    qty_capped, qty_cap_report = cap_orders_total_qty_per_side_with_report(ladder, side_qty_caps)
+    venued, venue_report = apply_venue_constraints_with_report(qty_capped, constraints)
     capped, capped_report = cap_orders_per_side_with_report(venued, constraints.max_orders_per_side)
+    cap_rejections = dict(qty_cap_report.rejection_counts)
+    for key, value in capped_report.rejection_counts.items():
+        cap_rejections[key] = cap_rejections.get(key, 0) + value
+    capped_report = stage_report_with_rejections(capped, cap_rejections)
     pipeline = ActionPipelineReport(
         continuous=dict(continuous or {}),
         ladder=ladder_report,

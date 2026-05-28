@@ -110,6 +110,25 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert pipeline.target_book.order_count == len(local_orders)
 
 
+def test_build_joint_target_book_caps_side_qty_by_capacity() -> None:
+    joint_book, pipeline, _ladder, local_orders = build_joint_target_book_from_sigmoid(
+        actor_id="actor-1",
+        local_event=_market_event(),
+        sigmoid_action=_sigmoid_action(bid_qty=2.0, ask_qty=2.0),
+        orderbook_grid=_grid(),
+        local_constraints=_constraints(),
+        local_side_qty_caps={"buy": 0.4, "sell": 0.25},
+    )
+
+    buy_qty = sum(order.qty for order in local_orders if order.side == "buy")
+    sell_qty = sum(order.qty for order in local_orders if order.side == "sell")
+    assert buy_qty == pytest.approx(0.4)
+    assert sell_qty == pytest.approx(0.25)
+    assert pipeline.capped.rejection_counts["buy_capacity_cap"] == 1
+    assert pipeline.capped.rejection_counts["sell_capacity_cap"] == 1
+    assert len(joint_book.local.orders) == len(local_orders)
+
+
 def test_joint_target_book_converts_to_action() -> None:
     book = JointTargetBook(
         actor_id="actor-1",

@@ -253,13 +253,13 @@ These current joint objective parameters are configured under
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
       "inventory_target_penalty_weight": 0.000001,
-      "target_inventory_multiplier": 2.0
+      "target_inventory": 0.0
     },
     "global": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
       "inventory_target_penalty_weight": 0.000001,
-      "target_inventory_multiplier": 2.0
+      "target_inventory": 0.0
     }
   }
 }
@@ -272,19 +272,13 @@ Meaning:
 | `objective_weight` | Venue return-term multiplier |
 | `return_risk_aversion_beta` | Venue risk aversion for entropic return |
 | `inventory_target_penalty_weight` | Venue inventory-capacity penalty weight |
-| `target_inventory` | Optional venue inventory target in base units |
-| `target_inventory_multiplier` | Venue multiplier used when `target_inventory` is unset |
+| `target_inventory` | Venue inventory target in base units |
 
-The inventory target and scale are venue-scoped:
+The inventory target is used directly:
 
 ```text
-local_target_inventory =
-  local.target_inventory_multiplier
-  * midpoint(local.quote_size_min_per_side, local.quote_size_max_per_side)
-
-global_target_inventory =
-  global.target_inventory_multiplier
-  * midpoint(global.quote_size_min_per_side, global.quote_size_max_per_side)
+local_target_inventory = local.target_inventory
+global_target_inventory = global.target_inventory
 ```
 
 ## Separate Optimizer Parameters
@@ -298,9 +292,10 @@ These optimizer parameters are separate for local and global:
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
       "inventory_target_penalty_weight": 0.000001,
-      "target_inventory_multiplier": 2.0,
+      "target_inventory": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
+      "quote_capacity_ratio": 1.0,
       "quote_spread_max": 100.0,
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
@@ -312,9 +307,10 @@ These optimizer parameters are separate for local and global:
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
       "inventory_target_penalty_weight": 0.000001,
-      "target_inventory_multiplier": 2.0,
+      "target_inventory": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
+      "quote_capacity_ratio": 1.0,
       "quote_spread_max": 100.0,
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
@@ -333,9 +329,10 @@ Current behavior:
 | `objective_weight` | Yes | Venue multiplier in mixed objective |
 | `return_risk_aversion_beta` | Yes | Venue entropic-return risk aversion |
 | `inventory_target_penalty_weight` | Yes | Venue inventory penalty weight |
-| `target_inventory` / `target_inventory_multiplier` | Yes | Venue target and scale |
+| `target_inventory` | Yes | Venue inventory target in base units |
 | `quote_size_min_per_side` | Yes | Venue sigmoid depth lower range |
 | `quote_size_max_per_side` | Yes | Venue sigmoid depth upper range |
+| `quote_capacity_ratio` | Yes | Venue side cap ratio: bid cap uses `cash / mid`, ask cap uses inventory; below `quote_size_min_per_side` disables that side |
 | `quote_spread_max` | Yes | Venue structured spread cap |
 | `quote_spread_min_depth` | Yes | Venue structured minimum depth |
 | `quote_spread_k_epsilon` | Yes | Venue spread-parameter numerical guard |

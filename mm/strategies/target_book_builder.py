@@ -65,6 +65,7 @@ def build_joint_target_book_from_sigmoid(
     sigmoid_action: Any,
     orderbook_grid: Any,
     local_constraints: OrderConstraints,
+    local_side_qty_caps: dict[str, float] | None = None,
     continuous: dict[str, Any] | None = None,
     mode: LiquiditySourcingMode = "single_venue",
     local_policy: ExecutionPolicy = "reconcile",
@@ -72,6 +73,7 @@ def build_joint_target_book_from_sigmoid(
     global_event: MarketEvent | None = None,
     global_constraints: OrderConstraints | None = None,
     global_sigmoid_action: Any | None = None,
+    global_side_qty_caps: dict[str, float] | None = None,
 ) -> tuple[JointTargetBook, ActionPipelineReport, list[Order], list[Order]]:
     """Discretize MPC output into a joint target book and pipeline report."""
 
@@ -81,6 +83,7 @@ def build_joint_target_book_from_sigmoid(
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
         constraints=local_constraints,
+        side_qty_caps=local_side_qty_caps,
         continuous=continuous,
     )
     local_book = build_venue_target_book_from_orders(
@@ -102,6 +105,7 @@ def build_joint_target_book_from_sigmoid(
             sigmoid_action=global_sigmoid_action,
             orderbook_grid=orderbook_grid,
             constraints=global_constraints,
+            side_qty_caps=global_side_qty_caps,
         )
         global_book = build_venue_target_book_from_orders(
             actor_id=actor_id,
