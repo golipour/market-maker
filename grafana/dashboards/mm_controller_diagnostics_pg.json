@@ -189,11 +189,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','inventory_capacity_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','threshold_shortfall_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','threshold_shortfall_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','threshold_shortfall_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "inventory_capacity_penalty",
+      "title": "threshold_shortfall_penalty",
       "type": "timeseries"
     },
     {
@@ -235,11 +235,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','local_inventory_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_threshold_shortfall_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','local_threshold_shortfall_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','local_threshold_shortfall_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "local_inventory_penalty",
+      "title": "local_threshold_shortfall_penalty",
       "type": "timeseries"
     },
     {
@@ -281,11 +281,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','global_inventory_penalty'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_threshold_shortfall_penalty'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'components','global_threshold_shortfall_penalty'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'components','global_threshold_shortfall_penalty'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "global_inventory_penalty",
+      "title": "global_threshold_shortfall_penalty",
       "type": "timeseries"
     },
     {

@@ -102,11 +102,6 @@ def optimize_joint_with_diagnostics(
     )
     ref_0 = float(reference_price_from_state(state, reference_price_source))
     wealth_0 = wealth_0_from_state(state, reference_price_source)
-    obj_local_target = mpc._resolve_inventory_target("local")
-    obj_global_target = mpc._resolve_inventory_target("global")
-    obj_local_scale = mpc._resolve_inventory_scale("local")
-    obj_global_scale = mpc._resolve_inventory_scale("global")
-
     book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
         state.ob_rel, mpc.grid_levels, mpc.spread_step, _device, dtype
     )
@@ -345,7 +340,9 @@ def optimize_joint_with_diagnostics(
             total_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             total_local_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             total_global_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
+            local_cash_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             local_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
+            global_cash_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             global_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             step_reward_0 = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             local_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -481,7 +478,9 @@ def optimize_joint_with_diagnostics(
                 cash_next = cash_t + local_cash_delta.unsqueeze(1)
                 global_inv_next = global_inv_t + global_inv_delta.unsqueeze(1)
                 global_cash_next = global_cash_t + global_cash_delta.unsqueeze(1)
+                local_cash_path[:, h] = cash_next.squeeze(1)
                 local_inv_path[:, h] = inv_next.squeeze(1)
+                global_cash_path[:, h] = global_cash_next.squeeze(1)
                 global_inv_path[:, h] = global_inv_next.squeeze(1)
 
                 ref_next = global_sell_vwap_t if use_global_reference else sell_vwap_t
@@ -522,18 +521,24 @@ def optimize_joint_with_diagnostics(
             J, components = joint_terminal_objective(
                 local_returns,
                 global_returns,
+                local_cash_path,
                 local_inv_path,
+                global_cash_path,
                 global_inv_path,
                 local_return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
                 global_return_risk_aversion_beta=global_opt.return_risk_aversion_beta,
                 local_objective_weight=local_opt.objective_weight,
                 global_objective_weight=global_opt.objective_weight,
-                local_inventory_target_penalty_weight=local_opt.inventory_target_penalty_weight,
-                global_inventory_target_penalty_weight=global_opt.inventory_target_penalty_weight,
-                local_target_inventory=obj_local_target,
-                global_target_inventory=obj_global_target,
-                local_inventory_scale=obj_local_scale,
-                global_inventory_scale=obj_global_scale,
+                local_inventory_threshold_penalty_weight=(
+                    local_opt.inventory_threshold_penalty_weight
+                ),
+                global_inventory_threshold_penalty_weight=(
+                    global_opt.inventory_threshold_penalty_weight
+                ),
+                local_cash_threshold=local_opt.cash_threshold,
+                local_inventory_threshold=local_opt.inventory_threshold,
+                global_cash_threshold=global_opt.cash_threshold,
+                global_inventory_threshold=global_opt.inventory_threshold,
                 global_active=global_mask,
             )
             J_mean_raw = torch_mod.nan_to_num(

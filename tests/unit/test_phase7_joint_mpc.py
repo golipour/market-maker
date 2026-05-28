@@ -346,8 +346,9 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                 "local": {
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
-                    "inventory_target_penalty_weight": 0.01,
-                    "target_inventory": 3.3,
+                    "inventory_threshold_penalty_weight": 0.01,
+                    "cash_threshold": 300.0,
+                    "inventory_threshold": 3.3,
                     "quote_size_min_per_side": 0.2,
                     "quote_size_max_per_side": 2.0,
                     "quote_capacity_ratio": 0.8,
@@ -358,8 +359,9 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                 "global": {
                     "objective_weight": 0.4,
                     "return_risk_aversion_beta": 0.8,
-                    "inventory_target_penalty_weight": 0.02,
-                    "target_inventory": 12.0,
+                    "inventory_threshold_penalty_weight": 0.02,
+                    "cash_threshold": 1200.0,
+                    "inventory_threshold": 12.0,
                     "quote_size_min_per_side": 1.0,
                     "quote_size_max_per_side": 5.0,
                     "quote_capacity_ratio": 0.6,
@@ -382,8 +384,12 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.objective_weight == pytest.approx(0.4)
     assert controller.local_optimizer.return_risk_aversion_beta == pytest.approx(0.2)
     assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
-    assert controller.local_optimizer.inventory_target_penalty_weight == pytest.approx(0.01)
-    assert controller.global_optimizer.inventory_target_penalty_weight == pytest.approx(0.02)
+    assert controller.local_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.01)
+    assert controller.global_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.02)
+    assert controller.local_optimizer.cash_threshold == pytest.approx(300.0)
+    assert controller.global_optimizer.cash_threshold == pytest.approx(1200.0)
+    assert controller.local_optimizer.inventory_threshold == pytest.approx(3.3)
+    assert controller.global_optimizer.inventory_threshold == pytest.approx(12.0)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
     assert controller.local_optimizer.quote_capacity_ratio == pytest.approx(0.8)
@@ -393,8 +399,6 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.reference_price_source == "local"
     assert controller._l_param_config("local").quote_size_min == pytest.approx(0.2)
     assert controller._l_param_config("global").quote_size_max == pytest.approx(5.0)
-    assert controller._resolve_inventory_target("local") == pytest.approx(3.3)
-    assert controller._resolve_inventory_target("global") == pytest.approx(12.0)
 
 
 def test_build_controller_rejects_flat_venue_optimizer_params() -> None:

@@ -43,8 +43,9 @@ from mm.strategies.target_book_builder import (
 _VENUE_OPTIMIZER_KEYS = {
     "return_risk_aversion_beta",
     "objective_weight",
-    "inventory_target_penalty_weight",
-    "target_inventory",
+    "inventory_threshold_penalty_weight",
+    "cash_threshold",
+    "inventory_threshold",
     "quote_size_min_per_side",
     "quote_size_max_per_side",
     "quote_capacity_ratio",
@@ -56,9 +57,11 @@ _VENUE_OPTIMIZER_KEYS = {
     "soft_fill_queue_penalty",
 }
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
-    "inv_coef": "inventory_target_penalty_weight",
-    "target_inv": "target_inventory",
-    "target_inventory_multiplier": "target_inventory",
+    "inv_coef": "inventory_threshold_penalty_weight",
+    "inventory_target_penalty_weight": "inventory_threshold_penalty_weight",
+    "target_inv": "inventory_threshold",
+    "target_inventory": "inventory_threshold",
+    "target_inventory_multiplier": "inventory_threshold",
 }
 _FLAT_VENUE_OPTIMIZER_KEYS = _VENUE_OPTIMIZER_KEYS | set(_REMOVED_VENUE_OPTIMIZER_ALIASES)
 

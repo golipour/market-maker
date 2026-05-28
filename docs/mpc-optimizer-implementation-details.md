@@ -526,19 +526,20 @@ J =
   + global_active
     * global.objective_weight
     * entropic_return_beta(global_returns, global.return_risk_aversion_beta)
-  - local.inventory_target_penalty_weight * local_inventory_capacity_penalty
+  - local.inventory_threshold_penalty_weight * local_threshold_shortfall_penalty
   - global_active
-    * global.inventory_target_penalty_weight * global_inventory_capacity_penalty
+    * global.inventory_threshold_penalty_weight * global_threshold_shortfall_penalty
 ```
 
-Inventory targets are direct venue config values:
+Threshold penalties are one-sided and normalized:
 
 ```text
-local_target_inventory = local.target_inventory
-global_target_inventory = global.target_inventory
+threshold_shortfall =
+  relu(cash_threshold - cash) / max(abs(cash_threshold), 1)
+  + relu(inventory_threshold - inventory) / max(abs(inventory_threshold), 1)
 ```
 
-`target_inventory_multiplier` is no longer used.
+`target_inventory_multiplier` and `target_inventory` are no longer used.
 
 Implemented joint components:
 
@@ -547,9 +548,9 @@ Implemented joint components:
 | `risk_adjusted_return` | Sum of local and active global weighted return terms |
 | `local_risk_adjusted_return` | Local weighted entropic return term |
 | `global_risk_adjusted_return` | Global weighted entropic return term |
-| `inventory_capacity_penalty` | Total inventory penalty |
-| `local_inventory_penalty` | Local inventory penalty contribution |
-| `global_inventory_penalty` | Global contribution, masked when inactive |
+| `threshold_shortfall_penalty` | Total threshold shortfall penalty |
+| `local_threshold_shortfall_penalty` | Local threshold contribution |
+| `global_threshold_shortfall_penalty` | Global contribution, masked when inactive |
 
 Joint diagnostics also record:
 
@@ -572,7 +573,7 @@ The local-only objective remains:
 ```text
 J =
   expected_pnl_weight * reward_term
-  - inventory_target_penalty_weight * inventory_target_term
+  - inventory_threshold_penalty_weight * threshold_shortfall_term
   - pnl_volatility_penalty_weight * volatility_term
   - pnl_cvar_penalty_weight * soft_cvar_term
   - quote_shape_concentration_penalty_weight * concentration_term

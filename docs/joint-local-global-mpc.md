@@ -187,11 +187,11 @@ J =
   + global_active
     * global.objective_weight
     * entropic_return_beta(global_returns, global.return_risk_aversion_beta)
-  - local.inventory_target_penalty_weight
-    * local_inventory_capacity_penalty
+  - local.inventory_threshold_penalty_weight
+    * local_threshold_shortfall_penalty
   - global_active
-    * global.inventory_target_penalty_weight
-    * global_inventory_capacity_penalty
+    * global.inventory_threshold_penalty_weight
+    * global_threshold_shortfall_penalty
 ```
 
 The optimizer minimizes:
@@ -207,14 +207,14 @@ Objective components reported in diagnostics:
 | `risk_adjusted_return` | Sum of local and active global weighted return terms |
 | `local_risk_adjusted_return` | Local weighted entropic return term |
 | `global_risk_adjusted_return` | Global weighted entropic return term, masked when inactive |
-| `inventory_capacity_penalty` | Combined weighted inventory penalty |
-| `local_inventory_penalty` | Local weighted inventory contribution |
-| `global_inventory_penalty` | Global weighted inventory contribution, masked when inactive |
+| `threshold_shortfall_penalty` | Combined weighted one-sided cash/inventory threshold shortfall penalty |
+| `local_threshold_shortfall_penalty` | Local weighted threshold contribution |
+| `global_threshold_shortfall_penalty` | Global weighted threshold contribution, masked when inactive |
 
 ## What "Mixed Objective" Means Here
 
 The mixed objective is the configurable sum of local and global return terms,
-plus their own inventory penalties:
+plus their own cash/inventory threshold penalties:
 
 ```text
 local_weight * local_objective + global_weight * global_objective
@@ -233,11 +233,11 @@ means the local/global tradeoff comes from:
 - simulated global fills
 - the reference price used to mark combined inventory
 - local/global objective weights
-- local/global inventory penalty weights
+- local/global threshold penalty weights
 - the global active mask
 
 If you set `global.objective_weight=0`, global fills can still affect global
-inventory penalty and target-book diagnostics, but the global return term is not
+threshold penalty and target-book diagnostics, but the global return term is not
 rewarded. If `global_active=false`, the global return and inventory terms are
 both masked out.
 
@@ -252,14 +252,16 @@ These current joint objective parameters are configured under
     "local": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0
     },
     "global": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0
     }
   }
 }
@@ -271,14 +273,16 @@ Meaning:
 | --- | --- |
 | `objective_weight` | Venue return-term multiplier |
 | `return_risk_aversion_beta` | Venue risk aversion for entropic return |
-| `inventory_target_penalty_weight` | Venue inventory-capacity penalty weight |
-| `target_inventory` | Venue inventory target in base units |
+| `inventory_threshold_penalty_weight` | Venue one-sided threshold penalty weight |
+| `cash_threshold` | Venue quote-cash floor; no penalty above it |
+| `inventory_threshold` | Venue base-inventory floor; no penalty above it |
 
-The inventory target is used directly:
+The threshold term is linear and normalized:
 
 ```text
-local_target_inventory = local.target_inventory
-global_target_inventory = global.target_inventory
+penalty =
+  relu(cash_threshold - cash) / max(abs(cash_threshold), 1)
+  + relu(inventory_threshold - inventory) / max(abs(inventory_threshold), 1)
 ```
 
 ## Separate Optimizer Parameters
@@ -291,8 +295,9 @@ These optimizer parameters are separate for local and global:
     "local": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0,
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,
@@ -306,8 +311,9 @@ These optimizer parameters are separate for local and global:
     "global": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0,
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,
@@ -328,8 +334,9 @@ Current behavior:
 | --- | --- | --- |
 | `objective_weight` | Yes | Venue multiplier in mixed objective |
 | `return_risk_aversion_beta` | Yes | Venue entropic-return risk aversion |
-| `inventory_target_penalty_weight` | Yes | Venue inventory penalty weight |
-| `target_inventory` | Yes | Venue inventory target in base units |
+| `inventory_threshold_penalty_weight` | Yes | Venue threshold shortfall penalty weight |
+| `cash_threshold` | Yes | Venue quote-cash floor |
+| `inventory_threshold` | Yes | Venue base-inventory floor |
 | `quote_size_min_per_side` | Yes | Venue sigmoid depth lower range |
 | `quote_size_max_per_side` | Yes | Venue sigmoid depth upper range |
 | `quote_capacity_ratio` | Yes | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory, both floored at `quote_size_min_per_side` |
@@ -388,16 +395,16 @@ For the joint optimizer:
   return contribution.
 - `optimizer.objective.*.components.global_risk_adjusted_return` is the global
   return contribution.
-- `optimizer.objective.*.components.local_inventory_penalty` is the local
-  inventory term.
-- `optimizer.objective.*.components.global_inventory_penalty` is the global
-  inventory term.
+- `optimizer.objective.*.components.local_threshold_shortfall_penalty` is the
+  local threshold term.
+- `optimizer.objective.*.components.global_threshold_shortfall_penalty` is the
+  global threshold term.
 - `optimizer.rollout.local_fill_*_mean` and `global_fill_*_mean` show expected
   first-step simulated fills.
 - `optimizer.rollout.global_action_flat` is the optimized global first-step raw
   vector when joint mode runs.
 
-If `global_inventory_penalty` is zero and global fill means are zero, check
+If `global_threshold_shortfall_penalty` is zero and global fill means are zero, check
 `global_active`, frame readiness, global staleness, and global model outputs.
 `liquidity_sourcing.global_live_orders` is an execution switch after
 optimization; it does not change the optimizer simulation itself.

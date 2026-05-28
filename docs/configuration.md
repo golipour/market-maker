@@ -175,8 +175,9 @@ Without token, private reconciler is skipped and **no live orders** on that exch
     "local": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0,
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,
@@ -187,8 +188,9 @@ Without token, private reconciler is skipped and **no live orders** on that exch
     "global": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_target_penalty_weight": 0.000001,
-      "target_inventory": 0.0,
+      "inventory_threshold_penalty_weight": 0.000001,
+      "cash_threshold": 0.0,
+      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
       "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,

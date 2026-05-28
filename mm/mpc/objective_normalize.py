@@ -20,20 +20,6 @@ def wealth_scale(
     return max(float(eps), abs(float(cash)) + abs(float(inventory) * float(mark_price)))
 
 
-def inventory_scale(
-    target_inventory: float,
-    quote_size_target: float | None = None,
-    *,
-    eps: float = 1e-8,
-) -> float:
-    """Scale for inventory target penalty: max(|target|, quote size, 1)."""
-
-    parts = [abs(float(target_inventory)), 1.0]
-    if quote_size_target is not None and float(quote_size_target) > 0.0:
-        parts.append(float(quote_size_target))
-    return max(float(eps), max(parts))
-
-
 def resolve_quote_spread_target_bps(
     quote_spread_target_bps: float | None,
     *,

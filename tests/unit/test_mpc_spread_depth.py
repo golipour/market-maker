@@ -27,48 +27,39 @@ def test_optimizer_stores_objective_params() -> None:
         flow,
         exe,
         return_risk_aversion_beta=2.0,
-        inventory_target_penalty_weight=4.0,
-        target_inventory=5.0,
+        inventory_threshold_penalty_weight=4.0,
+        cash_threshold=500.0,
+        inventory_threshold=5.0,
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
         quote_capacity_ratio=0.5,
     )
     assert mpc.return_risk_aversion_beta == 2.0
-    assert mpc.inventory_target_penalty_weight == 4.0
-    assert mpc.target_inventory == 5.0
+    assert mpc.inventory_threshold_penalty_weight == 4.0
+    assert mpc.cash_threshold == 500.0
+    assert mpc.inventory_threshold == 5.0
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
     assert mpc.quote_capacity_ratio == 0.5
     assert mpc.soft_fill_queue_penalty == 1.0
 
 
-def test_resolve_inventory_target_uses_direct_target_inventory() -> None:
-    mpc = MonteCarloMPCTensorBatched(
-        object(),
-        object(),
-        object(),
-        quote_size_min_per_side=100.0,
-        quote_size_max_per_side=200.0,
-        target_inventory=7.0,
-    )
-    assert mpc._resolve_inventory_target() == 7.0
-    assert mpc._resolve_inventory_scale() == 7.0
-
-
 def test_terminal_objective_uses_clear_component_names() -> None:
     returns = torch.tensor([0.01, 0.03], dtype=torch.float64)
+    cash_path = torch.tensor([[100.0, 80.0], [100.0, 120.0]], dtype=torch.float64)
     inv_path = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
 
     objective, components = terminal_objective(
         returns,
+        cash_path,
         inv_path,
         return_risk_aversion_beta=5.0,
-        inventory_target_penalty_weight=0.5,
-        target_inventory=2.0,
-        inventory_scale=2.0,
+        inventory_threshold_penalty_weight=0.5,
+        cash_threshold=90.0,
+        inventory_threshold=2.0,
     )
 
-    assert set(components) == {"risk_adjusted_return", "inventory_capacity_penalty"}
+    assert set(components) == {"risk_adjusted_return", "threshold_shortfall_penalty"}
     assert torch.isclose(objective, sum(components.values()))
 
 

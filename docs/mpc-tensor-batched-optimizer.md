@@ -244,7 +244,7 @@ The terminal objective is built by `terminal_objective()`:
 ```text
 J =
   expected_pnl_weight * E[total_reward]
-  - inventory_target_penalty_weight * (E[terminal_inventory] - target_inventory)^2
+  - inventory_threshold_penalty_weight * threshold_shortfall_term
   - pnl_volatility_penalty_weight * Std(total_reward)
   - quote_shape_uniformity_penalty_weight * uniformity_penalty
   - quote_size_target_penalty_weight * size_penalty

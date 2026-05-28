@@ -812,6 +812,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 30,
+  "version": 31,
   "weekStart": ""
 }

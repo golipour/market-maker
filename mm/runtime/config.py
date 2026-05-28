@@ -829,8 +829,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         venue_optimizer_keys = {
             "return_risk_aversion_beta",
             "objective_weight",
-            "inventory_target_penalty_weight",
-            "target_inventory",
+            "inventory_threshold_penalty_weight",
+            "cash_threshold",
+            "inventory_threshold",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
             "quote_capacity_ratio",
@@ -842,9 +843,11 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "soft_fill_queue_penalty",
         }
         removed_venue_optimizer_aliases = {
-            "inv_coef": "inventory_target_penalty_weight",
-            "target_inv": "target_inventory",
-            "target_inventory_multiplier": "target_inventory",
+            "inv_coef": "inventory_threshold_penalty_weight",
+            "inventory_target_penalty_weight": "inventory_threshold_penalty_weight",
+            "target_inv": "inventory_threshold",
+            "target_inventory": "inventory_threshold",
+            "target_inventory_multiplier": "inventory_threshold",
         }
         removed_optimizer_keys = [
             key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_payload
@@ -859,8 +862,11 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             for key in (
                 "return_risk_aversion_beta",
                 "objective_weight",
-                "inventory_target_penalty_weight",
+                "inventory_threshold_penalty_weight",
                 "inv_coef",
+                "cash_threshold",
+                "inventory_threshold",
+                "inventory_target_penalty_weight",
                 "target_inventory",
                 "target_inv",
                 "target_inventory_multiplier",
@@ -1059,13 +1065,13 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "spread_depth_semantics": (
             "optimizer.local/global quote_size_min_per_side and quote_size_max_per_side "
             "bound venue cumulative per-side depth at spread_max; each venue default "
-            "inventory target uses its own midpoint when target_inventory is unset"
+            "inventory and cash threshold penalties are one-sided shortfall terms"
         ),
         "risk": {
             "enabled": config.risk.enabled,
             "local": config.risk.local.as_dict(),
             "global": config.risk.global_.as_dict(),
-            "note": "hard gates only; inventory_target_penalty_weight lives under optimizer",
+            "note": "hard gates only; inventory_threshold_penalty_weight lives under optimizer",
         },
         "reconcile": {
             **config.reconcile.as_dict(),
@@ -1080,8 +1086,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "inventory_target_penalty_weight": "venue lambda_inv inventory-capacity penalty weight",
-            "target_inventory": "optional venue inventory target in base units",
+            "inventory_threshold_penalty_weight": (
+                "venue lambda threshold shortfall penalty weight"
+            ),
+            "cash_threshold": "quote-cash floor; no penalty above this threshold",
+            "inventory_threshold": "base-inventory floor; no penalty above this threshold",
             "quote_size_min_per_side": "venue minimum cumulative quote depth per side at spread_max",
             "quote_size_max_per_side": "venue maximum cumulative quote depth per side at spread_max",
             "quote_capacity_ratio": (

@@ -66,8 +66,9 @@ class VenueOptimizerParams:
 
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
-    inventory_target_penalty_weight: float = 0.0
-    target_inventory: float = 0.0
+    inventory_threshold_penalty_weight: float = 0.0
+    cash_threshold: float = 0.0
+    inventory_threshold: float = 0.0
     quote_size_min_per_side: float | None = None
     quote_size_max_per_side: float | None = None
     quote_capacity_ratio: float = 1.0
@@ -87,10 +88,9 @@ class VenueOptimizerParams:
     ) -> "VenueOptimizerParams":
         base = defaults or cls()
         data = dict(payload or {})
-        target_value = data.get("target_inventory", base.target_inventory)
-        inv_weight = data.get(
-            "inventory_target_penalty_weight",
-            base.inventory_target_penalty_weight,
+        threshold_weight = data.get(
+            "inventory_threshold_penalty_weight",
+            base.inventory_threshold_penalty_weight,
         )
         return cls(
             return_risk_aversion_beta=max(
@@ -98,8 +98,11 @@ class VenueOptimizerParams:
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
-            inventory_target_penalty_weight=max(0.0, float(inv_weight)),
-            target_inventory=float(target_value) if target_value is not None else 0.0,
+            inventory_threshold_penalty_weight=max(0.0, float(threshold_weight)),
+            cash_threshold=float(data.get("cash_threshold", base.cash_threshold)),
+            inventory_threshold=float(
+                data.get("inventory_threshold", base.inventory_threshold)
+            ),
             quote_size_min_per_side=(
                 float(data.get("quote_size_min_per_side"))
                 if data.get("quote_size_min_per_side") is not None
@@ -158,20 +161,14 @@ class VenueOptimizerParams:
             quote_spread_k_epsilon=self.quote_spread_k_epsilon,
         )
 
-    def inventory_target(self, *, spread_max: float, n_components: int) -> float:
-        del spread_max, n_components
-        return float(self.target_inventory)
-
-    def inventory_scale(self, *, spread_max: float, n_components: int) -> float:
-        del spread_max, n_components
-        return max(1.0, abs(float(self.target_inventory)))
-
     def as_config(self, *, spread_max: float, n_components: int) -> dict[str, Any]:
+        del spread_max, n_components
         return {
             "return_risk_aversion_beta": self.return_risk_aversion_beta,
             "objective_weight": self.objective_weight,
-            "inventory_target_penalty_weight": self.inventory_target_penalty_weight,
-            "target_inventory": self.inventory_target(spread_max=spread_max, n_components=n_components),
+            "inventory_threshold_penalty_weight": self.inventory_threshold_penalty_weight,
+            "cash_threshold": self.cash_threshold,
+            "inventory_threshold": self.inventory_threshold,
             "quote_size_min_per_side": self.quote_size_min_per_side,
             "quote_size_max_per_side": self.quote_size_max_per_side,
             "quote_capacity_ratio": self.quote_capacity_ratio,
@@ -641,8 +638,9 @@ class MonteCarloMPCTensorBatched:
         fixed_mc_samples: bool = False,
         verbose: bool = False,
         return_risk_aversion_beta: float = 1.0,
-        inventory_target_penalty_weight: float | None = None,
-        target_inventory: float | None = 0.0,
+        inventory_threshold_penalty_weight: float | None = None,
+        cash_threshold: float | None = 0.0,
+        inventory_threshold: float | None = 0.0,
         liquidity_sourcing_enabled: bool = False,
         global_market_flow_model: Any = None,
         global_price_model: Any = None,
@@ -681,12 +679,15 @@ class MonteCarloMPCTensorBatched:
         flat_defaults = VenueOptimizerParams(
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
-            inventory_target_penalty_weight=float(
-                inventory_target_penalty_weight
-                if inventory_target_penalty_weight is not None
+            inventory_threshold_penalty_weight=float(
+                inventory_threshold_penalty_weight
+                if inventory_threshold_penalty_weight is not None
                 else 0.0
             ),
-            target_inventory=float(target_inventory) if target_inventory is not None else 0.0,
+            cash_threshold=float(cash_threshold) if cash_threshold is not None else 0.0,
+            inventory_threshold=(
+                float(inventory_threshold) if inventory_threshold is not None else 0.0
+            ),
             quote_size_min_per_side=(
                 float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
             ),
@@ -728,8 +729,11 @@ class MonteCarloMPCTensorBatched:
             venue="global",
         )
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
-        self.inventory_target_penalty_weight = self.local_optimizer.inventory_target_penalty_weight
-        self.target_inventory = self.local_optimizer.target_inventory
+        self.inventory_threshold_penalty_weight = (
+            self.local_optimizer.inventory_threshold_penalty_weight
+        )
+        self.cash_threshold = self.local_optimizer.cash_threshold
+        self.inventory_threshold = self.local_optimizer.inventory_threshold
         self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
         self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
         self.quote_capacity_ratio = self.local_optimizer.quote_capacity_ratio
@@ -779,18 +783,6 @@ class MonteCarloMPCTensorBatched:
 
     def _l_param_config(self, venue: str = "local") -> LParamConfig:
         return self._venue_optimizer(venue).l_param_config(
-            spread_max=self.spread_max,
-            n_components=self.n_components,
-        )
-
-    def _resolve_inventory_target(self, venue: str = "local") -> float:
-        return self._venue_optimizer(venue).inventory_target(
-            spread_max=self.spread_max,
-            n_components=self.n_components,
-        )
-
-    def _resolve_inventory_scale(self, venue: str = "local") -> float:
-        return self._venue_optimizer(venue).inventory_scale(
             spread_max=self.spread_max,
             n_components=self.n_components,
         )
@@ -845,8 +837,6 @@ class MonteCarloMPCTensorBatched:
         cash_0 = float(state.cash)
         sell_vwap_0 = float(state.sell_vwap)
         wealth_0 = portfolio_wealth(cash_0, inv_0, sell_vwap_0)
-        obj_inventory_target = self._resolve_inventory_target()
-        obj_inventory_scale = self._resolve_inventory_scale()
         bid_quote_size_max_0, ask_quote_size_max_0 = _quote_capacity_maxima_scalar(
             cash=cash_0,
             inventory=inv_0,
@@ -1005,6 +995,7 @@ class MonteCarloMPCTensorBatched:
 
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
+                cash_path = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
                 inv_path = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
                 step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
 
@@ -1086,6 +1077,7 @@ class MonteCarloMPCTensorBatched:
                     )
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
+                    cash_path[:, h] = cash_next.squeeze(1)
                     inv_path[:, h] = inv_next.squeeze(1)
                     mid_next = _mid_from_book_best_levels_batched(
                         ob_bids_next,
@@ -1134,11 +1126,14 @@ class MonteCarloMPCTensorBatched:
                 global_reward_mean_raw = torch_mod.zeros((), dtype=dtype, device=_device)
                 J, components = terminal_objective(
                     returns,
+                    cash_path,
                     inv_path,
                     return_risk_aversion_beta=self.return_risk_aversion_beta,
-                    inventory_target_penalty_weight=self.inventory_target_penalty_weight,
-                    target_inventory=obj_inventory_target,
-                    inventory_scale=obj_inventory_scale,
+                    inventory_threshold_penalty_weight=(
+                        self.inventory_threshold_penalty_weight
+                    ),
+                    cash_threshold=self.cash_threshold,
+                    inventory_threshold=self.inventory_threshold,
                 )
 
                 def _finite_item(t) -> float:

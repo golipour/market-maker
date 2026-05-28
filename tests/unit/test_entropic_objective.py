@@ -5,7 +5,7 @@ import torch
 
 from mm.mpc.reward_tensor import (
     objective_entropic_return,
-    objective_inventory_capacity_penalty,
+    objective_threshold_shortfall_penalty,
     terminal_objective,
 )
 
@@ -18,31 +18,35 @@ def test_entropic_return_prefers_better_tail() -> None:
     assert score_good > score_bad
 
 
-def test_inventory_capacity_penalty_is_quadratic_and_normalized() -> None:
+def test_threshold_shortfall_penalty_is_one_sided_and_normalized() -> None:
+    cash = torch.tensor([[80.0, 120.0], [50.0, 100.0]], dtype=torch.float64)
     inv = torch.tensor([[0.0, 2.0], [4.0, 0.0]], dtype=torch.float64)
     penalty = float(
-        objective_inventory_capacity_penalty(
+        objective_threshold_shortfall_penalty(
+            cash,
             inv,
-            target_inventory=2.0,
-            inventory_scale=2.0,
+            cash_threshold=100.0,
+            inventory_threshold=2.0,
         ).item()
     )
-    assert penalty == 0.75
+    assert penalty == pytest.approx(((0.2 + 1.0) + 0.0 + 0.5 + 1.0) / 4.0)
 
 
 def test_terminal_objective_has_two_components() -> None:
     returns = torch.tensor([0.01, 0.02, -0.05, 0.03], dtype=torch.float64)
+    cash_path = torch.tensor([[100.0], [80.0], [120.0], [100.0]], dtype=torch.float64)
     inv_path = torch.tensor([[1.0], [2.0], [0.0], [3.0]], dtype=torch.float64)
     objective, components = terminal_objective(
         returns,
+        cash_path,
         inv_path,
         return_risk_aversion_beta=10.0,
-        inventory_target_penalty_weight=0.5,
-        target_inventory=2.0,
-        inventory_scale=2.0,
+        inventory_threshold_penalty_weight=0.5,
+        cash_threshold=100.0,
+        inventory_threshold=2.0,
     )
-    assert set(components) == {"risk_adjusted_return", "inventory_capacity_penalty"}
-    assert components["inventory_capacity_penalty"] <= 0.0
+    assert set(components) == {"risk_adjusted_return", "threshold_shortfall_penalty"}
+    assert components["threshold_shortfall_penalty"] <= 0.0
     assert torch.isclose(objective, sum(components.values()))
 
 
