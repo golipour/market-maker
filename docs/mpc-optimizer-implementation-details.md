@@ -335,7 +335,27 @@ selected, `MonteCarloMPCTensorBatched` uses the local-only rollout:
 4. Build current VWAPs from the simulated local book at `abs(inventory)`.
 5. Run `soft_fill_batched()` against the local book.
 6. Update local inventory and cash from simulated fills.
-7. Compute terminal objective from local wealth and penalties.
+7. Build next VWAPs from the eaten/updated simulated local book at
+   `abs(next_inventory)`.
+8. Add the sampled residual price model to the mechanical book VWAPs.
+9. Compute terminal objective from local wealth and penalties.
+
+For the first horizon step, the current VWAPs come from
+`State.buy_vwap`/`State.sell_vwap`, which were computed upstream from the clean
+orderbook. For later steps, the current VWAPs come from the simulated
+market-only book carried from the previous step.
+
+Within each local-only step, the next mark price follows this pattern:
+
+```text
+ob_next = soft_fill(current_book, action, sampled_market_flow)
+mechanical_vwap_next = vwap(ob_next, depth = abs(next_inventory))
+simulated_vwap_next = mechanical_vwap_next + sampled_price_residual_next
+```
+
+So the local residual price model is not the whole price path. It is an additive
+residual on top of the mechanical VWAP implied by the simulated book after
+market-flow consumption and our fills.
 
 ## Joint Liquidity-Sourcing Rollout
 
@@ -361,6 +381,22 @@ For each horizon step:
 Unfilled own quote remainder is not carried as resting own liquidity into later
 rollout steps. The simulated books after each step are market-only books.
 
+The joint path currently has a slightly different VWAP timing from the
+local-only path:
+
+- at `h == 0`, local/global VWAPs come from the input `State`
+- at `h > 0`, local/global VWAPs are computed from the market-only books carried
+  from the previous step
+- the current step then runs `soft_fill_batched()` and carries the eaten books
+  forward
+- the wealth mark for the current step uses the selected reference VWAP already
+  computed for that step, so the effect of the eaten book appears in the next
+  horizon step
+
+In other words, local-only computes an explicit `mechanical_vwap_next` from
+`ob_next` inside the same step, while joint mode applies the eaten-book effect
+with a one-step timing lag.
+
 ## Soft Fill Model
 
 `soft_fill_batched()` is the differentiable fill transition used by both
@@ -369,7 +405,7 @@ single-venue and joint rollouts.
 Inputs include:
 
 - one venue action parameters
-- sell and buy VWAP tensors
+- clean mid tensor used to price fills at `mid ± spread`
 - cumulative market bid/ask depth
 - sell and buy market-flow volumes
 - spread grid
