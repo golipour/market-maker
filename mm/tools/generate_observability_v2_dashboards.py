@@ -285,7 +285,7 @@ def _time_bucket_alias_sql(expr: str) -> str:
 
 
 def _step_time_sql(t_end_expr: str) -> str:
-    return f"to_timestamp(({_numeric_sql(t_end_expr, default='NULL')}) / 1000.0)"
+    return f"to_timestamp(NULLIF({t_end_expr}, '')::double precision / 1000.0)"
 
 
 def _step_time_alias_sql(t_end_expr: str) -> str:
@@ -324,7 +324,7 @@ WHERE e.event_type = 'JointStrategyFrame'
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND (e.payload #>> ARRAY['local_market','exchange']) IN (${{exchange:sqlstring}})
   AND (e.payload #>> ARRAY['local_market','symbol']) IN (${{symbol:sqlstring}})
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -340,7 +340,7 @@ WHERE e.event_type = 'StrategyDecision'
   AND e.exchange IN (${{exchange:sqlstring}})
   AND e.symbol IN (${{symbol:sqlstring}})
   AND e.actor_id IN (${{actor_id:sqlstring}})
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -396,7 +396,7 @@ WHERE e.event_type = '{event_type}'
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -418,7 +418,7 @@ WHERE e.event_type = '{event_type}'
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${{exchange:sqlstring}})
   AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${{symbol:sqlstring}})
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -482,7 +482,7 @@ JOIN LATERAL (
   ORDER BY s.t_end_ms ASC
   LIMIT 1
 ) AS step ON TRUE
-WHERE $__timeFilter(to_timestamp(step.t_end_ms / 1000.0))
+WHERE TRUE
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -534,7 +534,7 @@ WHERE e.event_type = 'MarketEvent'
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND e.symbol IN (${{symbol:sqlstring}})
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -639,7 +639,7 @@ WHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -656,7 +656,7 @@ WHERE e.event_type IN ('CancelOrdersFailed', 'PlaceOrdersFailed')
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -671,7 +671,7 @@ WHERE e.event_type = 'OrderValidationRejected'
   AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
-  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 

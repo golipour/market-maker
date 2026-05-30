@@ -93,7 +93,8 @@ def test_rate_dashboards_use_exact_step_queries() -> None:
     }
     for title in exact_titles:
         sql = panels_by_title[title]["targets"][0]["rawSql"]
-        assert 'to_timestamp((' in sql or 'to_timestamp(step.t_end_ms / 1000.0)' in sql
+        assert "to_timestamp(" in sql
+        assert "$__timeFilter(to_timestamp" not in sql
         assert "_time_bucket" not in sql
         assert "floor(EXTRACT(EPOCH" not in sql
 
