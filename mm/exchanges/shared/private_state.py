@@ -38,6 +38,8 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         self._rate_limiter = AsyncRateLimiter(self.poll_interval_ms)
         self._connected = False
         self._error_queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
+        self._seen_fill_qty_by_order: dict[str, float] = {}
+        self._fill_history_seeded = False
 
     async def connect(self) -> None:
         self._connected = True
@@ -94,8 +96,21 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             yield _
 
     async def fill_stream(self) -> AsyncIterator[Fill]:
-        async for _ in self._empty_stream():
-            yield _
+        while self._connected:
+            await asyncio.sleep(self.poll_interval_ms / 1000.0)
+            try:
+                timestamp_ms = now_ms()
+                rows = await self.fetch_fills()
+                fills = self.normalize_fills(rows, timestamp_ms=timestamp_ms)
+                if not self._fill_history_seeded:
+                    self._fill_history_seeded = True
+                    continue
+                for fill in fills:
+                    yield fill
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self._publish_error("fill_poll", exc)
 
     async def error_stream(self) -> AsyncIterator[dict[str, str]]:
         while self._connected:
@@ -106,6 +121,9 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
 
     async def fetch_open_orders(self) -> list[dict]:
         raise NotImplementedError
+
+    async def fetch_fills(self) -> list[dict]:
+        return []
 
     def normalize_balances(self, raw: dict, *, timestamp_ms: int) -> dict[str, Balance]:
         balances: dict[str, Balance] = {}
@@ -182,6 +200,50 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             filled_qty=max(0.0, filled),
             status=status,
             timestamp_ms=_safe_int(_first_value(row, "time", "createdAt", "updatedAt"), timestamp_ms),
+        )
+
+    def normalize_fills(self, rows: list[dict], *, timestamp_ms: int) -> tuple[Fill, ...]:
+        fills: list[Fill] = []
+        if not isinstance(rows, list):
+            return ()
+        for row in rows:
+            fill = self.normalize_fill(row, timestamp_ms=timestamp_ms)
+            if fill is not None:
+                fills.append(fill)
+        return tuple(fills)
+
+    def normalize_fill(self, row: dict, *, timestamp_ms: int) -> Fill | None:
+        if not isinstance(row, dict):
+            return None
+        order_id = _first_text(row, "exchange_order_id", "clientOrderId", "client_order_id", "id", "orderId", "order_id")
+        if not order_id:
+            return None
+        side = _normalize_side(_first_text(row, "side", "type"))
+        if side not in {"buy", "sell"}:
+            return None
+        cumulative_qty = _safe_float(
+            _first_value(row, "filled_qty", "filledAmount", "matchedAmount", "executedQty", "tradeAmount", "quantity")
+        )
+        if cumulative_qty <= 0.0:
+            return None
+        seen_qty = self._seen_fill_qty_by_order.get(order_id, 0.0)
+        delta_qty = max(0.0, cumulative_qty - seen_qty)
+        self._seen_fill_qty_by_order[order_id] = max(seen_qty, cumulative_qty)
+        if delta_qty <= 1e-12:
+            return None
+        price = _safe_float(_first_value(row, "price", "averagePrice", "avgFilledPrice", "executedPrice"))
+        fee = _safe_float(_first_value(row, "fee", "commission"), 0.0)
+        actor_id = _first_text(row, "actor_id", "actorId")
+        return Fill(
+            exchange_order_id=order_id,
+            actor_id=actor_id or "",
+            exchange=self.exchange,
+            symbol=self.symbol,
+            side=side,
+            price=price,
+            qty=delta_qty,
+            fee=fee,
+            timestamp_ms=_safe_int(_first_value(row, "timestamp_ms", "timestamp", "time", "createdAt", "updatedAt"), timestamp_ms),
         )
 
     async def _publish_error(self, source: str, exc: Exception) -> None:

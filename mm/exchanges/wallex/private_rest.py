@@ -175,6 +175,36 @@ def list_open_orders(symbol: str, api_token: str | None) -> list[dict]:
     return [o for o in orders if isinstance(o, dict)]
 
 
+def list_filled_orders(symbol: str, api_token: str | None) -> list[dict]:
+    if not api_token:
+        return []
+    sym = api_symbol(symbol)
+    try:
+        out = _get_auth(
+            "/v1/account/orders",
+            api_token,
+            params={"market": sym, "per_page": 100},
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Wallex order-history fetch failed: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(out, dict) or not out.get("success"):
+        raise RuntimeError("Wallex order-history fetch failed: success=false")
+    result = out.get("result") or {}
+    rows: list[dict] = []
+    if isinstance(result, dict):
+        for value in result.values():
+            if isinstance(value, list):
+                rows.extend(row for row in value if isinstance(row, dict))
+    elif isinstance(result, list):
+        rows.extend(row for row in result if isinstance(row, dict))
+    return [
+        row
+        for row in rows
+        if str(row.get("status", "")).upper() in {"FILLED", "PARTIALLY_FILLED", "PARTIAL_FILLED"}
+        or _safe_float(row.get("executedQty", row.get("filledAmount", 0.0))) > 0.0
+    ]
+
+
 def place_market_order(
     symbol: str,
     side: str,

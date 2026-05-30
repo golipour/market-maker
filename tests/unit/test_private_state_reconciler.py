@@ -237,6 +237,31 @@ class _FillingRestPolling(RestPollingPrivateStateAdapter):
         ]
 
 
+class _FillHistoryRestPolling(RestPollingPrivateStateAdapter):
+    def __init__(self) -> None:
+        super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=500)
+        self.fill_calls = 0
+
+    async def fetch_balances(self) -> dict:
+        return {"BTC": {"free": "0.25", "locked": "0.0"}}
+
+    async def fetch_open_orders(self) -> list[dict]:
+        return []
+
+    async def fetch_fills(self) -> list[dict]:
+        self.fill_calls += 1
+        matched = "0.1" if self.fill_calls == 1 else "0.2"
+        return [
+            {
+                "id": "o1",
+                "type": "buy",
+                "averagePrice": "1000000",
+                "matchedAmount": matched,
+                "fee": "0.01",
+            }
+        ]
+
+
 class _EmptyBalanceRestPolling(RestPollingPrivateStateAdapter):
     def __init__(self) -> None:
         super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
@@ -300,6 +325,26 @@ async def test_rest_polling_reconciler_publishes_fill_deltas_from_open_order_sna
         assert fill.price == pytest.approx(1_000_000.0)
     finally:
         await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_rest_fill_stream_polls_done_order_history_after_seed() -> None:
+    adapter = _FillHistoryRestPolling()
+    await adapter.connect()
+    stream = adapter.fill_stream()
+    try:
+        fill = await asyncio.wait_for(stream.__anext__(), timeout=1.5)
+
+        assert fill.exchange_order_id == "o1"
+        assert fill.exchange == "nobitex"
+        assert fill.symbol == "BTC_IRT"
+        assert fill.side == "buy"
+        assert fill.qty == pytest.approx(0.1)
+        assert fill.price == pytest.approx(1_000_000.0)
+        assert fill.fee == pytest.approx(0.01)
+    finally:
+        await adapter.disconnect()
+        await stream.aclose()
 
 
 def test_private_state_store_keeps_economy_assets_explicit_zero() -> None:

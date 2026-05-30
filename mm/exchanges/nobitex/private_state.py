@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from mm.core.models.execution import Order
+from mm.core.models.execution import Fill, Order
 from mm.core.models.private import OpenOrder
 from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.nobitex import private_rest
@@ -32,6 +32,9 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
     async def fetch_open_orders(self) -> list[dict]:
         return await asyncio.to_thread(private_rest.list_open_orders, self.symbol, self.api_token)
 
+    async def fetch_fills(self) -> list[dict]:
+        return await asyncio.to_thread(private_rest.list_filled_orders, self.symbol, self.api_token)
+
     def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
         o = super().normalize_open_order(row, timestamp_ms=timestamp_ms)
         if o is None or self._wire.quote_asset != "IRT":
@@ -54,4 +57,20 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
             filled_qty=o.filled_qty,
             status=o.status,
             timestamp_ms=o.timestamp_ms,
+        )
+
+    def normalize_fill(self, row: dict, *, timestamp_ms: int) -> Fill | None:
+        fill = super().normalize_fill(row, timestamp_ms=timestamp_ms)
+        if fill is None or self._wire.quote_asset != "IRT":
+            return fill
+        return Fill(
+            exchange_order_id=fill.exchange_order_id,
+            actor_id=fill.actor_id,
+            exchange=fill.exchange,
+            symbol=fill.symbol,
+            side=fill.side,
+            price=self._wire.scale_public_price_from_api(float(fill.price)),
+            qty=fill.qty,
+            fee=fill.fee,
+            timestamp_ms=fill.timestamp_ms,
         )

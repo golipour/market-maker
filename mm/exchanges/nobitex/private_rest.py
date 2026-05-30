@@ -256,6 +256,32 @@ def list_open_orders(symbol: str, api_token: NobitexAuth | None) -> list[dict]:
     return [o for o in orders if isinstance(o, dict)]
 
 
+def list_filled_orders(symbol: str, api_token: NobitexAuth | None) -> list[dict]:
+    if not api_token:
+        return []
+    src, dst = split_symbol_pair(symbol)
+    try:
+        out = _get_auth(
+            "/market/orders/list",
+            api_token,
+            params={
+                "status": "done",
+                "srcCurrency": src,
+                "dstCurrency": dst,
+                "details": 2,
+                "order": "-created_at",
+            },
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Nobitex filled-order fetch failed: {type(exc).__name__}: {exc}") from exc
+    if not isinstance(out, dict) or out.get("status") != "ok":
+        raise RuntimeError(f"Nobitex filled-order fetch failed: status={getattr(out, 'get', lambda *_: None)('status')!r}")
+    orders = out.get("orders") or []
+    if not isinstance(orders, list):
+        raise RuntimeError("Nobitex filled-order fetch failed: orders is not a list")
+    return [o for o in orders if isinstance(o, dict)]
+
+
 def place_market_order(
     symbol: str,
     side: str,
