@@ -174,6 +174,100 @@ def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any
     }
 
 
+def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
+    return {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                    "axisBorderShow": False,
+                    "axisCenteredZero": False,
+                    "axisColorMode": "text",
+                    "axisLabel": "cumulative qty",
+                    "axisPlacement": "auto",
+                    "hideFrom": {"legend": False, "tooltip": False, "viz": False},
+                    "lineInterpolation": "linear",
+                    "lineStyle": {"fill": "solid"},
+                    "lineWidth": 2,
+                    "pointSize": {"fixed": 4, "max": 20, "min": 1},
+                    "scaleDistribution": {"type": "linear"},
+                    "show": "lines",
+                    "spanNulls": False,
+                },
+                "unit": "short",
+                "decimals": 3,
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "price"},
+                    "properties": [
+                        {"id": "custom.axisLabel", "value": "price"},
+                        {"id": "decimals", "value": 1},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "bid"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Bid"},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "ask"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Ask"},
+                    ],
+                },
+            ],
+        },
+        "gridPos": {"h": 10, "w": 24, "x": 0, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": True},
+            "mapping": "auto",
+            "series": [],
+            "tooltip": {"mode": "multi", "sort": "none"},
+        },
+        "targets": [_target(PG_DS, expr, fmt="table")],
+        "title": title,
+        "type": "xychart",
+        "pluginVersion": "13.0.0",
+        "transformations": [
+            {
+                "id": "partitionByValues",
+                "options": {
+                    "fields": ["side"],
+                    "keepFields": False,
+                    "naming": {"mode": "as_is", "asLabels": False},
+                },
+            }
+        ],
+    }
+
+
+def _execution_command_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
+    panel = _panel(id_, title, "timeseries", PG_DS, expr, x=0, y=y, w=24)
+    panel["fieldConfig"]["overrides"] = [
+        {
+            "matcher": {"id": "byName", "options": "placed orders"},
+            "properties": [
+                {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                {"id": "displayName", "value": "Placed orders"},
+            ],
+        },
+        {
+            "matcher": {"id": "byName", "options": "canceled order ids"},
+            "properties": [
+                {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                {"id": "displayName", "value": "Canceled order ids"},
+            ],
+        },
+    ]
+    return panel
+
+
 def _text(id_: int, title: str, content: str, *, y: int) -> dict[str, Any]:
     return {
         "gridPos": {"h": 3, "w": 24, "x": 0, "y": y},
@@ -1192,6 +1286,185 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
+def _latest_target_ladder_depth_sql() -> str:
+    side = _side_sql("o.value->>'side'")
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_book AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+orders AS (
+  SELECT {side} AS side,
+         {price} AS price,
+         {qty} AS qty
+  FROM latest_book lb
+  CROSS JOIN LATERAL (
+    VALUES ('local', lb.payload->'local'), ('global', lb.payload->'global')
+  ) AS book(role, value)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS o(value)
+  WHERE book.value IS NOT NULL
+    AND ('${{target_role}}' = 'all' OR book.role = '${{target_role}}')
+),
+bid_depth AS (
+  SELECT 'bid'::text AS side,
+         price,
+         SUM(qty) OVER (ORDER BY price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
+  FROM orders
+  WHERE side = 'bid'
+    AND price IS NOT NULL
+    AND qty > 0
+),
+ask_depth AS (
+  SELECT 'ask'::text AS side,
+         price,
+         SUM(qty) OVER (ORDER BY price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
+  FROM orders
+  WHERE side = 'ask'
+    AND price IS NOT NULL
+    AND qty > 0
+)
+SELECT side, price, value
+FROM bid_depth
+UNION ALL
+SELECT side, price, value
+FROM ask_depth
+ORDER BY side, price"""
+
+
+def _target_to_execution_stage_counts_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  stage.metric,
+  SUM(stage.value) AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('raw ladder', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','ladder','order_count']")}),
+    ('venue-valid ladder', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count']")}),
+    ('capped target', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','capped','order_count']")}),
+    ('target book', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','target_book','order_count']")}),
+    ('risk-passed target', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count']")}),
+    ('kept live orders', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','kept','order_count']")}),
+    ('new order candidates', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_place','order_count']")}),
+    ('exchange-rule valid', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','rules_valid','order_count']")}),
+    ('exchange accepted', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','router_accepted','order_count']")})
+) AS stage(metric, value)
+WHERE {_diagnostics_filter()}
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES
+      ('raw ladder'),
+      ('venue-valid ladder'),
+      ('capped target'),
+      ('target book'),
+      ('risk-passed target'),
+      ('kept live orders'),
+      ('new order candidates'),
+      ('exchange-rule valid'),
+      ('exchange accepted')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _target_to_execution_filter_reason_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    reason_payload = """COALESCE(
+    e.payload #> ARRAY['action_pipeline', stages.stage, 'rejection_counts'],
+    CASE
+      WHEN stages.stage = 'risk_approved_target'
+      THEN e.payload #> ARRAY['risk','rejection_counts']
+      ELSE NULL::jsonb
+    END,
+    '{}'::jsonb
+  )"""
+    stages_sql = """VALUES
+    ('ladder', 'raw ladder'),
+    ('venue_quantized', 'venue limits'),
+    ('capped', 'per-side cap'),
+    ('risk_approved_target', 'risk'),
+    ('rules_valid', 'exchange rules'),
+    ('router_accepted', 'router')"""
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  (stages.stage_label || ': ' || reason.key) AS metric,
+  SUM({_numeric_sql("reason.value", default="0.0")}) AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  {stages_sql}
+) AS stages(stage, stage_label)
+CROSS JOIN LATERAL jsonb_each_text({reason_payload}) AS reason(key, value)
+WHERE {_diagnostics_filter()}
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT DISTINCT
+         (stages.stage_label || ': ' || reason.key) AS metric
+  FROM mm_events e
+  CROSS JOIN LATERAL (
+    {stages_sql}
+  ) AS stages(stage, stage_label)
+  CROSS JOIN LATERAL jsonb_each_text({reason_payload}) AS reason(key, value)
+  WHERE {_diagnostics_filter()}
+  UNION
+  SELECT 'no filter reasons'::text AS metric
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM mm_events e
+    CROSS JOIN LATERAL (
+      {stages_sql}
+    ) AS stages(stage, stage_label)
+    CROSS JOIN LATERAL jsonb_each_text({reason_payload}) AS reason(key, value)
+    WHERE {_diagnostics_filter()}
+  )"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _placed_vs_canceled_step_sql() -> str:
+    event_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT "time", metric, SUM(value) AS value
+FROM (
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'placed orders'::text AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersAccepted'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'canceled order ids'::text AS metric,
+         SUM(jsonb_array_length(COALESCE(e.payload->'order_ids', '[]'::jsonb)))::double precision AS value
+  FROM mm_events e
+  WHERE e.event_type = 'CancelOrdersAccepted'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+) commands
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES ('placed orders'), ('canceled order ids')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
 def _operator_failure_step_sql() -> str:
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     data_sql = f"""SELECT
@@ -1312,6 +1585,28 @@ def optimizer_diagnostics() -> dict[str, Any]:
         _panel(5, "Nonfinite counts", "timeseries", PG_DS, _optimizer_gradients_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
+
+
+def target_order_execution() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Chart-only path from the latest target orderbook to per-step filters and the final placed/canceled exchange commands. Narrow exchange, symbol, and actor when reading one ladder.",
+            y=0,
+        ),
+        _xy_target_ladder_panel(2, "Target orderbook depth (latest)", _latest_target_ladder_depth_sql(), y=3),
+        _panel(3, "Orders remaining by stage / step", "timeseries", PG_DS, _target_to_execution_stage_counts_sql(), x=0, y=13, w=24),
+        _panel(4, "Filtered orders by reason / step", "timeseries", PG_DS, _target_to_execution_filter_reason_sql(), x=0, y=21, w=24),
+        _execution_command_panel(5, "Placed vs canceled orders / step", _placed_vs_canceled_step_sql(), y=29),
+    ]
+    return _dashboard(
+        "mm-obs-v2-target-order-execution",
+        "MM Observability v2 / 05B Target To Execution",
+        panels,
+        tags=["actions", "execution"],
+        extra_templating=[_custom_var("target_role", "Target role", "local,global,all")],
+    )
 
 
 def action_pipeline() -> dict[str, Any]:
@@ -2412,6 +2707,7 @@ def dashboards() -> list[dict[str, Any]]:
         model_quality(),
         optimizer_diagnostics(),
         action_pipeline(),
+        target_order_execution(),
         risk_execution(),
         portfolio_pnl(),
         liquidity_sourcing(),

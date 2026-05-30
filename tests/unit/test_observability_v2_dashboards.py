@@ -8,6 +8,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     model_quality,
     risk_execution,
     runtime_overview,
+    target_order_execution,
 )
 
 
@@ -27,6 +28,7 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         controller_health(),
         risk_execution(),
         action_pipeline(),
+        target_order_execution(),
     ]
     zero_filled_titles = {
         "Frames / step",
@@ -55,6 +57,9 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Target orders / step",
         "Target quantity / step",
         "Frame order flow / step",
+        "Orders remaining by stage / step",
+        "Filtered orders by reason / step",
+        "Placed vs canceled orders / step",
     }
     panels_by_title = {
         panel["title"]: panel
@@ -180,6 +185,53 @@ def test_action_pipeline_exposes_order_flow_charts() -> None:
         assert "floor(EXTRACT(EPOCH" in sql
 
 
+def test_target_order_execution_dashboard_flows_from_ladder_to_commands() -> None:
+    dashboard = target_order_execution()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected_titles = {
+        "Target orderbook depth (latest)",
+        "Orders remaining by stage / step",
+        "Filtered orders by reason / step",
+        "Placed vs canceled orders / step",
+    }
+    assert expected_titles.issubset(panels_by_title)
+    assert panels_by_title["Target orderbook depth (latest)"]["type"] == "xychart"
+    for title in expected_titles - {"Target orderbook depth (latest)"}:
+        assert panels_by_title[title]["type"] == "timeseries"
+
+    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
+    assert templating["target_role"]["query"] == "local,global,all"
+
+    target_sql = panels_by_title["Target orderbook depth (latest)"]["targets"][0]["rawSql"]
+    stage_sql = panels_by_title["Orders remaining by stage / step"]["targets"][0]["rawSql"]
+    reason_sql = panels_by_title["Filtered orders by reason / step"]["targets"][0]["rawSql"]
+    commands_panel = panels_by_title["Placed vs canceled orders / step"]
+    commands_sql = commands_panel["targets"][0]["rawSql"]
+
+    assert "latest_book AS" in target_sql
+    assert "jsonb_array_elements(COALESCE(book.value->'orders'" in target_sql
+    assert "SUM(qty) OVER (ORDER BY price DESC" in target_sql
+    assert "SUM(qty) OVER (ORDER BY price ASC" in target_sql
+    assert "'${target_role}' = 'all' OR book.role = '${target_role}'" in target_sql
+    assert "raw ladder" in stage_sql
+    assert "venue-valid ladder" in stage_sql
+    assert "risk-passed target" in stage_sql
+    assert "exchange accepted" in stage_sql
+    assert "rejection_counts" in reason_sql
+    assert "raw ladder" in reason_sql
+    assert "venue limits" in reason_sql
+    assert "exchange rules" in reason_sql
+    assert "PlaceOrdersAccepted" in commands_sql
+    assert "CancelOrdersAccepted" in commands_sql
+    assert "placed orders" in commands_sql
+    assert "canceled order ids" in commands_sql
+
+    overrides = commands_panel["fieldConfig"]["overrides"]
+    override_names = {override["matcher"]["options"] for override in overrides}
+    assert {"placed orders", "canceled order ids"}.issubset(override_names)
+
+
 def test_risk_execution_exposes_order_flow_charts() -> None:
     dashboard = risk_execution()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
@@ -261,6 +313,7 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         model_quality(),
         risk_execution(),
         action_pipeline(),
+        target_order_execution(),
     ]
 
     for dashboard in dashboards:
@@ -304,6 +357,9 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         "Global risk rejects / step",
         "Local gate blocks / frame",
         "Global gate blocks / frame",
+        "Orders remaining by stage / step",
+        "Filtered orders by reason / step",
+        "Placed vs canceled orders / step",
     }
     panels_by_title = {
         panel["title"]: panel

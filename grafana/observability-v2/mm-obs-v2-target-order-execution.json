@@ -1,0 +1,552 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Chart-only path from the latest target orderbook to per-step filters and the final placed/canceled exchange commands. Narrow exchange, symbol, and actor when reading one ladder.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "cumulative qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "price"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest_book AS (\n  SELECT e.ts,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${target_books_topic}'\n    AND e.event_type = 'JointTargetBook'\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest_book lb\n  CROSS JOIN LATERAL (\n    VALUES ('local', lb.payload->'local'), ('global', lb.payload->'global')\n  ) AS book(role, value)\n  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS o(value)\n  WHERE book.value IS NOT NULL\n    AND ('${target_role}' = 'all' OR book.role = '${target_role}')\n),\nbid_depth AS (\n  SELECT 'bid'::text AS side,\n         price,\n         SUM(qty) OVER (ORDER BY price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM orders\n  WHERE side = 'bid'\n    AND price IS NOT NULL\n    AND qty > 0\n),\nask_depth AS (\n  SELECT 'ask'::text AS side,\n         price,\n         SUM(qty) OVER (ORDER BY price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM orders\n  WHERE side = 'ask'\n    AND price IS NOT NULL\n    AND qty > 0\n)\nSELECT side, price, value\nFROM bid_depth\nUNION ALL\nSELECT side, price, value\nFROM ask_depth\nORDER BY side, price",
+          "refId": "A"
+        }
+      ],
+      "title": "Target orderbook depth (latest)",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH buckets AS (\n  SELECT generate_series(\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    make_interval(secs => GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001))\n  ) AS \"time\"\n),\nmetrics AS (\n  SELECT metric\n  FROM (\n    VALUES\n      ('raw ladder'),\n      ('venue-valid ladder'),\n      ('capped target'),\n      ('target book'),\n      ('risk-passed target'),\n      ('kept live orders'),\n      ('new order candidates'),\n      ('exchange-rule valid'),\n      ('exchange accepted')\n  ) AS m(metric)\n),\ndata AS (\nSELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  stage.metric,\n  SUM(stage.value) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('raw ladder', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','ladder','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','ladder','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('venue-valid ladder', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('capped target', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','capped','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','capped','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('target book', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('risk-passed target', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('kept live orders', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('new order candidates', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('exchange-rule valid', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','rules_valid','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','rules_valid','order_count'], ''))::double precision\n  ELSE 0.0\nEND),\n    ('exchange accepted', CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], ''))::double precision\n  ELSE 0.0\nEND)\n) AS stage(metric, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\nGROUP BY 1, 2\n)\nSELECT b.\"time\", m.metric, COALESCE(d.value, 0.0) AS value\nFROM buckets b\nCROSS JOIN metrics m\nLEFT JOIN data d\n  ON d.\"time\" = b.\"time\"\n AND d.metric = m.metric\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Orders remaining by stage / step",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH buckets AS (\n  SELECT generate_series(\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    make_interval(secs => GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001))\n  ) AS \"time\"\n),\nmetrics AS (\n  SELECT DISTINCT\n         (stages.stage_label || ': ' || reason.key) AS metric\n  FROM mm_events e\n  CROSS JOIN LATERAL (\n    VALUES\n    ('ladder', 'raw ladder'),\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'per-side cap'),\n    ('risk_approved_target', 'risk'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n  ) AS stages(stage, stage_label)\n  CROSS JOIN LATERAL jsonb_each_text(COALESCE(\n    e.payload #> ARRAY['action_pipeline', stages.stage, 'rejection_counts'],\n    CASE\n      WHEN stages.stage = 'risk_approved_target'\n      THEN e.payload #> ARRAY['risk','rejection_counts']\n      ELSE NULL::jsonb\n    END,\n    '{}'::jsonb\n  )) AS reason(key, value)\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  UNION\n  SELECT 'no filter reasons'::text AS metric\n  WHERE NOT EXISTS (\n    SELECT 1\n    FROM mm_events e\n    CROSS JOIN LATERAL (\n      VALUES\n    ('ladder', 'raw ladder'),\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'per-side cap'),\n    ('risk_approved_target', 'risk'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n    ) AS stages(stage, stage_label)\n    CROSS JOIN LATERAL jsonb_each_text(COALESCE(\n    e.payload #> ARRAY['action_pipeline', stages.stage, 'rejection_counts'],\n    CASE\n      WHEN stages.stage = 'risk_approved_target'\n      THEN e.payload #> ARRAY['risk','rejection_counts']\n      ELSE NULL::jsonb\n    END,\n    '{}'::jsonb\n  )) AS reason(key, value)\n    WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  )\n),\ndata AS (\nSELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (stages.stage_label || ': ' || reason.key) AS metric,\n  SUM(CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('ladder', 'raw ladder'),\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'per-side cap'),\n    ('risk_approved_target', 'risk'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n) AS stages(stage, stage_label)\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(\n    e.payload #> ARRAY['action_pipeline', stages.stage, 'rejection_counts'],\n    CASE\n      WHEN stages.stage = 'risk_approved_target'\n      THEN e.payload #> ARRAY['risk','rejection_counts']\n      ELSE NULL::jsonb\n    END,\n    '{}'::jsonb\n  )) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\nGROUP BY 1, 2\n)\nSELECT b.\"time\", m.metric, COALESCE(d.value, 0.0) AS value\nFROM buckets b\nCROSS JOIN metrics m\nLEFT JOIN data d\n  ON d.\"time\" = b.\"time\"\n AND d.metric = m.metric\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Filtered orders by reason / step",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "placed orders"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Placed orders"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "canceled order ids"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Canceled order ids"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH buckets AS (\n  SELECT generate_series(\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    make_interval(secs => GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001))\n  ) AS \"time\"\n),\nmetrics AS (\n  SELECT metric\n  FROM (\n    VALUES ('placed orders'), ('canceled order ids')\n  ) AS m(metric)\n),\ndata AS (\nSELECT \"time\", metric, SUM(value) AS value\nFROM (\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         'placed orders'::text AS metric,\n         COUNT(*)::double precision AS value\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)\n  WHERE e.event_type = 'PlaceOrdersAccepted'\n    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  GROUP BY 1, 2\n  UNION ALL\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         'canceled order ids'::text AS metric,\n         SUM(jsonb_array_length(COALESCE(e.payload->'order_ids', '[]'::jsonb)))::double precision AS value\n  FROM mm_events e\n  WHERE e.event_type = 'CancelOrdersAccepted'\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND (e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[]) OR e.symbol IS NULL)\n    AND $__timeFilter(e.ts)\n  GROUP BY 1, 2\n) commands\nGROUP BY 1, 2\n)\nSELECT b.\"time\", m.metric, COALESCE(d.value, 0.0) AS value\nFROM buckets b\nCROSS JOIN metrics m\nLEFT JOIN data d\n  ON d.\"time\" = b.\"time\"\n AND d.metric = m.metric\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Placed vs canceled orders / step",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "actions",
+    "execution"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "local",
+          "value": "local"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target role",
+        "multi": false,
+        "name": "target_role",
+        "options": [
+          {
+            "selected": true,
+            "text": "local",
+            "value": "local"
+          },
+          {
+            "selected": false,
+            "text": "global",
+            "value": "global"
+          },
+          {
+            "selected": false,
+            "text": "all",
+            "value": "all"
+          }
+        ],
+        "query": "local,global,all",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 05B Target To Execution",
+  "uid": "mm-obs-v2-target-order-execution",
+  "version": 1,
+  "weekStart": ""
+}
