@@ -26,6 +26,7 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         market_data_quality(),
         controller_health(),
         risk_execution(),
+        action_pipeline(),
     ]
     zero_filled_titles = {
         "Frames / step",
@@ -40,11 +41,20 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Execution live qty / step (latest snapshot)",
         "Market events / step",
         "Warnings / step",
-        "Risk rejects / step",
-        "Execution gate blocks / step",
-        "Sync completed / failed / step",
+        "Order flow / step",
+        "Sync plan counts / step",
+        "Orders sent to exchange / step",
+        "Orders accepted by exchange / step",
+        "Canceled order ids / step",
+        "Rejected order commands / step",
+        "Fill events / step",
+        "Venue gate status / step",
+        "Risk reject reasons / step",
+        "Gate block reasons / step",
         "Router failures / step",
-        "Validation rejects / step",
+        "Target orders / step",
+        "Target quantity / step",
+        "Frame order flow / step",
     }
     panels_by_title = {
         panel["title"]: panel
@@ -99,45 +109,61 @@ def test_postgres_queries_use_empty_safe_multiselect_filters() -> None:
     assert "= ANY(ARRAY[${actor_id:sqlstring}]::text[])" in combined_sql
 
 
-def test_action_pipeline_splits_local_and_global_target_book_charts() -> None:
+def test_action_pipeline_exposes_order_flow_charts() -> None:
     dashboard = action_pipeline()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
-    assert panels_by_title["Local desired target orders"]["gridPos"]["x"] == 0
-    assert panels_by_title["Global desired target orders"]["gridPos"]["x"] == 12
-    assert panels_by_title["Local desired target qty"]["gridPos"]["x"] == 0
-    assert panels_by_title["Global desired target qty"]["gridPos"]["x"] == 12
-    assert panels_by_title["Local execution contract funnel"]["gridPos"]["x"] == 0
-    assert panels_by_title["Global execution contract funnel"]["gridPos"]["x"] == 12
-    assert panels_by_title["Local stage drops / step"]["gridPos"]["x"] == 0
+    expected_titles = {
+        "Target orders / step",
+        "Target quantity / step",
+        "Target ladder prices / step",
+        "Target ladder qty / step",
+        "Frame order flow / step",
+        "Local orders removed before target / step",
+        "Global risk rejects / step",
+        "Local gate blocks / frame",
+        "Global gate blocks / frame",
+    }
+    assert expected_titles.issubset(panels_by_title)
+    assert "Latest target orders" not in panels_by_title
+    assert "Latest frame order counts" not in panels_by_title
+    for title in expected_titles:
+        assert panels_by_title[title]["type"] == "timeseries"
+
+    assert panels_by_title["Target orders / step"]["gridPos"]["x"] == 0
+    assert panels_by_title["Target quantity / step"]["gridPos"]["x"] == 12
+    assert panels_by_title["Target ladder prices / step"]["gridPos"]["x"] == 0
+    assert panels_by_title["Target ladder qty / step"]["gridPos"]["x"] == 12
+    assert panels_by_title["Frame order flow / step"]["gridPos"]["w"] == 24
+    assert panels_by_title["Local orders removed before target / step"]["gridPos"]["x"] == 0
     assert panels_by_title["Global risk rejects / step"]["gridPos"]["x"] == 12
     assert panels_by_title["Local gate blocks / frame"]["gridPos"]["x"] == 0
     assert panels_by_title["Global gate blocks / frame"]["gridPos"]["x"] == 12
 
-    local_sql = panels_by_title["Local desired target orders"]["targets"][0]["rawSql"]
-    global_sql = panels_by_title["Global desired target orders"]["targets"][0]["rawSql"]
-    local_qty_sql = panels_by_title["Local desired target qty"]["targets"][0]["rawSql"]
-    global_qty_sql = panels_by_title["Global desired target qty"]["targets"][0]["rawSql"]
-    local_funnel_sql = panels_by_title["Local execution contract funnel"]["targets"][0]["rawSql"]
-    global_funnel_sql = panels_by_title["Global execution contract funnel"]["targets"][0]["rawSql"]
-    local_drop_sql = panels_by_title["Local stage drops / step"]["targets"][0]["rawSql"]
+    target_count_sql = panels_by_title["Target orders / step"]["targets"][0]["rawSql"]
+    target_qty_sql = panels_by_title["Target quantity / step"]["targets"][0]["rawSql"]
+    ladder_price_sql = panels_by_title["Target ladder prices / step"]["targets"][0]["rawSql"]
+    ladder_qty_sql = panels_by_title["Target ladder qty / step"]["targets"][0]["rawSql"]
+    frame_flow_sql = panels_by_title["Frame order flow / step"]["targets"][0]["rawSql"]
+    local_drop_sql = panels_by_title["Local orders removed before target / step"]["targets"][0]["rawSql"]
     global_reject_sql = panels_by_title["Global risk rejects / step"]["targets"][0]["rawSql"]
     local_gate_sql = panels_by_title["Local gate blocks / frame"]["targets"][0]["rawSql"]
     global_gate_sql = panels_by_title["Global gate blocks / frame"]["targets"][0]["rawSql"]
 
-    assert "VALUES ('local', payload->'local')" in local_sql
-    assert "VALUES ('global', payload->'global')" in global_sql
-    assert "VALUES ('local', e.payload->'local')" in local_qty_sql
-    assert "VALUES ('global', e.payload->'global')" in global_qty_sql
-    assert "payload->'global'" not in local_sql
-    assert "payload->'local'" not in global_sql
-    for sql in (local_sql, global_sql, local_qty_sql, global_qty_sql):
+    assert "VALUES ('local', e.payload->'local'), ('global', e.payload->'global')" in target_count_sql
+    assert "VALUES ('local', e.payload->'local'), ('global', e.payload->'global')" in target_qty_sql
+    for sql in (ladder_price_sql, ladder_qty_sql):
+        assert "WITH expanded AS" in sql
+        assert "WITH ORDINALITY" in sql
+        assert "SELECT DISTINCT ON" in sql
+        assert "book.role" in sql
+    assert "new order candidates" in frame_flow_sql
+    assert "exchange accepted" in frame_flow_sql
+    for sql in (target_count_sql, target_qty_sql):
         assert "${interval_ms}" in sql
         assert "floor(EXTRACT(EPOCH" in sql
-    assert "e.payload->'local'->'orders'" in local_funnel_sql
-    assert "COALESCE(gate.value->>'role', '') = 'local'" in local_funnel_sql
-    assert "e.payload->'global'->'orders'" in global_funnel_sql
-    assert "COALESCE(gate.value->>'role', '') = 'global'" in global_funnel_sql
+        assert "generate_series" in sql
+        assert "COALESCE(d.value, 0.0) AS value" in sql
     assert "GREATEST(drop_stage.before_count - drop_stage.after_count, 0.0)" in local_drop_sql
     assert "'venue limits'::text" in local_drop_sql
     assert "'order shaping'::text" in local_drop_sql
@@ -149,9 +175,59 @@ def test_action_pipeline_splits_local_and_global_target_book_charts() -> None:
     assert "blocked.reason AS metric" in global_gate_sql
     assert "COALESCE(gate.value->>'role', '') = 'local'" in local_gate_sql
     assert "COALESCE(gate.value->>'role', '') = 'global'" in global_gate_sql
-    for sql in (local_funnel_sql, global_funnel_sql, local_drop_sql, global_reject_sql, local_gate_sql, global_gate_sql):
+    for sql in (local_drop_sql, global_reject_sql, local_gate_sql, global_gate_sql):
         assert "${interval_ms}" in sql
         assert "floor(EXTRACT(EPOCH" in sql
+
+
+def test_risk_execution_exposes_order_flow_charts() -> None:
+    dashboard = risk_execution()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected_titles = {
+        "Order flow / step",
+        "Sync plan counts / step",
+        "Orders sent to exchange / step",
+        "Orders accepted by exchange / step",
+        "Canceled order ids / step",
+        "Rejected order commands / step",
+        "Fill events / step",
+        "Venue gate status / step",
+        "Risk reject reasons / step",
+        "Gate block reasons / step",
+        "Router failures / step",
+    }
+    assert expected_titles.issubset(panels_by_title)
+    for title in expected_titles:
+        assert panels_by_title[title]["type"] == "timeseries"
+
+    order_flow_sql = panels_by_title["Order flow / step"]["targets"][0]["rawSql"]
+    sync_sql = panels_by_title["Sync plan counts / step"]["targets"][0]["rawSql"]
+    requested_sql = panels_by_title["Orders sent to exchange / step"]["targets"][0]["rawSql"]
+    accepted_sql = panels_by_title["Orders accepted by exchange / step"]["targets"][0]["rawSql"]
+    canceled_sql = panels_by_title["Canceled order ids / step"]["targets"][0]["rawSql"]
+    rejected_sql = panels_by_title["Rejected order commands / step"]["targets"][0]["rawSql"]
+    fills_sql = panels_by_title["Fill events / step"]["targets"][0]["rawSql"]
+    venue_gate_sql = panels_by_title["Venue gate status / step"]["targets"][0]["rawSql"]
+
+    assert "target orders" in order_flow_sql
+    assert "placed orders" in order_flow_sql
+    assert "canceled order ids" in order_flow_sql
+    assert "rejected order commands" in order_flow_sql
+    assert "fill events" in order_flow_sql
+    assert "ExecutionSyncRequested" in sync_sql
+    assert "ExecutionSyncCompleted" in sync_sql
+    assert "target_count" in sync_sql
+    assert "accepted_count" in sync_sql
+    assert "PlaceOrdersRequested" in requested_sql
+    assert "PlaceOrdersAccepted" in accepted_sql
+    assert "CancelOrdersAccepted" in canceled_sql
+    assert "OrderValidationRejected" in rejected_sql
+    assert "PlaceOrdersFailed" in rejected_sql
+    assert "private:state:%:fills" in fills_sql
+    assert "has orders" in venue_gate_sql
+    assert "can sync" in venue_gate_sql
+    assert "live" in venue_gate_sql
 
 
 def test_runtime_overview_uses_per_step_counts_not_per_second_rates() -> None:
@@ -208,18 +284,23 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         "Stage latency / step",
         "Warnings / step",
         "Model NLL / step",
-        "Risk rejects / step",
-        "Execution gate blocks / step",
-        "Sync completed / failed / step",
+        "Order flow / step",
+        "Sync plan counts / step",
+        "Orders sent to exchange / step",
+        "Orders accepted by exchange / step",
+        "Canceled order ids / step",
+        "Rejected order commands / step",
+        "Fill events / step",
+        "Venue gate status / step",
+        "Risk reject reasons / step",
+        "Gate block reasons / step",
         "Router failures / step",
-        "Validation rejects / step",
-        "Local desired target orders",
-        "Global desired target orders",
-        "Local desired target qty",
-        "Global desired target qty",
-        "Local execution contract funnel",
-        "Global execution contract funnel",
-        "Local stage drops / step",
+        "Target orders / step",
+        "Target quantity / step",
+        "Target ladder prices / step",
+        "Target ladder qty / step",
+        "Frame order flow / step",
+        "Local orders removed before target / step",
         "Global risk rejects / step",
         "Local gate blocks / frame",
         "Global gate blocks / frame",

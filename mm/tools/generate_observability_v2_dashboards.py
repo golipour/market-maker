@@ -882,6 +882,345 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
+def _operator_order_flow_step_sql() -> str:
+    target_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    event_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    fill_ts = "COALESCE(to_timestamp((" + _numeric_sql("e.payload->>'timestamp_ms'", default="NULL") + ") / 1000.0), e.ts)"
+    data_sql = f"""SELECT "time", metric, SUM(value) AS value
+FROM (
+  SELECT {_approx_step_time_alias_sql(target_step)},
+         'target orders'::text AS metric,
+         SUM(
+           jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb))
+           + jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))
+         )::double precision AS value
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'placed orders'::text AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersAccepted'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'canceled order ids'::text AS metric,
+         SUM(jsonb_array_length(COALESCE(e.payload->'order_ids', '[]'::jsonb)))::double precision AS value
+  FROM mm_events e
+  WHERE e.event_type = 'CancelOrdersAccepted'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'rejected order commands'::text AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  WHERE e.event_type = 'OrderValidationRejected'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(event_step)},
+         'rejected order commands'::text AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersFailed'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(fill_ts)},
+         'fill events'::text AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  WHERE e.topic LIKE 'private:state:%:fills'
+    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+) flow
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES
+      ('target orders'),
+      ('placed orders'),
+      ('canceled order ids'),
+      ('rejected order commands'),
+      ('fill events')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _target_ladder_level_sql(measure: str) -> str:
+    if measure not in {"price", "qty"}:
+        raise ValueError(f"unknown target ladder measure: {measure}")
+    value = _numeric_sql(f"o.value->>'{measure}'", default="NULL")
+    side = _side_sql("o.value->>'side'")
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    bucket = _approx_step_time_sql(step_source)
+    return f"""WITH expanded AS (
+  SELECT {bucket} AS "time",
+         e.ts,
+         (book.role || ' ' ||
+          COALESCE(book.value->>'exchange', e.exchange, 'unknown') || ' ' ||
+          COALESCE(book.value->>'symbol', e.symbol, 'unknown') || ' ' ||
+          {side} || ' #' || o.order_no::text) AS metric,
+         {value} AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL (
+    VALUES ('local', e.payload->'local'), ('global', e.payload->'global')
+  ) AS book(role, value)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) WITH ORDINALITY AS o(value, order_no)
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND book.value IS NOT NULL
+    AND $__timeFilter(e.ts)
+),
+latest AS (
+  SELECT DISTINCT ON ("time", metric)
+         "time",
+         metric,
+         value
+  FROM expanded
+  WHERE value IS NOT NULL
+  ORDER BY "time", metric, ts DESC
+)
+SELECT "time", metric, value
+FROM latest
+ORDER BY 1, 2"""
+
+
+def _action_frame_order_flow_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  flow.metric,
+  SUM(flow.value) AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('target orders', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','target_book','order_count']")}),
+    ('risk passed', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count']")}),
+    ('kept live', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','kept','order_count']")}),
+    ('cancel commands', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count']")}),
+    ('new order candidates', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_place','order_count']")}),
+    ('valid new orders', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','rules_valid','order_count']")}),
+    ('exchange accepted', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','router_accepted','order_count']")})
+) AS flow(metric, value)
+WHERE {_diagnostics_filter()}
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES
+      ('target orders'),
+      ('risk passed'),
+      ('kept live'),
+      ('cancel commands'),
+      ('new order candidates'),
+      ('valid new orders'),
+      ('exchange accepted')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _execution_sync_counts_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    is_requested = "CASE WHEN e.event_type = 'ExecutionSyncRequested' THEN 1.0 ELSE 0.0 END"
+    is_completed = "CASE WHEN e.event_type = 'ExecutionSyncCompleted' THEN 1.0 ELSE 0.0 END"
+    is_failed = "CASE WHEN e.event_type = 'ExecutionSyncFailed' THEN 1.0 ELSE 0.0 END"
+
+    def completed_value(field: str) -> str:
+        payload_value = _numeric_sql(f"e.payload->>'{field}'")
+        return f"CASE WHEN e.event_type = 'ExecutionSyncCompleted' THEN {payload_value} ELSE 0.0 END"
+
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  sync.metric,
+  SUM(sync.value) AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('sync requested', {is_requested}),
+    ('completed', {is_completed}),
+    ('failed', {is_failed}),
+    ('target', {completed_value("target_count")}),
+    ('kept', {completed_value("keep_count")}),
+    ('cancel', {completed_value("cancel_count")}),
+    ('place', {completed_value("place_count")}),
+    ('accepted', {completed_value("accepted_count")}),
+    ('rejected', {completed_value("rejected_count")})
+) AS sync(metric, value)
+WHERE e.event_type IN ('ExecutionSyncRequested', 'ExecutionSyncCompleted', 'ExecutionSyncFailed')
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES
+      ('sync requested'),
+      ('completed'),
+      ('failed'),
+      ('target'),
+      ('kept'),
+      ('cancel'),
+      ('place'),
+      ('accepted'),
+      ('rejected')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _execution_order_payload_step_sql(event_type: str) -> str:
+    return _runtime_order_payload_rate_sql(event_type, "count")
+
+
+def _rejected_order_commands_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT "time", metric, SUM(value) AS value
+FROM (
+  SELECT {_approx_step_time_alias_sql(step_source)},
+         (COALESCE(e.exchange, 'unknown') || ' ' ||
+          COALESCE(e.symbol, 'unknown') || ' validation ' ||
+          COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown')) AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  WHERE e.event_type = 'OrderValidationRejected'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT {_approx_step_time_alias_sql(step_source)},
+         (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
+          COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' place failed ' ||
+          COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')) AS metric,
+         COUNT(*)::double precision AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersFailed'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  GROUP BY 1, 2
+) rejected
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT scope.exchange || ' ' || scope.symbol || ' validation unknown' AS metric
+  FROM (
+    {_mm_scope_pairs_sql()}
+  ) AS scope
+  UNION
+  SELECT scope.exchange || ' ' || scope.symbol || ' place failed unknown' AS metric
+  FROM (
+    {_mm_scope_pairs_sql()}
+  ) AS scope
+  UNION
+  SELECT DISTINCT
+         COALESCE(e.exchange, 'unknown') || ' ' ||
+         COALESCE(e.symbol, 'unknown') || ' validation ' ||
+         COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown') AS metric
+  FROM mm_events e
+  WHERE e.event_type = 'OrderValidationRejected'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  UNION
+  SELECT DISTINCT
+         COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
+         COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' place failed ' ||
+         COALESCE(NULLIF(e.payload->>'error', ''), 'unknown') AS metric
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersFailed'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _venue_gate_status_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    bool_value = lambda field: (
+        f"lower(trim(COALESCE(gate.value->>'{field}', 'false'))) IN ('true', 't', '1', 'yes')"
+    )
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  (COALESCE(gate.value->>'role', 'unknown') || ' ' || gate.key || ' ' || status.metric) AS metric,
+  MAX(CASE WHEN status.ok THEN 1.0 ELSE 0.0 END) AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(
+  COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)
+) AS gate(key, value)
+CROSS JOIN LATERAL (
+  VALUES
+    ('has orders', {bool_value("has_orders")}),
+    ('can sync', {bool_value("can_sync")}),
+    ('live', {bool_value("live")})
+) AS status(metric, ok)
+WHERE {_diagnostics_filter()}
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT DISTINCT
+         COALESCE(gate.value->>'role', 'unknown') || ' ' || gate.key || ' ' || status.metric AS metric
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)
+  ) AS gate(key, value)
+  CROSS JOIN LATERAL (
+    VALUES ('has orders'), ('can sync'), ('live')
+  ) AS status(metric)
+  WHERE {_diagnostics_filter()}"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _operator_failure_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  metric,
+  SUM(value) AS value
+FROM (
+  SELECT e.ts,
+         e.payload,
+         CASE e.event_type
+           WHEN 'CancelOrdersFailed' THEN 'cancel failed'
+           WHEN 'PlaceOrdersFailed' THEN 'place failed'
+           ELSE 'validation rejected'
+         END AS metric,
+         1.0 AS value
+  FROM mm_events e
+  WHERE e.event_type IN ('CancelOrdersFailed', 'PlaceOrdersFailed', 'OrderValidationRejected')
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+) e
+GROUP BY 1, 2"""
+    metrics_sql = """  SELECT metric
+  FROM (
+    VALUES ('cancel failed'), ('place failed'), ('validation rejected')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
 def runtime_overview() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Runtime health from persisted events. Prometheus scrape status is shown separately so a failed `/metrics` socket does not make the whole overview blank.", y=0),
@@ -980,34 +1319,36 @@ def action_pipeline() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Joint target-book execution path split by local and global role. Target-book charts come from `JointTargetBook`; local stage drops are adjacent-stage order-count deltas; global risk rejects are global-specific risk reasons; gate-block charts count blocked frames by reason.",
+            "Chart view of the strategy target: target ladder levels, frame order flow, and why target orders did not become executable commands.",
             y=0,
         ),
-        _panel(2, "Local desired target orders", "timeseries", PG_DS, _target_book_count_sql("local"), x=0, y=3, w=12),
-        _panel(3, "Global desired target orders", "timeseries", PG_DS, _target_book_count_sql("global"), x=12, y=3, w=12),
-        _panel(4, "Local desired target qty", "timeseries", PG_DS, _target_book_qty_sql("local"), x=0, y=11, w=12),
-        _panel(5, "Global desired target qty", "timeseries", PG_DS, _target_book_qty_sql("global"), x=12, y=11, w=12),
-        _panel(6, "Local execution contract funnel", "timeseries", PG_DS, _role_execution_contract_sql("local"), x=0, y=19, w=12),
-        _panel(7, "Global execution contract funnel", "timeseries", PG_DS, _role_execution_contract_sql("global"), x=12, y=19, w=12),
-        _panel(8, "Local stage drops / step", "timeseries", PG_DS, _local_stage_drop_sql(), x=0, y=27, w=12),
-        _panel(9, "Global risk rejects / step", "timeseries", PG_DS, _role_rejection_reason_sql("global"), x=12, y=27, w=12),
-        _panel(10, "Local gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("local"), x=0, y=35, w=12),
-        _panel(11, "Global gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("global"), x=12, y=35, w=12),
-        _panel(12, "Latest execution summary", "table", PG_DS, _action_execution_summary_sql(), x=0, y=43, w=24, fmt="table"),
+        _panel(2, "Target orders / step", "timeseries", PG_DS, _target_book_count_sql(), x=0, y=3, w=12),
+        _panel(3, "Target quantity / step", "timeseries", PG_DS, _target_book_qty_sql(), x=12, y=3, w=12),
+        _panel(4, "Target ladder prices / step", "timeseries", PG_DS, _target_ladder_level_sql("price"), x=0, y=11, w=12),
+        _panel(5, "Target ladder qty / step", "timeseries", PG_DS, _target_ladder_level_sql("qty"), x=12, y=11, w=12),
+        _panel(6, "Frame order flow / step", "timeseries", PG_DS, _action_frame_order_flow_sql(), x=0, y=19, w=24),
+        _panel(7, "Local orders removed before target / step", "timeseries", PG_DS, _local_stage_drop_sql(), x=0, y=27, w=12),
+        _panel(8, "Global risk rejects / step", "timeseries", PG_DS, _role_rejection_reason_sql("global"), x=12, y=27, w=12),
+        _panel(9, "Local gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("local"), x=0, y=35, w=12),
+        _panel(10, "Global gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("global"), x=12, y=35, w=12),
     ]
     return _dashboard("mm-obs-v2-action-pipeline", "MM Observability v2 / 05 Action Pipeline Funnel", panels, tags=["actions"])
 
 
 def risk_execution() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Risk decisions, execution gates, order sync lifecycle, and adapter health.", y=0),
-        _panel(2, "Risk approved / step", "timeseries", PG_DS, _risk_approved_step_sql(), x=0, y=3),
-        _panel(3, "Risk rejects / step", "timeseries", PG_DS, _risk_reject_step_sql(), x=12, y=3),
-        _panel(4, "Execution gate blocks / step", "timeseries", PG_DS, _execution_gate_block_step_sql(), x=0, y=11),
-        _panel(5, "Sync completed / failed / step", "timeseries", PG_DS, _execution_sync_outcome_step_sql(), x=12, y=11),
-        _panel(6, "Router failures / step", "timeseries", PG_DS, _router_failure_step_sql(), x=0, y=19),
-        _panel(7, "Validation rejects / step", "timeseries", PG_DS, _validation_reject_step_sql(), x=12, y=19),
-        _panel(8, "Recent execution events", "table", PG_DS, _recent_execution_events_sql(), x=0, y=27, w=24, fmt="table"),
+        _text(1, "Scope", "Chart view of execution: what was sent to the exchange, what was accepted, what was canceled, what was rejected, and what filled.", y=0),
+        _panel(2, "Order flow / step", "timeseries", PG_DS, _operator_order_flow_step_sql(), x=0, y=3, w=24),
+        _panel(3, "Sync plan counts / step", "timeseries", PG_DS, _execution_sync_counts_step_sql(), x=0, y=11, w=24),
+        _panel(4, "Orders sent to exchange / step", "timeseries", PG_DS, _execution_order_payload_step_sql("PlaceOrdersRequested"), x=0, y=19, w=12),
+        _panel(5, "Orders accepted by exchange / step", "timeseries", PG_DS, _execution_order_payload_step_sql("PlaceOrdersAccepted"), x=12, y=19, w=12),
+        _panel(6, "Canceled order ids / step", "timeseries", PG_DS, _runtime_order_id_event_sql("CancelOrdersAccepted"), x=0, y=27, w=12),
+        _panel(7, "Rejected order commands / step", "timeseries", PG_DS, _rejected_order_commands_step_sql(), x=12, y=27, w=12),
+        _panel(8, "Fill events / step", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=0, y=35, w=12),
+        _panel(9, "Venue gate status / step", "timeseries", PG_DS, _venue_gate_status_step_sql(), x=12, y=35, w=12),
+        _panel(10, "Risk reject reasons / step", "timeseries", PG_DS, _risk_reject_step_sql(), x=0, y=43, w=12),
+        _panel(11, "Gate block reasons / step", "timeseries", PG_DS, _execution_gate_block_step_sql(), x=12, y=43, w=12),
+        _panel(12, "Router failures / step", "timeseries", PG_DS, _router_failure_step_sql(), x=0, y=51, w=12),
     ]
     return _dashboard("mm-obs-v2-risk-execution", "MM Observability v2 / 06 Risk And Execution", panels, tags=["risk", "execution"])
 
@@ -1676,16 +2017,18 @@ def _action_execution_summary_sql() -> str:
     new_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_place','order_count']")
     cancel_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count']")
     kept_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','kept','order_count']")
+    valid_new_orders = _numeric_sql("e.payload #>> ARRAY['action_pipeline','rules_valid','order_count']")
     return f"""SELECT e.ts,
        e.actor_id,
        e.exchange,
        e.symbol,
-       {desired} AS desired_orders,
-       {approved} AS risk_approved_orders,
-       {accepted} AS router_accepted_orders,
-       {new_orders} AS new_order_commands,
-       {cancel_orders} AS cancel_commands,
-       {kept_orders} AS unchanged_existing_orders,
+       {desired} AS target_orders,
+       {approved} AS risk_passed_orders,
+       {kept_orders} AS kept_live_orders,
+       {cancel_orders} AS cancel_orders,
+       {new_orders} AS new_order_candidates,
+       {valid_new_orders} AS valid_new_orders,
+       {accepted} AS exchange_accepted_new_orders,
        COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{{}}'::jsonb) AS risk_blocks,
        COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{{}}'::jsonb) AS rule_blocks,
        COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{{}}'::jsonb) AS router_blocks
@@ -1693,6 +2036,185 @@ FROM mm_events e
 WHERE {_diagnostics_filter()}
 ORDER BY e.ts DESC
 LIMIT 50"""
+
+
+def _latest_target_orders_sql(limit: int = 200) -> str:
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'", default="NULL")
+    return f"""WITH recent_books AS (
+  SELECT e.ts,
+         e.actor_id,
+         e.exchange AS frame_exchange,
+         e.symbol AS frame_symbol,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 25
+)
+SELECT rb.ts,
+       rb.actor_id,
+       book.role,
+       COALESCE(book.value->>'exchange', rb.frame_exchange, '') AS exchange,
+       COALESCE(book.value->>'symbol', rb.frame_symbol, '') AS symbol,
+       COALESCE(book.value->>'policy', '') AS policy,
+       o.order_no,
+       COALESCE(o.value->>'side', '') AS side,
+       {price} AS price,
+       {qty} AS qty,
+       COALESCE(o.value->>'order_type', 'limit') AS order_type
+FROM recent_books rb
+CROSS JOIN LATERAL (
+  VALUES ('local', rb.payload->'local'), ('global', rb.payload->'global')
+) AS book(role, value)
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) WITH ORDINALITY AS o(value, order_no)
+WHERE book.value IS NOT NULL
+ORDER BY rb.ts DESC, book.role, o.order_no
+LIMIT {limit}"""
+
+
+def _recent_sync_summaries_sql(limit: int = 100) -> str:
+    return f"""SELECT e.ts,
+       e.event_type,
+       e.exchange,
+       e.symbol,
+       e.actor_id,
+       e.payload->>'target_count' AS target_count,
+       e.payload->>'keep_count' AS keep_count,
+       e.payload->>'cancel_count' AS cancel_count,
+       e.payload->>'place_count' AS place_count,
+       e.payload->>'accepted_count' AS accepted_count,
+       e.payload->>'rejected_count' AS rejected_count,
+       e.payload->>'placed' AS placed,
+       e.payload->>'latency_ms' AS latency_ms,
+       e.payload->>'error' AS error,
+       e.payload->>'message' AS message
+FROM mm_events e
+WHERE e.event_type IN ('ExecutionSyncRequested', 'ExecutionSyncCompleted', 'ExecutionSyncFailed')
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC
+LIMIT {limit}"""
+
+
+def _recent_placed_orders_sql(limit: int = 100) -> str:
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'", default="NULL")
+    return f"""SELECT e.ts,
+       COALESCE(o.value->>'exchange', e.exchange, '') AS exchange,
+       COALESCE(o.value->>'symbol', e.symbol, '') AS symbol,
+       e.actor_id,
+       COALESCE(o.value->>'exchange_order_id', '') AS exchange_order_id,
+       o.order_no,
+       COALESCE(o.value->>'side', '') AS side,
+       {price} AS price,
+       {qty} AS qty,
+       COALESCE(o.value->>'order_type', 'limit') AS order_type,
+       COALESCE(o.value->>'client_order_id', '') AS client_order_id
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) WITH ORDINALITY AS o(value, order_no)
+WHERE e.event_type = 'PlaceOrdersAccepted'
+  AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC, o.order_no
+LIMIT {limit}"""
+
+
+def _recent_place_requests_sql(limit: int = 100) -> str:
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'", default="NULL")
+    return f"""SELECT e.ts,
+       COALESCE(o.value->>'exchange', e.exchange, '') AS exchange,
+       COALESCE(o.value->>'symbol', e.symbol, '') AS symbol,
+       e.actor_id,
+       COALESCE(e.payload->>'policy', '') AS policy,
+       o.order_no,
+       COALESCE(o.value->>'side', '') AS side,
+       {price} AS price,
+       {qty} AS qty,
+       COALESCE(o.value->>'order_type', 'limit') AS order_type,
+       COALESCE(o.value->>'client_order_id', '') AS client_order_id
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) WITH ORDINALITY AS o(value, order_no)
+WHERE e.event_type = 'PlaceOrdersRequested'
+  AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC, o.order_no
+LIMIT {limit}"""
+
+
+def _recent_canceled_orders_sql(limit: int = 100) -> str:
+    return f"""SELECT e.ts,
+       e.event_type,
+       e.exchange,
+       e.symbol,
+       e.actor_id,
+       order_id.value AS exchange_order_id,
+       COALESCE(e.payload->>'policy', '') AS policy,
+       COALESCE(e.payload->>'error', '') AS error,
+       COALESCE(e.payload->>'message', '') AS message
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'order_ids', '[]'::jsonb)) AS order_id(value)
+WHERE e.event_type IN ('CancelOrdersRequested', 'CancelOrdersAccepted', 'CancelOrdersFailed')
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC
+LIMIT {limit}"""
+
+
+def _recent_rejected_orders_sql(limit: int = 100) -> str:
+    validation_price = _numeric_sql("e.payload->>'price'", default="NULL")
+    validation_qty = _numeric_sql("e.payload->>'qty'", default="NULL")
+    failed_price = _numeric_sql("o.value->>'price'", default="NULL")
+    failed_qty = _numeric_sql("o.value->>'qty'", default="NULL")
+    return f"""SELECT *
+FROM (
+  SELECT e.ts,
+         'validation'::text AS source,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         COALESCE(e.payload->>'stage', 'rules') AS stage,
+         COALESCE(e.payload->>'reason', '') AS reason,
+         COALESCE(e.payload->>'side', '') AS side,
+         {validation_price} AS price,
+         {validation_qty} AS qty,
+         ''::text AS exchange_order_id
+  FROM mm_events e
+  WHERE e.event_type = 'OrderValidationRejected'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  UNION ALL
+  SELECT e.ts,
+         'router'::text AS source,
+         COALESCE(o.value->>'exchange', e.exchange, '') AS exchange,
+         COALESCE(o.value->>'symbol', e.symbol, '') AS symbol,
+         e.actor_id,
+         'router'::text AS stage,
+         COALESCE(e.payload->>'error', '') AS reason,
+         COALESCE(o.value->>'side', '') AS side,
+         {failed_price} AS price,
+         {failed_qty} AS qty,
+         ''::text AS exchange_order_id
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersFailed'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+) rejected
+ORDER BY ts DESC
+LIMIT {limit}"""
 
 
 def _recent_execution_events_sql(limit: int = 50) -> str:
@@ -1799,9 +2321,9 @@ def _target_book_values_sql(venue: str | None) -> str:
 
 
 def _target_book_count_sql(venue: str | None = None) -> str:
-    values_sql = _target_book_values_sql(venue)
+    values_sql = _target_book_values_sql(venue).replace("payload", "e.payload")
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
-    return f"""SELECT {_approx_step_time_alias_sql(step_source)},
+    data_sql = f"""SELECT {_approx_step_time_alias_sql(step_source)},
        venue AS metric,
        SUM(jsonb_array_length(COALESCE(book->'orders', '[]'::jsonb)))::double precision AS value
 FROM mm_events e
@@ -1816,13 +2338,23 @@ WHERE e.topic = '${{target_books_topic}}'
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
+    metrics_sql = (
+        f"""  SELECT '{venue}'::text AS metric"""
+        if venue is not None
+        else """  SELECT metric
+  FROM (
+    VALUES ('local'), ('global')
+  ) AS m(metric)"""
+    )
+    return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
 def _target_book_qty_sql(venue: str | None = None) -> str:
     qty = _numeric_sql("o->>'qty'")
+    side = _side_sql("o->>'side'")
     values_sql = _target_book_values_sql(venue).replace("payload", "e.payload")
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
-    return f"""SELECT {_approx_step_time_alias_sql(step_source)}, (venue || ' ' || (o->>'side')) AS metric,
+    data_sql = f"""SELECT {_approx_step_time_alias_sql(step_source)}, (venue || ' ' || {side}) AS metric,
        SUM({qty}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL (
@@ -1834,8 +2366,19 @@ WHERE e.topic = '${{target_books_topic}}'
   AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND $__timeFilter(e.ts)
-GROUP BY 1, venue, (o->>'side')
+GROUP BY 1, venue, {side}
 ORDER BY 1"""
+    if venue is not None:
+        metrics_sql = f"""  SELECT metric
+  FROM (
+    VALUES ('{venue} bid'), ('{venue} ask')
+  ) AS m(metric)"""
+    else:
+        metrics_sql = """  SELECT metric
+  FROM (
+    VALUES ('local bid'), ('local ask'), ('global bid'), ('global ask')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
 def _latest_payload_sql(kind: str) -> str:
