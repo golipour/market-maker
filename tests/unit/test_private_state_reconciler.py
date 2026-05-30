@@ -214,6 +214,29 @@ class _StubRestPolling(RestPollingPrivateStateAdapter):
         return await super().snapshot()
 
 
+class _FillingRestPolling(RestPollingPrivateStateAdapter):
+    def __init__(self) -> None:
+        super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
+        self.open_order_calls = 0
+
+    async def fetch_balances(self) -> dict:
+        return {"BTC": {"free": "0.25", "locked": "0.0"}}
+
+    async def fetch_open_orders(self) -> list[dict]:
+        self.open_order_calls += 1
+        filled = "0.0" if self.open_order_calls == 1 else "0.1"
+        return [
+            {
+                "id": "o1",
+                "type": "buy",
+                "price": "1000000",
+                "amount": "0.5",
+                "filledAmount": filled,
+                "status": "open",
+            }
+        ]
+
+
 class _EmptyBalanceRestPolling(RestPollingPrivateStateAdapter):
     def __init__(self) -> None:
         super().__init__("nobitex", "BTC_IRT", api_token="t", poll_interval_ms=25)
@@ -254,6 +277,27 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
         second = await asyncio.wait_for(snapshots.get(), timeout=1.0)
         assert second.balances["BTC"].free == pytest.approx(0.25)
         assert adapter.snapshot_calls >= 2
+    finally:
+        await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_rest_polling_reconciler_publishes_fill_deltas_from_open_order_snapshots() -> None:
+    adapter = _FillingRestPolling()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    fills = bus.subscribe_queue("private:state:nobitex:fills")
+
+    try:
+        await reconciler.start()
+        fill = await asyncio.wait_for(fills.get(), timeout=1.0)
+
+        assert fill.exchange_order_id == "o1"
+        assert fill.exchange == "nobitex"
+        assert fill.symbol == "BTC_IRT"
+        assert fill.side == "buy"
+        assert fill.qty == pytest.approx(0.1)
+        assert fill.price == pytest.approx(1_000_000.0)
     finally:
         await reconciler.stop()
 

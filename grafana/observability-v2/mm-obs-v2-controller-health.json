@@ -96,7 +96,7 @@
           },
           "expr": "mm_frame_sync_ready{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}",
           "refId": "A",
-          "legendFormat": "{{exchange}} {{symbol}}"
+          "legendFormat": "{{field}} {{exchange}} {{symbol}}"
         }
       ],
       "title": "Frame readiness",

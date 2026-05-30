@@ -79,6 +79,12 @@ class PrivateStateReconciler:
                 await asyncio.sleep(poll_ms / 1000.0)
                 try:
                     snap_in = await self.adapter.snapshot()
+                    fills = _fills_from_open_order_delta(
+                        self.store.snapshot().open_orders,
+                        snap_in.open_orders,
+                    )
+                    for fill in fills:
+                        await self._publish(f"private:state:{self.exchange}:fills", fill)
                     merged = self.store.apply_snapshot(snap_in)
                     await self._publish_snapshot(merged)
                     for balance in snap_in.balances.values():
@@ -158,3 +164,33 @@ class PrivateStateReconciler:
     async def _publish(self, topic: str, event: Balance | OpenOrder | OrderUpdate | Fill | PrivateStateSnapshot | dict) -> None:
         if self.bus is not None:
             await self.bus.publish(topic, event)
+
+
+def _fills_from_open_order_delta(
+    previous: dict[str, OpenOrder],
+    current: dict[str, OpenOrder],
+) -> tuple[Fill, ...]:
+    fills: list[Fill] = []
+    for order_id, current_order in current.items():
+        previous_order = previous.get(order_id)
+        if previous_order is None:
+            continue
+        filled_delta = max(0.0, float(current_order.filled_qty) - float(previous_order.filled_qty))
+        remaining_delta = max(0.0, float(previous_order.remaining_qty) - float(current_order.remaining_qty))
+        qty = max(filled_delta, remaining_delta)
+        if qty <= 1e-12:
+            continue
+        fills.append(
+            Fill(
+                exchange_order_id=order_id,
+                actor_id=current_order.actor_id or previous_order.actor_id or "",
+                exchange=current_order.order.exchange,
+                symbol=current_order.order.symbol,
+                side=current_order.order.side,
+                price=float(current_order.order.price),
+                qty=qty,
+                fee=0.0,
+                timestamp_ms=int(current_order.timestamp_ms),
+            )
+        )
+    return tuple(fills)
