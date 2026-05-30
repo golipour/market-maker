@@ -27,8 +27,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -47,15 +47,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "mm_risk_approved{actor_id=~\"${actor_id:regex}\"}",
-          "refId": "A",
-          "legendFormat": "{{exchange}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  (e.exchange || ' ' || e.symbol) AS metric,\n  CASE WHEN COALESCE(e.payload #>> ARRAY['risk','approved'], 'false') = 'true' THEN 1.0 ELSE 0.0 END AS value\nFROM mm_events e\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND e.payload->>'t_end_ms' IS NOT NULL\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Risk approved",
+      "title": "Risk approved / step",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -71,8 +73,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -91,15 +93,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (reason)(rate(mm_risk_reject_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{reason}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  reason.key AS metric,\n  SUM(CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['risk','rejection_counts'], '{}'::jsonb)) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND e.payload->>'t_end_ms' IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Risk rejects",
+      "title": "Risk rejects / step",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -115,8 +119,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -135,15 +139,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~\"${actor_id:regex}\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{reason}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  reason.value AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload #> ARRAY['execution_gates','blocked_reasons'], '[]'::jsonb)) AS reason(value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND e.payload->>'t_end_ms' IS NOT NULL\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Execution gate blocks",
+      "title": "Execution gate blocks / step",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -159,8 +165,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -179,15 +185,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,__name__)(rate({__name__=~\"mm_execution_sync_completed_total|mm_execution_sync_failed_total\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{__name__}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  (COALESCE(e.exchange, 'unknown') || ' ' ||\n   CASE e.event_type WHEN 'ExecutionSyncCompleted' THEN 'completed' ELSE 'failed' END) AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nWHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')\n  AND e.payload->>'t_end_ms' IS NOT NULL\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND $__timeFilter(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0))\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Sync completed / failed",
+      "title": "Sync completed / failed / step",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -203,8 +211,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -223,15 +231,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{operation}} {{error}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  (COALESCE(e.exchange, 'unknown') || ' ' ||\n   CASE WHEN e.event_type = 'CancelOrdersFailed' THEN 'cancel' ELSE 'place' END || ' ' ||\n   COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')) AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nWHERE e.event_type IN ('CancelOrdersFailed', 'PlaceOrdersFailed')\n  AND e.payload->>'t_end_ms' IS NOT NULL\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND $__timeFilter(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0))\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Router failures",
+      "title": "Router failures / step",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -247,8 +257,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -267,15 +277,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{reason}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown')) AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'OrderValidationRejected'\n  AND e.payload->>'t_end_ms' IS NOT NULL\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND $__timeFilter(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0))\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Validation rejects",
+      "title": "Validation rejects / step",
       "type": "timeseries",
       "options": {
         "legend": {

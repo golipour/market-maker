@@ -34,9 +34,10 @@ class OrderRouter:
         self.bus = bus
         self.clock_ms = clock_ms
 
-    async def execute(self, plan: ExecutionPlan) -> RouterResult:
+    async def execute(self, plan: ExecutionPlan, *, context: dict[str, Any] | None = None) -> RouterResult:
         """Execute cancels before places for replace and reconcile policies."""
 
+        context_payload = dict(context or {})
         cancelled: list[str] = []
         failed_cancels: list[str] = []
         placed: list[tuple[str, Order]] = []
@@ -52,6 +53,7 @@ class OrderRouter:
                     "order_ids": cancel_ids,
                     "policy": plan.policy,
                     "timestamp_ms": self.clock_ms(),
+                    **context_payload,
                 },
             )
             try:
@@ -64,6 +66,7 @@ class OrderRouter:
                         "exchange": self.exchange,
                         "order_ids": cancel_ids,
                         "timestamp_ms": self.clock_ms(),
+                        **context_payload,
                     },
                 )
             except Exception as exc:
@@ -78,6 +81,7 @@ class OrderRouter:
                         "error": type(exc).__name__,
                         "message": str(exc),
                         "timestamp_ms": self.clock_ms(),
+                        **context_payload,
                     },
                 )
                 if plan.policy == "replace":
@@ -96,6 +100,7 @@ class OrderRouter:
                     "orders": [_order_summary(order) for order in orders],
                     "policy": plan.policy,
                     "timestamp_ms": self.clock_ms(),
+                    **context_payload,
                 },
             )
             try:
@@ -119,6 +124,7 @@ class OrderRouter:
                         "error": type(exc).__name__,
                         "message": str(exc),
                         "timestamp_ms": self.clock_ms(),
+                        **context_payload,
                     },
                 )
             else:
@@ -140,6 +146,7 @@ class OrderRouter:
                         "order_ids": order_ids,
                         "orders": accepted_orders,
                         "timestamp_ms": timestamp_ms,
+                        **context_payload,
                     },
                 )
 
@@ -156,6 +163,7 @@ class OrderRouter:
                     "qty": float(rejection.order.qty),
                     "stage": rejection.stage,
                     "timestamp_ms": self.clock_ms(),
+                    **context_payload,
                 },
             )
 

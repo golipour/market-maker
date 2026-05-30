@@ -284,6 +284,14 @@ def _time_bucket_alias_sql(expr: str) -> str:
     return f"{_time_bucket_sql(expr)} AS \"time\""
 
 
+def _step_time_sql(t_end_expr: str) -> str:
+    return f"to_timestamp(({_numeric_sql(t_end_expr, default='NULL')}) / 1000.0)"
+
+
+def _step_time_alias_sql(t_end_expr: str) -> str:
+    return f"{_step_time_sql(t_end_expr)} AS \"time\""
+
+
 def _numeric_sql(expr: str, default: str = "0.0") -> str:
     return f"""CASE
   WHEN trim(COALESCE({expr}, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
@@ -308,29 +316,31 @@ END"""
 
 def _runtime_frame_rate_sql() -> str:
     return f"""SELECT
-  {_time_bucket_alias_sql("e.ts")},
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
   ((e.payload #>> ARRAY['local_market','exchange']) || ' ' || (e.payload #>> ARRAY['local_market','symbol'])) AS metric,
-  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+  COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'JointStrategyFrame'
+  AND e.payload->>'t_end_ms' IS NOT NULL
   AND (e.payload #>> ARRAY['local_market','exchange']) IN (${{exchange:sqlstring}})
   AND (e.payload #>> ARRAY['local_market','symbol']) IN (${{symbol:sqlstring}})
-  AND $__timeFilter(e.ts)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
 GROUP BY 1, 2
 ORDER BY 1"""
 
 
 def _runtime_decision_rate_sql() -> str:
     return f"""SELECT
-  {_time_bucket_alias_sql("e.ts")},
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
   (e.actor_id || ' ' || e.exchange || ' ' || e.symbol) AS metric,
-  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+  COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'StrategyDecision'
+  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND e.symbol IN (${{symbol:sqlstring}})
   AND e.actor_id IN (${{actor_id:sqlstring}})
-  AND $__timeFilter(e.ts)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -378,14 +388,15 @@ ORDER BY 1"""
 
 def _runtime_execution_event_rate_sql(event_type: str) -> str:
     return f"""SELECT
-  {_time_bucket_alias_sql("e.ts")},
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
   COALESCE(e.exchange, 'unknown') AS metric,
-  COUNT(*)::double precision / {_rate_denominator_sql()} AS value
+  COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = '{event_type}'
+  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
-  AND $__timeFilter(e.ts)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -396,17 +407,18 @@ def _runtime_order_payload_rate_sql(event_type: str, measure: str, *, include_re
     value = "1.0" if measure == "count" else qty
     reason = " || ' ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')" if include_reason else ""
     return f"""SELECT
-  {_time_bucket_alias_sql("e.ts")},
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
   (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
    COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' ' ||
    {side}{reason}) AS metric,
-  SUM({value}) / {_rate_denominator_sql()} AS value
+  SUM({value}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
 WHERE e.event_type = '{event_type}'
+  AND e.payload->>'t_end_ms' IS NOT NULL
   AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${{exchange:sqlstring}})
   AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${{symbol:sqlstring}})
-  AND $__timeFilter(e.ts)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -417,15 +429,60 @@ def _runtime_fill_rate_sql(measure: str) -> str:
     value = "1.0" if measure == "count" else qty
     exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
     symbol = "COALESCE(e.symbol, e.payload->>'symbol')"
-    return f"""SELECT
-  {_time_bucket_alias_sql("e.ts")},
-  ({exchange} || ' ' || COALESCE({symbol}, 'unknown') || ' ' || {side}) AS metric,
-  SUM({value}) / {_rate_denominator_sql()} AS value
-FROM mm_events e
-WHERE e.topic LIKE 'private:state:%:fills'
-  AND {exchange} IN (${{exchange:sqlstring}})
-  AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
-  AND $__timeFilter(e.ts)
+    fill_ts_ms = _numeric_sql(
+        "COALESCE(e.payload->>'timestamp_ms', (EXTRACT(EPOCH FROM e.ts) * 1000.0)::text)",
+        default="NULL",
+    )
+    step_t_end_ms = _numeric_sql("s.payload->>'t_end_ms'", default="NULL")
+    return f"""WITH decision_steps AS (
+  SELECT
+    s.exchange,
+    s.symbol,
+    s.actor_id,
+    {step_t_end_ms} AS t_end_ms,
+    LAG({step_t_end_ms}) OVER (
+      PARTITION BY s.exchange, s.symbol, s.actor_id
+      ORDER BY {step_t_end_ms}
+    ) AS prev_t_end_ms
+  FROM mm_events s
+  WHERE s.event_type = 'StrategyDecision'
+    AND s.payload->>'t_end_ms' IS NOT NULL
+    AND s.exchange IN (${{exchange:sqlstring}})
+    AND s.symbol IN (${{symbol:sqlstring}})
+    AND s.actor_id IN (${{actor_id:sqlstring}})
+),
+fills AS (
+  SELECT
+    {exchange} AS exchange,
+    {symbol} AS symbol,
+    COALESCE(NULLIF(e.actor_id, ''), NULLIF(e.payload->>'actor_id', ''), '') AS actor_id,
+    {side} AS side,
+    {value} AS value,
+    {fill_ts_ms} AS fill_ts_ms
+  FROM mm_events e
+  WHERE e.topic LIKE 'private:state:%:fills'
+    AND {exchange} IN (${{exchange:sqlstring}})
+    AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
+    AND $__timeFilter(e.ts)
+)
+SELECT
+  to_timestamp(step.t_end_ms / 1000.0) AS "time",
+  (fills.exchange || ' ' || COALESCE(NULLIF(fills.symbol, ''), step.symbol, 'unknown') || ' ' || fills.side) AS metric,
+  SUM(fills.value) AS value
+FROM fills
+JOIN LATERAL (
+  SELECT s.t_end_ms, s.symbol
+  FROM decision_steps s
+  WHERE s.exchange = fills.exchange
+    AND (fills.symbol IS NULL OR fills.symbol = '' OR s.symbol = fills.symbol)
+    AND (fills.actor_id = '' OR s.actor_id = fills.actor_id)
+    AND fills.fill_ts_ms IS NOT NULL
+    AND fills.fill_ts_ms <= s.t_end_ms
+    AND (s.prev_t_end_ms IS NULL OR fills.fill_ts_ms > s.prev_t_end_ms)
+  ORDER BY s.t_end_ms ASC
+  LIMIT 1
+) AS step ON TRUE
+WHERE $__timeFilter(to_timestamp(step.t_end_ms / 1000.0))
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -467,19 +524,171 @@ GROUP BY 1, 2
 ORDER BY 1"""
 
 
+def _market_event_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  (e.exchange || ' ' || e.symbol) AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type = 'MarketEvent'
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND e.symbol IN (${{symbol:sqlstring}})
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _controller_stage_step_sql() -> str:
+    numeric_value = _numeric_sql("kv.value", default="NULL")
+    value_ms = f"""CASE
+  WHEN kv.key LIKE '%_sec' THEN ({numeric_value}) * 1000.0
+  ELSE ({numeric_value})
+END"""
+    stage = """CASE
+  WHEN kv.key LIKE '%_sec' THEN substring(kv.key from 1 for length(kv.key) - 4)
+  WHEN kv.key LIKE '%_ms' THEN substring(kv.key from 1 for length(kv.key) - 3)
+  ELSE kv.key
+END"""
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {stage} AS metric,
+  {value_ms} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{{}}'::jsonb)) AS kv(key, value)
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND kv.key <> 'best_epoch'
+  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+ORDER BY 1"""
+
+
+def _controller_warning_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  w.warning AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'warnings', '[]'::jsonb)) AS w(warning)
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _model_nll_step_sql() -> str:
+    nll = _numeric_sql("m.value->>'nll'", default="NULL")
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  m.key AS metric,
+  {nll} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{{}}'::jsonb)) AS m(key, value)
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND m.value->>'nll' IS NOT NULL
+ORDER BY 1"""
+
+
+def _risk_approved_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  (e.exchange || ' ' || e.symbol) AS metric,
+  CASE WHEN COALESCE(e.payload #>> ARRAY['risk','approved'], 'false') = 'true' THEN 1.0 ELSE 0.0 END AS value
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+ORDER BY 1"""
+
+
+def _risk_reject_step_sql() -> str:
+    count_value = _numeric_sql("reason.value", default="0.0")
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  reason.key AS metric,
+  SUM({count_value}) AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['risk','rejection_counts'], '{{}}'::jsonb)) AS reason(key, value)
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _execution_gate_block_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  reason.value AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload #> ARRAY['execution_gates','blocked_reasons'], '[]'::jsonb)) AS reason(value)
+WHERE {_diagnostics_filter()}
+  AND e.payload->>'t_end_ms' IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _execution_sync_outcome_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  (COALESCE(e.exchange, 'unknown') || ' ' ||
+   CASE e.event_type WHEN 'ExecutionSyncCompleted' THEN 'completed' ELSE 'failed' END) AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _router_failure_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  (COALESCE(e.exchange, 'unknown') || ' ' ||
+   CASE WHEN e.event_type = 'CancelOrdersFailed' THEN 'cancel' ELSE 'place' END || ' ' ||
+   COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')) AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type IN ('CancelOrdersFailed', 'PlaceOrdersFailed')
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _validation_reject_step_sql() -> str:
+    return f"""SELECT
+  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown')) AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type = 'OrderValidationRejected'
+  AND e.payload->>'t_end_ms' IS NOT NULL
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND $__timeFilter({_step_time_sql("e.payload->>'t_end_ms'")})
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
 def runtime_overview() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Runtime health from persisted events. Prometheus scrape status is shown separately so a failed `/metrics` socket does not make the whole overview blank.", y=0),
-        _panel(2, "Prometheus scrape up", "stat", PROM_DS, 'max(up{job="market_maker"}) or vector(0)', x=0, y=3, w=6, h=4, legend="{{job}}"),
-        _panel(3, "Frame rate", "timeseries", PG_DS, _runtime_frame_rate_sql(), x=6, y=3),
-        _panel(4, "Decision rate", "timeseries", PG_DS, _runtime_decision_rate_sql(), x=18, y=3, w=6),
+        _panel(2, "Prometheus scrape up", "stat", PROM_DS, 'max(up{job="market_maker"})', x=0, y=3, w=6, h=4, legend="{{job}}"),
+        _panel(3, "Frames / step", "timeseries", PG_DS, _runtime_frame_rate_sql(), x=6, y=3),
+        _panel(4, "Decisions / step", "timeseries", PG_DS, _runtime_decision_rate_sql(), x=18, y=3, w=6),
         _panel(5, "Controller stage p95 ms", "timeseries", PG_DS, _runtime_controller_stage_p95_sql(), x=0, y=11, unit="ms"),
         _panel(6, "Order sync p95 ms", "timeseries", PG_DS, _runtime_order_sync_p95_sql(), x=12, y=11, w=6, unit="ms"),
-        _panel(15, "Sync requests / sec", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested"), x=18, y=11, w=6),
-        _panel(7, "Placed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=8),
-        _panel(8, "Failed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=8, y=19, w=8),
-        _panel(9, "Fill events / sec", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=16, y=19, w=8),
-        _panel(10, "Filled qty / sec", "timeseries", PG_DS, _runtime_fill_rate_sql("qty"), x=0, y=27, w=8),
+        _panel(15, "Sync requests / step", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested"), x=18, y=11, w=6),
+        _panel(7, "Placed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=8),
+        _panel(8, "Failed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=8, y=19, w=8),
+        _panel(9, "Fill events / step", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=16, y=19, w=8),
+        _panel(10, "Filled qty / step", "timeseries", PG_DS, _runtime_fill_rate_sql("qty"), x=0, y=27, w=8),
         _panel(11, "Live orders by side", "timeseries", PG_DS, _runtime_live_orders_sql("count"), x=8, y=27, w=8),
         _panel(12, "Live order qty by side", "timeseries", PG_DS, _runtime_live_orders_sql("qty"), x=16, y=27, w=8),
         _panel(13, "Persistence errors", "timeseries", LOKI_DS, 'sum by (writer,error) (count_over_time({job="market-maker-runtime"} | json | event="persistence_batch_failed" [$__interval]))', x=0, y=35, legend="{{writer}} {{error}}"),
@@ -491,7 +700,7 @@ def runtime_overview() -> dict[str, Any]:
 def market_data_quality() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Raw orderbook/trade feed health before interval aggregation, plus local/global price-volume comparison.", y=0),
-        _panel(2, "Raw feed rate / sec", "timeseries", PROM_DS, 'sum by (exchange,symbol,kind)(rate(mm_raw_market_events_total{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}[$__rate_interval]))', x=0, y=3, w=6, unit="ops", legend="{{exchange}} {{kind}}"),
+        _panel(2, "Market events / step", "timeseries", PG_DS, _market_event_step_sql(), x=0, y=3, w=6, unit="ops"),
         _panel(3, "Raw feed freshness ms", "timeseries", PROM_DS, '(time() * 1000) - max by (exchange,symbol,kind)(mm_raw_market_event_timestamp_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=6, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
         _panel(4, "Raw receive lag latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=12, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
         _panel(5, "Raw event gap latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_event_gap_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=18, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
@@ -529,8 +738,8 @@ def controller_health() -> dict[str, Any]:
         _text(1, "Scope", "Controller frame freshness, readiness, warnings, and stage timings.", y=0),
         _panel(2, "Frame age", "timeseries", PROM_DS, 'mm_frame_age_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=0, y=3, legend="{{exchange}} {{symbol}}"),
         _panel(3, "Frame readiness", "timeseries", PROM_DS, 'mm_frame_sync_ready{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"}', x=12, y=3, legend="{{field}} {{exchange}} {{symbol}}"),
-        _panel(4, "Stage latency p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,stage)(rate(mm_controller_stage_latency_ms_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=11, legend="{{stage}}"),
-        _panel(5, "Warnings", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_controller_warnings_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=11, legend="{{reason}}"),
+        _panel(4, "Stage latency / step", "timeseries", PG_DS, _controller_stage_step_sql(), x=0, y=11, unit="ms"),
+        _panel(5, "Warnings / step", "timeseries", PG_DS, _controller_warning_step_sql(), x=12, y=11),
         _panel(6, "Recent diagnostics warnings", "table", PG_DS, _latest_warnings_sql(limit=100), x=0, y=19, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-controller-health", "MM Observability v2 / 02 Frame And Controller Health", panels, tags=["controller"])
@@ -539,7 +748,7 @@ def controller_health() -> dict[str, Any]:
 def model_quality() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Model NLL and latest model scores emitted from `ControllerDiagnostics.models`.", y=0),
-        _panel(2, "Model NLL p95", "timeseries", PROM_DS, 'histogram_quantile(0.95, sum by (le,model)(rate(mm_model_nll_bucket{actor_id=~"${actor_id:regex}"}[$__rate_interval])))', x=0, y=3, w=24, legend="{{model}}"),
+        _panel(2, "Model NLL / step", "timeseries", PG_DS, _model_nll_step_sql(), x=0, y=3, w=24),
         _panel(3, "Latest model scores", "table", PG_DS, _latest_model_scores_sql(), x=0, y=11, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-model-quality", "MM Observability v2 / 03 Strategy Model Quality", panels, tags=["models"])
@@ -576,12 +785,12 @@ def action_pipeline() -> dict[str, Any]:
 def risk_execution() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Risk decisions, execution gates, order sync lifecycle, and adapter health.", y=0),
-        _panel(2, "Risk approved", "timeseries", PROM_DS, 'mm_risk_approved{actor_id=~"${actor_id:regex}"}', x=0, y=3, legend="{{exchange}}"),
-        _panel(3, "Risk rejects", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_risk_reject_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=12, y=3, legend="{{reason}}"),
-        _panel(4, "Execution gate blocks", "timeseries", PROM_DS, 'sum by (reason)(rate(mm_execution_gate_block_total{actor_id=~"${actor_id:regex}"}[$__rate_interval]))', x=0, y=11, legend="{{reason}}"),
-        _panel(5, "Sync completed / failed", "timeseries", PROM_DS, 'sum by (exchange,__name__)(rate({__name__=~"mm_execution_sync_completed_total|mm_execution_sync_failed_total"}[$__rate_interval]))', x=12, y=11, legend="{{exchange}} {{__name__}}"),
-        _panel(6, "Router failures", "timeseries", PROM_DS, 'sum by (exchange,operation,error)(rate(mm_order_router_failures_total[$__rate_interval]))', x=0, y=19, legend="{{exchange}} {{operation}} {{error}}"),
-        _panel(7, "Validation rejects", "timeseries", PROM_DS, 'sum by (exchange,reason)(rate(mm_order_validation_rejected_total[$__rate_interval]))', x=12, y=19, legend="{{exchange}} {{reason}}"),
+        _panel(2, "Risk approved / step", "timeseries", PG_DS, _risk_approved_step_sql(), x=0, y=3),
+        _panel(3, "Risk rejects / step", "timeseries", PG_DS, _risk_reject_step_sql(), x=12, y=3),
+        _panel(4, "Execution gate blocks / step", "timeseries", PG_DS, _execution_gate_block_step_sql(), x=0, y=11),
+        _panel(5, "Sync completed / failed / step", "timeseries", PG_DS, _execution_sync_outcome_step_sql(), x=12, y=11),
+        _panel(6, "Router failures / step", "timeseries", PG_DS, _router_failure_step_sql(), x=0, y=19),
+        _panel(7, "Validation rejects / step", "timeseries", PG_DS, _validation_reject_step_sql(), x=12, y=19),
         _panel(8, "Recent execution events", "table", PG_DS, _recent_execution_events_sql(), x=0, y=27, w=24, fmt="table"),
     ]
     return _dashboard("mm-obs-v2-risk-execution", "MM Observability v2 / 06 Risk And Execution", panels, tags=["risk", "execution"])

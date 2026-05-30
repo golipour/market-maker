@@ -91,6 +91,7 @@ class OrderManager(AbstractOrderManager):
                 "action_count": len(actions),
                 "target_count": target_count,
                 "timestamp_ms": timestamp_ms,
+                **_actions_context(actions),
             },
         )
         combined = ExecutionSyncReport()
@@ -102,6 +103,7 @@ class OrderManager(AbstractOrderManager):
             symbol=_single_action_symbol(actions),
             target_count=target_count,
             latency_ms=_elapsed_ms(started_ns),
+            context=_actions_context(actions),
         )
         await self._publish_snapshot()
         return combined
@@ -320,7 +322,7 @@ class OrderManager(AbstractOrderManager):
             placed = False
             live_snapshot = dict(self._live_orders)
             if execute and (plan.cancel or plan.place):
-                router_result = await self._router.execute(plan)
+                router_result = await self._router.execute(plan, context=_action_context(action))
                 accepted_orders = [order for _, order in router_result.placed]
                 placed = bool(router_result.placed)
                 self._apply_router_result(action, router_result)
@@ -441,6 +443,7 @@ class OrderManager(AbstractOrderManager):
         symbol: str,
         target_count: int,
         latency_ms: float,
+        context: dict[str, Any] | None = None,
     ) -> None:
         await self._publish(
             "execution:orders",
@@ -458,6 +461,7 @@ class OrderManager(AbstractOrderManager):
                 "placed": bool(report.placed),
                 "latency_ms": max(0.0, float(latency_ms)),
                 "timestamp_ms": self.clock_ms(),
+                **dict(context or {}),
             },
         )
 
@@ -483,3 +487,28 @@ def _single_action_symbol(actions: list[Action]) -> str:
         for order in action.orders
     }
     return next(iter(symbols)) if len(symbols) == 1 else ""
+
+
+def _actions_context(actions: list[Action]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    for field in ("t_end_ms", "frame_step", "decision_hash"):
+        values = {getattr(action, field, None) for action in actions}
+        values.discard(None)
+        if field in {"t_end_ms", "frame_step"}:
+            values.discard(0)
+        else:
+            values.discard("")
+        if len(values) == 1:
+            context[field] = next(iter(values))
+    return context
+
+
+def _action_context(action: Action) -> dict[str, Any]:
+    context = {"actor_id": action.actor_id}
+    if action.t_end_ms:
+        context["t_end_ms"] = int(action.t_end_ms)
+    if action.frame_step:
+        context["frame_step"] = int(action.frame_step)
+    if action.decision_hash:
+        context["decision_hash"] = action.decision_hash
+    return context

@@ -202,6 +202,9 @@ class RuntimeRiskEngine(AbstractRiskEngine):
                     Action(
                         actor_id=action.actor_id,
                         orders=tuple(safe_orders),
+                        t_end_ms=action.t_end_ms,
+                        frame_step=action.frame_step,
+                        decision_hash=action.decision_hash,
                     )
                 )
             elif action.orders:

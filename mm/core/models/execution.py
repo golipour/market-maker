@@ -23,6 +23,9 @@ if msgspec is not None:
 
         actor_id: str
         orders: Tuple[Order, ...] = ()
+        t_end_ms: int = 0
+        frame_step: int = 0
+        decision_hash: str = ""
 
 
     class Fill(msgspec.Struct, frozen=True):
@@ -55,6 +58,9 @@ else:
 
         actor_id: str
         orders: Tuple[Order, ...] = ()
+        t_end_ms: int = 0
+        frame_step: int = 0
+        decision_hash: str = ""
 
 
     @dataclass(frozen=True, slots=True)

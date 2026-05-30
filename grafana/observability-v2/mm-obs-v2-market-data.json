@@ -27,8 +27,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus-mm"
+        "type": "postgres",
+        "uid": "postgres-mm"
       },
       "fieldConfig": {
         "defaults": {
@@ -47,15 +47,17 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus-mm"
+            "type": "postgres",
+            "uid": "postgres-mm"
           },
-          "expr": "sum by (exchange,symbol,kind)(rate(mm_raw_market_events_total{exchange=~\"${exchange:regex}\",symbol=~\"${symbol:regex}\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{exchange}} {{kind}}"
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0) AS \"time\",\n  (e.exchange || ' ' || e.symbol) AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'MarketEvent'\n  AND e.payload->>'t_end_ms' IS NOT NULL\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0))\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
         }
       ],
-      "title": "Raw feed rate / sec",
+      "title": "Market events / step",
       "type": "timeseries",
       "options": {
         "legend": {

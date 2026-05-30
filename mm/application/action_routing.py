@@ -30,7 +30,13 @@ async def route_actions_to_managers_with_report(
             creates_by_exchange[order.exchange.lower().strip()].append(order)
         for exchange, orders in creates_by_exchange.items():
             by_exchange[exchange].append(
-                Action(actor_id=action.actor_id, orders=tuple(orders))
+                Action(
+                    actor_id=action.actor_id,
+                    orders=tuple(orders),
+                    t_end_ms=action.t_end_ms,
+                    frame_step=action.frame_step,
+                    decision_hash=action.decision_hash,
+                )
             )
 
     combined = ExecutionSyncReport()

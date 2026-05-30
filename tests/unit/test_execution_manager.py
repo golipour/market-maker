@@ -44,6 +44,9 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
                 orders=(
                     Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1"),
                 ),
+                t_end_ms=1700000000000,
+                frame_step=42,
+                decision_hash="decision-42",
             )
         ]
     )
@@ -59,9 +62,16 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
     assert accepted["type"] == "PlaceOrdersAccepted"
     assert accepted["orders"][0]["side"] == "buy"
     assert accepted["orders"][0]["qty"] == 0.5
+    assert requested["t_end_ms"] == 1700000000000
+    assert requested["frame_step"] == 42
+    assert requested["decision_hash"] == "decision-42"
+    assert placed["t_end_ms"] == 1700000000000
+    assert accepted["frame_step"] == 42
     assert completed["type"] == "ExecutionSyncCompleted"
     assert completed["accepted_count"] == 1
     assert completed["target_count"] == 1
+    assert completed["t_end_ms"] == 1700000000000
+    assert completed["frame_step"] == 42
     assert isinstance(snapshot, ExecutionSnapshot)
     assert commands.placed[0].price == 100.0
     assert snapshot.live_order_count == 1
