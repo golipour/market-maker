@@ -284,12 +284,6 @@ def _time_bucket_alias_sql(expr: str) -> str:
     return f"{_time_bucket_sql(expr)} AS \"time\""
 
 
-def _zero_series_sql(metric: str) -> str:
-    return f"""SELECT {_time_bucket_sql("$__timeFrom()")} AS "time", '{metric}' AS metric, 0.0 AS value
-UNION ALL
-SELECT {_time_bucket_sql("$__timeTo()")} AS "time", '{metric}' AS metric, 0.0 AS value"""
-
-
 def _numeric_sql(expr: str, default: str = "0.0") -> str:
     return f"""CASE
   WHEN trim(COALESCE({expr}, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
@@ -323,8 +317,6 @@ WHERE e.event_type = 'JointStrategyFrame'
   AND (e.payload #>> ARRAY['local_market','symbol']) IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql("no frames")}
 ORDER BY 1"""
 
 
@@ -340,8 +332,6 @@ WHERE e.event_type = 'StrategyDecision'
   AND e.actor_id IN (${{actor_id:sqlstring}})
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql("no decisions")}
 ORDER BY 1"""
 
 
@@ -366,8 +356,6 @@ WHERE {_diagnostics_filter()}
   AND kv.key <> 'best_epoch'
   AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql("no stage timings")}
 ORDER BY 1"""
 
 
@@ -385,12 +373,10 @@ WHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')
   AND trim(e.payload->>'latency_ms') ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql("no sync latency")}
 ORDER BY 1"""
 
 
-def _runtime_execution_event_rate_sql(event_type: str, zero_metric: str) -> str:
+def _runtime_execution_event_rate_sql(event_type: str) -> str:
     return f"""SELECT
   {_time_bucket_alias_sql("e.ts")},
   COALESCE(e.exchange, 'unknown') AS metric,
@@ -401,8 +387,6 @@ WHERE e.event_type = '{event_type}'
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql(zero_metric)}
 ORDER BY 1"""
 
 
@@ -411,7 +395,6 @@ def _runtime_order_payload_rate_sql(event_type: str, measure: str, *, include_re
     qty = _numeric_sql("COALESCE(o.value->>'qty', o.value->>'remaining_qty')")
     value = "1.0" if measure == "count" else qty
     reason = " || ' ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')" if include_reason else ""
-    zero_metric = "no failed orders" if include_reason else "no placed orders"
     return f"""SELECT
   {_time_bucket_alias_sql("e.ts")},
   (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
@@ -425,8 +408,6 @@ WHERE e.event_type = '{event_type}'
   AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql(zero_metric)}
 ORDER BY 1"""
 
 
@@ -434,19 +415,18 @@ def _runtime_fill_rate_sql(measure: str) -> str:
     side = _side_sql("e.payload->>'side'")
     qty = _numeric_sql("e.payload->>'qty'")
     value = "1.0" if measure == "count" else qty
-    zero_metric = "no fills" if measure == "count" else "no filled qty"
+    exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
+    symbol = "COALESCE(e.symbol, e.payload->>'symbol')"
     return f"""SELECT
   {_time_bucket_alias_sql("e.ts")},
-  (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(e.symbol, 'unknown') || ' ' || {side}) AS metric,
+  ({exchange} || ' ' || COALESCE({symbol}, 'unknown') || ' ' || {side}) AS metric,
   SUM({value}) / {_rate_denominator_sql()} AS value
 FROM mm_events e
 WHERE e.topic LIKE 'private:state:%:fills'
-  AND e.exchange IN (${{exchange:sqlstring}})
-  AND e.symbol IN (${{symbol:sqlstring}})
+  AND {exchange} IN (${{exchange:sqlstring}})
+  AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql(zero_metric)}
 ORDER BY 1"""
 
 
@@ -454,7 +434,6 @@ def _runtime_live_orders_sql(measure: str) -> str:
     side = _side_sql("open_order.value #>> ARRAY['order','side']")
     qty = _numeric_sql("open_order.value->>'remaining_qty'")
     value = "COUNT(*)::double precision" if measure == "count" else "SUM(qty)"
-    zero_metric = "no live orders" if measure == "count" else "no live order qty"
     return f"""WITH expanded AS (
   SELECT
     e.ts,
@@ -485,8 +464,6 @@ SELECT
   AVG(value) AS value
 FROM per_snapshot
 GROUP BY 1, 2
-UNION ALL
-{_zero_series_sql(zero_metric)}
 ORDER BY 1"""
 
 
@@ -498,7 +475,7 @@ def runtime_overview() -> dict[str, Any]:
         _panel(4, "Decision rate", "timeseries", PG_DS, _runtime_decision_rate_sql(), x=18, y=3, w=6),
         _panel(5, "Controller stage p95 ms", "timeseries", PG_DS, _runtime_controller_stage_p95_sql(), x=0, y=11, unit="ms"),
         _panel(6, "Order sync p95 ms", "timeseries", PG_DS, _runtime_order_sync_p95_sql(), x=12, y=11, w=6, unit="ms"),
-        _panel(15, "Sync requests / sec", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested", "no sync requests"), x=18, y=11, w=6),
+        _panel(15, "Sync requests / sec", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested"), x=18, y=11, w=6),
         _panel(7, "Placed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=8),
         _panel(8, "Failed orders / sec", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=8, y=19, w=8),
         _panel(9, "Fill events / sec", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=16, y=19, w=8),
