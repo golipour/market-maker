@@ -28,6 +28,7 @@ class VenueExecutionGate:
     live: bool
     blocked_reasons: tuple[str, ...]
     has_orders: bool
+    can_sync: bool
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +37,7 @@ class VenueExecutionGate:
             "live": self.live,
             "blocked_reasons": list(self.blocked_reasons),
             "has_orders": self.has_orders,
+            "can_sync": self.can_sync,
         }
 
 
@@ -158,6 +160,7 @@ def compute_venue_execution_gates(
         exchange_key = exchange.lower().strip()
         blocked = list(global_blocked)
         has_orders = venue_book is not None and bool(venue_book.orders)
+        can_sync = venue_book is not None and (has_orders or venue_book.policy == "replace")
 
         if venue_exec.observe_only:
             blocked.append("venue_observe_only")
@@ -169,7 +172,7 @@ def compute_venue_execution_gates(
             blocked.append("global_live_orders_disabled")
         if role == "global" and _global_market_stale(frame):
             blocked.append("stale_global_market_data")
-        if not has_orders and not ignore_empty_book:
+        if not can_sync and not ignore_empty_book:
             blocked.append("no_orders")
 
         live = not blocked
@@ -179,6 +182,7 @@ def compute_venue_execution_gates(
             live=live,
             blocked_reasons=tuple(blocked),
             has_orders=has_orders,
+            can_sync=can_sync,
         )
     return gates
 
@@ -251,7 +255,7 @@ async def route_joint_target_book_with_report(
             continue
         exchange = venue_book.exchange.lower().strip()
         gate = venue_gates.get(exchange)
-        if gate is None or not gate.has_orders:
+        if gate is None or not gate.can_sync:
             continue
 
         manager = order_managers.get(exchange)

@@ -120,6 +120,35 @@ def test_atomic_replace_planner_cancels_all_before_place() -> None:
     assert len(plan.place) == 1
 
 
+def test_atomic_replace_planner_cancels_unattributed_same_symbol_orders() -> None:
+    live = _open_order(
+        "live-1",
+        Order("nobitex", "BTC_IRT", "buy", 100.0, 1.0),
+        actor_id=None,
+    )
+    other_actor = _open_order(
+        "other-actor",
+        Order("nobitex", "BTC_IRT", "buy", 100.0, 1.0),
+        actor_id="other",
+    )
+    other_symbol = _open_order(
+        "other-symbol",
+        Order("nobitex", "ETH_IRT", "buy", 100.0, 1.0),
+        actor_id=None,
+    )
+    target = VenueTargetBook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        orders=(),
+        policy="replace",
+    )
+    plan = AtomicReplacePlanner().plan(target, _ledger(live, other_actor, other_symbol))
+
+    assert plan.cancel_ids == ("live-1",)
+    assert plan.place == ()
+
+
 class StaticVenueOrderLimitSource(AbstractVenueOrderLimitSource):
     def __init__(self, limits: VenueOrderLimits) -> None:
         self._limits = limits

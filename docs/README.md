@@ -10,6 +10,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Data flow](data-flow.md) | End-to-end phases with sequence diagram |
 | **[Runtime mechanisms](mechanisms.md)** | **Detailed internals: tasks, queues, hedge drain/grace, raw vs cleaned books, execution** |
 | [Controller & execution](controller-and-execution.md) | `StrategyRunner`, MPC, risk, `OrderManager` |
+| [Execution, ledger, and observability](execution-ledger-observability.md) | Detailed live execution, ledger, private state, fills, and dashboard debugging |
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
 | [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |

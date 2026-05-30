@@ -10,12 +10,29 @@ from mm.core.models.execution import Action, Order
 from mm.core.models.joint_strategy import FrameSyncStatus, JointStrategyFrame
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
-from mm.core.models.private import OpenOrder
+from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
-from mm.execution.plan import ExecutionSyncReport, summarize_orders
-from mm.risk.engine import PassThroughRiskEngine
+from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
+from mm.core.risk_limits import VenueRiskLimits
+from mm.execution.plan import (
+    ActionPipelineReport,
+    ActionStageReport,
+    ExecutionSyncReport,
+    RiskResult,
+    summarize_orders,
+)
+from mm.risk.engine import PassThroughRiskEngine, RiskLimits
+from mm.risk.net_delta import NetDeltaRiskEngine
 from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
-from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, RiskRuntimeConfig
+from mm.runtime.config import (
+    ControllerRuntimeConfig,
+    ExecutionRuntimeConfig,
+    LiquiditySourcingRuntimeConfig,
+    MarketDataSourceConfig,
+    MarketMakerRuntimeConfig,
+    RiskRuntimeConfig,
+    VenueExecutionConfig,
+)
 
 
 def _market_event() -> MarketEvent:
@@ -120,6 +137,36 @@ class _FailingOrderManager:
 
         return await self.sync_with_report([venue_target_book_to_action(target)])
 
+
+class _EmptyApprovingRiskEngine:
+    def validate_frame_with_result(
+        self,
+        actions: list[Action],
+        state,
+        frame: StrategyInputFrame,
+    ) -> RiskResult:
+        _ = actions, state, frame
+        return RiskResult(approved=(), rejection_counts={})
+
+
+class _RecordingVenueOrderManager:
+    exchange = "nobitex"
+
+    def __init__(self) -> None:
+        self.sync_calls = 0
+        self.targets = []
+
+    @property
+    def live_orders(self) -> dict[str, Order]:
+        return {}
+
+    async def sync_venue_target_book(self, target) -> ExecutionSyncReport:
+        self.sync_calls += 1
+        self.targets.append(target)
+        return ExecutionSyncReport(
+            canceled=ActionStageReport(order_count=1),
+            cancel_count=1,
+        )
 
 
 @pytest.mark.asyncio
@@ -227,6 +274,151 @@ async def test_strategy_runner_continues_after_sync_failure(monkeypatch: pytest.
     second = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert first["frame_step"] == 1
     assert second["frame_step"] == 2
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_syncs_empty_replace_book_when_risk_has_no_rejections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(actor_id="test-runner", orders=()),
+            joint_target_book=JointTargetBook(
+                actor_id="test-runner",
+                local=VenueTargetBook(
+                    exchange="nobitex",
+                    symbol="BTC_IRT",
+                    actor_id="test-runner",
+                    orders=(),
+                    policy="replace",
+                ),
+            ),
+            action_pipeline_report=ActionPipelineReport(
+                target_book=ActionStageReport(order_count=1),
+            ),
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    manager = _SlowOrderManager(delay_s=0.0)
+    runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"))
+    runner = StrategyRunner(
+        config=_runner_config(placement_timeout_ms=1000),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": manager},
+        risk_engine=_EmptyApprovingRiskEngine(),
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+        bus=bus,
+    )
+
+    approved = await _run_market_frame(runner)
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert approved == []
+    assert manager.sync_calls == 1
+    assert diagnostics["execution_gates"]["executed"] is True
+    assert diagnostics["execution_gates"]["venue_gates"]["nobitex"]["can_sync"] is True
+    assert diagnostics["execution_gates"]["venue_gates"]["nobitex"]["has_orders"] is False
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_syncs_cancel_only_replace_book_when_risk_rejects_new_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        target_order = TargetOrder(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            side="buy",
+            price=100.0,
+            qty=2.0,
+        )
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(
+                actor_id="test-runner",
+                orders=(Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0),),
+            ),
+            joint_target_book=JointTargetBook(
+                actor_id="test-runner",
+                local=VenueTargetBook(
+                    exchange="nobitex",
+                    symbol="BTC_IRT",
+                    actor_id="test-runner",
+                    orders=(target_order,),
+                    policy="replace",
+                ),
+            ),
+            action_pipeline_report=ActionPipelineReport(
+                target_book=ActionStageReport(order_count=1),
+            ),
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    risk_engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            )
+        ),
+        binding=runtime.binding,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        clock_ms=lambda: 2_000,
+    )
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        local_private=PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": Balance("nobitex", "BTC", 10.0, 0.0, 10.0, 2_000),
+                "IRT": Balance("nobitex", "IRT", 50.0, 0.0, 50.0, 2_000),
+            },
+            open_orders={},
+        ),
+        created_at_ms=2_000,
+    )
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    manager = _RecordingVenueOrderManager()
+    runner = StrategyRunner(
+        config=_runner_config(placement_timeout_ms=1000),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": manager},
+        risk_engine=risk_engine,
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+        bus=bus,
+    )
+
+    approved = await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert approved == []
+    assert manager.sync_calls == 1
+    assert manager.targets[0].orders == ()
+    assert diagnostics["execution_gates"]["executed"] is True
+    assert diagnostics["risk"]["rejection_counts"]["insufficient_quote_for_buys"] == 1
+    assert diagnostics["action_pipeline"]["planned_cancel"]["order_count"] == 1
+    assert diagnostics["action_pipeline"]["planned_place"]["order_count"] == 0
 
 
 @pytest.mark.asyncio

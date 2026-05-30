@@ -39,7 +39,7 @@
   },
   "execution": {
     "local": {
-      "planner": "reconcile"
+      "planner": "replace"
     },
     "global": {
       "planner": "replace",
@@ -83,8 +83,8 @@
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
     "orderbook_grid": {
-      "spread_step": 20.0,
-      "spread_max": 200.0
+      "spread_step": 5.0,
+      "spread_max": 100.0
     },
     "risk": {
       "enabled": true,
@@ -155,13 +155,13 @@
         "inventory_threshold": 5,
         "quote_size_min_per_side": 1.0,
         "quote_size_max_per_side": 10.0,
-        "quote_capacity_ratio": 1.0,
+        "quote_capacity_ratio": 0.5,
         "quote_spread_max": 100.0,
         "quote_spread_min_depth": 0.3,
         "quote_spread_k_epsilon": 0.01,
         "soft_fill_temp": 0.1,
         "soft_fill_activation": "hardsigmoid",
-        "soft_fill_queue_penalty": 1.0
+        "soft_fill_queue_model": "back_of_queue"
       },
       "global": {
         "objective_weight": 1.0,
@@ -171,13 +171,13 @@
         "inventory_threshold": 100.0,
         "quote_size_min_per_side": 1.0,
         "quote_size_max_per_side": 10.0,
-        "quote_capacity_ratio": 1.0,
+        "quote_capacity_ratio": 0.5,
         "quote_spread_max": 100.0,
         "quote_spread_min_depth": 0.3,
         "quote_spread_k_epsilon": 0.01,
         "soft_fill_temp": 0.1,
         "soft_fill_activation": "hardsigmoid",
-        "soft_fill_queue_penalty": 1.0
+        "soft_fill_queue_model": "back_of_queue"
       }
     }
   }

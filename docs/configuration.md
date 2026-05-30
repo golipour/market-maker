@@ -183,7 +183,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "quote_capacity_ratio": 1.0,
       "soft_fill_temp": 0.1,
       "soft_fill_activation": "hardsigmoid",
-      "soft_fill_queue_penalty": 1.0
+      "soft_fill_queue_model": "back_of_queue"
     },
     "global": {
       "objective_weight": 1.0,
@@ -196,7 +196,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "quote_capacity_ratio": 1.0,
       "soft_fill_temp": 0.1,
       "soft_fill_activation": "hardsigmoid",
-      "soft_fill_queue_penalty": 1.0
+      "soft_fill_queue_model": "back_of_queue"
     }
   }
 }

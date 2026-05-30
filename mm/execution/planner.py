@@ -108,7 +108,13 @@ class AtomicReplacePlanner(AbstractExecutionPlanner):
         scoped_live = [
             open_order
             for open_order in ledger.live_orders.values()
-            if _live_matches_scope(open_order, actor_id=actor, exchange=ex, symbol=sym)
+            if _live_matches_scope(
+                open_order,
+                actor_id=actor,
+                exchange=ex,
+                symbol=sym,
+                include_unattributed=True,
+            )
         ]
         desired = target_orders_to_domain_orders(target)
         return ExecutionPlan(
@@ -151,9 +157,10 @@ def _live_matches_scope(
     actor_id: str,
     exchange: str,
     symbol: str,
+    include_unattributed: bool = False,
 ) -> bool:
     order_actor = (open_order.actor_id or "").strip()
-    if order_actor != actor_id:
+    if order_actor != actor_id and not (include_unattributed and not order_actor):
         return False
     order = open_order.order
     if order.exchange.lower().strip() != exchange:

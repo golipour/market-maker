@@ -54,7 +54,7 @@ _VENUE_OPTIMIZER_KEYS = {
     "quote_spread_k_epsilon",
     "soft_fill_temp",
     "soft_fill_activation",
-    "soft_fill_queue_penalty",
+    "soft_fill_queue_model",
 }
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
     "inv_coef": "inventory_threshold_penalty_weight",
@@ -62,6 +62,7 @@ _REMOVED_VENUE_OPTIMIZER_ALIASES = {
     "target_inv": "inventory_threshold",
     "target_inventory": "inventory_threshold",
     "target_inventory_multiplier": "inventory_threshold",
+    "soft_fill_queue_penalty": "soft_fill_queue_model",
 }
 _FLAT_VENUE_OPTIMIZER_KEYS = _VENUE_OPTIMIZER_KEYS | set(_REMOVED_VENUE_OPTIMIZER_ALIASES)
 

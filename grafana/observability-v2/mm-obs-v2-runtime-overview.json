@@ -307,7 +307,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
         "y": 19
       },
@@ -353,8 +353,54 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 6,
+        "y": 19
+      },
+      "id": 18,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  COALESCE(e.exchange, 'unknown') AS metric,\n  SUM(jsonb_array_length(COALESCE(e.payload->'order_ids', '[]'::jsonb)))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'CancelOrdersAccepted'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND (e.symbol IN (${symbol:sqlstring}) OR e.symbol IS NULL)\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Cancelled orders / step",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
         "y": 19
       },
       "id": 8,
@@ -399,8 +445,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 18,
         "y": 19
       },
       "id": 9,
@@ -413,11 +459,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'timestamp_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'timestamp_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') || ' ' || COALESCE(COALESCE(e.symbol, e.payload->>'symbol'), 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(1.0) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') IN (${exchange:sqlstring})\n  AND (COALESCE(e.symbol, e.payload->>'symbol') IN (${symbol:sqlstring}) OR COALESCE(e.symbol, e.payload->>'symbol') IS NULL OR COALESCE(e.symbol, e.payload->>'symbol') = '')\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'timestamp_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'timestamp_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') || ' ' || COALESCE(COALESCE(e.symbol, e.payload->>'symbol'), 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(1.0) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') IN (${exchange:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Fill events / step",
+      "title": "Fill events / step (private feed)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -459,11 +505,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'timestamp_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'timestamp_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') || ' ' || COALESCE(COALESCE(e.symbol, e.payload->>'symbol'), 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') IN (${exchange:sqlstring})\n  AND (COALESCE(e.symbol, e.payload->>'symbol') IN (${symbol:sqlstring}) OR COALESCE(e.symbol, e.payload->>'symbol') IS NULL OR COALESCE(e.symbol, e.payload->>'symbol') = '')\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
+          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'timestamp_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'timestamp_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') || ' ' || COALESCE(COALESCE(e.symbol, e.payload->>'symbol'), 'unknown') || ' ' || CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND) AS metric,\n  SUM(CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') IN (${exchange:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Filled qty / step",
+      "title": "Filled qty / step (private feed)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -505,11 +551,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH expanded AS (\n  SELECT\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${symbol:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nper_snapshot AS (\n  SELECT\n    ts,\n    exchange,\n    symbol,\n    side,\n    COUNT(*)::double precision AS value\n  FROM expanded\n  GROUP BY ts, exchange, symbol, side\n)\nSELECT\n  (floor(EXTRACT(EPOCH FROM (ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  AVG(value) AS value\nFROM per_snapshot\nGROUP BY 1, 2\nORDER BY 1",
+          "rawSql": "WITH snapshots AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS bucket,\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    e.payload\n  FROM mm_events e\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nlatest_per_bucket AS (\n  SELECT DISTINCT ON (bucket, exchange)\n    bucket,\n    ts,\n    exchange,\n    payload\n  FROM snapshots\n  ORDER BY bucket, exchange, ts DESC\n),\nexpanded AS (\n  SELECT\n    s.bucket,\n    s.exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest_per_bucket s\n  CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE COALESCE(open_order.value #>> ARRAY['order','symbol'], '') IN (${symbol:sqlstring})\n)\nSELECT\n  bucket AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  COUNT(*)::double precision AS value\nFROM expanded\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Live orders by side",
+      "title": "Execution live orders / step (latest snapshot)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -551,55 +597,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH expanded AS (\n  SELECT\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${symbol:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nper_snapshot AS (\n  SELECT\n    ts,\n    exchange,\n    symbol,\n    side,\n    SUM(qty) AS value\n  FROM expanded\n  GROUP BY ts, exchange, symbol, side\n)\nSELECT\n  (floor(EXTRACT(EPOCH FROM (ts)::timestamptz) / GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) * GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)) AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  AVG(value) AS value\nFROM per_snapshot\nGROUP BY 1, 2\nORDER BY 1",
+          "rawSql": "WITH snapshots AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (e.ts)::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS bucket,\n    e.ts,\n    COALESCE(e.exchange, 'unknown') AS exchange,\n    e.payload\n  FROM mm_events e\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND $__timeFilter(e.ts)\n),\nlatest_per_bucket AS (\n  SELECT DISTINCT ON (bucket, exchange)\n    bucket,\n    ts,\n    exchange,\n    payload\n  FROM snapshots\n  ORDER BY bucket, exchange, ts DESC\n),\nexpanded AS (\n  SELECT\n    s.bucket,\n    s.exchange,\n    COALESCE(open_order.value #>> ARRAY['order','symbol'], 'unknown') AS symbol,\n    CASE lower(trim(COALESCE(open_order.value #>> ARRAY['order','side'], '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(open_order.value->>'remaining_qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(open_order.value->>'remaining_qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest_per_bucket s\n  CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{}'::jsonb)) AS open_order(key, value)\n  WHERE COALESCE(open_order.value #>> ARRAY['order','symbol'], '') IN (${symbol:sqlstring})\n)\nSELECT\n  bucket AS \"time\",\n  (exchange || ' ' || symbol || ' ' || side) AS metric,\n  SUM(qty) AS value\nFROM expanded\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Live order qty by side",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 35
-      },
-      "id": 13,
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki-mm"
-          },
-          "expr": "sum by (writer,error) (count_over_time({job=\"market-maker-runtime\"} | json | event=\"persistence_batch_failed\" [$__interval]))",
-          "refId": "A",
-          "legendFormat": "{{writer}} {{error}}"
-        }
-      ],
-      "title": "Persistence errors",
+      "title": "Execution live qty / step (latest snapshot)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -628,8 +630,134 @@
       "gridPos": {
         "h": 8,
         "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "id": 16,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest_execution AS (\n  SELECT DISTINCT ON (e.exchange)\n    'execution state'::text AS source,\n    e.ts,\n    e.exchange,\n    e.payload\n  FROM mm_events e\n  WHERE e.topic LIKE 'execution:state:%'\n    AND e.exchange IN (${exchange:sqlstring})\n    AND $__timeFilter(e.ts)\n  ORDER BY e.exchange, e.ts DESC\n),\nlatest_private AS (\n  SELECT DISTINCT ON (COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$')))\n    'private snapshot'::text AS source,\n    e.ts,\n    COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') AS exchange,\n    e.payload\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:snapshot'\n    AND COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') IN (${exchange:sqlstring})\n    AND $__timeFilter(e.ts)\n  ORDER BY COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$')), e.ts DESC\n),\nlatest AS (\n  SELECT * FROM latest_execution\n  UNION ALL\n  SELECT * FROM latest_private\n)\nSELECT\n  l.source,\n  l.ts,\n  l.exchange,\n  COUNT(open_order.key)::double precision AS open_order_count\nFROM latest l\nLEFT JOIN LATERAL jsonb_each(\n  CASE l.source\n    WHEN 'execution state' THEN COALESCE(l.payload->'live_orders', '{}'::jsonb)\n    ELSE COALESCE(l.payload->'open_orders', '{}'::jsonb)\n  END\n) AS open_order(key, value)\n  ON COALESCE(open_order.value #>> ARRAY['order','symbol'], '') IN (${symbol:sqlstring})\nGROUP BY l.source, l.ts, l.exchange\nORDER BY l.exchange, l.source",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest private vs execution order counts",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
         "x": 12,
         "y": 35
+      },
+      "id": 17,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') AS exchange,\n  COALESCE(e.symbol, e.payload->>'symbol', '') AS symbol,\n  e.actor_id,\n  e.payload->>'exchange_order_id' AS exchange_order_id,\n  e.payload->>'side' AS side,\n  CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE NULL\nEND AS qty,\n  CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n  e.payload->>'timestamp_ms' AS fill_timestamp_ms,\n  e.payload\nFROM mm_events e\nWHERE e.topic LIKE 'private:state:%:fills'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') IN (${exchange:sqlstring})\n  AND $__timeFilter(e.ts)\nORDER BY e.ts DESC\nLIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent private fills",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 43
+      },
+      "id": 19,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts, gates.key AS exchange, gates.value->>'role' AS role,\n       gates.value->>'live' AS live,\n       gates.value->>'has_orders' AS has_orders,\n       gates.value->>'can_sync' AS can_sync,\n       e.payload #> ARRAY['execution_gates','blocked_reasons'] AS frame_blocked_reasons,\n       gates.value->'blocked_reasons' AS venue_blocked_reasons\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest execution gates",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 43
       },
       "id": 14,
       "targets": [
@@ -653,6 +781,50 @@
           "countRows": false
         },
         "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "id": 13,
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-mm"
+          },
+          "expr": "sum by (writer,error) (count_over_time({job=\"market-maker-runtime\"} | json | event=\"persistence_batch_failed\" [$__interval]))",
+          "refId": "A",
+          "legendFormat": "{{writer}} {{error}}"
+        }
+      ],
+      "title": "Persistence errors",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       }
     }
   ],

@@ -212,6 +212,41 @@ def test_evaluate_venue_transition_rejects_insufficient_quote_for_buys() -> None
     assert exposure.target_locked_quote == 200.0
 
 
+def test_replace_transition_checks_total_quote_even_when_locked() -> None:
+    snapshot = _private_snapshot(quote_free=50.0, quote_locked=150.0)
+    ledger = _venue_ledger_from_private(snapshot)
+    reconcile_target = VenueTargetBook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 2.0),),
+    )
+    replace_target = VenueTargetBook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 2.0),),
+        policy="replace",
+    )
+
+    reconcile_ok, reconcile_reasons, _ = evaluate_venue_target_transition(
+        ledger=ledger,
+        target=reconcile_target,
+        limits=VenueRiskLimits(min_cash=0.0),
+    )
+    replace_ok, replace_reasons, replace_exposure = evaluate_venue_target_transition(
+        ledger=ledger,
+        target=replace_target,
+        limits=VenueRiskLimits(min_cash=0.0),
+    )
+
+    assert not reconcile_ok
+    assert "insufficient_quote_for_buys" in reconcile_reasons
+    assert replace_ok
+    assert replace_reasons == []
+    assert replace_exposure.target_locked_quote == pytest.approx(200.0)
+
+
 def test_evaluate_venue_transition_rejects_insufficient_base_for_sells() -> None:
     snapshot = _private_snapshot(base_free=1.0)
     ledger = _venue_ledger_from_private(snapshot)
@@ -408,6 +443,42 @@ def test_rejection_includes_transition_diagnostics() -> None:
     assert "insufficient_quote_for_buys" in result.target_book_gate_reasons
     assert "local" in result.transition_diagnostics
     assert result.transition_diagnostics["local"]["target_locked_quote"] == 200.0
+
+
+def test_replace_rejection_approves_empty_cancel_only_book() -> None:
+    snapshot = _private_snapshot(quote_free=50.0)
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
+    ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
+    target = JointTargetBook(
+        actor_id="actor-1",
+        local=VenueTargetBook(
+            "nobitex",
+            "BTC_IRT",
+            "actor-1",
+            (TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 2.0),),
+            policy="replace",
+        ),
+    )
+
+    engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            )
+        ),
+        binding=_binding(),
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        clock_ms=lambda: 1000,
+    )
+    result = engine.validate_target_book_with_result(target, ledger, frame)
+
+    assert result.approved is not None
+    assert result.approved.local.policy == "replace"
+    assert result.approved.local.orders == ()
+    assert "insufficient_quote_for_buys" in result.target_book_gate_reasons
+    assert result.rejection_counts["insufficient_quote_for_buys"] == 1
 
 
 def test_risk_config_parses_engine_field() -> None:

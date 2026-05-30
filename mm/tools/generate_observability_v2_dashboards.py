@@ -436,6 +436,21 @@ GROUP BY 1, 2
 ORDER BY 1"""
 
 
+def _runtime_order_id_event_sql(event_type: str) -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    return f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  COALESCE(e.exchange, 'unknown') AS metric,
+  SUM(jsonb_array_length(COALESCE(e.payload->'order_ids', '[]'::jsonb)))::double precision AS value
+FROM mm_events e
+WHERE e.event_type = '{event_type}'
+  AND e.exchange IN (${{exchange:sqlstring}})
+  AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
+  AND $__timeFilter(e.ts)
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
 def _runtime_fill_rate_sql(measure: str) -> str:
     side = _side_sql("e.payload->>'side'")
     qty = _numeric_sql("e.payload->>'qty'")
@@ -450,7 +465,6 @@ def _runtime_fill_rate_sql(measure: str) -> str:
 FROM mm_events e
 WHERE e.topic LIKE 'private:state:%:fills'
   AND {exchange} IN (${{exchange:sqlstring}})
-  AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
@@ -460,37 +474,115 @@ def _runtime_live_orders_sql(measure: str) -> str:
     side = _side_sql("open_order.value #>> ARRAY['order','side']")
     qty = _numeric_sql("open_order.value->>'remaining_qty'")
     value = "COUNT(*)::double precision" if measure == "count" else "SUM(qty)"
-    return f"""WITH expanded AS (
+    bucket = _approx_step_time_sql("e.ts")
+    return f"""WITH snapshots AS (
   SELECT
+    {bucket} AS bucket,
     e.ts,
     COALESCE(e.exchange, 'unknown') AS exchange,
-    COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, 'unknown') AS symbol,
-    {side} AS side,
-    {qty} AS qty
+    e.payload
   FROM mm_events e
-  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'live_orders', '{{}}'::jsonb)) AS open_order(key, value)
   WHERE e.topic LIKE 'execution:state:%'
     AND e.exchange IN (${{exchange:sqlstring}})
-    AND COALESCE(open_order.value #>> ARRAY['order','symbol'], e.symbol, '') IN (${{symbol:sqlstring}})
     AND $__timeFilter(e.ts)
 ),
-per_snapshot AS (
-  SELECT
+latest_per_bucket AS (
+  SELECT DISTINCT ON (bucket, exchange)
+    bucket,
     ts,
     exchange,
-    symbol,
-    side,
-    {value} AS value
-  FROM expanded
-  GROUP BY ts, exchange, symbol, side
+    payload
+  FROM snapshots
+  ORDER BY bucket, exchange, ts DESC
+),
+expanded AS (
+  SELECT
+    s.bucket,
+    s.exchange,
+    COALESCE(open_order.value #>> ARRAY['order','symbol'], 'unknown') AS symbol,
+    {side} AS side,
+    {qty} AS qty
+  FROM latest_per_bucket s
+  CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{{}}'::jsonb)) AS open_order(key, value)
+  WHERE COALESCE(open_order.value #>> ARRAY['order','symbol'], '') IN (${{symbol:sqlstring}})
 )
 SELECT
-  {_time_bucket_alias_sql("ts")},
+  bucket AS "time",
   (exchange || ' ' || symbol || ' ' || side) AS metric,
-  AVG(value) AS value
-FROM per_snapshot
+  {value} AS value
+FROM expanded
 GROUP BY 1, 2
 ORDER BY 1"""
+
+
+def _runtime_latest_order_counts_sql() -> str:
+    return """WITH latest_execution AS (
+  SELECT DISTINCT ON (e.exchange)
+    'execution state'::text AS source,
+    e.ts,
+    e.exchange,
+    e.payload
+  FROM mm_events e
+  WHERE e.topic LIKE 'execution:state:%'
+    AND e.exchange IN (${exchange:sqlstring})
+    AND $__timeFilter(e.ts)
+  ORDER BY e.exchange, e.ts DESC
+),
+latest_private AS (
+  SELECT DISTINCT ON (COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$')))
+    'private snapshot'::text AS source,
+    e.ts,
+    COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') AS exchange,
+    e.payload
+  FROM mm_events e
+  WHERE e.topic LIKE 'private:state:%:snapshot'
+    AND COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') IN (${exchange:sqlstring})
+    AND $__timeFilter(e.ts)
+  ORDER BY COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$')), e.ts DESC
+),
+latest AS (
+  SELECT * FROM latest_execution
+  UNION ALL
+  SELECT * FROM latest_private
+)
+SELECT
+  l.source,
+  l.ts,
+  l.exchange,
+  COUNT(open_order.key)::double precision AS open_order_count
+FROM latest l
+LEFT JOIN LATERAL jsonb_each(
+  CASE l.source
+    WHEN 'execution state' THEN COALESCE(l.payload->'live_orders', '{}'::jsonb)
+    ELSE COALESCE(l.payload->'open_orders', '{}'::jsonb)
+  END
+) AS open_order(key, value)
+  ON COALESCE(open_order.value #>> ARRAY['order','symbol'], '') IN (${symbol:sqlstring})
+GROUP BY l.source, l.ts, l.exchange
+ORDER BY l.exchange, l.source"""
+
+
+def _runtime_recent_fills_sql(limit: int = 50) -> str:
+    exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
+    qty = _numeric_sql("e.payload->>'qty'", default="NULL")
+    price = _numeric_sql("e.payload->>'price'", default="NULL")
+    return f"""SELECT
+  e.ts,
+  {exchange} AS exchange,
+  COALESCE(e.symbol, e.payload->>'symbol', '') AS symbol,
+  e.actor_id,
+  e.payload->>'exchange_order_id' AS exchange_order_id,
+  e.payload->>'side' AS side,
+  {qty} AS qty,
+  {price} AS price,
+  e.payload->>'timestamp_ms' AS fill_timestamp_ms,
+  e.payload
+FROM mm_events e
+WHERE e.topic LIKE 'private:state:%:fills'
+  AND {exchange} IN (${{exchange:sqlstring}})
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC
+LIMIT {limit}"""
 
 
 def _market_event_step_sql() -> str:
@@ -654,14 +746,18 @@ def runtime_overview() -> dict[str, Any]:
         _panel(5, "Controller stage p95 ms", "timeseries", PG_DS, _runtime_controller_stage_p95_sql(), x=0, y=11, unit="ms"),
         _panel(6, "Order sync p95 ms", "timeseries", PG_DS, _runtime_order_sync_p95_sql(), x=12, y=11, w=6, unit="ms"),
         _panel(15, "Sync requests / step", "timeseries", PG_DS, _runtime_execution_event_rate_sql("ExecutionSyncRequested"), x=18, y=11, w=6),
-        _panel(7, "Placed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=8),
-        _panel(8, "Failed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=8, y=19, w=8),
-        _panel(9, "Fill events / step", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=16, y=19, w=8),
-        _panel(10, "Filled qty / step", "timeseries", PG_DS, _runtime_fill_rate_sql("qty"), x=0, y=27, w=8),
-        _panel(11, "Live orders by side", "timeseries", PG_DS, _runtime_live_orders_sql("count"), x=8, y=27, w=8),
-        _panel(12, "Live order qty by side", "timeseries", PG_DS, _runtime_live_orders_sql("qty"), x=16, y=27, w=8),
-        _panel(13, "Persistence errors", "timeseries", LOKI_DS, 'sum by (writer,error) (count_over_time({job="market-maker-runtime"} | json | event="persistence_batch_failed" [$__interval]))', x=0, y=35, legend="{{writer}} {{error}}"),
-        _panel(14, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=35, fmt="table"),
+        _panel(7, "Placed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersAccepted", "count"), x=0, y=19, w=6),
+        _panel(18, "Cancelled orders / step", "timeseries", PG_DS, _runtime_order_id_event_sql("CancelOrdersAccepted"), x=6, y=19, w=6),
+        _panel(8, "Failed orders / step", "timeseries", PG_DS, _runtime_order_payload_rate_sql("PlaceOrdersFailed", "count", include_reason=True), x=12, y=19, w=6),
+        _panel(9, "Fill events / step (private feed)", "timeseries", PG_DS, _runtime_fill_rate_sql("count"), x=18, y=19, w=6),
+        _panel(10, "Filled qty / step (private feed)", "timeseries", PG_DS, _runtime_fill_rate_sql("qty"), x=0, y=27, w=8),
+        _panel(11, "Execution live orders / step (latest snapshot)", "timeseries", PG_DS, _runtime_live_orders_sql("count"), x=8, y=27, w=8),
+        _panel(12, "Execution live qty / step (latest snapshot)", "timeseries", PG_DS, _runtime_live_orders_sql("qty"), x=16, y=27, w=8),
+        _panel(16, "Latest private vs execution order counts", "table", PG_DS, _runtime_latest_order_counts_sql(), x=0, y=35, w=12, fmt="table"),
+        _panel(17, "Recent private fills", "table", PG_DS, _runtime_recent_fills_sql(), x=12, y=35, w=12, fmt="table"),
+        _panel(19, "Latest execution gates", "table", PG_DS, _venue_gates_sql(), x=0, y=43, w=12, fmt="table"),
+        _panel(14, "Latest controller warnings", "table", PG_DS, _latest_warnings_sql(), x=12, y=43, w=12, fmt="table"),
+        _panel(13, "Persistence errors", "timeseries", LOKI_DS, 'sum by (writer,error) (count_over_time({job="market-maker-runtime"} | json | event="persistence_batch_failed" [$__interval]))', x=0, y=51, w=24, legend="{{writer}} {{error}}"),
     ]
     return _dashboard("mm-obs-v2-runtime-overview", "MM Observability v2 / 00 Runtime Overview", panels, tags=["runtime"])
 
@@ -1399,7 +1495,9 @@ def _venue_gates_sql() -> str:
     return f"""SELECT e.ts, gates.key AS exchange, gates.value->>'role' AS role,
        gates.value->>'live' AS live,
        gates.value->>'has_orders' AS has_orders,
-       gates.value->'blocked_reasons' AS blocked_reasons
+       gates.value->>'can_sync' AS can_sync,
+       e.payload #> ARRAY['execution_gates','blocked_reasons'] AS frame_blocked_reasons,
+       gates.value->'blocked_reasons' AS venue_blocked_reasons
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)) AS gates
 WHERE {_diagnostics_filter()}

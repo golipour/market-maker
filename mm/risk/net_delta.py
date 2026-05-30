@@ -17,7 +17,7 @@ from mm.core.models.private import OpenOrder
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
-from mm.core.wallet import order_collateral_from_open_orders
+from mm.core.wallet import order_collateral_from_open_orders, reported_wallet_total
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
 from mm.risk.engine import RiskLimits, _proposed_order_count
@@ -31,13 +31,15 @@ def _scope_actor_live_orders(
     actor_id: str,
     exchange: str,
     symbol: str,
+    include_unattributed: bool = False,
 ) -> dict[str, OpenOrder]:
     ex = str(exchange or "").lower().strip()
     sym = str(symbol or "").strip()
     actor = str(actor_id or "").strip()
     scoped: dict[str, OpenOrder] = {}
     for order_id, open_order in live_orders.items():
-        if (open_order.actor_id or "").strip() != actor:
+        order_actor = (open_order.actor_id or "").strip()
+        if order_actor != actor and not (include_unattributed and not order_actor):
             continue
         order = open_order.order
         if str(order.exchange or "").lower().strip() != ex:
@@ -73,6 +75,16 @@ def _open_notional(orders: tuple[TargetOrder, ...]) -> float:
     return total
 
 
+def _empty_venue_target_book(book: VenueTargetBook) -> VenueTargetBook:
+    return VenueTargetBook(
+        exchange=book.exchange,
+        symbol=book.symbol,
+        actor_id=book.actor_id,
+        orders=(),
+        policy=book.policy,
+    )
+
+
 def _global_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
     return VenueRiskLimits(
         min_inventory=limits.min_inventory,
@@ -86,8 +98,18 @@ def _global_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLi
 
 
 def _venue_base_quote_totals(ledger: VenueLedger) -> tuple[float, float]:
-    base_total = float(ledger.available_base) + float(ledger.locked_base)
-    quote_total = float(ledger.available_quote) + float(ledger.locked_quote)
+    base_balance = ledger.balances.get(ledger.base_asset)
+    quote_balance = ledger.balances.get(ledger.quote_asset)
+    base_total = (
+        reported_wallet_total(base_balance)
+        if base_balance is not None
+        else float(ledger.available_base) + float(ledger.locked_base)
+    )
+    quote_total = (
+        reported_wallet_total(quote_balance)
+        if quote_balance is not None
+        else float(ledger.available_quote) + float(ledger.locked_quote)
+    )
     return base_total, quote_total
 
 
@@ -96,6 +118,7 @@ def evaluate_venue_target_transition(
     ledger: VenueLedger,
     target: VenueTargetBook,
     limits: VenueRiskLimits,
+    release_unattributed: bool = False,
 ) -> tuple[bool, list[str], VenueTransitionExposure]:
     """Evaluate whether ``target`` resting book is feasible from ``ledger`` state."""
 
@@ -104,6 +127,7 @@ def evaluate_venue_target_transition(
         actor_id=target.actor_id,
         exchange=target.exchange,
         symbol=target.symbol,
+        include_unattributed=release_unattributed,
     )
     actor_locked_base, actor_locked_quote = order_collateral_from_open_orders(
         actor_live,
@@ -139,8 +163,12 @@ def evaluate_venue_target_transition(
         if str(order.side).lower().strip() == "buy"
     )
 
-    base_capacity = float(ledger.available_base) + actor_locked_base
-    quote_capacity = float(ledger.available_quote) + actor_locked_quote
+    if target.policy == "replace":
+        base_capacity = base_total
+        quote_capacity = quote_total
+    else:
+        base_capacity = float(ledger.available_base) + actor_locked_base
+        quote_capacity = float(ledger.available_quote) + actor_locked_quote
 
     for order in target.orders:
         qty = float(order.qty)
@@ -285,6 +313,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             ledger=ledger.local,
             target=target_book.local,
             limits=self.limits.local,
+            release_unattributed=target_book.local.policy == "replace",
         )
         venue_diagnostics["local"] = local_exposure.as_dict()
         for reason in local_reasons:
@@ -321,6 +350,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
                     ledger=ledger.global_,
                     target=target_book.global_,
                     limits=global_limits,
+                    release_unattributed=target_book.global_.policy == "replace",
                 )
                 venue_diagnostics["global"] = global_exposure.as_dict()
                 for reason in global_reasons:
@@ -334,17 +364,29 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             and bool(target_book.global_.orders)
             and not global_ok
         )
-        if local_ok and global_orders_rejected and not command_gate_reasons:
+
+        approved_local: VenueTargetBook | None = None
+        if local_ok:
+            approved_local = target_book.local
+        elif target_book.local.policy == "replace":
+            approved_local = _empty_venue_target_book(target_book.local)
+
+        approved_global: VenueTargetBook | None = None
+        if target_book.global_ is not None:
+            if local_ok and global_ok:
+                approved_global = target_book.global_
+            elif local_ok and global_orders_rejected:
+                approved_global = _empty_venue_target_book(target_book.global_)
+            elif not local_ok and target_book.global_.policy == "replace":
+                approved_global = _empty_venue_target_book(target_book.global_)
+            elif not target_book.global_.orders:
+                approved_global = target_book.global_
+
+        if approved_local is not None and not command_gate_reasons:
             approved_book = JointTargetBook(
                 actor_id=target_book.actor_id,
-                local=target_book.local,
-                global_=VenueTargetBook(
-                    exchange=target_book.global_.exchange,
-                    symbol=target_book.global_.symbol,
-                    actor_id=target_book.global_.actor_id,
-                    orders=(),
-                    policy=target_book.global_.policy,
-                ),
+                local=approved_local,
+                global_=approved_global,
                 mode=target_book.mode,
                 diagnostics=dict(target_book.diagnostics),
             )
@@ -354,15 +396,6 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
                 target_book_gate_reasons=tuple(target_book_gate_reasons),
                 command_gate_reasons=tuple(command_gate_reasons),
                 rejection_counts=rejection_counts,
-                exposure_before=exposure_before,
-                exposure_after=exposure_after,
-                transition_diagnostics=venue_diagnostics,
-            )
-
-        if local_ok and global_ok and not command_gate_reasons:
-            exposure_after = _target_exposure_dict(ledger, target_book)
-            return TargetBookRiskResult(
-                approved=target_book,
                 exposure_before=exposure_before,
                 exposure_after=exposure_after,
                 transition_diagnostics=venue_diagnostics,

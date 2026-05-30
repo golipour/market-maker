@@ -201,7 +201,7 @@ reach = market_order_volume - combined_cumulative_depth
 consumed_level = combined_level * sigmoid(normalized_reach / soft_fill_temp)
 ```
 
-6. Splits consumed volume between the market book and our quotes in proportion to their level sizes. If `soft_fill_queue_penalty` is positive, the own-share denominator also includes `soft_fill_queue_penalty * next_worse_public_level_depth`, making the fill model more conservative while remaining differentiable.
+6. Splits consumed volume between the market book and our quotes using `soft_fill_queue_model`: `pro_rata` shares by same-level size, while `back_of_queue` also includes the next worse public level in the own-share denominator.
 7. Returns:
    - next market-only bid levels
    - next market-only ask levels

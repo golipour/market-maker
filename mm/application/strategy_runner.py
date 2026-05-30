@@ -208,10 +208,10 @@ class StrategyRunner:
                 global_exchange
                 and intent_gates.get(global_exchange) is not None
                 and intent_gates[global_exchange].live
-                and intent_gates[global_exchange].has_orders
+                and intent_gates[global_exchange].can_sync
             )
             live_execution = any(
-                gate.live and gate.has_orders for gate in intent_gates.values()
+                gate.live and gate.can_sync for gate in intent_gates.values()
             )
 
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
@@ -234,10 +234,12 @@ class StrategyRunner:
                         frame=clean_frame,
                         binding=self.binding,
                     )
+                risk_approved_execution_book = target_risk_result.approved is not None
             else:
                 risk_result = self.risk_engine.validate_frame_with_result(
                     proposed, trading_state, clean_frame
                 )
+                risk_approved_execution_book = False
             approved = risk_result.approved_list
             approved_orders = tuple(order for action in approved for order in action.orders)
             ctx.record_risk_result(
@@ -278,7 +280,14 @@ class StrategyRunner:
                 control_plane=self.control_plane,
                 frame=clean_frame,
             )
-            executed = self._should_execute_live(approved, venue_gates=venue_gates)
+            execution_allowed_by_risk = bool(approved) or (
+                (risk_approved_execution_book or not risk_result.rejection_counts)
+                and any(gate.live and gate.can_sync for gate in venue_gates.values())
+            )
+            executed = self._should_execute_live(
+                execution_allowed_by_risk=execution_allowed_by_risk,
+                venue_gates=venue_gates,
+            )
             blocked = execution_blocked_reasons(
                 config=self.config,
                 frame_step=self._frame_step,
@@ -288,7 +297,7 @@ class StrategyRunner:
             )
             if executed:
                 blocked = []
-            elif approved and venue_gates:
+            elif execution_allowed_by_risk and venue_gates:
                 blocked = sorted(
                     {
                         *blocked,
@@ -296,7 +305,7 @@ class StrategyRunner:
                             reason
                             for gate in venue_gates.values()
                             for reason in gate.blocked_reasons
-                            if reason != "no_orders" or gate.has_orders
+                            if reason != "no_orders" or gate.can_sync
                         ),
                     }
                 )
@@ -334,7 +343,7 @@ class StrategyRunner:
             execute_started = time.monotonic_ns()
             execution_report: ExecutionSyncReport | None = None
             sync_executed = executed
-            if approved:
+            if execution_allowed_by_risk:
                 if executed:
                     execution_report = await self._sync_joint_with_timeout(
                         execution_book,
@@ -470,13 +479,13 @@ class StrategyRunner:
 
     def _should_execute_live(
         self,
-        approved: list[Action],
         *,
+        execution_allowed_by_risk: bool,
         venue_gates: dict,
     ) -> bool:
-        if not approved:
+        if not execution_allowed_by_risk:
             return False
-        return any(gate.live and gate.has_orders for gate in venue_gates.values())
+        return any(gate.live and gate.can_sync for gate in venue_gates.values())
 
     async def _publish_decision(
         self,

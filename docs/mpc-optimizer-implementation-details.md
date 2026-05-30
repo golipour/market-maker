@@ -466,26 +466,26 @@ cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
 inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
 ```
 
-By default, this is a differentiable liquidity-share model, not a venue
-queue-position model:
+With `soft_fill_queue_model = "pro_rata"`, this is a differentiable
+liquidity-share model:
 
 ```text
 own_share_i = own_qty_i / (public_qty_i + own_qty_i)
 ```
 
-`soft_fill_queue_penalty` makes the share more conservative without adding a
-discrete queue simulator:
+With `soft_fill_queue_model = "back_of_queue"`, the share is more conservative
+without adding a discrete queue simulator:
 
 ```text
 own_share_i =
     own_qty_i
-    / (public_qty_i + own_qty_i + soft_fill_queue_penalty * public_qty_{i+1})
+    / (public_qty_i + own_qty_i + public_qty_{i+1})
 ```
 
-The default `soft_fill_queue_penalty = 1` treats an order at level `i` as if
-the next worse public level is also ahead of it in the queue. Setting it to `0`
-uses the pure pro-rata split. This is still differentiable because it only
-changes the denominator of the continuous share calculation.
+The default `back_of_queue` model treats an order at level `i` as if the next
+worse public level is also ahead of it in the queue. `pro_rata` uses the pure
+same-level share. Both remain differentiable because they only change the
+denominator of the continuous share calculation.
 
 ## Joint Objective
 

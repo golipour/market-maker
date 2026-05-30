@@ -141,7 +141,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, gates.key AS exchange, gates.value->>'role' AS role,\n       gates.value->>'live' AS live,\n       gates.value->>'has_orders' AS has_orders,\n       gates.value->'blocked_reasons' AS blocked_reasons\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 100",
+          "rawSql": "SELECT e.ts, gates.key AS exchange, gates.value->>'role' AS role,\n       gates.value->>'live' AS live,\n       gates.value->>'has_orders' AS has_orders,\n       gates.value->>'can_sync' AS can_sync,\n       e.payload #> ARRAY['execution_gates','blocked_reasons'] AS frame_blocked_reasons,\n       gates.value->'blocked_reasons' AS venue_blocked_reasons\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 100",
           "refId": "A"
         }
       ],

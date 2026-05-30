@@ -12,6 +12,7 @@ from mm.application.venue_execution import (
     compute_venue_execution_gates,
     execution_book_from_joint,
     prepare_execution_joint_book,
+    route_joint_target_book_with_report,
 )
 from mm.bus.memory import InMemoryBus
 from mm.core.models.execution import Action, Order
@@ -183,6 +184,87 @@ def test_compute_venue_execution_gates_independent_local_and_global() -> None:
     assert gates["nobitex"].live is True
     assert gates["wallex"].live is False
     assert "venue_observe_only" in gates["wallex"].blocked_reasons
+
+
+def test_replace_empty_book_can_sync_to_cancel_existing_orders() -> None:
+    runtime = _runtime_binding()
+    empty_replace_book = JointTargetBook(
+        actor_id="test-runner",
+        local=VenueTargetBook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            actor_id="test-runner",
+            orders=(),
+            policy="replace",
+        ),
+        global_=None,
+    )
+
+    gates = compute_venue_execution_gates(
+        config=ControllerRuntimeConfig(
+            enabled=True,
+            actor_id="test-runner",
+            observe_only=False,
+            action_start_after_steps=0,
+        ),
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        binding=runtime.binding,
+        frame_step=1,
+        joint_target_book=empty_replace_book,
+        order_managers={"nobitex": RecordingOrderManager("nobitex")},
+        control_plane=None,
+        frame=StrategyInputFrame(local=_market_event(exchange="nobitex")),
+    )
+
+    assert gates["nobitex"].has_orders is False
+    assert gates["nobitex"].can_sync is True
+    assert gates["nobitex"].live is True
+    assert "no_orders" not in gates["nobitex"].blocked_reasons
+
+
+@pytest.mark.asyncio
+async def test_route_joint_target_book_syncs_empty_replace_book() -> None:
+    manager = RecordingOrderManager("nobitex")
+    book = JointTargetBook(
+        actor_id="test-runner",
+        local=VenueTargetBook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            actor_id="test-runner",
+            orders=(),
+            policy="replace",
+        ),
+        global_=None,
+    )
+    gates = {
+        "nobitex": compute_venue_execution_gates(
+            config=ControllerRuntimeConfig(
+                enabled=True,
+                actor_id="test-runner",
+                observe_only=False,
+                action_start_after_steps=0,
+            ),
+            execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+            liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+            binding=_runtime_binding().binding,
+            frame_step=1,
+            joint_target_book=book,
+            order_managers={"nobitex": manager},
+            control_plane=None,
+            frame=StrategyInputFrame(local=_market_event(exchange="nobitex")),
+        )["nobitex"]
+    }
+
+    await route_joint_target_book_with_report(
+        book,
+        order_managers={"nobitex": manager},
+        venue_gates=gates,
+        execute=True,
+    )
+
+    assert len(manager.synced) == 1
+    assert manager.synced[0][0].orders == ()
 
 
 def test_global_stale_market_blocks_only_global_gate() -> None:

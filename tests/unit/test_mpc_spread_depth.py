@@ -41,7 +41,7 @@ def test_optimizer_stores_objective_params() -> None:
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
     assert mpc.quote_capacity_ratio == 0.5
-    assert mpc.soft_fill_queue_penalty == 1.0
+    assert mpc.soft_fill_queue_model == "back_of_queue"
 
 
 def test_terminal_objective_uses_clear_component_names() -> None:
@@ -212,7 +212,7 @@ def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:
     assert float(cash_delta[0]) == pytest.approx(-99.0, rel=1e-6)
 
 
-def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() -> None:
+def test_soft_fill_queue_model_back_of_queue_reduces_own_fill_share_and_keeps_gradients() -> None:
     from mm.mpc.l_param import LParamConfig
 
     l_param = LParamConfig(
@@ -245,7 +245,7 @@ def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() ->
         maker_fee=0.0,
         soft_temp=0.01,
         soft_fill_activation="hardsigmoid",
-        soft_fill_queue_penalty=0.0,
+        soft_fill_queue_model="pro_rata",
         l_param=l_param,
     )
     _, _, _, inv_queue_back = soft_fill_batched(
@@ -260,7 +260,7 @@ def test_soft_fill_queue_penalty_reduces_own_fill_share_and_keeps_gradients() ->
         maker_fee=0.0,
         soft_temp=0.01,
         soft_fill_activation="hardsigmoid",
-        soft_fill_queue_penalty=1.0,
+        soft_fill_queue_model="back_of_queue",
         l_param=l_param,
     )
 
@@ -361,15 +361,20 @@ def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
         flow,
         exe,
         soft_fill_activation="hardsigmoid",
-        soft_fill_queue_penalty=1.25,
+        soft_fill_queue_model="pro_rata",
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
     )
     assert mpc.soft_fill_activation == "hardsigmoid"
-    assert mpc.soft_fill_queue_penalty == pytest.approx(1.25)
+    assert mpc.soft_fill_queue_model == "pro_rata"
 
     with pytest.raises(ValueError, match="unsupported soft_fill_activation"):
         MonteCarloMPCTensorBatched(
             price, flow, exe, soft_fill_activation="relu",
+            quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+        )
+    with pytest.raises(ValueError, match="unsupported soft_fill_queue_model"):
+        MonteCarloMPCTensorBatched(
+            price, flow, exe, soft_fill_queue_model="middle_of_queue",
             quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
         )
