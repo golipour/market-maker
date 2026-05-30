@@ -53,7 +53,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts)) ORDER BY e.ts DESC LIMIT 1",
+          "rawSql": "SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts)) ORDER BY e.ts DESC LIMIT 1",
           "refId": "A"
         }
       ],
@@ -95,7 +95,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE event_type = 'StrategyDecision'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND actor_id IN (${actor_id:sqlstring})\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
+          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE event_type = 'StrategyDecision'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
           "refId": "A"
         }
       ],
@@ -137,7 +137,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE topic = '${target_books_topic}'\n  AND event_type = 'JointTargetBook'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND actor_id IN (${actor_id:sqlstring})\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
+          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE topic = '${target_books_topic}'\n  AND event_type = 'JointTargetBook'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
           "refId": "A"
         }
       ],
@@ -179,7 +179,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts, topic, event_type, exchange, symbol, actor_id, payload\nFROM mm_events\nWHERE topic LIKE 'execution:%'\n  AND exchange IN (${exchange:sqlstring})\n  AND (symbol IN (${symbol:sqlstring}) OR symbol IS NULL)\n  AND $__timeFilter(ts)\nORDER BY ts DESC\nLIMIT 100",
+          "rawSql": "SELECT ts, topic, event_type, exchange, symbol, actor_id, payload\nFROM mm_events\nWHERE topic LIKE 'execution:%'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND (symbol = ANY(ARRAY[${symbol:sqlstring}]::text[]) OR symbol IS NULL)\n  AND $__timeFilter(ts)\nORDER BY ts DESC\nLIMIT 100",
           "refId": "A"
         }
       ],
@@ -251,14 +251,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Exchange",
         "multi": true,
         "name": "exchange",
         "options": [],
-        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -273,14 +273,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Symbol",
         "multi": true,
         "name": "symbol",
         "options": [],
-        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -295,14 +295,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Actor",
         "multi": true,
         "name": "actor_id",
         "options": [],
-        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Joint target-book execution path. The main funnel is intentionally collapsed to the runtime contract: desired target book, risk-approved target, and router-accepted orders. Planner internals are summarized in the table.",
+        "content": "Joint target-book execution path split by local and global role. Target-book charts come from `JointTargetBook`; rejection charts count rejected candidates/orders by reason; gate-block charts count blocked frames by reason.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -53,11 +53,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts AS \"time\", venue AS metric, jsonb_array_length(COALESCE(book->'orders', '[]'::jsonb))::double precision AS value\nFROM mm_events\nCROSS JOIN LATERAL (\n  VALUES ('local', payload->'local'), ('global', payload->'global')\n) AS v(venue, book)\nWHERE topic = '${target_books_topic}'\n  AND event_type = 'JointTargetBook'\n  AND exchange IN (${exchange:sqlstring})\n  AND symbol IN (${symbol:sqlstring})\n  AND book IS NOT NULL\n  AND $__timeFilter(ts)\nORDER BY 1",
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       venue AS metric,\n       SUM(jsonb_array_length(COALESCE(book->'orders', '[]'::jsonb)))::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', payload->'local')\n) AS v(venue, book)\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND book IS NOT NULL\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Desired target orders",
+      "title": "Local desired target orders",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -99,11 +99,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM(CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', e.payload->'local'), ('global', e.payload->'global')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       venue AS metric,\n       SUM(jsonb_array_length(COALESCE(book->'orders', '[]'::jsonb)))::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('global', payload->'global')\n) AS v(venue, book)\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND book IS NOT NULL\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Desired target qty",
+      "title": "Global desired target orders",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -145,11 +145,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", label AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('target_book', 'desired target'),\n    ('risk_approved_target', 'risk approved'),\n    ('router_accepted', 'router accepted')\n) AS stages(stage, label)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM(CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('local', e.payload->'local')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Execution contract funnel",
+      "title": "Local desired target qty",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -191,11 +191,287 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       (stage_label || ': ' || reason.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'order shaping'),\n    ('risk_approved_target', 'risk'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n) AS stages(stage, stage_label)\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'], '{}'::jsonb)\n) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\", (venue || ' ' || (o->>'side')) AS metric,\n       SUM(CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND) AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES ('global', e.payload->'global')\n) AS v(venue, book)\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o\nWHERE e.topic = '${target_books_topic}'\n  AND e.event_type = 'JointTargetBook'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nGROUP BY 1, venue, (o->>'side')\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Blocked/rejected reasons",
+      "title": "Global desired target qty",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH target_books AS (\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         'target orders'::text AS metric,\n         SUM(jsonb_array_length(COALESCE(e.payload->'local'->'orders', '[]'::jsonb)))::double precision AS value\n  FROM mm_events e\n  WHERE e.topic = '${target_books_topic}'\n    AND e.event_type = 'JointTargetBook'\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  GROUP BY 1, 2\n),\nvenue_gates AS (\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         stage.metric,\n         MAX(CASE WHEN stage.ok THEN 1.0 ELSE 0.0 END) AS value\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gate(key, value)\n  CROSS JOIN LATERAL (\n    VALUES\n      ('gate has orders', COALESCE(NULLIF(gate.value->>'has_orders', ''), 'false')::boolean),\n      ('gate can sync', COALESCE(NULLIF(gate.value->>'can_sync', ''), 'false')::boolean),\n      ('gate live', COALESCE(NULLIF(gate.value->>'live', ''), 'false')::boolean)\n  ) AS stage(metric, ok)\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n    AND COALESCE(gate.value->>'role', '') = 'local'\n  GROUP BY 1, 2\n)\nSELECT \"time\", metric, value FROM target_books\nUNION ALL\nSELECT \"time\", metric, value FROM venue_gates\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local execution contract funnel",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH target_books AS (\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         'target orders'::text AS metric,\n         SUM(jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb)))::double precision AS value\n  FROM mm_events e\n  WHERE e.topic = '${target_books_topic}'\n    AND e.event_type = 'JointTargetBook'\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  GROUP BY 1, 2\n),\nvenue_gates AS (\n  SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n         stage.metric,\n         MAX(CASE WHEN stage.ok THEN 1.0 ELSE 0.0 END) AS value\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gate(key, value)\n  CROSS JOIN LATERAL (\n    VALUES\n      ('gate has orders', COALESCE(NULLIF(gate.value->>'has_orders', ''), 'false')::boolean),\n      ('gate can sync', COALESCE(NULLIF(gate.value->>'can_sync', ''), 'false')::boolean),\n      ('gate live', COALESCE(NULLIF(gate.value->>'live', ''), 'false')::boolean)\n  ) AS stage(metric, ok)\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n    AND COALESCE(gate.value->>'role', '') = 'global'\n  GROUP BY 1, 2\n)\nSELECT \"time\", metric, value FROM target_books\nUNION ALL\nSELECT \"time\", metric, value FROM venue_gates\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global execution contract funnel",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH role_rejections AS (\nSELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       ('risk: ' || reason.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'],\n    e.payload #> ARRAY['risk','rejection_counts'],\n    '{}'::jsonb\n  )\n) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND NOT (reason.key LIKE 'global_%'\n       OR reason.key IN ('missing_global_market_data', 'stale_global_market_data', 'missing_global_ledger'))\n\nUNION ALL\nSELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       (stage_label || ': ' || reason.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('venue_quantized', 'venue limits'),\n    ('capped', 'order shaping'),\n    ('rules_valid', 'exchange rules'),\n    ('router_accepted', 'router')\n) AS stages(stage, stage_label)\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['action_pipeline', stage, 'rejection_counts'], '{}'::jsonb)\n) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n)\nSELECT \"time\", metric, SUM(value) AS value\nFROM role_rejections\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local candidate/order rejections",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH role_rejections AS (\nSELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       ('risk: ' || reason.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(reason.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(reason.value, ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'],\n    e.payload #> ARRAY['risk','rejection_counts'],\n    '{}'::jsonb\n  )\n) AS reason(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND (reason.key LIKE 'global_%'\n       OR reason.key IN ('missing_global_market_data', 'stale_global_market_data', 'missing_global_ledger'))\n\n)\nSELECT \"time\", metric, SUM(value) AS value\nFROM role_rejections\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global candidate/order rejections",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       blocked.reason AS metric,\n       COUNT(*)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n) AS gate(key, value)\nCROSS JOIN LATERAL jsonb_array_elements_text(\n  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)\n) AS blocked(reason)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND COALESCE(gate.value->>'role', '') = 'local'\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local gate blocks / frame",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n       blocked.reason AS metric,\n       COUNT(*)::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(\n  COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n) AS gate(key, value)\nCROSS JOIN LATERAL jsonb_array_elements_text(\n  COALESCE(gate.value->'blocked_reasons', '[]'::jsonb)\n) AS blocked(reason)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND COALESCE(gate.value->>'role', '') = 'global'\nGROUP BY 1, 2\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global gate blocks / frame",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -225,9 +501,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 43
       },
-      "id": 6,
+      "id": 12,
       "targets": [
         {
           "datasource": {
@@ -237,7 +513,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts,\n       e.actor_id,\n       e.exchange,\n       e.symbol,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS desired_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS risk_approved_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS router_accepted_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS new_order_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS cancel_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS unchanged_existing_orders,\n       COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{}'::jsonb) AS risk_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{}'::jsonb) AS rule_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{}'::jsonb) AS router_blocks\nFROM mm_events e\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 50",
+          "rawSql": "SELECT e.ts,\n       e.actor_id,\n       e.exchange,\n       e.symbol,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','target_book','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS desired_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS risk_approved_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','router_accepted','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS router_accepted_orders,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_place','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS new_order_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','planned_cancel','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS cancel_commands,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline','kept','order_count'], ''))::double precision\n  ELSE 0.0\nEND AS unchanged_existing_orders,\n       COALESCE(e.payload #> ARRAY['action_pipeline','risk_approved_target','rejection_counts'], '{}'::jsonb) AS risk_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','rules_valid','rejection_counts'], '{}'::jsonb) AS rule_blocks,\n       COALESCE(e.payload #> ARRAY['action_pipeline','router_accepted','rejection_counts'], '{}'::jsonb) AS router_blocks\nFROM mm_events e\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\nORDER BY e.ts DESC\nLIMIT 50",
           "refId": "A"
         }
       ],
@@ -272,14 +548,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Exchange",
         "multi": true,
         "name": "exchange",
         "options": [],
-        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -294,14 +570,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Symbol",
         "multi": true,
         "name": "symbol",
         "options": [],
-        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -316,14 +592,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Actor",
         "multi": true,
         "name": "actor_id",
         "options": [],
-        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"

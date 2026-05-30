@@ -53,7 +53,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -99,7 +99,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -145,7 +145,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n       CASE WHEN kv.key LIKE '%_sec' THEN (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0 ELSE (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) END AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n       CASE WHEN kv.key LIKE '%_sec' THEN (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0 ELSE (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) END AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -191,7 +191,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','gradients'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange IN (${exchange:sqlstring})\n  AND e.symbol IN (${symbol:sqlstring})\n  AND e.actor_id IN (${actor_id:sqlstring})\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','gradients'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -230,14 +230,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Exchange",
         "multi": true,
         "name": "exchange",
         "options": [],
-        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -252,14 +252,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Symbol",
         "multi": true,
         "name": "symbol",
         "options": [],
-        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
@@ -274,14 +274,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "hide": 0,
         "includeAll": true,
         "label": "Actor",
         "multi": true,
         "name": "actor_id",
         "options": [],
-        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1",
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
         "refresh": 1,
         "sort": 1,
         "type": "query"
