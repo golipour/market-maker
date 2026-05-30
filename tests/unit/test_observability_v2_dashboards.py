@@ -109,8 +109,8 @@ def test_action_pipeline_splits_local_and_global_target_book_charts() -> None:
     assert panels_by_title["Global desired target qty"]["gridPos"]["x"] == 12
     assert panels_by_title["Local execution contract funnel"]["gridPos"]["x"] == 0
     assert panels_by_title["Global execution contract funnel"]["gridPos"]["x"] == 12
-    assert panels_by_title["Local candidate/order rejections"]["gridPos"]["x"] == 0
-    assert panels_by_title["Global candidate/order rejections"]["gridPos"]["x"] == 12
+    assert panels_by_title["Local stage drops / step"]["gridPos"]["x"] == 0
+    assert panels_by_title["Global risk rejects / step"]["gridPos"]["x"] == 12
     assert panels_by_title["Local gate blocks / frame"]["gridPos"]["x"] == 0
     assert panels_by_title["Global gate blocks / frame"]["gridPos"]["x"] == 12
 
@@ -120,8 +120,8 @@ def test_action_pipeline_splits_local_and_global_target_book_charts() -> None:
     global_qty_sql = panels_by_title["Global desired target qty"]["targets"][0]["rawSql"]
     local_funnel_sql = panels_by_title["Local execution contract funnel"]["targets"][0]["rawSql"]
     global_funnel_sql = panels_by_title["Global execution contract funnel"]["targets"][0]["rawSql"]
-    local_reject_sql = panels_by_title["Local candidate/order rejections"]["targets"][0]["rawSql"]
-    global_reject_sql = panels_by_title["Global candidate/order rejections"]["targets"][0]["rawSql"]
+    local_drop_sql = panels_by_title["Local stage drops / step"]["targets"][0]["rawSql"]
+    global_reject_sql = panels_by_title["Global risk rejects / step"]["targets"][0]["rawSql"]
     local_gate_sql = panels_by_title["Local gate blocks / frame"]["targets"][0]["rawSql"]
     global_gate_sql = panels_by_title["Global gate blocks / frame"]["targets"][0]["rawSql"]
 
@@ -138,15 +138,18 @@ def test_action_pipeline_splits_local_and_global_target_book_charts() -> None:
     assert "COALESCE(gate.value->>'role', '') = 'local'" in local_funnel_sql
     assert "e.payload->'global'->'orders'" in global_funnel_sql
     assert "COALESCE(gate.value->>'role', '') = 'global'" in global_funnel_sql
-    assert "NOT (reason.key LIKE 'global_%'" in local_reject_sql
+    assert "GREATEST(drop_stage.before_count - drop_stage.after_count, 0.0)" in local_drop_sql
+    assert "'venue limits'::text" in local_drop_sql
+    assert "'order shaping'::text" in local_drop_sql
+    assert "jsonb_each_text" not in local_drop_sql
     assert "reason.key LIKE 'global_%'" in global_reject_sql
-    assert "blocked.reason AS metric" not in local_reject_sql
+    assert "blocked.reason AS metric" not in local_drop_sql
     assert "blocked.reason AS metric" not in global_reject_sql
     assert "blocked.reason AS metric" in local_gate_sql
     assert "blocked.reason AS metric" in global_gate_sql
     assert "COALESCE(gate.value->>'role', '') = 'local'" in local_gate_sql
     assert "COALESCE(gate.value->>'role', '') = 'global'" in global_gate_sql
-    for sql in (local_funnel_sql, global_funnel_sql, local_reject_sql, global_reject_sql, local_gate_sql, global_gate_sql):
+    for sql in (local_funnel_sql, global_funnel_sql, local_drop_sql, global_reject_sql, local_gate_sql, global_gate_sql):
         assert "${interval_ms}" in sql
         assert "floor(EXTRACT(EPOCH" in sql
 
@@ -216,8 +219,8 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         "Global desired target qty",
         "Local execution contract funnel",
         "Global execution contract funnel",
-        "Local candidate/order rejections",
-        "Global candidate/order rejections",
+        "Local stage drops / step",
+        "Global risk rejects / step",
         "Local gate blocks / frame",
         "Global gate blocks / frame",
     }

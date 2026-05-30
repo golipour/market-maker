@@ -980,7 +980,7 @@ def action_pipeline() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Joint target-book execution path split by local and global role. Target-book charts come from `JointTargetBook`; rejection charts count rejected candidates/orders by reason; gate-block charts count blocked frames by reason.",
+            "Joint target-book execution path split by local and global role. Target-book charts come from `JointTargetBook`; local stage drops are adjacent-stage order-count deltas; global risk rejects are global-specific risk reasons; gate-block charts count blocked frames by reason.",
             y=0,
         ),
         _panel(2, "Local desired target orders", "timeseries", PG_DS, _target_book_count_sql("local"), x=0, y=3, w=12),
@@ -989,8 +989,8 @@ def action_pipeline() -> dict[str, Any]:
         _panel(5, "Global desired target qty", "timeseries", PG_DS, _target_book_qty_sql("global"), x=12, y=11, w=12),
         _panel(6, "Local execution contract funnel", "timeseries", PG_DS, _role_execution_contract_sql("local"), x=0, y=19, w=12),
         _panel(7, "Global execution contract funnel", "timeseries", PG_DS, _role_execution_contract_sql("global"), x=12, y=19, w=12),
-        _panel(8, "Local candidate/order rejections", "timeseries", PG_DS, _role_rejection_reason_sql("local"), x=0, y=27, w=12),
-        _panel(9, "Global candidate/order rejections", "timeseries", PG_DS, _role_rejection_reason_sql("global"), x=12, y=27, w=12),
+        _panel(8, "Local stage drops / step", "timeseries", PG_DS, _local_stage_drop_sql(), x=0, y=27, w=12),
+        _panel(9, "Global risk rejects / step", "timeseries", PG_DS, _role_rejection_reason_sql("global"), x=12, y=27, w=12),
         _panel(10, "Local gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("local"), x=0, y=35, w=12),
         _panel(11, "Global gate blocks / frame", "timeseries", PG_DS, _role_gate_block_reason_sql("global"), x=12, y=35, w=12),
         _panel(12, "Latest execution summary", "table", PG_DS, _action_execution_summary_sql(), x=0, y=43, w=24, fmt="table"),
@@ -1622,6 +1622,29 @@ WHERE {_diagnostics_filter()}
 )
 SELECT "time", metric, SUM(value) AS value
 FROM role_rejections
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _local_stage_drop_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    ladder_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','ladder','order_count']")
+    venue_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count']")
+    capped_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','capped','order_count']")
+    return f"""WITH drops AS (
+  SELECT {_approx_step_time_alias_sql(step_source)},
+         drop_stage.metric,
+         GREATEST(drop_stage.before_count - drop_stage.after_count, 0.0) AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL (
+    VALUES
+      ('venue limits'::text, {ladder_count}, {venue_count}),
+      ('order shaping'::text, {venue_count}, {capped_count})
+  ) AS drop_stage(metric, before_count, after_count)
+  WHERE {_diagnostics_filter()}
+)
+SELECT "time", metric, SUM(value) AS value
+FROM drops
 GROUP BY 1, 2
 ORDER BY 1"""
 
