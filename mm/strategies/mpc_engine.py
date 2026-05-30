@@ -315,13 +315,6 @@ class MpcStrategyEngine:
         decision_hash = hashlib.sha256(
             json.dumps(order_summaries, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        action = Action(
-            actor_id=action.actor_id,
-            orders=action.orders,
-            t_end_ms=int(frame.local.t_end_ms),
-            frame_step=int(frame_step),
-            decision_hash=decision_hash,
-        )
         latency_ms = (time.monotonic_ns() - t0) / 1_000_000
         optimizer_log = optimizer_stdout.getvalue().strip()
         if optimizer_run is not None:

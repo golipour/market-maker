@@ -54,7 +54,7 @@ def test_runtime_overview_uses_per_step_counts_not_per_second_rates() -> None:
             assert "/ GREATEST(EXTRACT(EPOCH FROM '${__interval}'::interval), 1.0)" not in line
 
 
-def test_rate_dashboards_use_exact_step_queries() -> None:
+def test_rate_dashboards_use_approximate_step_queries() -> None:
     dashboards = [
         runtime_overview(),
         market_data_quality(),
@@ -70,7 +70,7 @@ def test_rate_dashboards_use_exact_step_queries() -> None:
                 assert "rate(" not in query
                 assert "__rate_interval" not in query
 
-    exact_titles = {
+    approximate_titles = {
         "Frames / step",
         "Decisions / step",
         "Sync requests / step",
@@ -91,12 +91,11 @@ def test_rate_dashboards_use_exact_step_queries() -> None:
         for dashboard in dashboards
         for panel in dashboard["panels"]
     }
-    for title in exact_titles:
+    for title in approximate_titles:
         sql = panels_by_title[title]["targets"][0]["rawSql"]
-        assert "to_timestamp(" in sql
-        assert "$__timeFilter(to_timestamp" not in sql
-        assert "_time_bucket" not in sql
-        assert "floor(EXTRACT(EPOCH" not in sql
+        assert "${interval_ms}" in sql
+        assert "floor(EXTRACT(EPOCH" in sql
+        assert "${__interval}" not in sql
 
 
 def test_frame_readiness_legends_include_readiness_field() -> None:

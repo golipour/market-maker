@@ -284,20 +284,33 @@ def _time_bucket_alias_sql(expr: str) -> str:
     return f"{_time_bucket_sql(expr)} AS \"time\""
 
 
-def _step_time_sql(t_end_expr: str) -> str:
-    return f"to_timestamp(NULLIF({t_end_expr}, '')::double precision / 1000.0)"
-
-
-def _step_time_alias_sql(t_end_expr: str) -> str:
-    return f"{_step_time_sql(t_end_expr)} AS \"time\""
-
-
 def _numeric_sql(expr: str, default: str = "0.0") -> str:
     return f"""CASE
   WHEN trim(COALESCE({expr}, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
   THEN trim(COALESCE({expr}, ''))::double precision
   ELSE {default}
 END"""
+
+
+def _step_time_sql(t_end_expr: str) -> str:
+    return f"to_timestamp(({_numeric_sql(t_end_expr, default='NULL')}) / 1000.0)"
+
+
+def _step_interval_seconds_sql() -> str:
+    return "GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)"
+
+
+def _approx_step_time_sql(expr: str) -> str:
+    seconds = _step_interval_seconds_sql()
+    return f"to_timestamp(floor(EXTRACT(EPOCH FROM ({expr})::timestamptz) / {seconds}) * {seconds})"
+
+
+def _approx_step_time_alias_sql(expr: str) -> str:
+    return f"{_approx_step_time_sql(expr)} AS \"time\""
+
+
+def _event_step_source_sql(t_end_expr: str, fallback_ts_expr: str) -> str:
+    return f"COALESCE({_step_time_sql(t_end_expr)}, {fallback_ts_expr})"
 
 
 def _rate_denominator_sql() -> str:
@@ -315,13 +328,13 @@ END"""
 
 
 def _runtime_frame_rate_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   ((e.payload #>> ARRAY['local_market','exchange']) || ' ' || (e.payload #>> ARRAY['local_market','symbol'])) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'JointStrategyFrame'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND (e.payload #>> ARRAY['local_market','exchange']) IN (${{exchange:sqlstring}})
   AND (e.payload #>> ARRAY['local_market','symbol']) IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
@@ -330,13 +343,13 @@ ORDER BY 1"""
 
 
 def _runtime_decision_rate_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (e.actor_id || ' ' || e.exchange || ' ' || e.symbol) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'StrategyDecision'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND e.symbol IN (${{symbol:sqlstring}})
   AND e.actor_id IN (${{actor_id:sqlstring}})
@@ -387,13 +400,13 @@ ORDER BY 1"""
 
 
 def _runtime_execution_event_rate_sql(event_type: str) -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   COALESCE(e.exchange, 'unknown') AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = '{event_type}'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
   AND $__timeFilter(e.ts)
@@ -406,8 +419,9 @@ def _runtime_order_payload_rate_sql(event_type: str, measure: str, *, include_re
     qty = _numeric_sql("COALESCE(o.value->>'qty', o.value->>'remaining_qty')")
     value = "1.0" if measure == "count" else qty
     reason = " || ' ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')" if include_reason else ""
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (COALESCE(o.value->>'exchange', e.exchange, 'unknown') || ' ' ||
    COALESCE(o.value->>'symbol', e.symbol, 'unknown') || ' ' ||
    {side}{reason}) AS metric,
@@ -415,7 +429,6 @@ def _runtime_order_payload_rate_sql(event_type: str, measure: str, *, include_re
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
 WHERE e.event_type = '{event_type}'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND COALESCE(o.value->>'exchange', e.exchange, '') IN (${{exchange:sqlstring}})
   AND COALESCE(o.value->>'symbol', e.symbol, '') IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
@@ -429,60 +442,16 @@ def _runtime_fill_rate_sql(measure: str) -> str:
     value = "1.0" if measure == "count" else qty
     exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
     symbol = "COALESCE(e.symbol, e.payload->>'symbol')"
-    fill_ts_ms = _numeric_sql(
-        "COALESCE(e.payload->>'timestamp_ms', (EXTRACT(EPOCH FROM e.ts) * 1000.0)::text)",
-        default="NULL",
-    )
-    step_t_end_ms = _numeric_sql("s.payload->>'t_end_ms'", default="NULL")
-    return f"""WITH decision_steps AS (
-  SELECT
-    s.exchange,
-    s.symbol,
-    s.actor_id,
-    {step_t_end_ms} AS t_end_ms,
-    LAG({step_t_end_ms}) OVER (
-      PARTITION BY s.exchange, s.symbol, s.actor_id
-      ORDER BY {step_t_end_ms}
-    ) AS prev_t_end_ms
-  FROM mm_events s
-  WHERE s.event_type = 'StrategyDecision'
-    AND s.payload->>'t_end_ms' IS NOT NULL
-    AND s.exchange IN (${{exchange:sqlstring}})
-    AND s.symbol IN (${{symbol:sqlstring}})
-    AND s.actor_id IN (${{actor_id:sqlstring}})
-),
-fills AS (
-  SELECT
-    {exchange} AS exchange,
-    {symbol} AS symbol,
-    COALESCE(NULLIF(e.actor_id, ''), NULLIF(e.payload->>'actor_id', ''), '') AS actor_id,
-    {side} AS side,
-    {value} AS value,
-    {fill_ts_ms} AS fill_ts_ms
-  FROM mm_events e
-  WHERE e.topic LIKE 'private:state:%:fills'
-    AND {exchange} IN (${{exchange:sqlstring}})
-    AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
-    AND $__timeFilter(e.ts)
-)
-SELECT
-  to_timestamp(step.t_end_ms / 1000.0) AS "time",
-  (fills.exchange || ' ' || COALESCE(NULLIF(fills.symbol, ''), step.symbol, 'unknown') || ' ' || fills.side) AS metric,
-  SUM(fills.value) AS value
-FROM fills
-JOIN LATERAL (
-  SELECT s.t_end_ms, s.symbol
-  FROM decision_steps s
-  WHERE s.exchange = fills.exchange
-    AND (fills.symbol IS NULL OR fills.symbol = '' OR s.symbol = fills.symbol)
-    AND (fills.actor_id = '' OR s.actor_id = fills.actor_id)
-    AND fills.fill_ts_ms IS NOT NULL
-    AND fills.fill_ts_ms <= s.t_end_ms
-    AND (s.prev_t_end_ms IS NULL OR fills.fill_ts_ms > s.prev_t_end_ms)
-  ORDER BY s.t_end_ms ASC
-  LIMIT 1
-) AS step ON TRUE
-WHERE TRUE
+    fill_ts = "COALESCE(to_timestamp((" + _numeric_sql("e.payload->>'timestamp_ms'", default="NULL") + ") / 1000.0), e.ts)"
+    return f"""SELECT
+  {_approx_step_time_alias_sql(fill_ts)},
+  ({exchange} || ' ' || COALESCE({symbol}, 'unknown') || ' ' || {side}) AS metric,
+  SUM({value}) AS value
+FROM mm_events e
+WHERE e.topic LIKE 'private:state:%:fills'
+  AND {exchange} IN (${{exchange:sqlstring}})
+  AND ({symbol} IN (${{symbol:sqlstring}}) OR {symbol} IS NULL OR {symbol} = '')
+  AND $__timeFilter(e.ts)
 GROUP BY 1, 2
 ORDER BY 1"""
 
@@ -525,13 +494,13 @@ ORDER BY 1"""
 
 
 def _market_event_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (e.exchange || ' ' || e.symbol) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'MarketEvent'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND e.symbol IN (${{symbol:sqlstring}})
   AND $__timeFilter(e.ts)
@@ -550,93 +519,93 @@ END"""
   WHEN kv.key LIKE '%_ms' THEN substring(kv.key from 1 for length(kv.key) - 3)
   ELSE kv.key
 END"""
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   {stage} AS metric,
   {value_ms} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{{}}'::jsonb)) AS kv(key, value)
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND kv.key <> 'best_epoch'
   AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
 ORDER BY 1"""
 
 
 def _controller_warning_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   w.warning AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'warnings', '[]'::jsonb)) AS w(warning)
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 1"""
 
 
 def _model_nll_step_sql() -> str:
     nll = _numeric_sql("m.value->>'nll'", default="NULL")
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   m.key AS metric,
   {nll} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{{}}'::jsonb)) AS m(key, value)
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND m.value->>'nll' IS NOT NULL
 ORDER BY 1"""
 
 
 def _risk_approved_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (e.exchange || ' ' || e.symbol) AS metric,
   CASE WHEN COALESCE(e.payload #>> ARRAY['risk','approved'], 'false') = 'true' THEN 1.0 ELSE 0.0 END AS value
 FROM mm_events e
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
 ORDER BY 1"""
 
 
 def _risk_reject_step_sql() -> str:
     count_value = _numeric_sql("reason.value", default="0.0")
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   reason.key AS metric,
   SUM({count_value}) AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['risk','rejection_counts'], '{{}}'::jsonb)) AS reason(key, value)
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 1"""
 
 
 def _execution_gate_block_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   reason.value AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload #> ARRAY['execution_gates','blocked_reasons'], '[]'::jsonb)) AS reason(value)
 WHERE {_diagnostics_filter()}
-  AND e.payload->>'t_end_ms' IS NOT NULL
 GROUP BY 1, 2
 ORDER BY 1"""
 
 
 def _execution_sync_outcome_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (COALESCE(e.exchange, 'unknown') || ' ' ||
    CASE e.event_type WHEN 'ExecutionSyncCompleted' THEN 'completed' ELSE 'failed' END) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type IN ('ExecutionSyncCompleted', 'ExecutionSyncFailed')
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
   AND $__timeFilter(e.ts)
@@ -645,15 +614,15 @@ ORDER BY 1"""
 
 
 def _router_failure_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (COALESCE(e.exchange, 'unknown') || ' ' ||
    CASE WHEN e.event_type = 'CancelOrdersFailed' THEN 'cancel' ELSE 'place' END || ' ' ||
    COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type IN ('CancelOrdersFailed', 'PlaceOrdersFailed')
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
   AND $__timeFilter(e.ts)
@@ -662,13 +631,13 @@ ORDER BY 1"""
 
 
 def _validation_reject_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
-  {_step_time_alias_sql("e.payload->>'t_end_ms'")},
+  {_approx_step_time_alias_sql(step_source)},
   (COALESCE(e.exchange, 'unknown') || ' ' || COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown')) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
 WHERE e.event_type = 'OrderValidationRejected'
-  AND e.payload->>'t_end_ms' IS NOT NULL
   AND e.exchange IN (${{exchange:sqlstring}})
   AND (e.symbol IN (${{symbol:sqlstring}}) OR e.symbol IS NULL)
   AND $__timeFilter(e.ts)
