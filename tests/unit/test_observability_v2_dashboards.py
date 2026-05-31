@@ -215,12 +215,12 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         "01 Strategy raw ladder",
         "02 Strategy cap -> target orderbook",
         "03 Risk-approved target",
-        "04 Removed by local risk / collateral",
-        "05 Planner new place orders",
-        "06 Venue rules valid after rounding",
-        "07 Exchange accepted placed orders",
-        "08 Planner kept live orders",
-        "09 Planner cancel orders",
+        "04 Planner new place orders",
+        "05 Venue rules valid after rounding",
+        "06 Exchange accepted placed orders",
+        "07 Planner kept live orders",
+        "08 Planner cancel orders",
+        "09 Removed by local risk / collateral",
         "10 Removed by venue adapter: invalid price/qty",
         "11 Removed by venue adapter: min qty",
         "12 Removed by venue adapter: min notional",
@@ -231,12 +231,12 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         "01 Strategy raw ladder": 3,
         "02 Strategy cap -> target orderbook": 13,
         "03 Risk-approved target": 23,
-        "04 Removed by local risk / collateral": 33,
-        "05 Planner new place orders": 43,
-        "06 Venue rules valid after rounding": 53,
-        "07 Exchange accepted placed orders": 63,
-        "08 Planner kept live orders": 73,
-        "09 Planner cancel orders": 83,
+        "04 Planner new place orders": 33,
+        "05 Venue rules valid after rounding": 43,
+        "06 Exchange accepted placed orders": 53,
+        "07 Planner kept live orders": 63,
+        "08 Planner cancel orders": 73,
+        "09 Removed by local risk / collateral": 83,
         "10 Removed by venue adapter: invalid price/qty": 93,
         "11 Removed by venue adapter: min qty": 103,
         "12 Removed by venue adapter: min notional": 113,
@@ -277,12 +277,12 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     raw_sql = panels_by_title["01 Strategy raw ladder"]["targets"][0]["rawSql"]
     target_sql = panels_by_title["02 Strategy cap -> target orderbook"]["targets"][0]["rawSql"]
     risk_sql = panels_by_title["03 Risk-approved target"]["targets"][0]["rawSql"]
-    risk_removed_sql = panels_by_title["04 Removed by local risk / collateral"]["targets"][0]["rawSql"]
-    place_sql = panels_by_title["05 Planner new place orders"]["targets"][0]["rawSql"]
-    rules_sql = panels_by_title["06 Venue rules valid after rounding"]["targets"][0]["rawSql"]
-    accepted_sql = panels_by_title["07 Exchange accepted placed orders"]["targets"][0]["rawSql"]
-    kept_sql = panels_by_title["08 Planner kept live orders"]["targets"][0]["rawSql"]
-    cancel_sql = panels_by_title["09 Planner cancel orders"]["targets"][0]["rawSql"]
+    place_sql = panels_by_title["04 Planner new place orders"]["targets"][0]["rawSql"]
+    rules_sql = panels_by_title["05 Venue rules valid after rounding"]["targets"][0]["rawSql"]
+    accepted_sql = panels_by_title["06 Exchange accepted placed orders"]["targets"][0]["rawSql"]
+    kept_sql = panels_by_title["07 Planner kept live orders"]["targets"][0]["rawSql"]
+    cancel_sql = panels_by_title["08 Planner cancel orders"]["targets"][0]["rawSql"]
+    risk_removed_sql = panels_by_title["09 Removed by local risk / collateral"]["targets"][0]["rawSql"]
     invalid_sql = panels_by_title["10 Removed by venue adapter: invalid price/qty"]["targets"][0]["rawSql"]
     min_qty_sql = panels_by_title["11 Removed by venue adapter: min qty"]["targets"][0]["rawSql"]
     min_notional_sql = panels_by_title["12 Removed by venue adapter: min notional"]["targets"][0]["rawSql"]
