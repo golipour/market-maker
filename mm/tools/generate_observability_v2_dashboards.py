@@ -174,7 +174,7 @@ def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any
     }
 
 
-def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
+def _xy_order_qty_price_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {
@@ -184,7 +184,7 @@ def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[
                     "axisBorderShow": False,
                     "axisCenteredZero": False,
                     "axisColorMode": "text",
-                    "axisLabel": "cumulative qty",
+                    "axisLabel": "qty",
                     "axisPlacement": "auto",
                     "hideFrom": {"legend": False, "tooltip": False, "viz": False},
                     "lineInterpolation": "linear",
@@ -203,7 +203,7 @@ def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[
                     "matcher": {"id": "byName", "options": "price"},
                     "properties": [
                         {"id": "custom.axisLabel", "value": "price"},
-                        {"id": "decimals", "value": 1},
+                        {"id": "decimals", "value": 6},
                     ],
                 },
                 {
@@ -218,6 +218,20 @@ def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[
                     "properties": [
                         {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
                         {"id": "displayName", "value": "Ask"},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "placed orders"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Placed orders"},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byName", "options": "canceled order ids"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "displayName", "value": "Canceled order ids"},
                     ],
                 },
             ],
@@ -238,7 +252,105 @@ def _xy_target_ladder_panel(id_: int, title: str, expr: str, *, y: int) -> dict[
             {
                 "id": "partitionByValues",
                 "options": {
-                    "fields": ["side"],
+                    "fields": ["series"],
+                    "keepFields": False,
+                    "naming": {"mode": "as_is", "asLabels": False},
+                },
+            }
+        ],
+    }
+
+
+def _stem_order_qty_price_panel(
+    id_: int,
+    title: str,
+    expr: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 8,
+    h: int = 10,
+) -> dict[str, Any]:
+    return {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                    "axisBorderShow": False,
+                    "axisCenteredZero": False,
+                    "axisColorMode": "text",
+                    "axisLabel": "qty",
+                    "axisPlacement": "auto",
+                    "hideFrom": {"legend": False, "tooltip": False, "viz": False},
+                    "lineWidth": 0,
+                    "pointSize": {"fixed": 6, "max": 20, "min": 1},
+                    "scaleDistribution": {"type": "linear"},
+                    "show": "points",
+                    "spanNulls": False,
+                },
+                "unit": "short",
+                "decimals": 3,
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "price"},
+                    "properties": [
+                        {"id": "custom.axisLabel", "value": "price"},
+                        {"id": "decimals", "value": 6},
+                    ],
+                },
+                {
+                    "matcher": {
+                        "id": "byRegexp",
+                        "options": ".*bid$",
+                    },
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+                {
+                    "matcher": {
+                        "id": "byRegexp",
+                        "options": ".*ask$",
+                    },
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byRegexp", "options": "^axis range$"},
+                    "properties": [
+                        {
+                            "id": "custom.hideFrom",
+                            "value": {"legend": True, "tooltip": True, "viz": False},
+                        },
+                        {"id": "color", "value": {"fixedColor": "black", "mode": "fixed"}},
+                    ],
+                },
+            ],
+        },
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+            "mapping": "auto",
+            "series": [],
+            "tooltip": {"mode": "multi", "sort": "none"},
+        },
+        "targets": [_target(PG_DS, expr, fmt="table")],
+        "title": title,
+        "type": "xychart",
+        "pluginVersion": "13.0.0",
+        "transformations": [
+            {
+                "id": "partitionByValues",
+                "options": {
+                    "fields": ["series"],
                     "keepFields": False,
                     "naming": {"mode": "as_is", "asLabels": False},
                 },
@@ -346,7 +458,7 @@ def _templating() -> list[dict[str, Any]]:
     ]
 
 
-def _query_var(name: str, label: str, query: str, *, multi: bool = False) -> dict[str, Any]:
+def _query_var(name: str, label: str, query: str, *, multi: bool = False, refresh: int = 1) -> dict[str, Any]:
     return {
         "current": {"selected": False, "text": "All", "value": "$__all"} if multi else {},
         "datasource": PG_DS,
@@ -358,10 +470,29 @@ def _query_var(name: str, label: str, query: str, *, multi: bool = False) -> dic
         "name": name,
         "options": [],
         "query": query,
-        "refresh": 1,
+        "refresh": refresh,
         "sort": 1,
         "type": "query",
     }
+
+
+def _target_stems_frame_query() -> str:
+    return """SELECT
+  e.event_id AS __value,
+  (
+    'step ' || COALESCE(e.payload->>'frame_step', '?')
+    || ' / t_end ' || COALESCE(e.payload->>'t_end_ms', '?')
+    || ' / created ' || COALESCE(e.payload->>'created_at_ms', '?')
+  ) AS __text
+FROM mm_events e
+WHERE e.topic = '${diagnostics_topic}'
+  AND e.event_type = 'ControllerDiagnostics'
+  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
+  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
+  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
+  AND $__timeFilter(e.ts)
+ORDER BY e.ts DESC
+LIMIT 100"""
 
 
 def _custom_var(name: str, label: str, query: str) -> dict[str, Any]:
@@ -1286,7 +1417,7 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
-def _latest_target_ladder_depth_sql() -> str:
+def _latest_target_ladder_qty_price_sql() -> str:
     side = _side_sql("o.value->>'side'")
     price = _numeric_sql("o.value->>'price'", default="NULL")
     qty = _numeric_sql("o.value->>'qty'")
@@ -1317,31 +1448,734 @@ orders AS (
   CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS o(value)
   WHERE book.value IS NOT NULL
     AND ('${{target_role}}' = 'all' OR book.role = '${{target_role}}')
-),
-bid_depth AS (
-  SELECT 'bid'::text AS side,
-         price,
-         SUM(qty) OVER (ORDER BY price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
-  FROM orders
-  WHERE side = 'bid'
-    AND price IS NOT NULL
-    AND qty > 0
-),
-ask_depth AS (
-  SELECT 'ask'::text AS side,
-         price,
-         SUM(qty) OVER (ORDER BY price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value
-  FROM orders
-  WHERE side = 'ask'
-    AND price IS NOT NULL
-    AND qty > 0
 )
-SELECT side, price, value
-FROM bid_depth
+SELECT side AS series,
+       price,
+       SUM(qty) AS value
+FROM orders
+WHERE side IN ('bid', 'ask')
+  AND price IS NOT NULL
+  AND qty > 0
+GROUP BY 1, 2
+ORDER BY 1, 2"""
+
+
+def _latest_strategy_ladder_qty_price_sql() -> str:
+    side = _side_sql("o.value->>'side'")
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_decision AS (
+  SELECT e.ts,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'StrategyDecision'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+orders AS (
+  SELECT {side} AS side,
+         {price} AS price,
+         {qty} AS qty
+  FROM latest_decision d
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.payload->'ladder_orders', '[]'::jsonb)) AS o(value)
+)
+SELECT side AS series,
+       price,
+       SUM(qty) AS value
+FROM orders
+WHERE side IN ('bid', 'ask')
+  AND price IS NOT NULL
+  AND qty > 0
+GROUP BY 1, 2
+ORDER BY 1, 2"""
+
+
+def _latest_place_request_qty_price_sql() -> str:
+    side = _side_sql("o.value->>'side'")
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_request AS (
+  SELECT e.ts,
+         e.exchange,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'PlaceOrdersRequested'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+orders AS (
+  SELECT {side} AS side,
+         {price} AS price,
+         {qty} AS qty
+  FROM latest_request e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+)
+SELECT side AS series,
+       price,
+       SUM(qty) AS value
+FROM orders
+WHERE side IN ('bid', 'ask')
+  AND price IS NOT NULL
+  AND qty > 0
+GROUP BY 1, 2
+ORDER BY 1, 2"""
+
+
+def _rejected_command_qty_price_sql() -> str:
+    validation_side = _side_sql("e.payload->>'side'")
+    failed_side = _side_sql("o.value->>'side'")
+    validation_price = _numeric_sql("e.payload->>'price'", default="NULL")
+    validation_qty = _numeric_sql("e.payload->>'qty'")
+    failed_price = _numeric_sql("o.value->>'price'", default="NULL")
+    failed_qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH rejected AS (
+  SELECT ('validation: ' || COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown') || ' ' || {validation_side}) AS series,
+         {validation_price} AS price,
+         {validation_qty} AS qty
+  FROM mm_events e
+  WHERE e.event_type = 'OrderValidationRejected'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND (e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[]) OR e.symbol IS NULL)
+    AND $__timeFilter(e.ts)
+  UNION ALL
+  SELECT ('router: ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown') || ' ' || {failed_side}) AS series,
+         {failed_price} AS price,
+         {failed_qty} AS qty
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersFailed'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+)
+SELECT series,
+       price,
+       SUM(qty) AS value
+FROM rejected
+WHERE price IS NOT NULL
+  AND qty > 0
+GROUP BY 1, 2
+ORDER BY 1, 2"""
+
+
+def _placed_vs_canceled_qty_price_sql() -> str:
+    placed_price = _numeric_sql("o.value->>'price'", default="NULL")
+    placed_qty = _numeric_sql("o.value->>'qty'")
+    canceled_price = _numeric_sql("live_order.value #>> ARRAY['order','price']", default="NULL")
+    canceled_qty = _numeric_sql("COALESCE(live_order.value->>'remaining_qty', live_order.value #>> ARRAY['order','qty'])")
+    return f"""WITH placed AS (
+  SELECT 'placed orders'::text AS series,
+         {placed_price} AS price,
+         {placed_qty} AS qty
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE e.event_type = 'PlaceOrdersAccepted'
+    AND COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+),
+cancel_ids AS (
+  SELECT e.ts,
+         e.exchange,
+         order_id.value AS order_id
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(e.payload->'order_ids', '[]'::jsonb)) AS order_id(value)
+  WHERE e.event_type = 'CancelOrdersAccepted'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+),
+canceled AS (
+  SELECT 'canceled order ids'::text AS series,
+         {canceled_price} AS price,
+         {canceled_qty} AS qty
+  FROM cancel_ids c
+  JOIN LATERAL (
+    SELECT open_order.value
+    FROM mm_events s
+    CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{{}}'::jsonb)) AS open_order(key, value)
+    WHERE s.topic LIKE 'execution:state:%'
+      AND s.exchange = c.exchange
+      AND s.ts <= c.ts
+      AND open_order.key = c.order_id
+      AND COALESCE(open_order.value #>> ARRAY['order','symbol'], '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    ORDER BY s.ts DESC
+    LIMIT 1
+  ) AS live_order ON TRUE
+),
+commands AS (
+  SELECT * FROM placed
+  UNION ALL
+  SELECT * FROM canceled
+),
+grouped AS (
+SELECT series,
+       price,
+       SUM(qty) AS value
+FROM commands
+WHERE price IS NOT NULL
+  AND qty > 0
+GROUP BY 1, 2
+)
+SELECT series,
+       price,
+       value
+FROM grouped
+ORDER BY grouped.price, series"""
+
+
+def _previous_live_vs_canceled_qty_price_sql() -> str:
+    side = _side_sql("live_order.value #>> ARRAY['order','side']")
+    price = _numeric_sql("live_order.value #>> ARRAY['order','price']", default="NULL")
+    qty = _numeric_sql("COALESCE(live_order.value->>'remaining_qty', live_order.value #>> ARRAY['order','qty'])")
+    return f"""WITH latest_cancel AS (
+  SELECT e.ts,
+         e.exchange,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'CancelOrdersAccepted'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+cancel_ids AS (
+  SELECT order_id.value AS order_id
+  FROM latest_cancel c
+  CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(c.payload->'order_ids', '[]'::jsonb)) AS order_id(value)
+),
+previous_state AS (
+  SELECT s.ts,
+         s.exchange,
+         s.payload
+  FROM latest_cancel c
+  JOIN LATERAL (
+    SELECT s.ts, s.exchange, s.payload
+    FROM mm_events s
+    WHERE s.topic LIKE 'execution:state:%'
+      AND s.exchange = c.exchange
+      AND s.ts <= c.ts
+      AND $__timeFilter(s.ts)
+    ORDER BY s.ts DESC
+    LIMIT 1
+  ) s ON TRUE
+),
+live_orders AS (
+  SELECT live_order.key AS order_id,
+         {side} AS side,
+         {price} AS price,
+         {qty} AS qty
+  FROM previous_state s
+  CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{{}}'::jsonb)) AS live_order(key, value)
+  WHERE COALESCE(live_order.value #>> ARRAY['order','symbol'], '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+),
+series AS (
+  SELECT CASE
+           WHEN cancel_ids.order_id IS NOT NULL THEN 'canceled ' || live_orders.side
+           ELSE 'previously live ' || live_orders.side
+         END AS series,
+         live_orders.price,
+         live_orders.qty AS value
+  FROM live_orders
+  LEFT JOIN cancel_ids ON cancel_ids.order_id = live_orders.order_id
+  WHERE live_orders.side IN ('bid', 'ask')
+    AND live_orders.price IS NOT NULL
+),
+{_stem_axis_ctes()}
+SELECT series,
+       price,
+       SUM(value) AS value
+FROM series
+WHERE value > 0
+GROUP BY 1, 2
 UNION ALL
-SELECT side, price, value
-FROM ask_depth
-ORDER BY side, price"""
+SELECT series, price, value
+FROM axis_rows
+ORDER BY price, series"""
+
+
+def _stem_axis_ctes() -> str:
+    raw_side = _side_sql("axis_o.value->>'side'")
+    raw_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
+    raw_qty = _numeric_sql("axis_o.value->>'qty'")
+    target_side = _side_sql("axis_o.value->>'side'")
+    target_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
+    target_qty = _numeric_sql("axis_o.value->>'qty'")
+    return f"""axis_latest_book AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+axis_latest_decision AS (
+  SELECT e.ts,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'StrategyDecision'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+axis_raw_orders AS (
+  SELECT {raw_side} AS side,
+         {raw_price} AS price,
+         SUM({raw_qty}) AS qty
+  FROM axis_latest_decision d
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.payload->'ladder_orders', '[]'::jsonb)) AS axis_o(value)
+  GROUP BY 1, 2
+),
+axis_target_orders AS (
+  SELECT {target_side} AS side,
+         {target_price} AS price,
+         SUM({target_qty}) AS qty
+  FROM axis_latest_book lb
+  CROSS JOIN LATERAL (
+    VALUES ('local', lb.payload->'local'), ('global', lb.payload->'global')
+  ) AS book(role, value)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS axis_o(value)
+  WHERE book.value IS NOT NULL
+    AND ('${{target_role}}' = 'all' OR book.role = '${{target_role}}')
+  GROUP BY 1, 2
+),
+axis_points AS (
+  SELECT axis_target_orders.price,
+         axis_target_orders.qty AS value
+  FROM axis_target_orders
+  WHERE axis_target_orders.side IN ('bid', 'ask')
+    AND axis_target_orders.price IS NOT NULL
+  UNION ALL
+  SELECT axis_raw_orders.price,
+         GREATEST(axis_raw_orders.qty - COALESCE(axis_target_orders.qty, 0.0), 0.0) AS value
+  FROM axis_raw_orders
+  LEFT JOIN axis_target_orders
+    ON axis_target_orders.side = axis_raw_orders.side
+   AND axis_target_orders.price = axis_raw_orders.price
+  WHERE axis_raw_orders.side IN ('bid', 'ask')
+    AND axis_raw_orders.price IS NOT NULL
+),
+axis_frame AS (
+  SELECT MIN(price) AS price_min,
+         MAX(price) AS price_max,
+         GREATEST(MAX(value), 0.0) AS qty_max
+  FROM axis_points
+  WHERE value > 0
+),
+axis_rows AS (
+  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value
+  FROM axis_frame
+  WHERE price_min IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value
+  FROM axis_frame
+  WHERE price_max IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_min AS price, qty_max AS value
+  FROM axis_frame
+  WHERE price_min IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_max AS price, qty_max AS value
+  FROM axis_frame
+  WHERE price_max IS NOT NULL
+)"""
+
+
+def _latest_action_pipeline_stage_orders_sql(
+    stage: str,
+    *,
+    field: str = "orders",
+    reason: str | None = None,
+) -> str:
+    side = _side_sql("o.value->>'side'")
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    axis_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
+    axis_qty = _numeric_sql("axis_o.value->>'qty'")
+    reason_filter = ""
+    if reason is not None:
+        reason_filter = f"\n    AND COALESCE(o.value->>'reason', '') = '{reason}'"
+    return f"""WITH latest AS (
+  SELECT e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{diagnostics_topic}}'
+    AND e.event_type = 'ControllerDiagnostics'
+    AND e.event_id = ${{target_frame_event_id:sqlstring}}
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+orders AS (
+  SELECT {side} AS series,
+         {price} AS price,
+         {qty} AS value
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', '{field}'], '[]'::jsonb)
+  ) AS o(value)
+  WHERE {side} IN ('bid', 'ask')
+    AND {price} IS NOT NULL{reason_filter}
+),
+axis_points AS (
+  SELECT {axis_price} AS price,
+         {axis_qty} AS value
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders'], '[]'::jsonb)
+  ) AS axis_o(value)
+  WHERE {axis_price} IS NOT NULL
+),
+axis_frame AS (
+  SELECT MIN(price) AS price_min,
+         MAX(price) AS price_max,
+         GREATEST(MAX(value), 0.0) AS qty_max
+  FROM axis_points
+  WHERE value > 0
+),
+axis_rows AS (
+  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value
+  FROM axis_frame
+  WHERE price_min IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value
+  FROM axis_frame
+  WHERE price_max IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_min AS price, qty_max AS value
+  FROM axis_frame
+  WHERE price_min IS NOT NULL
+  UNION ALL
+  SELECT 'axis range' AS series, price_max AS price, qty_max AS value
+  FROM axis_frame
+  WHERE price_max IS NOT NULL
+),
+grouped AS (
+  SELECT series, price, SUM(value) AS value
+  FROM orders
+  WHERE value > 0
+  GROUP BY 1, 2
+)
+SELECT series, price, value
+FROM grouped
+UNION ALL
+SELECT series, price, value
+FROM axis_rows
+ORDER BY price, series"""
+
+
+def _stem_raw_to_target_sql() -> str:
+    raw_side = _side_sql("o.value->>'side'")
+    raw_price = _numeric_sql("o.value->>'price'", default="NULL")
+    raw_qty = _numeric_sql("o.value->>'qty'")
+    target_side = _side_sql("o.value->>'side'")
+    target_price = _numeric_sql("o.value->>'price'", default="NULL")
+    target_qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_book AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+latest_decision AS (
+  SELECT e.ts,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'StrategyDecision'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+raw_orders AS (
+  SELECT {raw_side} AS side,
+         {raw_price} AS price,
+         SUM({raw_qty}) AS qty
+  FROM latest_decision d
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(d.payload->'ladder_orders', '[]'::jsonb)) AS o(value)
+  GROUP BY 1, 2
+),
+target_orders AS (
+  SELECT {target_side} AS side,
+         {target_price} AS price,
+         SUM({target_qty}) AS qty
+  FROM latest_book lb
+  CROSS JOIN LATERAL (
+    VALUES ('local', lb.payload->'local'), ('global', lb.payload->'global')
+  ) AS book(role, value)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS o(value)
+  WHERE book.value IS NOT NULL
+    AND ('${{target_role}}' = 'all' OR book.role = '${{target_role}}')
+  GROUP BY 1, 2
+),
+remaining AS (
+  SELECT side AS series,
+         price,
+         qty AS value
+  FROM target_orders
+  WHERE side IN ('bid', 'ask')
+    AND price IS NOT NULL
+)
+,
+{_stem_axis_ctes()},
+grouped AS (
+  SELECT series, price, SUM(value) AS value
+  FROM (
+  SELECT * FROM remaining
+  ) stem
+  WHERE value > 0
+  GROUP BY 1, 2
+)
+SELECT series, price, value
+FROM grouped
+UNION ALL
+SELECT series, price, value
+FROM axis_rows
+ORDER BY price, series"""
+
+
+def _stem_target_to_place_sql() -> str:
+    target_side = _side_sql("o.value->>'side'")
+    target_price = _numeric_sql("o.value->>'price'", default="NULL")
+    target_qty = _numeric_sql("o.value->>'qty'")
+    request_side = _side_sql("o.value->>'side'")
+    request_price = _numeric_sql("o.value->>'price'", default="NULL")
+    request_qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_book AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.actor_id,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{target_books_topic}}'
+    AND e.event_type = 'JointTargetBook'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+latest_request AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'PlaceOrdersRequested'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+    AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS eo(value)
+      WHERE COALESCE(eo.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    )
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+target_orders AS (
+  SELECT {target_side} AS side,
+         {target_price} AS price,
+         SUM({target_qty}) AS qty
+  FROM latest_book lb
+  CROSS JOIN LATERAL (
+    VALUES ('local', lb.payload->'local'), ('global', lb.payload->'global')
+  ) AS book(role, value)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) AS o(value)
+  WHERE book.value IS NOT NULL
+    AND ('${{target_role}}' = 'all' OR book.role = '${{target_role}}')
+  GROUP BY 1, 2
+),
+requested AS (
+  SELECT {request_side} AS side,
+         {request_price} AS price,
+         SUM({request_qty}) AS qty
+  FROM latest_request e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  GROUP BY 1, 2
+),
+sent AS (
+  SELECT side AS series,
+         price,
+         qty AS value
+  FROM requested
+  WHERE side IN ('bid', 'ask')
+    AND price IS NOT NULL
+)
+,
+{_stem_axis_ctes()},
+grouped AS (
+  SELECT series, price, SUM(value) AS value
+  FROM (
+  SELECT * FROM sent
+  ) stem
+  WHERE value > 0
+  GROUP BY 1, 2
+)
+SELECT series, price, value
+FROM grouped
+UNION ALL
+SELECT series, price, value
+FROM axis_rows
+ORDER BY price, series"""
+
+
+def _stem_place_to_accept_reject_sql() -> str:
+    request_side = _side_sql("o.value->>'side'")
+    request_price = _numeric_sql("o.value->>'price'", default="NULL")
+    request_qty = _numeric_sql("o.value->>'qty'")
+    accepted_side = _side_sql("o.value->>'side'")
+    accepted_price = _numeric_sql("o.value->>'price'", default="NULL")
+    accepted_qty = _numeric_sql("o.value->>'qty'")
+    validation_side = _side_sql("e.payload->>'side'")
+    validation_price = _numeric_sql("e.payload->>'price'", default="NULL")
+    validation_qty = _numeric_sql("e.payload->>'qty'")
+    failed_side = _side_sql("o.value->>'side'")
+    failed_price = _numeric_sql("o.value->>'price'", default="NULL")
+    failed_qty = _numeric_sql("o.value->>'qty'")
+    return f"""WITH latest_request AS (
+  SELECT e.ts,
+         e.exchange,
+         e.symbol,
+         e.payload
+  FROM mm_events e
+  WHERE e.event_type = 'PlaceOrdersRequested'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+    AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS eo(value)
+      WHERE COALESCE(eo.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    )
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+requested AS (
+  SELECT {request_side} AS side,
+         {request_price} AS price,
+         SUM({request_qty}) AS qty
+  FROM latest_request e
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  GROUP BY 1, 2
+),
+accepted AS (
+  SELECT {accepted_side} AS side,
+         {accepted_price} AS price,
+         SUM({accepted_qty}) AS qty
+  FROM latest_request r
+  JOIN mm_events e
+    ON e.event_type = 'PlaceOrdersAccepted'
+   AND e.exchange = r.exchange
+   AND e.ts >= r.ts
+   AND e.ts <= r.ts + interval '5 minutes'
+   AND $__timeFilter(e.ts)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  GROUP BY 1, 2
+),
+rejected AS (
+  SELECT ('rejected: ' || COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown') || ' ' || {validation_side}) AS series,
+         {validation_side} AS side,
+         {validation_price} AS price,
+         SUM({validation_qty}) AS qty
+  FROM latest_request r
+  JOIN mm_events e
+    ON e.event_type = 'OrderValidationRejected'
+   AND e.exchange = r.exchange
+   AND e.ts >= r.ts
+   AND e.ts <= r.ts + interval '5 minutes'
+   AND $__timeFilter(e.ts)
+  WHERE e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  GROUP BY 1, 2, 3
+  UNION ALL
+  SELECT ('rejected: ' || COALESCE(NULLIF(e.payload->>'error', ''), 'unknown') || ' ' || {failed_side}) AS series,
+         {failed_side} AS side,
+         {failed_price} AS price,
+         SUM({failed_qty}) AS qty
+  FROM latest_request r
+  JOIN mm_events e
+    ON e.event_type = 'PlaceOrdersFailed'
+   AND e.exchange = r.exchange
+   AND e.ts >= r.ts
+   AND e.ts <= r.ts + interval '5 minutes'
+   AND $__timeFilter(e.ts)
+  CROSS JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[]'::jsonb)) AS o(value)
+  WHERE COALESCE(o.value->>'exchange', e.exchange, '') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND COALESCE(o.value->>'symbol', e.symbol, '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  GROUP BY 1, 2, 3
+),
+accepted_series AS (
+  SELECT side AS series,
+         price,
+         qty AS value
+  FROM accepted
+  WHERE side IN ('bid', 'ask')
+    AND price IS NOT NULL
+),
+rejected_series AS (
+  SELECT series,
+         price,
+         qty AS value
+  FROM rejected
+  WHERE side IN ('bid', 'ask')
+    AND price IS NOT NULL
+)
+,
+{_stem_axis_ctes()},
+grouped AS (
+  SELECT series, price, SUM(value) AS value
+  FROM (
+  SELECT * FROM accepted_series
+  UNION ALL
+  SELECT * FROM rejected_series
+  ) stem
+  WHERE value > 0
+  GROUP BY 1, 2
+)
+SELECT series, price, value
+FROM grouped
+UNION ALL
+SELECT series, price, value
+FROM axis_rows
+ORDER BY price, series"""
 
 
 def _target_to_execution_stage_counts_sql() -> str:
@@ -1354,8 +2188,7 @@ FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES
     ('raw ladder', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','ladder','order_count']")}),
-    ('venue-valid ladder', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count']")}),
-    ('capped target', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','capped','order_count']")}),
+    ('strategy-capped target', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','capped','order_count']")}),
     ('target book', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','target_book','order_count']")}),
     ('risk-passed target', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','risk_approved_target','order_count']")}),
     ('kept live orders', {_numeric_sql("e.payload #>> ARRAY['action_pipeline','kept','order_count']")}),
@@ -1369,8 +2202,7 @@ GROUP BY 1, 2"""
   FROM (
     VALUES
       ('raw ladder'),
-      ('venue-valid ladder'),
-      ('capped target'),
+      ('strategy-capped target'),
       ('target book'),
       ('risk-passed target'),
       ('kept live orders'),
@@ -1394,8 +2226,7 @@ def _target_to_execution_filter_reason_sql() -> str:
   )"""
     stages_sql = """VALUES
     ('ladder', 'raw ladder'),
-    ('venue_quantized', 'venue limits'),
-    ('capped', 'per-side cap'),
+    ('capped', 'strategy cap'),
     ('risk_approved_target', 'risk'),
     ('rules_valid', 'exchange rules'),
     ('router_accepted', 'router')"""
@@ -1587,25 +2418,34 @@ def optimizer_diagnostics() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
 
-def target_order_execution() -> dict[str, Any]:
+def target_order_stems() -> dict[str, Any]:
     panels = [
         _text(
             1,
             "Scope",
-            "Chart-only path from the latest target orderbook to per-step filters and the final placed/canceled exchange commands. Narrow exchange, symbol, and actor when reading one ladder.",
+            "Selected-frame strategy-to-execution ladder. Every chart uses the same ControllerDiagnostics event and the same raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
             y=0,
         ),
-        _xy_target_ladder_panel(2, "Target orderbook depth (latest)", _latest_target_ladder_depth_sql(), y=3),
-        _panel(3, "Orders remaining by stage / step", "timeseries", PG_DS, _target_to_execution_stage_counts_sql(), x=0, y=13, w=24),
-        _panel(4, "Filtered orders by reason / step", "timeseries", PG_DS, _target_to_execution_filter_reason_sql(), x=0, y=21, w=24),
-        _execution_command_panel(5, "Placed vs canceled orders / step", _placed_vs_canceled_step_sql(), y=29),
+        _stem_order_qty_price_panel(2, "01 Strategy raw ladder", _latest_action_pipeline_stage_orders_sql("ladder"), x=0, y=3, w=24),
+        _stem_order_qty_price_panel(3, "02 Strategy cap -> target orderbook", _latest_action_pipeline_stage_orders_sql("capped"), x=0, y=13, w=24),
+        _stem_order_qty_price_panel(4, "03 Risk-approved target", _latest_action_pipeline_stage_orders_sql("risk_approved_target"), x=0, y=23, w=24),
+        _stem_order_qty_price_panel(5, "04 Planner new place orders", _latest_action_pipeline_stage_orders_sql("planned_place"), x=0, y=33, w=24),
+        _stem_order_qty_price_panel(6, "05 Venue rules valid after rounding", _latest_action_pipeline_stage_orders_sql("rules_valid"), x=0, y=43, w=24),
+        _stem_order_qty_price_panel(7, "06 Exchange accepted placed orders", _latest_action_pipeline_stage_orders_sql("router_accepted"), x=0, y=53, w=24),
+        _stem_order_qty_price_panel(8, "07 Planner kept live orders", _latest_action_pipeline_stage_orders_sql("kept"), x=0, y=63, w=24),
+        _stem_order_qty_price_panel(9, "08 Planner cancel orders", _latest_action_pipeline_stage_orders_sql("planned_cancel"), x=0, y=73, w=24),
+        _stem_order_qty_price_panel(10, "09 Removed by venue rules: invalid price/qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_invalid_price_or_qty"), x=0, y=83, w=24),
+        _stem_order_qty_price_panel(11, "10 Removed by venue rules: min qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_qty"), x=0, y=93, w=24),
+        _stem_order_qty_price_panel(12, "11 Removed by venue rules: min notional", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_notional"), x=0, y=103, w=24),
     ]
     return _dashboard(
-        "mm-obs-v2-target-order-execution",
-        "MM Observability v2 / 05B Target To Execution",
+        "mm-obs-v2-target-order-stems",
+        "MM Observability v2 / 05C Target Order Stems",
         panels,
         tags=["actions", "execution"],
-        extra_templating=[_custom_var("target_role", "Target role", "local,global,all")],
+        extra_templating=[
+            _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
+        ],
     )
 
 
@@ -2158,8 +2998,7 @@ def _action_rejection_reason_sql() -> str:
 FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES
-    ('venue_quantized', 'venue limits'),
-    ('capped', 'order shaping'),
+    ('capped', 'strategy cap'),
     ('risk_approved_target', 'risk'),
     ('rules_valid', 'exchange rules'),
     ('router_accepted', 'router')
@@ -2230,8 +3069,7 @@ SELECT {_approx_step_time_alias_sql(local_step_source)},
 FROM mm_events e
 CROSS JOIN LATERAL (
   VALUES
-    ('venue_quantized', 'venue limits'),
-    ('capped', 'order shaping'),
+    ('capped', 'strategy cap'),
     ('rules_valid', 'exchange rules'),
     ('router_accepted', 'router')
 ) AS stages(stage, stage_label)
@@ -2265,7 +3103,6 @@ ORDER BY 1"""
 def _local_stage_drop_sql() -> str:
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     ladder_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','ladder','order_count']")
-    venue_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','venue_quantized','order_count']")
     capped_count = _numeric_sql("e.payload #>> ARRAY['action_pipeline','capped','order_count']")
     return f"""WITH drops AS (
   SELECT {_approx_step_time_alias_sql(step_source)},
@@ -2274,8 +3111,7 @@ def _local_stage_drop_sql() -> str:
   FROM mm_events e
   CROSS JOIN LATERAL (
     VALUES
-      ('venue limits'::text, {ladder_count}, {venue_count}),
-      ('order shaping'::text, {venue_count}, {capped_count})
+      ('strategy cap'::text, {ladder_count}, {capped_count})
   ) AS drop_stage(metric, before_count, after_count)
   WHERE {_diagnostics_filter()}
 )
@@ -2707,7 +3543,7 @@ def dashboards() -> list[dict[str, Any]]:
         model_quality(),
         optimizer_diagnostics(),
         action_pipeline(),
-        target_order_execution(),
+        target_order_stems(),
         risk_execution(),
         portfolio_pnl(),
         liquidity_sourcing(),

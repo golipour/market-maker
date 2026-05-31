@@ -1,4 +1,9 @@
-"""Order pipeline: MPC ladder → venue rules (``InstrumentSpec``) → strategy caps."""
+"""Order pipeline helpers for strategy-owned ladder construction and caps.
+
+Venue tick/lot quantization and min-size validation belong to the execution
+boundary. Strategy construction remains float-first so the target book shows
+what the strategy decided before exchange formatting.
+"""
 
 from __future__ import annotations
 
@@ -194,12 +199,11 @@ def build_orders_from_sigmoid_with_report(
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
     )
-    venued, venue_report = apply_venue_constraints_with_report(ladder, constraints)
-    capped, capped_report = cap_orders_per_side_with_report(venued, constraints.max_orders_per_side)
+    capped, capped_report = cap_orders_per_side_with_report(ladder, constraints.max_orders_per_side)
     pipeline = ActionPipelineReport(
         continuous=dict(continuous or {}),
         ladder=ladder_report,
-        venue_quantized=venue_report,
+        venue_quantized=ActionStageReport(),
         capped=capped_report,
     )
     return capped, pipeline, ladder

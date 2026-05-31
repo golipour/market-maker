@@ -87,12 +87,16 @@ book unless replace-mode empty books are approved.
 `MpcStrategyEngine` asks `build_joint_target_book_from_sigmoid` to turn optimizer
 output into target books.
 
-For each venue role, `build_orders_from_sigmoid_with_report` performs three
-local steps:
+For each venue role, `build_orders_from_sigmoid_with_report` performs only
+strategy-owned steps:
 
 1. Build a raw price/quantity ladder.
-2. Quantize and validate against venue instrument constraints.
-3. Cap the number of orders per side.
+2. Cap the number of orders per side.
+
+Venue tick/lot rounding, minimum quantity, and minimum notional are no longer
+strategy ladder concerns. They are applied at the execution boundary by
+`OrderManager` / `ExchangeRulesGateway`, after risk has approved the target
+book and before place commands reach the exchange adapter.
 
 ### Raw ladder
 
@@ -123,23 +127,6 @@ sell price = mid + spread
 
 The stage report is `action_pipeline.ladder`.
 
-### Venue quantization and exchange minimums
-
-`apply_venue_constraints_with_report` rounds candidate orders:
-
-- price is rounded by `price_step`
-- quantity is rounded by `qty_step`
-
-It then drops orders that cannot be sent to the venue:
-
-| Rejection | Meaning |
-|-----------|---------|
-| `invalid_price_or_qty` | Rounded price/qty is invalid, zero, negative, or non-finite. |
-| `below_min_qty` | Quantity is below venue minimum. |
-| `below_min_notional` | `price * qty` is below venue minimum notional. |
-
-The stage report is `action_pipeline.venue_quantized`.
-
 ### Per-side strategy cap
 
 `cap_orders_per_side_with_report` sorts buy and sell orders by descending
@@ -152,6 +139,9 @@ quantity and keeps only the largest `max_orders_per_side` orders per side.
 | `capped_sell` | Extra sell orders were dropped. |
 
 The stage report is `action_pipeline.capped`.
+
+`action_pipeline.venue_quantized` is retained only for old dashboards and is
+empty in the simplified path.
 
 ### Target book output
 
@@ -368,22 +358,25 @@ Empty `replace` is actionable. It cancels scoped live orders and places nothing.
 
 ## Rules gateway
 
-The raw planner output may contain place commands that should not be sent to
-the exchange. `ExchangeRulesGateway` validates each `PlaceCommand` against the
-latest venue limits.
+The raw planner output may contain place commands that are not yet in venue
+wire shape. `ExchangeRulesGateway` normalizes and validates each `PlaceCommand`
+against the latest venue limits:
+
+- price is rounded down to the venue tick size when known
+- quantity is rounded down to the venue lot size when known
+- the rounded order is checked against min quantity and min notional
 
 Invalid place commands are moved from `plan.place` to `plan.rejected` with
 stable rule reasons such as:
 
 - `rules_min_qty`
 - `rules_min_notional`
-- `rules_tick_size`
-- `rules_qty_step`
-- `rules_price_band`
+- `rules_invalid_price_or_qty`
 
 `ExecutionSyncReport.to_place` records the raw planner place candidates.
-`ExecutionSyncReport.limit_valid` records only commands that survived rules
-validation.
+`ExecutionSyncReport.limit_valid` records only normalized commands that survived
+rules validation. Its `rejections` array carries rejected order price/qty,
+side, and reason for per-stage ladder dashboards.
 
 Current implementation detail: `OrderValidationRejected` events are published
 by the router. If a plan has only rejections and no cancels or valid places, the

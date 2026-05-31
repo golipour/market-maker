@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource, order_passes_limits
+from mm.core.interfaces.order_validation import (
+    AbstractVenueOrderLimitSource,
+    normalize_order_to_limits,
+    order_passes_limits,
+)
 from mm.execution.target_book import CommandRejection, ExecutionPlan, PlaceCommand
 
 RULES_MIN_QTY = "rules_min_qty"
@@ -33,13 +37,14 @@ class ExchangeRulesGateway:
         rejected: list[CommandRejection] = list(plan.rejected)
         for command in plan.place:
             limits = self._limit_source.limits_for(command.order.symbol)
-            ok, reason = order_passes_limits(command.order, limits)
+            normalized = normalize_order_to_limits(command.order, limits)
+            ok, reason = order_passes_limits(normalized, limits)
             if ok:
-                valid.append(command)
+                valid.append(PlaceCommand(command.actor_id, normalized))
             else:
                 rejected.append(
                     CommandRejection(
-                        order=command.order,
+                        order=normalized,
                         reason=normalize_rules_reason(reason),
                         stage="rules",
                     )

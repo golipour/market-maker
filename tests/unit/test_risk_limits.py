@@ -55,6 +55,31 @@ def test_risk_config_uses_nested_local_limits() -> None:
     assert config.controller.risk.local.min_inventory == 0.0
 
 
+def test_risk_config_uses_same_fields_for_global_limits() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(
+                local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+                global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+            ),
+            "controller": {
+                "enabled": True,
+                "risk": {
+                    "global": {
+                        "max_inventory": 600.0,
+                        "max_open_notional": 12_000.0,
+                        "max_order_notional": 3_000.0,
+                    },
+                },
+            },
+        }
+    )
+
+    assert config.controller.risk.global_.max_inventory == 600.0
+    assert config.controller.risk.global_.max_open_notional == 12_000.0
+    assert config.controller.risk.global_.max_order_notional == 3_000.0
+
+
 def test_spot_rejects_sell_exceeding_inventory() -> None:
     limits = RiskLimits(local=VenueRiskLimits(min_inventory=0.0, max_inventory=100.0))
     risk = RuntimeRiskEngine(limits=limits, clock_ms=lambda: 1000)

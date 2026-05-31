@@ -86,15 +86,7 @@ def _empty_venue_target_book(book: VenueTargetBook) -> VenueTargetBook:
 
 
 def _global_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
-    return VenueRiskLimits(
-        min_inventory=limits.min_inventory,
-        max_inventory=limits.max_inventory,
-        min_cash=limits.min_cash,
-        max_open_notional=float("inf"),
-        max_order_notional=limits.max_market_order_notional,
-        max_market_data_age_ms=limits.max_market_data_age_ms,
-        max_private_state_age_ms=limits.max_private_state_age_ms,
-    )
+    return limits
 
 
 def _venue_base_quote_totals(ledger: VenueLedger) -> tuple[float, float]:

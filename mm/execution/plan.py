@@ -10,7 +10,7 @@ from mm.core.models.execution import Action, Order
 
 @dataclass(frozen=True, slots=True)
 class ActionStageReport:
-    """Per-side order totals and rejection counts at one pipeline stage."""
+    """Per-side order totals, orders, and rejection details at one pipeline stage."""
 
     order_count: int = 0
     buy_qty: float = 0.0
@@ -18,6 +18,8 @@ class ActionStageReport:
     buy_notional: float = 0.0
     sell_notional: float = 0.0
     rejection_counts: dict[str, int] = field(default_factory=dict)
+    orders: tuple[dict[str, Any], ...] = ()
+    rejections: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -27,6 +29,8 @@ class ActionStageReport:
             "buy_notional": self.buy_notional,
             "sell_notional": self.sell_notional,
             "rejection_counts": dict(self.rejection_counts),
+            "orders": [dict(order) for order in self.orders],
+            "rejections": [dict(rejection) for rejection in self.rejections],
         }
 
 
@@ -126,12 +130,15 @@ def summarize_orders(orders: list[Order] | tuple[Order, ...]) -> ActionStageRepo
         sell_qty=sell_qty,
         buy_notional=buy_notional,
         sell_notional=sell_notional,
+        orders=tuple(order_summary(order) for order in orders),
     )
 
 
 def stage_report_with_rejections(
     orders: list[Order] | tuple[Order, ...],
     rejection_counts: dict[str, int],
+    *,
+    rejections: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
 ) -> ActionStageReport:
     base = summarize_orders(orders)
     return ActionStageReport(
@@ -141,6 +148,8 @@ def stage_report_with_rejections(
         buy_notional=base.buy_notional,
         sell_notional=base.sell_notional,
         rejection_counts=dict(rejection_counts),
+        orders=base.orders,
+        rejections=tuple(dict(rejection) for rejection in rejections),
     )
 
 
@@ -158,7 +167,6 @@ def apply_execution_stages_to_pipeline(
 ) -> None:
     """Map order-manager reconcile output onto pipeline stage names."""
 
-    report.target_book = execution_report.target
     report.kept = execution_report.kept
     report.planned_cancel = execution_report.canceled
     report.planned_place = execution_report.to_place
@@ -169,6 +177,8 @@ def apply_execution_stages_to_pipeline(
         buy_notional=execution_report.limit_valid.buy_notional,
         sell_notional=execution_report.limit_valid.sell_notional,
         rejection_counts=dict(execution_report.venue_rejection_counts),
+        orders=execution_report.limit_valid.orders,
+        rejections=execution_report.limit_valid.rejections,
     )
     report.router_accepted = (
         execution_report.accepted if executed else report.rules_valid
@@ -186,4 +196,21 @@ def _merge_stage_reports(left: ActionStageReport, right: ActionStageReport) -> A
         buy_notional=left.buy_notional + right.buy_notional,
         sell_notional=left.sell_notional + right.sell_notional,
         rejection_counts=rejections,
+        orders=(*left.orders, *right.orders),
+        rejections=(*left.rejections, *right.rejections),
     )
+
+
+def order_summary(order: Order) -> dict[str, Any]:
+    """JSON-friendly order details for stage-level diagnostics."""
+
+    return {
+        "exchange": order.exchange,
+        "symbol": order.symbol,
+        "side": order.side,
+        "price": float(order.price),
+        "qty": float(order.qty),
+        "notional": float(order.price) * float(order.qty),
+        "order_type": order.order_type,
+        "client_order_id": order.client_order_id,
+    }

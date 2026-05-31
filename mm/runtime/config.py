@@ -995,18 +995,10 @@ def _venue_risk_from_mapping(payload: dict[str, Any]) -> VenueRiskLimits:
 def _global_risk_from_mapping(payload: dict[str, Any] | None) -> GlobalVenueRiskLimits:
     if not isinstance(payload, dict):
         return GlobalVenueRiskLimits()
-    min_inv = float(payload.get("min_inventory", 0.0))
-    if min_inv < 0.0:
-        min_inv = 0.0
-    return GlobalVenueRiskLimits(
-        min_inventory=min_inv,
-        max_inventory=float(payload.get("max_inventory", float("inf"))),
-        min_cash=float(payload.get("min_cash", 0.0)),
-        max_market_order_notional=float(payload.get("max_market_order_notional", float("inf"))),
-        max_slippage_bps=float(payload.get("max_slippage_bps", float("inf"))),
-        max_market_data_age_ms=int(payload.get("max_market_data_age_ms", 10_000)),
-        max_private_state_age_ms=int(payload.get("max_private_state_age_ms", 60_000)),
-    )
+    data = dict(payload)
+    if "max_order_notional" not in data and "max_market_order_notional" in data:
+        data["max_order_notional"] = data["max_market_order_notional"]
+    return _venue_risk_from_mapping(data)
 
 
 def _dict_or_none(value: Any) -> dict[str, Any] | None:

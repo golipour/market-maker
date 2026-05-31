@@ -361,19 +361,19 @@ Suggested shape:
 
 ```json
 "risk": {
-  "primary": {
+  "local": {
     "min_inventory": -1000.0,
     "max_inventory": 1000.0,
     "min_cash": 10000000.0,
     "max_open_notional": 200000000.0,
     "max_order_notional": 50000000.0
   },
-  "hedge": {
+  "global": {
     "min_inventory": -1000.0,
     "max_inventory": 1000.0,
     "min_cash": 10000000.0,
-    "max_market_order_notional": 50000000.0,
-    "max_slippage_bps": 20.0
+    "max_open_notional": 200000000.0,
+    "max_order_notional": 50000000.0
   }
 }
 ```

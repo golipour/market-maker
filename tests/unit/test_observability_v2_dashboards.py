@@ -8,7 +8,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     model_quality,
     risk_execution,
     runtime_overview,
-    target_order_execution,
+    target_order_stems,
 )
 
 
@@ -28,7 +28,7 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         controller_health(),
         risk_execution(),
         action_pipeline(),
-        target_order_execution(),
+        target_order_stems(),
     ]
     zero_filled_titles = {
         "Frames / step",
@@ -57,9 +57,6 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Target orders / step",
         "Target quantity / step",
         "Frame order flow / step",
-        "Orders remaining by stage / step",
-        "Filtered orders by reason / step",
-        "Placed vs canceled orders / step",
     }
     panels_by_title = {
         panel["title"]: panel
@@ -168,10 +165,9 @@ def test_action_pipeline_exposes_order_flow_charts() -> None:
         assert "${interval_ms}" in sql
         assert "floor(EXTRACT(EPOCH" in sql
         assert "generate_series" in sql
-        assert "COALESCE(d.value, 0.0) AS value" in sql
+    assert "COALESCE(d.value, 0.0) AS value" in sql
     assert "GREATEST(drop_stage.before_count - drop_stage.after_count, 0.0)" in local_drop_sql
-    assert "'venue limits'::text" in local_drop_sql
-    assert "'order shaping'::text" in local_drop_sql
+    assert "'strategy cap'::text" in local_drop_sql
     assert "jsonb_each_text" not in local_drop_sql
     assert "reason.key LIKE 'global_%'" in global_reject_sql
     assert "blocked.reason AS metric" not in local_drop_sql
@@ -185,51 +181,122 @@ def test_action_pipeline_exposes_order_flow_charts() -> None:
         assert "floor(EXTRACT(EPOCH" in sql
 
 
-def test_target_order_execution_dashboard_flows_from_ladder_to_commands() -> None:
-    dashboard = target_order_execution()
+def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
+    dashboard = target_order_stems()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
-    expected_titles = {
-        "Target orderbook depth (latest)",
-        "Orders remaining by stage / step",
-        "Filtered orders by reason / step",
-        "Placed vs canceled orders / step",
+    stem_titles = {
+        "01 Strategy raw ladder",
+        "02 Strategy cap -> target orderbook",
+        "03 Risk-approved target",
+        "04 Planner new place orders",
+        "05 Venue rules valid after rounding",
+        "06 Exchange accepted placed orders",
+        "07 Planner kept live orders",
+        "08 Planner cancel orders",
+        "09 Removed by venue rules: invalid price/qty",
+        "10 Removed by venue rules: min qty",
+        "11 Removed by venue rules: min notional",
     }
-    assert expected_titles.issubset(panels_by_title)
-    assert panels_by_title["Target orderbook depth (latest)"]["type"] == "xychart"
-    for title in expected_titles - {"Target orderbook depth (latest)"}:
-        assert panels_by_title[title]["type"] == "timeseries"
+    assert stem_titles.issubset(panels_by_title)
 
-    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
-    assert templating["target_role"]["query"] == "local,global,all"
+    expected_y = {
+        "01 Strategy raw ladder": 3,
+        "02 Strategy cap -> target orderbook": 13,
+        "03 Risk-approved target": 23,
+        "04 Planner new place orders": 33,
+        "05 Venue rules valid after rounding": 43,
+        "06 Exchange accepted placed orders": 53,
+        "07 Planner kept live orders": 63,
+        "08 Planner cancel orders": 73,
+        "09 Removed by venue rules: invalid price/qty": 83,
+        "10 Removed by venue rules: min qty": 93,
+        "11 Removed by venue rules: min notional": 103,
+    }
+    for title in stem_titles:
+        assert panels_by_title[title]["gridPos"]["x"] == 0
+        assert panels_by_title[title]["gridPos"]["w"] == 24
+        assert panels_by_title[title]["gridPos"]["y"] == expected_y[title]
 
-    target_sql = panels_by_title["Target orderbook depth (latest)"]["targets"][0]["rawSql"]
-    stage_sql = panels_by_title["Orders remaining by stage / step"]["targets"][0]["rawSql"]
-    reason_sql = panels_by_title["Filtered orders by reason / step"]["targets"][0]["rawSql"]
-    commands_panel = panels_by_title["Placed vs canceled orders / step"]
-    commands_sql = commands_panel["targets"][0]["rawSql"]
+    for title in stem_titles:
+        panel = panels_by_title[title]
+        assert panel["type"] == "xychart"
+        assert panel["fieldConfig"]["defaults"]["custom"]["show"] == "points"
+        assert panel["fieldConfig"]["defaults"]["custom"]["lineWidth"] == 0
+        assert panel["transformations"][0]["options"]["fields"] == ["series"]
+        price_override = next(
+            override
+            for override in panel["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "price"
+        )
+        assert {"id": "decimals", "value": 6} in price_override["properties"]
+        axis_override = next(
+            override
+            for override in panel["fieldConfig"]["overrides"]
+            if override["matcher"]["options"] == "^axis range$"
+        )
+        assert {
+            "id": "custom.hideFrom",
+            "value": {"legend": True, "tooltip": True, "viz": False},
+        } in axis_override["properties"]
+        assert "black" in str(axis_override["properties"])
+        overrides = str(panel["fieldConfig"]["overrides"])
+        assert ".*bid$" in overrides
+        assert ".*ask$" in overrides
+        assert "green" in overrides
+        assert "red" in overrides
 
-    assert "latest_book AS" in target_sql
-    assert "jsonb_array_elements(COALESCE(book.value->'orders'" in target_sql
-    assert "SUM(qty) OVER (ORDER BY price DESC" in target_sql
-    assert "SUM(qty) OVER (ORDER BY price ASC" in target_sql
-    assert "'${target_role}' = 'all' OR book.role = '${target_role}'" in target_sql
-    assert "raw ladder" in stage_sql
-    assert "venue-valid ladder" in stage_sql
-    assert "risk-passed target" in stage_sql
-    assert "exchange accepted" in stage_sql
-    assert "rejection_counts" in reason_sql
-    assert "raw ladder" in reason_sql
-    assert "venue limits" in reason_sql
-    assert "exchange rules" in reason_sql
-    assert "PlaceOrdersAccepted" in commands_sql
-    assert "CancelOrdersAccepted" in commands_sql
-    assert "placed orders" in commands_sql
-    assert "canceled order ids" in commands_sql
+    raw_sql = panels_by_title["01 Strategy raw ladder"]["targets"][0]["rawSql"]
+    target_sql = panels_by_title["02 Strategy cap -> target orderbook"]["targets"][0]["rawSql"]
+    risk_sql = panels_by_title["03 Risk-approved target"]["targets"][0]["rawSql"]
+    place_sql = panels_by_title["04 Planner new place orders"]["targets"][0]["rawSql"]
+    rules_sql = panels_by_title["05 Venue rules valid after rounding"]["targets"][0]["rawSql"]
+    accepted_sql = panels_by_title["06 Exchange accepted placed orders"]["targets"][0]["rawSql"]
+    kept_sql = panels_by_title["07 Planner kept live orders"]["targets"][0]["rawSql"]
+    cancel_sql = panels_by_title["08 Planner cancel orders"]["targets"][0]["rawSql"]
+    invalid_sql = panels_by_title["09 Removed by venue rules: invalid price/qty"]["targets"][0]["rawSql"]
+    min_qty_sql = panels_by_title["10 Removed by venue rules: min qty"]["targets"][0]["rawSql"]
+    min_notional_sql = panels_by_title["11 Removed by venue rules: min notional"]["targets"][0]["rawSql"]
 
-    overrides = commands_panel["fieldConfig"]["overrides"]
-    override_names = {override["matcher"]["options"] for override in overrides}
-    assert {"placed orders", "canceled order ids"}.issubset(override_names)
+    frame_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "target_frame_event_id")
+    assert frame_var["label"] == "Target frame"
+    assert "e.event_id AS __value" in frame_var["query"]
+    assert "ControllerDiagnostics" in frame_var["query"]
+
+    assert "ARRAY['action_pipeline', 'ladder', 'orders']" in raw_sql
+    assert "ARRAY['action_pipeline', 'capped', 'orders']" in target_sql
+    assert "ARRAY['action_pipeline', 'risk_approved_target', 'orders']" in risk_sql
+    assert "ARRAY['action_pipeline', 'kept', 'orders']" in kept_sql
+    assert "ARRAY['action_pipeline', 'planned_cancel', 'orders']" in cancel_sql
+    assert "ARRAY['action_pipeline', 'planned_place', 'orders']" in place_sql
+    assert "ARRAY['action_pipeline', 'rules_valid', 'orders']" in rules_sql
+    assert "ARRAY['action_pipeline', 'router_accepted', 'orders']" in accepted_sql
+    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in invalid_sql
+    assert "rules_invalid_price_or_qty" in invalid_sql
+    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in min_qty_sql
+    assert "rules_min_qty" in min_qty_sql
+    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in min_notional_sql
+    assert "rules_min_notional" in min_notional_sql
+
+    for sql in (
+        raw_sql,
+        target_sql,
+        risk_sql,
+        place_sql,
+        rules_sql,
+        accepted_sql,
+        kept_sql,
+        cancel_sql,
+        invalid_sql,
+        min_qty_sql,
+        min_notional_sql,
+    ):
+        assert "ControllerDiagnostics" in sql
+        assert "e.event_id = ${target_frame_event_id:sqlstring}" in sql
+        assert "axis_frame AS" in sql
+        assert "'axis range' AS series" in sql
+        assert "FROM axis_rows" in sql
+        assert "price::text" not in sql
 
 
 def test_risk_execution_exposes_order_flow_charts() -> None:
@@ -313,7 +380,7 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         model_quality(),
         risk_execution(),
         action_pipeline(),
-        target_order_execution(),
+        target_order_stems(),
     ]
 
     for dashboard in dashboards:
@@ -357,9 +424,6 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         "Global risk rejects / step",
         "Local gate blocks / frame",
         "Global gate blocks / frame",
-        "Orders remaining by stage / step",
-        "Filtered orders by reason / step",
-        "Placed vs canceled orders / step",
     }
     panels_by_title = {
         panel["title"]: panel

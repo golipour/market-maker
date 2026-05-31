@@ -180,6 +180,33 @@ def test_exchange_rules_gateway_rejects_with_stable_labels() -> None:
     assert RULES_MIN_NOTIONAL in reasons
 
 
+def test_exchange_rules_gateway_rounds_to_venue_steps() -> None:
+    gateway = ExchangeRulesGateway(
+        StaticVenueOrderLimitSource(
+            VenueOrderLimits(
+                min_base_qty=0.0,
+                min_notional_quote=0.0,
+                price_step=0.5,
+                qty_step=0.01,
+            )
+        )
+    )
+    plan = ExecutionPlan(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        policy="reconcile",
+        place=(PlaceCommand("actor-1", Order("nobitex", "BTC_IRT", "buy", 10.74, 1.239)),),
+    )
+
+    validated = gateway.validate(plan)
+
+    assert validated.rejected == ()
+    assert len(validated.place) == 1
+    assert validated.place[0].order.price == 10.5
+    assert validated.place[0].order.qty == 1.23
+
+
 @pytest.mark.asyncio
 async def test_order_router_cancel_before_place_for_replace_policy() -> None:
     adapter = FakeOrderCommandAdapter()

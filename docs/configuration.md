@@ -116,7 +116,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 
 ```json
 "execution": {
-  "local": {"planner": "reconcile"},
+  "local": {"planner": "replace"},
   "global": {
     "planner": "replace",
     "max_order_qty": 0.5,
@@ -140,6 +140,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
   "observe_only": false,
   "action_start_after_steps": 10,
   "actor_id": "mpc-controller",
+  "max_orders_per_side": 5,
   "risk": {
     "enabled": true,
     "engine": "net_delta",
@@ -156,8 +157,8 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "min_inventory": 0.0,
       "max_inventory": 1000.0,
       "min_cash": 0.0,
-      "max_market_order_notional": 10000000.0,
-      "max_slippage_bps": 100.0,
+      "max_open_notional": 100000000.0,
+      "max_order_notional": 100000000.0,
       "max_market_data_age_ms": 60000,
       "max_private_state_age_ms": 120000
     }
@@ -212,8 +213,9 @@ book depth.
 |-------|--------|
 | `observe_only: true` | Decisions published; **no** live order sync |
 | `action_start_after_steps` | MPC runs from frame 1; sync only after N frames |
+| `max_orders_per_side` | Strategy cap before target book: max bid levels and max ask levels kept |
 | `risk.engine` | `net_delta` (default): target-book transition against ledger |
-| `risk.local` / `risk.global` | Per-venue hard collateral and freshness gates |
+| `risk.local` / `risk.global` | Same per-venue hard collateral and freshness gates |
 
 ### Hard risk (`controller.risk`)
 
@@ -221,14 +223,13 @@ Separate from optimizer soft preferences (`optimizer.local.*` / `optimizer.globa
 
 | Field | Role |
 |-------|------|
-| `local.min_inventory` | Floor on base inventory after a sell |
-| `local.max_inventory` | Ceiling on base inventory after a buy |
-| `local.min_cash` | Minimum quote cash after a buy |
-| `local.max_open_notional` | Cap on resting open order notional |
-| `local.max_order_notional` | Per-order notional cap |
-| `local.max_market_data_age_ms` | Reject if local market event is too old |
-| `local.max_private_state_age_ms` | Reject if local private snapshot missing or stale |
-| `global.*` | Same inventory/cash floors for global wallet; `max_market_order_notional` and `max_slippage_bps` for global venue |
+| `local.min_inventory` / `global.min_inventory` | Floor on base inventory after a sell |
+| `local.max_inventory` / `global.max_inventory` | Ceiling on base inventory after a buy |
+| `local.min_cash` / `global.min_cash` | Minimum quote cash after a buy |
+| `local.max_open_notional` / `global.max_open_notional` | Cap on resting open order notional |
+| `local.max_order_notional` / `global.max_order_notional` | Per-order notional cap |
+| `local.max_market_data_age_ms` / `global.max_market_data_age_ms` | Reject if market event is too old |
+| `local.max_private_state_age_ms` / `global.max_private_state_age_ms` | Reject if private snapshot missing or stale |
 
 ## Derived topics
 

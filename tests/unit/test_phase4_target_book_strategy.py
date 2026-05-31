@@ -108,6 +108,31 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert len(joint_book.local.orders) == len(local_orders)
     assert len(ladder) >= 1
     assert pipeline.target_book.order_count == len(local_orders)
+    assert pipeline.target_book.orders
+    assert pipeline.venue_quantized.order_count == 0
+
+
+def test_target_book_builder_does_not_apply_venue_minimums() -> None:
+    constraints = OrderConstraints(
+        price_step=10.0,
+        qty_step=10.0,
+        min_qty=10.0,
+        min_notional=1_000_000.0,
+        max_orders_per_side=4,
+    )
+    joint_book, pipeline, ladder, local_orders = build_joint_target_book_from_sigmoid(
+        actor_id="actor-1",
+        local_event=_market_event(),
+        sigmoid_action=_sigmoid_action(bid_qty=0.01, ask_qty=0.01),
+        orderbook_grid=_grid(),
+        local_constraints=constraints,
+    )
+
+    assert ladder
+    assert local_orders
+    assert joint_book.local.orders
+    assert pipeline.venue_quantized.order_count == 0
+    assert pipeline.target_book.order_count == len(local_orders)
 
 
 def test_joint_target_book_converts_to_action() -> None:
@@ -149,18 +174,52 @@ def test_action_pipeline_phase4_stages() -> None:
     assert report.rules_valid.order_count == 1
     assert report.router_accepted.order_count == 1
 
+    original_target = report.target_book
     execution = ExecutionSyncReport(
-        target=ActionStageReport(order_count=2),
+        target=ActionStageReport(order_count=99),
         kept=ActionStageReport(order_count=1),
         canceled=ActionStageReport(order_count=1),
         to_place=ActionStageReport(order_count=1),
-        limit_valid=ActionStageReport(order_count=1),
+        limit_valid=ActionStageReport(
+            order_count=1,
+            orders=(
+                {
+                    "exchange": "nobitex",
+                    "symbol": "BTC_IRT",
+                    "side": "buy",
+                    "price": 99.0,
+                    "qty": 1.0,
+                    "notional": 99.0,
+                    "order_type": "limit",
+                    "client_order_id": None,
+                },
+            ),
+            rejections=(
+                {
+                    "exchange": "nobitex",
+                    "symbol": "BTC_IRT",
+                    "side": "sell",
+                    "price": 101.0,
+                    "qty": 0.0,
+                    "notional": 0.0,
+                    "order_type": "limit",
+                    "client_order_id": None,
+                    "reason": "rules_invalid_price_or_qty",
+                    "stage": "rules",
+                },
+            ),
+        ),
         accepted=ActionStageReport(order_count=1),
+        venue_rejection_counts={"rules_invalid_price_or_qty": 1},
     )
     apply_execution_stages_to_pipeline(report, execution, executed=True)
+    assert report.target_book == original_target
     assert report.planned_cancel.order_count == 1
     assert report.planned_place.order_count == 1
     assert report.rules_valid.order_count == 1
+    assert report.rules_valid.orders == execution.limit_valid.orders
+    assert report.rules_valid.rejections == execution.limit_valid.rejections
+    assert report.rules_valid.rejection_counts == {"rules_invalid_price_or_qty": 1}
     assert report.router_accepted.order_count == 1
 
 

@@ -388,7 +388,7 @@ class DecisionContext:
         return ActionPipelineDiagnostics(
             continuous=dict(decision.diagnostics.continuous_action_depth),
             ladder=_order_stage_summary_from_dicts(tuple(decision.ladder_orders)),
-            venue_quantized=target_summary,
+            venue_quantized={},
             capped=target_summary,
             target_book=target_summary,
             risk_approved_target=_order_stage_summary(approved_orders),
@@ -434,6 +434,9 @@ def _order_stage_summary_from_dicts(orders: tuple[dict[str, Any], ...]) -> dict[
         "sell_qty": sell_qty,
         "buy_notional": buy_notional,
         "sell_notional": sell_notional,
+        "rejection_counts": {},
+        "orders": [dict(order) for order in orders],
+        "rejections": [],
     }
 
 
