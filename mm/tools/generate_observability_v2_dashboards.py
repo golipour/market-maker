@@ -2670,6 +2670,28 @@ def portfolio_pnl() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
 
 
+def fill_spread_pnl() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL per unit is average ask fill price minus average bid fill price.",
+            y=0,
+        ),
+        _panel(2, "Filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=5, h=5),
+        _panel(3, "Filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume"), x=5, y=3, w=5, h=5),
+        _panel(4, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=10, y=3, w=5, h=5, unit="currency"),
+        _panel(5, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=15, y=3, w=5, h=5, unit="currency"),
+        _panel(6, "Average spread PnL / unit", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl_per_unit"), x=20, y=3, w=4, h=5, unit="currency"),
+    ]
+    return _dashboard(
+        "mm-obs-v2-fill-spread-pnl",
+        "MM Observability v2 / 07B Fill Spread PnL",
+        panels,
+        tags=["portfolio", "fills"],
+    )
+
+
 def liquidity_sourcing() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Local/global readiness and joint target-book routing.", y=0),
@@ -3599,6 +3621,47 @@ WHERE exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
 ORDER BY 1"""
 
 
+def _fill_interval_stat_sql(stat: str) -> str:
+    stat_exprs = {
+        "bid_volume": "COALESCE(bid_qty, 0.0)",
+        "ask_volume": "COALESCE(ask_qty, 0.0)",
+        "bid_avg_price": "bid_avg_price",
+        "ask_avg_price": "ask_avg_price",
+        "spread_pnl_per_unit": "ask_avg_price - bid_avg_price",
+    }
+    if stat not in stat_exprs:
+        raise ValueError(f"unknown fill interval stat: {stat}")
+    exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
+    symbol = "COALESCE(e.symbol, e.payload->>'symbol', '')"
+    side = _side_sql("e.payload->>'side'")
+    qty = _numeric_sql("e.payload->>'qty'")
+    price = _numeric_sql("e.payload->>'price'", default="NULL")
+    return f"""WITH fills AS (
+  SELECT
+    {side} AS side,
+    {qty} AS qty,
+    {price} AS price
+  FROM mm_events e
+  WHERE e.topic LIKE 'private:state:%:fills'
+    AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND {symbol} = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+),
+agg AS (
+  SELECT
+    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,
+    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,
+    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)
+      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,
+    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)
+      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price
+  FROM fills
+)
+SELECT ($__timeTo())::timestamptz AS "time",
+       {stat_exprs[stat]} AS value
+FROM agg"""
+
+
 def _venue_gates_sql() -> str:
     return f"""SELECT e.ts, gates.key AS exchange, gates.value->>'role' AS role,
        gates.value->>'live' AS live,
@@ -3717,6 +3780,7 @@ def dashboards() -> list[dict[str, Any]]:
         action_pipeline_side_counts(),
         risk_execution(),
         portfolio_pnl(),
+        fill_spread_pnl(),
         liquidity_sourcing(),
         runtime_logs(),
         incident_drilldown(),

@@ -1,0 +1,394 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL per unit is average ask fill price minus average bid fill price.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(bid_qty, 0.0) AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Filled bid volume",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(ask_qty, 0.0) AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Filled ask volume",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 10,
+        "y": 3
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       bid_avg_price AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Average bid fill price",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 15,
+        "y": 3
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       ask_avg_price AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Average ask fill price",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 3
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       ask_avg_price - bid_avg_price AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Average spread PnL / unit",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "portfolio",
+    "fills"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 07B Fill Spread PnL",
+  "uid": "mm-obs-v2-fill-spread-pnl",
+  "version": 1,
+  "weekStart": ""
+}

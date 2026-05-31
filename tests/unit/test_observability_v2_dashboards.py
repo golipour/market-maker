@@ -4,6 +4,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     action_pipeline_side_counts,
     controller_health,
     dashboards,
+    fill_spread_pnl,
     liquidity_sourcing,
     market_data_quality,
     model_quality,
@@ -586,6 +587,45 @@ def test_runtime_live_order_panels_use_latest_snapshot_semantics() -> None:
     assert "COUNT(open_order.key)" in latest_sql
     assert "private:state:%:fills" in fills_sql
     assert "ORDER BY e.ts DESC" in fills_sql
+
+
+def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
+    dashboard = fill_spread_pnl()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected_positions = {
+        "Filled bid volume": (0, 5),
+        "Filled ask volume": (5, 5),
+        "Average bid fill price": (10, 5),
+        "Average ask fill price": (15, 5),
+        "Average spread PnL / unit": (20, 4),
+    }
+
+    for title, (x, w) in expected_positions.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "stat"
+        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": 3}
+        sql = panel["targets"][0]["rawSql"]
+        assert "private:state:%:fills" in sql
+        assert "$__timeFilter(e.ts)" in sql
+        assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
+        assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
+        assert "SUM(price * qty) FILTER" in sql
+
+    bid_volume_sql = panels_by_title["Filled bid volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(bid_qty, 0.0) AS value" in bid_volume_sql
+
+    ask_volume_sql = panels_by_title["Filled ask volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(ask_qty, 0.0) AS value" in ask_volume_sql
+
+    bid_avg_sql = panels_by_title["Average bid fill price"]["targets"][0]["rawSql"]
+    assert "bid_avg_price AS value" in bid_avg_sql
+
+    ask_avg_sql = panels_by_title["Average ask fill price"]["targets"][0]["rawSql"]
+    assert "ask_avg_price AS value" in ask_avg_sql
+
+    spread_sql = panels_by_title["Average spread PnL / unit"]["targets"][0]["rawSql"]
+    assert "ask_avg_price - bid_avg_price AS value" in spread_sql
 
 
 def test_frame_readiness_legends_include_readiness_field() -> None:
