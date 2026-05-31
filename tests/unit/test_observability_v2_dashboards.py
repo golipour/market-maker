@@ -1,6 +1,7 @@
 from mm.tools.generate_observability_v2_dashboards import (
     _runtime_fill_rate_sql,
     action_pipeline,
+    action_pipeline_side_counts,
     controller_health,
     dashboards,
     liquidity_sourcing,
@@ -30,6 +31,7 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         risk_execution(),
         action_pipeline(),
         target_order_stems(),
+        action_pipeline_side_counts(),
     ]
     zero_filled_titles = {
         "Frames / step",
@@ -58,6 +60,18 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Target orders / step",
         "Target quantity / step",
         "Frame order flow / step",
+        "Bid/ask exchange accepted placement counts / step",
+        "Bid/ask exchange accepted placement volume / step",
+        "Bid/ask planner placement counts / step",
+        "Bid/ask planner placement volume / step",
+        "Bid target survival counts / step",
+        "Ask target survival counts / step",
+        "Bid placement counts / step",
+        "Ask placement counts / step",
+        "Bid live/cancel counts / step",
+        "Ask live/cancel counts / step",
+        "Bid removed by reason / step",
+        "Ask removed by reason / step",
     }
     panels_by_title = {
         panel["title"]: panel
@@ -205,6 +219,80 @@ def test_action_pipeline_exposes_order_flow_charts() -> None:
     for sql in (local_drop_sql, global_reject_sql, local_gate_sql, global_gate_sql):
         assert "${interval_ms}" in sql
         assert "floor(EXTRACT(EPOCH" in sql
+
+
+def test_action_pipeline_side_counts_dashboard_splits_bid_and_ask() -> None:
+    dashboard = action_pipeline_side_counts()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    summary_expected = {
+        "Bid/ask exchange accepted placement counts / step": (0, 3, "router_accepted", "accepted placement"),
+        "Bid/ask exchange accepted placement volume / step": (0, 11, "router_accepted", "accepted placement"),
+        "Bid/ask planner placement counts / step": (0, 19, "planned_place", "placement"),
+        "Bid/ask planner placement volume / step": (0, 27, "planned_place", "placement"),
+    }
+
+    for title, (x, y, stage, label) in summary_expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "timeseries"
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
+        assert panel["gridPos"]["w"] == 24
+        sql = panel["targets"][0]["rawSql"]
+        assert stage in sql
+        assert f"bid {label}" in sql
+        assert f"ask {label}" in sql
+        assert "generate_series" in sql
+        assert "COALESCE(d.value, 0.0) AS value" in sql
+
+    accepted_volume_sql = panels_by_title["Bid/ask exchange accepted placement volume / step"]["targets"][0]["rawSql"]
+    assert "o.value->>'qty'" in accepted_volume_sql
+
+    volume_sql = panels_by_title["Bid/ask planner placement volume / step"]["targets"][0]["rawSql"]
+    assert "o.value->>'qty'" in volume_sql
+
+    expected = {
+        "Bid target survival counts / step": (0, 35, "bid"),
+        "Ask target survival counts / step": (12, 35, "ask"),
+        "Bid placement counts / step": (0, 43, "bid"),
+        "Ask placement counts / step": (12, 43, "ask"),
+        "Bid live/cancel counts / step": (0, 51, "bid"),
+        "Ask live/cancel counts / step": (12, 51, "ask"),
+        "Bid removed by reason / step": (0, 59, "bid"),
+        "Ask removed by reason / step": (12, 59, "ask"),
+    }
+
+    for title, (x, y, side) in expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "timeseries"
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
+        assert panel["gridPos"]["w"] == 12
+        sql = panel["targets"][0]["rawSql"]
+        assert "ControllerDiagnostics" in sql
+        assert f"= '{side}'" in sql
+        assert "generate_series" in sql
+        assert "COALESCE(d.value, 0.0) AS value" in sql
+
+    survival_sql = panels_by_title["Bid target survival counts / step"]["targets"][0]["rawSql"]
+    assert "('raw ladder', 'ladder')" in survival_sql
+    assert "('strategy capped', 'capped')" in survival_sql
+    assert "('risk approved', 'risk_approved_target')" in survival_sql
+    assert "('venue valid', 'rules_valid')" in survival_sql
+
+    placement_sql = panels_by_title["Ask placement counts / step"]["targets"][0]["rawSql"]
+    assert "('planner placed', 'planned_place')" in placement_sql
+    assert "('exchange accepted', 'router_accepted')" in placement_sql
+
+    live_sql = panels_by_title["Bid live/cancel counts / step"]["targets"][0]["rawSql"]
+    assert "('kept live', 'kept')" in live_sql
+    assert "('planner canceled', 'planned_cancel')" in live_sql
+
+    removed_sql = panels_by_title["Ask removed by reason / step"]["targets"][0]["rawSql"]
+    assert "ARRAY['action_pipeline', stages.stage, 'rejections']" in removed_sql
+    assert "risk_approved_target" in removed_sql
+    assert "rules_valid" in removed_sql
+    assert "router_accepted" in removed_sql
 
 
 def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:

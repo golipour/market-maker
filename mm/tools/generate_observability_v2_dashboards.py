@@ -2270,6 +2270,94 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
+def _action_pipeline_side_stage_counts_sql(
+    side: str,
+    stages: tuple[tuple[str, str], ...],
+) -> str:
+    side = "ask" if side == "ask" else "bid"
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    values_sql = ",\n    ".join(f"('{metric}', '{stage}')" for metric, stage in stages)
+    metrics_sql = "  SELECT metric\n  FROM (\n    VALUES\n    " + values_sql + "\n  ) AS m(metric, stage)"
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  stages.metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    {values_sql}
+) AS stages(metric, stage)
+CROSS JOIN LATERAL jsonb_array_elements(
+  COALESCE(e.payload #> ARRAY['action_pipeline', stages.stage, 'orders'], '[]'::jsonb)
+) AS o(value)
+WHERE {_diagnostics_filter()}
+  AND {_side_sql("o.value->>'side'")} = '{side}'
+GROUP BY 1, 2"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _action_pipeline_placement_side_summary_sql(measure: str, stage: str, label: str = "placement") -> str:
+    if measure not in {"count", "qty"}:
+        raise ValueError(f"unknown placement side summary measure: {measure}")
+    if stage not in {"planned_place", "router_accepted"}:
+        raise ValueError(f"unknown placement side summary stage: {stage}")
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    value_expr = "1.0" if measure == "count" else _numeric_sql("o.value->>'qty'")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  ({_side_sql("o.value->>'side'")} || ' {label}') AS metric,
+  SUM({value_expr}) AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_array_elements(
+  COALESCE(e.payload #> ARRAY['action_pipeline', '{stage}', 'orders'], '[]'::jsonb)
+) AS o(value)
+WHERE {_diagnostics_filter()}
+  AND {_side_sql("o.value->>'side'")} IN ('bid', 'ask')
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT metric
+  FROM (
+    VALUES ('bid {label}'), ('ask {label}')
+  ) AS m(metric)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _action_pipeline_side_removed_reason_counts_sql(side: str) -> str:
+    side = "ask" if side == "ask" else "bid"
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    stages_sql = """VALUES
+    ('risk_approved_target'),
+    ('rules_valid'),
+    ('router_accepted')"""
+    reason_expr = "COALESCE(NULLIF(o.value->>'reason', ''), 'unknown')"
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  {reason_expr} AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  {stages_sql}
+) AS stages(stage)
+CROSS JOIN LATERAL jsonb_array_elements(
+  COALESCE(e.payload #> ARRAY['action_pipeline', stages.stage, 'rejections'], '[]'::jsonb)
+) AS o(value)
+WHERE {_diagnostics_filter()}
+  AND {_side_sql("o.value->>'side'")} = '{side}'
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT DISTINCT {reason_expr} AS metric
+  FROM mm_events e
+  CROSS JOIN LATERAL (
+    {stages_sql}
+  ) AS stages(stage)
+  CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(e.payload #> ARRAY['action_pipeline', stages.stage, 'rejections'], '[]'::jsonb)
+  ) AS o(value)
+  WHERE {_diagnostics_filter()}
+    AND {_side_sql("o.value->>'side'")} = '{side}'
+  UNION
+  SELECT 'no removals'::text AS metric"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
 def _placed_vs_canceled_step_sql() -> str:
     event_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     data_sql = f"""SELECT "time", metric, SUM(value) AS value
@@ -2485,6 +2573,49 @@ def target_order_stems() -> dict[str, Any]:
             _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
             _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
         ],
+    )
+
+
+def action_pipeline_side_counts() -> dict[str, Any]:
+    pipeline_stages = (
+        ("raw ladder", "ladder"),
+        ("strategy capped", "capped"),
+        ("risk approved", "risk_approved_target"),
+        ("venue valid", "rules_valid"),
+    )
+    placement_stages = (
+        ("planner placed", "planned_place"),
+        ("exchange accepted", "router_accepted"),
+    )
+    live_stages = (
+        ("kept live", "kept"),
+        ("planner canceled", "planned_cancel"),
+    )
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Bid and ask order counts per controller step through the strategy, risk, planner, venue-adapter, and exchange-acceptance path.",
+            y=0,
+        ),
+        _panel(2, "Bid/ask exchange accepted placement counts / step", "timeseries", PG_DS, _action_pipeline_placement_side_summary_sql("count", "router_accepted", "accepted placement"), x=0, y=3, w=24),
+        _panel(3, "Bid/ask exchange accepted placement volume / step", "timeseries", PG_DS, _action_pipeline_placement_side_summary_sql("qty", "router_accepted", "accepted placement"), x=0, y=11, w=24),
+        _panel(4, "Bid/ask planner placement counts / step", "timeseries", PG_DS, _action_pipeline_placement_side_summary_sql("count", "planned_place"), x=0, y=19, w=24),
+        _panel(5, "Bid/ask planner placement volume / step", "timeseries", PG_DS, _action_pipeline_placement_side_summary_sql("qty", "planned_place"), x=0, y=27, w=24),
+        _panel(6, "Bid target survival counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("bid", pipeline_stages), x=0, y=35),
+        _panel(7, "Ask target survival counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("ask", pipeline_stages), x=12, y=35),
+        _panel(8, "Bid placement counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("bid", placement_stages), x=0, y=43),
+        _panel(9, "Ask placement counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("ask", placement_stages), x=12, y=43),
+        _panel(10, "Bid live/cancel counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("bid", live_stages), x=0, y=51),
+        _panel(11, "Ask live/cancel counts / step", "timeseries", PG_DS, _action_pipeline_side_stage_counts_sql("ask", live_stages), x=12, y=51),
+        _panel(12, "Bid removed by reason / step", "timeseries", PG_DS, _action_pipeline_side_removed_reason_counts_sql("bid"), x=0, y=59),
+        _panel(13, "Ask removed by reason / step", "timeseries", PG_DS, _action_pipeline_side_removed_reason_counts_sql("ask"), x=12, y=59),
+    ]
+    return _dashboard(
+        "mm-obs-v2-action-pipeline-side-counts",
+        "MM Observability v2 / 05D Action Pipeline Side Counts",
+        panels,
+        tags=["actions", "execution"],
     )
 
 
@@ -3583,6 +3714,7 @@ def dashboards() -> list[dict[str, Any]]:
         optimizer_diagnostics(),
         action_pipeline(),
         target_order_stems(),
+        action_pipeline_side_counts(),
         risk_execution(),
         portfolio_pnl(),
         liquidity_sourcing(),
