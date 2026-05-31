@@ -229,21 +229,22 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
 
     expected_y = {
         "01 Strategy raw ladder": 3,
-        "02 Strategy cap -> target orderbook": 13,
-        "03 Risk-approved target": 23,
-        "04 Planner new place orders": 33,
-        "05 Venue rules valid after rounding": 43,
-        "06 Exchange accepted placed orders": 53,
-        "07 Planner kept live orders": 63,
-        "08 Planner cancel orders": 73,
-        "09 Removed by local risk / collateral": 83,
-        "10 Removed by venue adapter: invalid price/qty": 93,
-        "11 Removed by venue adapter: min qty": 103,
-        "12 Removed by venue adapter: min notional": 113,
+        "02 Strategy cap -> target orderbook": 10,
+        "03 Risk-approved target": 17,
+        "04 Planner new place orders": 24,
+        "05 Venue rules valid after rounding": 31,
+        "06 Exchange accepted placed orders": 38,
+        "07 Planner kept live orders": 45,
+        "08 Planner cancel orders": 52,
+        "09 Removed by local risk / collateral": 59,
+        "10 Removed by venue adapter: invalid price/qty": 66,
+        "11 Removed by venue adapter: min qty": 73,
+        "12 Removed by venue adapter: min notional": 80,
     }
     for title in stem_titles:
         assert panels_by_title[title]["gridPos"]["x"] == 0
         assert panels_by_title[title]["gridPos"]["w"] == 24
+        assert panels_by_title[title]["gridPos"]["h"] == 7
         assert panels_by_title[title]["gridPos"]["y"] == expected_y[title]
 
     for title in stem_titles:
