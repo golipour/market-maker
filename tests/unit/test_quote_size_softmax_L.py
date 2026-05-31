@@ -153,6 +153,62 @@ def test_spread_structured_depth_at_center_and_spread_max() -> None:
         assert q_min <= q_at_max <= q_max
 
 
+def test_spread_structured_depth_max_is_hard_cap_for_near_singular_solve() -> None:
+    spread_max = 100.0
+    q_min, q_max = 1.0, 10.0
+    n = 4
+    l_param = _l_param(
+        q_min=q_min,
+        q_max=q_max,
+        spread_max=spread_max,
+        n_components=n,
+        quote_spread_max=100.0,
+        quote_spread_min_depth=0.3,
+    )
+    flat = np.array(
+        [
+            13.21739818,
+            -27.30868284,
+            -19.61156255,
+            -10.8076019,
+            -2.00779819,
+            4.16676122,
+            3.72563968,
+            2.57493972,
+            3.96698046,
+            -4.95146261,
+            -13.27122907,
+            1.08777245,
+            -22.6883692,
+            14.95628219,
+            27.17614343,
+            -26.75421075,
+            16.93962847,
+            -16.57002653,
+            -9.8153187,
+            -27.98770947,
+            28.14514782,
+            3.72573632,
+            -25.10511407,
+            -10.70666193,
+            28.63686397,
+            -26.39752455,
+        ],
+        dtype=np.float64,
+    )
+
+    action = sigmoid_action_from_flat_raw(
+        flat,
+        n,
+        l_param=l_param,
+        bid_quote_size_max=q_max,
+        ask_quote_size_max=q_max,
+    )
+
+    assert action.effective_depth_bid(spread_max) <= q_max + 1e-9
+    assert action.effective_depth_ask(spread_max) <= q_max + 1e-9
+
+
 def test_spread_structured_rejects_n_components_one() -> None:
     l_param = _l_param(
         q_min=1.0,

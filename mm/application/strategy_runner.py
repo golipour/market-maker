@@ -12,7 +12,12 @@ from mm.application.venue_execution import (
     prepare_execution_joint_book,
     route_joint_target_book_with_report,
 )
-from mm.execution.plan import ExecutionSyncReport, stage_report_with_rejections
+from mm.core.adapters.joint import venue_target_book_to_action
+from mm.execution.plan import (
+    ExecutionSyncReport,
+    filter_execution_sync_report,
+    stage_report_with_rejections,
+)
 from mm.application.frame_preparation import clean_strategy_frame
 from mm.application.trading_context import trading_state_from_ledger
 from mm.bus.base import AbstractEventBus
@@ -242,6 +247,31 @@ class StrategyRunner:
                 risk_approved_execution_book = False
             approved = risk_result.approved_list
             approved_orders = tuple(order for action in approved for order in action.orders)
+            risk_stage_orders = approved_orders
+            local_risk_rejection_counts = _local_risk_rejection_counts(risk_result.rejection_counts)
+            risk_rejections: tuple[dict[str, Any], ...] = ()
+            if isinstance(self.risk_engine, NetDeltaRiskEngine):
+                if target_risk_result.approved is not None:
+                    risk_stage_orders = tuple(
+                        venue_target_book_to_action(target_risk_result.approved.local).orders
+                    )
+                    if not risk_stage_orders and local_risk_rejection_counts:
+                        risk_rejections = _risk_rejection_rows(
+                            ctx,
+                            local_risk_rejection_counts,
+                            fallback_orders=tuple(
+                                order for action in proposed for order in action.orders
+                            ),
+                        )
+                else:
+                    risk_stage_orders = ()
+                    risk_rejections = _risk_rejection_rows(
+                        ctx,
+                        local_risk_rejection_counts,
+                        fallback_orders=tuple(
+                            order for action in proposed for order in action.orders
+                        ),
+                    )
             ctx.record_risk_result(
                 proposed,
                 approved,
@@ -249,7 +279,13 @@ class StrategyRunner:
                 exposure_before=dict(risk_result.exposure_before),
                 exposure_after=dict(risk_result.exposure_after),
             )
-            ctx.apply_risk_to_pipeline(stage_report_with_rejections(approved_orders, risk_result.rejection_counts))
+            ctx.apply_risk_to_pipeline(
+                stage_report_with_rejections(
+                    risk_stage_orders,
+                    local_risk_rejection_counts,
+                    rejections=risk_rejections,
+                )
+            )
             ctx.record_stage_latency("risk", _elapsed_ms(risk_started))
             if len(approved) < len(proposed) and self.bus is not None:
                 await self.bus.publish(
@@ -361,6 +397,11 @@ class StrategyRunner:
                     )
             ctx.record_stage_latency("execute", _elapsed_ms(execute_started))
             if execution_report is not None:
+                execution_report = filter_execution_sync_report(
+                    execution_report,
+                    exchange=frame.local.exchange,
+                    symbol=frame.local.symbol,
+                )
                 ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
 
             if self.bus is not None:
@@ -515,6 +556,74 @@ def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:
         for exchange_order_id, open_order in venue.live_orders.items():
             out[f"{exchange_key}:{exchange_order_id}"] = open_order.order
     return out
+
+
+def _risk_rejection_rows(
+    ctx: DecisionContext,
+    rejection_counts: dict[str, int],
+    *,
+    fallback_orders: tuple[Order, ...] = (),
+) -> tuple[dict[str, Any], ...]:
+    if not rejection_counts:
+        return ()
+    source_orders: tuple[dict[str, Any], ...] = ()
+    if ctx.action_pipeline_report is not None:
+        source_orders = (
+            ctx.action_pipeline_report.risk_approved_target.orders
+            or ctx.action_pipeline_report.capped.orders
+            or ctx.action_pipeline_report.target_book.orders
+        )
+    if not source_orders and fallback_orders:
+        source_orders = tuple(order_summary_dict(order) for order in fallback_orders)
+    if not source_orders:
+        return ()
+    rows: list[dict[str, Any]] = []
+    for reason in sorted(rejection_counts):
+        reason_orders = _risk_rejection_source_orders(source_orders, reason)
+        for order in reason_orders:
+            rows.append({**dict(order), "reason": reason, "stage": "risk"})
+    return tuple(rows)
+
+
+def _risk_rejection_source_orders(
+    source_orders: tuple[dict[str, Any], ...],
+    reason: str,
+) -> tuple[dict[str, Any], ...]:
+    sides = _risk_rejection_sides(reason)
+    if sides is None:
+        return source_orders
+    filtered = tuple(
+        dict(order)
+        for order in source_orders
+        if str(order.get("side", "")).lower().strip() in sides
+    )
+    return filtered or source_orders
+
+
+def _risk_rejection_sides(reason: str) -> set[str] | None:
+    normalized = reason.removeprefix("global_")
+    if normalized in {
+        "insufficient_quote_for_bid_orders",
+        "insufficient_quote_for_buys",
+        "min_cash",
+        "max_inventory",
+    }:
+        return {"buy"}
+    if normalized in {
+        "insufficient_base_for_ask_orders",
+        "insufficient_base_for_sells",
+        "min_inventory",
+    }:
+        return {"sell"}
+    return None
+
+
+def _local_risk_rejection_counts(rejection_counts: dict[str, int]) -> dict[str, int]:
+    return {
+        reason: count
+        for reason, count in rejection_counts.items()
+        if not reason.startswith("global_")
+    }
 
 
 def _elapsed_ms(started_ns: int) -> float:

@@ -207,7 +207,10 @@ class OrderbookGridConfig:
 
     def spread_ladder(self) -> tuple[float, ...]:
         """Discrete quote spreads for limit orders: step, 2*step, …, up to spread_max."""
-        return tuple(self.spread_step * float(i + 1) for i in range(self.levels))
+        return tuple(
+            min(self.spread_max, self.spread_step * float(i + 1))
+            for i in range(self.levels)
+        )
 
     def as_contract(self) -> dict[str, Any]:
         return {

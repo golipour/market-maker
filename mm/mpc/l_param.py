@@ -250,6 +250,9 @@ def _solve_spread_leg_L_np(
     q_tail = max(0.0, q_total - L1 * d1_m)
     L_eff[0] = L1
     L_eff[1:] = q_tail * tail_v / z_tm
+    total_at_max = float(np.dot(L_eff, delta_max))
+    if total_at_max > q_total > 0.0:
+        L_eff *= q_total / max(total_at_max, 1e-12)
     return L_eff
 
 
@@ -469,6 +472,9 @@ def _solve_spread_leg_L_torch(
         L_eff = torch.zeros(q_flat.shape[0], n, dtype=d1_c.dtype, device=d1_c.device)
         L_eff[:, 0] = L1
         L_eff[:, 1:] = q_tail.unsqueeze(1) * tail_v.unsqueeze(0) / z_tm
+        total_at_max = (L_eff * delta_max.unsqueeze(0)).sum(dim=1).clamp(min=1e-12)
+        scale = torch.minimum(torch.ones_like(total_at_max), q_flat / total_at_max)
+        L_eff = L_eff * scale.unsqueeze(1)
         return L_eff
     numer = q_spread_t - q_total * tail_c / z_tm
     L1 = torch.where(denom.abs() < 1e-12, q_spread_t / d1_c, numer / denom)
@@ -477,6 +483,9 @@ def _solve_spread_leg_L_torch(
     L_eff = torch.zeros(n, dtype=d1_c.dtype, device=d1_c.device)
     L_eff[0] = L1
     L_eff[1:] = q_tail * tail_v / z_tm
+    total_at_max = (L_eff * delta_max).sum().clamp(min=1e-12)
+    scale = torch.minimum(torch.ones_like(total_at_max), q_total / total_at_max)
+    L_eff = L_eff * scale
     return L_eff
 
 

@@ -85,6 +85,39 @@ def _empty_venue_target_book(book: VenueTargetBook) -> VenueTargetBook:
     )
 
 
+def _venue_target_book_without_rejected_sides(
+    book: VenueTargetBook,
+    reasons: list[str],
+) -> VenueTargetBook:
+    rejected_sides = set().union(
+        *(_risk_rejected_sides(reason) for reason in reasons)
+    )
+    return VenueTargetBook(
+        exchange=book.exchange,
+        symbol=book.symbol,
+        actor_id=book.actor_id,
+        orders=tuple(
+            order
+            for order in book.orders
+            if str(order.side).lower().strip() not in rejected_sides
+        ),
+        policy=book.policy,
+    )
+
+
+def _can_approve_partial_book(reasons: list[str]) -> bool:
+    return bool(reasons) and all(_risk_rejected_sides(reason) for reason in reasons)
+
+
+def _risk_rejected_sides(reason: str) -> set[str]:
+    normalized = reason.removeprefix("global_")
+    if normalized in {"insufficient_quote_for_bid_orders", "min_cash", "max_inventory"}:
+        return {"buy"}
+    if normalized in {"insufficient_base_for_ask_orders", "min_inventory"}:
+        return {"sell"}
+    return set()
+
+
 def _global_limits_as_venue_limits(limits: GlobalVenueRiskLimits) -> VenueRiskLimits:
     return limits
 
@@ -174,9 +207,9 @@ def evaluate_venue_target_transition(
     if open_notional > limits.max_open_notional:
         reasons.append("max_open_notional")
     if target_locked_base > base_capacity + 1e-9:
-        reasons.append("insufficient_base_for_sells")
+        reasons.append("insufficient_base_for_ask_orders")
     if target_locked_quote > quote_capacity + 1e-9:
-        reasons.append("insufficient_quote_for_buys")
+        reasons.append("insufficient_quote_for_bid_orders")
 
     free_quote_after_lock = quote_total - target_locked_quote
     if free_quote_after_lock < limits.min_cash:
@@ -360,16 +393,22 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         approved_local: VenueTargetBook | None = None
         if local_ok:
             approved_local = target_book.local
+        elif _can_approve_partial_book(local_reasons):
+            approved_local = _venue_target_book_without_rejected_sides(
+                target_book.local,
+                local_reasons,
+            )
         elif target_book.local.policy == "replace":
             approved_local = _empty_venue_target_book(target_book.local)
 
         approved_global: VenueTargetBook | None = None
+        local_can_execute = approved_local is not None
         if target_book.global_ is not None:
-            if local_ok and global_ok:
+            if local_can_execute and global_ok:
                 approved_global = target_book.global_
-            elif local_ok and global_orders_rejected:
+            elif local_can_execute and global_orders_rejected:
                 approved_global = _empty_venue_target_book(target_book.global_)
-            elif not local_ok and target_book.global_.policy == "replace":
+            elif not local_can_execute and target_book.global_.policy == "replace":
                 approved_global = _empty_venue_target_book(target_book.global_)
             elif not target_book.global_.orders:
                 approved_global = target_book.global_

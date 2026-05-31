@@ -279,8 +279,8 @@ Per-venue target transition checks include:
 | Quantity positive | `invalid_qty` | `global_invalid_qty` |
 | Per-order notional | `max_order_notional` | `global_max_order_notional` |
 | Total open notional | `max_open_notional` | `global_max_open_notional` |
-| Sell collateral | `insufficient_base_for_sells` | `global_insufficient_base_for_sells` |
-| Buy collateral | `insufficient_quote_for_buys` | `global_insufficient_quote_for_buys` |
+| Sell collateral | `insufficient_base_for_ask_orders` | `global_insufficient_base_for_ask_orders` |
+| Buy collateral | `insufficient_quote_for_bid_orders` | `global_insufficient_quote_for_bid_orders` |
 | Minimum cash | `min_cash` | `global_min_cash` |
 | Inventory min/max | `min_inventory`, `max_inventory` | prefixed globally |
 

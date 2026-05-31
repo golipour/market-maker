@@ -22,6 +22,7 @@ from mm.execution.plan import (
     summarize_orders,
 )
 from mm.risk.engine import PassThroughRiskEngine, RiskLimits
+from mm.risk.models import TargetBookRiskResult
 from mm.risk.net_delta import NetDeltaRiskEngine
 from tests.unit.conftest import joint_frame_for_input, strategy_decision_with_joint
 from mm.runtime.config import (
@@ -106,6 +107,7 @@ class _SlowOrderManager:
         return ExecutionSyncReport(
             target=summary,
             kept=summary,
+            to_place=summary,
             limit_valid=summary,
             accepted=summary,
             placed=True,
@@ -416,9 +418,227 @@ async def test_strategy_runner_syncs_cancel_only_replace_book_when_risk_rejects_
     assert manager.sync_calls == 1
     assert manager.targets[0].orders == ()
     assert diagnostics["execution_gates"]["executed"] is True
-    assert diagnostics["risk"]["rejection_counts"]["insufficient_quote_for_buys"] == 1
+    assert diagnostics["risk"]["rejection_counts"]["insufficient_quote_for_bid_orders"] == 1
+    assert diagnostics["action_pipeline"]["risk_approved_target"]["order_count"] == 0
+    assert diagnostics["action_pipeline"]["risk_approved_target"]["rejections"]
+    assert (
+        diagnostics["action_pipeline"]["risk_approved_target"]["rejections"][0]["reason"]
+        == "insufficient_quote_for_bid_orders"
+    )
     assert diagnostics["action_pipeline"]["planned_cancel"]["order_count"] == 1
     assert diagnostics["action_pipeline"]["planned_place"]["order_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_records_local_risk_approved_target_for_net_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order = Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0)
+
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        target_order = TargetOrder(
+            exchange=order.exchange,
+            symbol=order.symbol,
+            side=order.side,
+            price=order.price,
+            qty=order.qty,
+        )
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(actor_id="test-runner", orders=(order,)),
+            joint_target_book=JointTargetBook(
+                actor_id="test-runner",
+                local=VenueTargetBook(
+                    exchange="nobitex",
+                    symbol="BTC_IRT",
+                    actor_id="test-runner",
+                    orders=(target_order,),
+                    policy="reconcile",
+                ),
+            ),
+            action_pipeline_report=ActionPipelineReport(
+                capped=summarize_orders((order,)),
+                target_book=summarize_orders((order,)),
+            ),
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    risk_engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            )
+        ),
+        binding=runtime.binding,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        clock_ms=lambda: 2_000,
+    )
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        local_private=PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": Balance("nobitex", "BTC", 10.0, 0.0, 10.0, 2_000),
+                "IRT": Balance("nobitex", "IRT", 1_000.0, 0.0, 1_000.0, 2_000),
+            },
+            open_orders={},
+        ),
+        created_at_ms=2_000,
+    )
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    runner = StrategyRunner(
+        config=_runner_config(placement_timeout_ms=1000),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": _SlowOrderManager(delay_s=0.0)},
+        risk_engine=risk_engine,
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="reconcile")),
+        bus=bus,
+    )
+
+    approved = await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert len(approved) == 1
+    assert diagnostics["action_pipeline"]["risk_approved_target"]["order_count"] == 1
+    assert diagnostics["action_pipeline"]["risk_approved_target"]["orders"][0]["exchange"] == "nobitex"
+    assert diagnostics["action_pipeline"]["planned_place"]["order_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_keeps_global_risk_rejections_out_of_local_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bid_order = Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0)
+    ask_order = Order("nobitex", "BTC_IRT", "sell", 101.0, 1.0)
+
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        target_orders = (
+            TargetOrder(
+                exchange=bid_order.exchange,
+                symbol=bid_order.symbol,
+                side=bid_order.side,
+                price=bid_order.price,
+                qty=bid_order.qty,
+            ),
+            TargetOrder(
+                exchange=ask_order.exchange,
+                symbol=ask_order.symbol,
+                side=ask_order.side,
+                price=ask_order.price,
+                qty=ask_order.qty,
+            ),
+        )
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(actor_id="test-runner", orders=(bid_order, ask_order)),
+            joint_target_book=JointTargetBook(
+                actor_id="test-runner",
+                local=VenueTargetBook(
+                    exchange="nobitex",
+                    symbol="BTC_IRT",
+                    actor_id="test-runner",
+                    orders=target_orders,
+                    policy="replace",
+                ),
+            ),
+            action_pipeline_report=ActionPipelineReport(
+                capped=summarize_orders((bid_order, ask_order)),
+                target_book=summarize_orders((bid_order, ask_order)),
+            ),
+        )
+
+    def fake_validate(self, target_book, ledger, frame, **kwargs) -> TargetBookRiskResult:
+        _ = self, target_book, ledger, frame, kwargs
+        return TargetBookRiskResult(
+            approved=None,
+            rejection_counts={
+                "insufficient_quote_for_bid_orders": 1,
+                "min_cash": 1,
+                "global_min_cash": 1,
+            },
+            exposure_before={"local_available_quote": 50.0},
+            exposure_after={"local_available_quote": 50.0},
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+    monkeypatch.setattr(NetDeltaRiskEngine, "validate_target_book_with_result", fake_validate)
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    risk_engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            )
+        ),
+        binding=runtime.binding,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        clock_ms=lambda: 2_000,
+    )
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        local_private=PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": Balance("nobitex", "BTC", 10.0, 0.0, 10.0, 2_000),
+                "IRT": Balance("nobitex", "IRT", 50.0, 0.0, 50.0, 2_000),
+            },
+            open_orders={},
+        ),
+        created_at_ms=2_000,
+    )
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    runner = StrategyRunner(
+        config=_runner_config(placement_timeout_ms=1000),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": _RecordingVenueOrderManager()},
+        risk_engine=risk_engine,
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+        bus=bus,
+    )
+
+    approved = await runner.on_joint_frame(joint_frame_for_input(frame, binding=runtime.binding))
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert approved == []
+    assert diagnostics["risk"]["rejection_counts"] == {
+        "insufficient_quote_for_bid_orders": 1,
+        "min_cash": 1,
+        "global_min_cash": 1,
+    }
+    pipeline_risk = diagnostics["action_pipeline"]["risk_approved_target"]
+    assert pipeline_risk["rejection_counts"] == {
+        "insufficient_quote_for_bid_orders": 1,
+        "min_cash": 1,
+    }
+    assert {row["reason"] for row in pipeline_risk["rejections"]} == {
+        "insufficient_quote_for_bid_orders",
+        "min_cash",
+    }
+    assert {row["side"] for row in pipeline_risk["rejections"]} == {"buy"}
 
 
 @pytest.mark.asyncio

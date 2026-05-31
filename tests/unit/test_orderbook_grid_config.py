@@ -12,6 +12,12 @@ def test_orderbook_grid_levels_and_ladder() -> None:
     assert grid.spread_ladder() == tuple(100.0 * (i + 1) for i in range(20))
 
 
+def test_orderbook_grid_ladder_clamps_final_level_to_spread_max() -> None:
+    grid = OrderbookGridConfig(spread_max=100.0, spread_step=30.0)
+    assert grid.levels == 4
+    assert grid.spread_ladder() == (30.0, 60.0, 90.0, 100.0)
+
+
 def test_orderbook_grid_contract() -> None:
     grid = OrderbookGridConfig(spread_max=100.0, spread_step=25.0)
     contract = grid.as_contract()

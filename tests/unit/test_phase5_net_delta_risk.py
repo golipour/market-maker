@@ -189,11 +189,11 @@ def test_venue_transition_ignores_unattributed_live_orders() -> None:
     )
 
     assert not ok
-    assert "insufficient_quote_for_buys" in reasons
+    assert "insufficient_quote_for_bid_orders" in reasons
     assert exposure.actor_locked_quote == 0.0
 
 
-def test_evaluate_venue_transition_rejects_insufficient_quote_for_buys() -> None:
+def test_evaluate_venue_transition_rejects_insufficient_quote_for_bid_orders() -> None:
     snapshot = _private_snapshot(quote_free=100.0, quote_locked=0.0)
     ledger = _venue_ledger_from_private(snapshot)
     target = VenueTargetBook(
@@ -208,8 +208,48 @@ def test_evaluate_venue_transition_rejects_insufficient_quote_for_buys() -> None
         limits=VenueRiskLimits(min_cash=0.0),
     )
     assert not ok
-    assert "insufficient_quote_for_buys" in reasons
+    assert "insufficient_quote_for_bid_orders" in reasons
     assert exposure.target_locked_quote == 200.0
+
+
+def test_net_delta_partial_approval_preserves_asks_when_bid_collateral_fails() -> None:
+    snapshot = _private_snapshot(base_free=10.0, quote_free=100.0, quote_locked=0.0)
+    frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
+    ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
+    target = JointTargetBook(
+        actor_id="actor-1",
+        local=VenueTargetBook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            actor_id="actor-1",
+            orders=(
+                TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 2.0),
+                TargetOrder("nobitex", "BTC_IRT", "sell", 101.0, 1.0),
+            ),
+            policy="replace",
+        ),
+    )
+    engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=50.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            )
+        ),
+        binding=_binding(),
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
+        clock_ms=lambda: 1000,
+    )
+
+    result = engine.validate_target_book_with_result(target, ledger, frame)
+
+    assert result.approved is not None
+    assert [order.side for order in result.approved.local.orders] == ["sell"]
+    assert result.target_book_gate_reasons == (
+        "insufficient_quote_for_bid_orders",
+        "min_cash",
+    )
 
 
 def test_replace_transition_checks_total_quote_even_when_locked() -> None:
@@ -241,13 +281,13 @@ def test_replace_transition_checks_total_quote_even_when_locked() -> None:
     )
 
     assert not reconcile_ok
-    assert "insufficient_quote_for_buys" in reconcile_reasons
+    assert "insufficient_quote_for_bid_orders" in reconcile_reasons
     assert replace_ok
     assert replace_reasons == []
     assert replace_exposure.target_locked_quote == pytest.approx(200.0)
 
 
-def test_evaluate_venue_transition_rejects_insufficient_base_for_sells() -> None:
+def test_evaluate_venue_transition_rejects_insufficient_base_for_ask_orders() -> None:
     snapshot = _private_snapshot(base_free=1.0)
     ledger = _venue_ledger_from_private(snapshot)
     target = VenueTargetBook(
@@ -262,7 +302,7 @@ def test_evaluate_venue_transition_rejects_insufficient_base_for_sells() -> None
         limits=VenueRiskLimits(min_inventory=0.0),
     )
     assert not ok
-    assert "insufficient_base_for_sells" in reasons
+    assert "insufficient_base_for_ask_orders" in reasons
 
 
 def test_frame_gate_kill_switch_rejects_entire_book() -> None:
@@ -421,7 +461,7 @@ def test_liquidity_sourcing_observe_only_allows_missing_global_private_without_o
     assert result.approved is not None
 
 
-def test_rejection_includes_transition_diagnostics() -> None:
+def test_empty_partial_approval_includes_transition_diagnostics() -> None:
     snapshot = _private_snapshot(quote_free=50.0)
     frame = StrategyInputFrame(local=_market_event(), local_private=snapshot)
     ledger = joint_ledger_from_frame(frame, _binding(), created_at_ms=1000)
@@ -439,8 +479,9 @@ def test_rejection_includes_transition_diagnostics() -> None:
         clock_ms=lambda: 1000,
     )
     result = engine.validate_target_book_with_result(target, ledger, frame)
-    assert result.approved is None
-    assert "insufficient_quote_for_buys" in result.target_book_gate_reasons
+    assert result.approved is not None
+    assert result.approved.local.orders == ()
+    assert "insufficient_quote_for_bid_orders" in result.target_book_gate_reasons
     assert "local" in result.transition_diagnostics
     assert result.transition_diagnostics["local"]["target_locked_quote"] == 200.0
 
@@ -477,8 +518,8 @@ def test_replace_rejection_approves_empty_cancel_only_book() -> None:
     assert result.approved is not None
     assert result.approved.local.policy == "replace"
     assert result.approved.local.orders == ()
-    assert "insufficient_quote_for_buys" in result.target_book_gate_reasons
-    assert result.rejection_counts["insufficient_quote_for_buys"] == 1
+    assert "insufficient_quote_for_bid_orders" in result.target_book_gate_reasons
+    assert result.rejection_counts["insufficient_quote_for_bid_orders"] == 1
 
 
 def test_risk_config_parses_engine_field() -> None:

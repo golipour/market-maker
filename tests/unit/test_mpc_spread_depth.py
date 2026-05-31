@@ -177,6 +177,21 @@ def test_spread_structured_decoder_keeps_collapsed_center_depth_bounded() -> Non
     assert float(torch_qrange) == pytest.approx(10.0, rel=1e-9)
 
 
+def test_spread_grid_clamps_final_edge_to_spread_max() -> None:
+    from mm.mpc.mpc_tensor_batched import _spread_grid_tensor
+
+    grid = _spread_grid_tensor(
+        torch,
+        grid_levels=4,
+        spread_step=30.0,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+        spread_max=100.0,
+    )
+
+    assert grid.tolist() == pytest.approx([30.0, 60.0, 90.0, 100.0])
+
+
 def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:
     from mm.mpc.l_param import LParamConfig
 

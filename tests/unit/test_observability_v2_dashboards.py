@@ -6,6 +6,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     liquidity_sourcing,
     market_data_quality,
     model_quality,
+    orderbook_depth,
     risk_execution,
     runtime_overview,
     target_order_stems,
@@ -92,6 +93,31 @@ def test_zero_fill_metric_grids_use_market_maker_scope_not_wallet_symbols() -> N
     templating = {item["name"]: item["query"] for item in dashboard["templating"]["list"]}
     assert "event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')" in templating["symbol"]
     assert "private:state" not in templating["symbol"]
+
+
+def test_orderbook_depth_includes_execution_ladder_stems() -> None:
+    dashboard = orderbook_depth()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected = {
+        "Marginal ladder": (27, "ladder"),
+        "After venue rounding": (37, "rules_valid"),
+        "Exchange-accepted placements": (47, "router_accepted"),
+    }
+    for title, (y, stage) in expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "xychart"
+        assert panel["gridPos"] == {"h": 10, "w": 24, "x": 0, "y": y}
+
+        sql = panel["targets"][0]["rawSql"]
+        assert f"ARRAY['action_pipeline', '{stage}', 'orders']" in sql
+        assert "ControllerDiagnostics" in sql
+        assert "'${target_frame_mode}' = 'latest'" in sql
+        assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
+
+    vars_by_name = {var["name"]: var for var in dashboard["templating"]["list"]}
+    assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"
+    assert vars_by_name["target_frame_event_id"]["label"] == "Target frame"
 
 
 def test_postgres_queries_use_empty_safe_multiselect_filters() -> None:
@@ -189,14 +215,15 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         "01 Strategy raw ladder",
         "02 Strategy cap -> target orderbook",
         "03 Risk-approved target",
-        "04 Planner new place orders",
-        "05 Venue rules valid after rounding",
-        "06 Exchange accepted placed orders",
-        "07 Planner kept live orders",
-        "08 Planner cancel orders",
-        "09 Removed by venue rules: invalid price/qty",
-        "10 Removed by venue rules: min qty",
-        "11 Removed by venue rules: min notional",
+        "04 Removed by local risk / collateral",
+        "05 Planner new place orders",
+        "06 Venue rules valid after rounding",
+        "07 Exchange accepted placed orders",
+        "08 Planner kept live orders",
+        "09 Planner cancel orders",
+        "10 Removed by venue adapter: invalid price/qty",
+        "11 Removed by venue adapter: min qty",
+        "12 Removed by venue adapter: min notional",
     }
     assert stem_titles.issubset(panels_by_title)
 
@@ -204,14 +231,15 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         "01 Strategy raw ladder": 3,
         "02 Strategy cap -> target orderbook": 13,
         "03 Risk-approved target": 23,
-        "04 Planner new place orders": 33,
-        "05 Venue rules valid after rounding": 43,
-        "06 Exchange accepted placed orders": 53,
-        "07 Planner kept live orders": 63,
-        "08 Planner cancel orders": 73,
-        "09 Removed by venue rules: invalid price/qty": 83,
-        "10 Removed by venue rules: min qty": 93,
-        "11 Removed by venue rules: min notional": 103,
+        "04 Removed by local risk / collateral": 33,
+        "05 Planner new place orders": 43,
+        "06 Venue rules valid after rounding": 53,
+        "07 Exchange accepted placed orders": 63,
+        "08 Planner kept live orders": 73,
+        "09 Planner cancel orders": 83,
+        "10 Removed by venue adapter: invalid price/qty": 93,
+        "11 Removed by venue adapter: min qty": 103,
+        "12 Removed by venue adapter: min notional": 113,
     }
     for title in stem_titles:
         assert panels_by_title[title]["gridPos"]["x"] == 0
@@ -249,15 +277,20 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     raw_sql = panels_by_title["01 Strategy raw ladder"]["targets"][0]["rawSql"]
     target_sql = panels_by_title["02 Strategy cap -> target orderbook"]["targets"][0]["rawSql"]
     risk_sql = panels_by_title["03 Risk-approved target"]["targets"][0]["rawSql"]
-    place_sql = panels_by_title["04 Planner new place orders"]["targets"][0]["rawSql"]
-    rules_sql = panels_by_title["05 Venue rules valid after rounding"]["targets"][0]["rawSql"]
-    accepted_sql = panels_by_title["06 Exchange accepted placed orders"]["targets"][0]["rawSql"]
-    kept_sql = panels_by_title["07 Planner kept live orders"]["targets"][0]["rawSql"]
-    cancel_sql = panels_by_title["08 Planner cancel orders"]["targets"][0]["rawSql"]
-    invalid_sql = panels_by_title["09 Removed by venue rules: invalid price/qty"]["targets"][0]["rawSql"]
-    min_qty_sql = panels_by_title["10 Removed by venue rules: min qty"]["targets"][0]["rawSql"]
-    min_notional_sql = panels_by_title["11 Removed by venue rules: min notional"]["targets"][0]["rawSql"]
+    risk_removed_sql = panels_by_title["04 Removed by local risk / collateral"]["targets"][0]["rawSql"]
+    place_sql = panels_by_title["05 Planner new place orders"]["targets"][0]["rawSql"]
+    rules_sql = panels_by_title["06 Venue rules valid after rounding"]["targets"][0]["rawSql"]
+    accepted_sql = panels_by_title["07 Exchange accepted placed orders"]["targets"][0]["rawSql"]
+    kept_sql = panels_by_title["08 Planner kept live orders"]["targets"][0]["rawSql"]
+    cancel_sql = panels_by_title["09 Planner cancel orders"]["targets"][0]["rawSql"]
+    invalid_sql = panels_by_title["10 Removed by venue adapter: invalid price/qty"]["targets"][0]["rawSql"]
+    min_qty_sql = panels_by_title["11 Removed by venue adapter: min qty"]["targets"][0]["rawSql"]
+    min_notional_sql = panels_by_title["12 Removed by venue adapter: min notional"]["targets"][0]["rawSql"]
 
+    mode_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "target_frame_mode")
+    assert mode_var["label"] == "Target frame mode"
+    assert mode_var["current"]["value"] == "latest"
+    assert [option["value"] for option in mode_var["options"]] == ["latest", "pinned"]
     frame_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "target_frame_event_id")
     assert frame_var["label"] == "Target frame"
     assert "e.event_id AS __value" in frame_var["query"]
@@ -266,6 +299,8 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     assert "ARRAY['action_pipeline', 'ladder', 'orders']" in raw_sql
     assert "ARRAY['action_pipeline', 'capped', 'orders']" in target_sql
     assert "ARRAY['action_pipeline', 'risk_approved_target', 'orders']" in risk_sql
+    assert "ARRAY['action_pipeline', 'risk_approved_target', 'rejections']" in risk_removed_sql
+    assert "COALESCE(NULLIF(o.value->>'reason', ''), 'unknown')" in risk_removed_sql
     assert "ARRAY['action_pipeline', 'kept', 'orders']" in kept_sql
     assert "ARRAY['action_pipeline', 'planned_cancel', 'orders']" in cancel_sql
     assert "ARRAY['action_pipeline', 'planned_place', 'orders']" in place_sql
@@ -282,6 +317,7 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         raw_sql,
         target_sql,
         risk_sql,
+        risk_removed_sql,
         place_sql,
         rules_sql,
         accepted_sql,
@@ -292,7 +328,8 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         min_notional_sql,
     ):
         assert "ControllerDiagnostics" in sql
-        assert "e.event_id = ${target_frame_event_id:sqlstring}" in sql
+        assert "'${target_frame_mode}' = 'latest'" in sql
+        assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
         assert "axis_frame AS" in sql
         assert "'axis range' AS series" in sql
         assert "FROM axis_rows" in sql

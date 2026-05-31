@@ -223,6 +223,59 @@ def test_action_pipeline_phase4_stages() -> None:
     assert report.router_accepted.order_count == 1
 
 
+def test_execution_report_filter_keeps_local_symbol_only() -> None:
+    from mm.execution.plan import ActionStageReport, ExecutionSyncReport, filter_execution_sync_report
+
+    local_order = {
+        "exchange": "nobitex",
+        "symbol": "USDT_IRT",
+        "side": "buy",
+        "price": 100.0,
+        "qty": 2.0,
+        "notional": 200.0,
+        "order_type": "limit",
+        "client_order_id": None,
+    }
+    global_order = {
+        "exchange": "wallex",
+        "symbol": "USDT_IRT",
+        "side": "sell",
+        "price": 110.0,
+        "qty": 3.0,
+        "notional": 330.0,
+        "order_type": "limit",
+        "client_order_id": None,
+    }
+    report = ExecutionSyncReport(
+        to_place=ActionStageReport(order_count=2, orders=(local_order, global_order)),
+        limit_valid=ActionStageReport(
+            order_count=1,
+            orders=(local_order,),
+            rejections=(
+                {
+                    **global_order,
+                    "reason": "rules_min_notional",
+                    "stage": "rules",
+                },
+            ),
+            rejection_counts={"rules_min_notional": 1},
+        ),
+        canceled=ActionStageReport(order_count=2, orders=(local_order, global_order)),
+        cancel_count=2,
+        placed=True,
+    )
+
+    filtered = filter_execution_sync_report(report, exchange="nobitex", symbol="USDT_IRT")
+
+    assert filtered.to_place.order_count == 1
+    assert filtered.to_place.orders == (local_order,)
+    assert filtered.canceled.order_count == 1
+    assert filtered.cancel_count == 1
+    assert filtered.limit_valid.order_count == 1
+    assert filtered.limit_valid.rejections == ()
+    assert filtered.venue_rejection_counts == {}
+
+
 def test_default_persistence_topics_include_target_books() -> None:
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         controller=ControllerRuntimeConfig(enabled=True, actor_id="mpc-controller"),

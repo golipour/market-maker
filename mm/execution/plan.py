@@ -159,6 +159,66 @@ def summarize_open_orders(open_orders: list) -> ActionStageReport:
     return summarize_orders(orders)
 
 
+def filter_stage_report(
+    report: ActionStageReport,
+    *,
+    exchange: str,
+    symbol: str,
+) -> ActionStageReport:
+    """Keep only order/rejection rows for one venue symbol and recompute totals."""
+
+    if not report.orders and not report.rejections:
+        return report
+
+    exchange_key = exchange.lower().strip()
+    symbol_key = symbol.strip()
+    orders = tuple(
+        dict(order)
+        for order in report.orders
+        if str(order.get("exchange", "")).lower().strip() == exchange_key
+        and str(order.get("symbol", "")).strip() == symbol_key
+    )
+    rejections = tuple(
+        dict(rejection)
+        for rejection in report.rejections
+        if str(rejection.get("exchange", "")).lower().strip() == exchange_key
+        and str(rejection.get("symbol", "")).strip() == symbol_key
+    )
+    rejection_counts: dict[str, int] = {}
+    for rejection in rejections:
+        reason = str(rejection.get("reason", "")).strip()
+        if reason:
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+    return _stage_report_from_order_dicts(
+        orders,
+        rejection_counts=rejection_counts,
+        rejections=rejections,
+    )
+
+
+def filter_execution_sync_report(
+    report: ExecutionSyncReport,
+    *,
+    exchange: str,
+    symbol: str,
+) -> ExecutionSyncReport:
+    """Keep one venue symbol from a possibly joint execution report."""
+
+    limit_valid = filter_stage_report(report.limit_valid, exchange=exchange, symbol=symbol)
+    canceled = filter_stage_report(report.canceled, exchange=exchange, symbol=symbol)
+    return ExecutionSyncReport(
+        target=filter_stage_report(report.target, exchange=exchange, symbol=symbol),
+        kept=filter_stage_report(report.kept, exchange=exchange, symbol=symbol),
+        canceled=canceled,
+        to_place=filter_stage_report(report.to_place, exchange=exchange, symbol=symbol),
+        limit_valid=limit_valid,
+        accepted=filter_stage_report(report.accepted, exchange=exchange, symbol=symbol),
+        venue_rejection_counts=dict(limit_valid.rejection_counts),
+        cancel_count=canceled.order_count,
+        placed=report.placed,
+    )
+
+
 def apply_execution_stages_to_pipeline(
     report: ActionPipelineReport,
     execution_report: ExecutionSyncReport,
@@ -214,3 +274,33 @@ def order_summary(order: Order) -> dict[str, Any]:
         "order_type": order.order_type,
         "client_order_id": order.client_order_id,
     }
+
+
+def _stage_report_from_order_dicts(
+    orders: tuple[dict[str, Any], ...],
+    *,
+    rejection_counts: dict[str, int] | None = None,
+    rejections: tuple[dict[str, Any], ...] = (),
+) -> ActionStageReport:
+    buy_qty = sell_qty = 0.0
+    buy_notional = sell_notional = 0.0
+    for order in orders:
+        qty = float(order.get("qty", 0.0))
+        price = float(order.get("price", 0.0))
+        side = str(order.get("side", "")).lower().strip()
+        if side == "buy":
+            buy_qty += qty
+            buy_notional += float(order.get("notional", price * qty))
+        elif side == "sell":
+            sell_qty += qty
+            sell_notional += float(order.get("notional", price * qty))
+    return ActionStageReport(
+        order_count=len(orders),
+        buy_qty=buy_qty,
+        sell_qty=sell_qty,
+        buy_notional=buy_notional,
+        sell_notional=sell_notional,
+        rejection_counts=dict(rejection_counts or {}),
+        orders=orders,
+        rejections=rejections,
+    )

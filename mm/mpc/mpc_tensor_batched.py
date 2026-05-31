@@ -281,9 +281,18 @@ def _grid_levels(spread_max: float, spread_step: float) -> int:
     return max(2, int(math.ceil(float(spread_max) / step)))
 
 
-def _spread_grid_tensor(torch_mod: Any, grid_levels: int, spread_step: float, device: Any, dtype: Any) -> Any:
+def _spread_grid_tensor(
+    torch_mod: Any,
+    grid_levels: int,
+    spread_step: float,
+    device: Any,
+    dtype: Any,
+    *,
+    spread_max: float,
+) -> Any:
     """Upper bucket edges from spread_step through grid_levels * spread_step (domain [0, spread_max])."""
-    return torch_mod.arange(1.0, float(grid_levels) + 1.0, dtype=dtype, device=device) * float(spread_step)
+    grid = torch_mod.arange(1.0, float(grid_levels) + 1.0, dtype=dtype, device=device) * float(spread_step)
+    return torch_mod.minimum(grid, torch_mod.tensor(float(spread_max), dtype=dtype, device=device))
 
 
 def _book_cumulative_from_ob_rel(
@@ -839,7 +848,14 @@ class MonteCarloMPCTensorBatched:
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
             state.ob_rel, self.grid_levels, self.spread_step, _device, dtype
         )
-        spread_grid = _spread_grid_tensor(torch_mod, self.grid_levels, self.spread_step, _device, dtype)
+        spread_grid = _spread_grid_tensor(
+            torch_mod,
+            self.grid_levels,
+            self.spread_step,
+            _device,
+            dtype,
+            spread_max=self.spread_max,
+        )
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
@@ -938,7 +954,8 @@ class MonteCarloMPCTensorBatched:
             batch_time_sec = time.perf_counter() - t_batch
 
         spread_levels = tuple(
-            round(i * self.spread_step, 12) for i in range(self.grid_levels + 1)
+            round(min(self.spread_max, i * self.spread_step), 12)
+            for i in range(self.grid_levels + 1)
         )
         initial_flat = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
         initial_action = self._flat_to_effective_action(

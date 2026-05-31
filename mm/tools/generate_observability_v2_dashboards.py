@@ -1804,8 +1804,12 @@ def _latest_action_pipeline_stage_orders_sql(
     *,
     field: str = "orders",
     reason: str | None = None,
+    include_reason_in_series: bool = False,
 ) -> str:
     side = _side_sql("o.value->>'side'")
+    series = side
+    if include_reason_in_series:
+        series = f"(COALESCE(NULLIF(o.value->>'reason', ''), 'unknown') || ' ' || {side})"
     price = _numeric_sql("o.value->>'price'", default="NULL")
     qty = _numeric_sql("o.value->>'qty'")
     axis_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
@@ -1818,7 +1822,10 @@ def _latest_action_pipeline_stage_orders_sql(
   FROM mm_events e
   WHERE e.topic = '${{diagnostics_topic}}'
     AND e.event_type = 'ControllerDiagnostics'
-    AND e.event_id = ${{target_frame_event_id:sqlstring}}
+    AND (
+      '${{target_frame_mode}}' = 'latest'
+      OR e.event_id = ${{target_frame_event_id:sqlstring}}
+    )
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
     AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
@@ -1827,7 +1834,7 @@ def _latest_action_pipeline_stage_orders_sql(
   LIMIT 1
 ),
 orders AS (
-  SELECT {side} AS series,
+  SELECT {series} AS series,
          {price} AS price,
          {qty} AS value
   FROM latest l
@@ -2376,13 +2383,41 @@ def orderbook_depth() -> dict[str, Any]:
         _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw"), y=3),
         _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean"), y=11),
         _xy_depth_panel(4, "Action ladder depth", _orderbook_depth_sql("ladder"), y=19),
+        _stem_order_qty_price_panel(
+            5,
+            "Marginal ladder",
+            _latest_action_pipeline_stage_orders_sql("ladder"),
+            x=0,
+            y=27,
+            w=24,
+        ),
+        _stem_order_qty_price_panel(
+            6,
+            "After venue rounding",
+            _latest_action_pipeline_stage_orders_sql("rules_valid"),
+            x=0,
+            y=37,
+            w=24,
+        ),
+        _stem_order_qty_price_panel(
+            7,
+            "Exchange-accepted placements",
+            _latest_action_pipeline_stage_orders_sql("router_accepted"),
+            x=0,
+            y=47,
+            w=24,
+        ),
     ]
     return _dashboard(
         "mm-obs-v2-orderbook-depth",
         "MM Observability v2 / 01B Orderbook Depth",
         panels,
         tags=["orderbook"],
-        extra_templating=[_custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100")],
+        extra_templating=[
+            _custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100"),
+            _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
+            _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
+        ],
     )
 
 
@@ -2423,20 +2458,21 @@ def target_order_stems() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Selected-frame strategy-to-execution ladder. Every chart uses the same ControllerDiagnostics event and the same raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
+            "Live or pinned strategy-to-execution ladder. Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the selected target frame. Every chart uses the same raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
             y=0,
         ),
         _stem_order_qty_price_panel(2, "01 Strategy raw ladder", _latest_action_pipeline_stage_orders_sql("ladder"), x=0, y=3, w=24),
         _stem_order_qty_price_panel(3, "02 Strategy cap -> target orderbook", _latest_action_pipeline_stage_orders_sql("capped"), x=0, y=13, w=24),
         _stem_order_qty_price_panel(4, "03 Risk-approved target", _latest_action_pipeline_stage_orders_sql("risk_approved_target"), x=0, y=23, w=24),
-        _stem_order_qty_price_panel(5, "04 Planner new place orders", _latest_action_pipeline_stage_orders_sql("planned_place"), x=0, y=33, w=24),
-        _stem_order_qty_price_panel(6, "05 Venue rules valid after rounding", _latest_action_pipeline_stage_orders_sql("rules_valid"), x=0, y=43, w=24),
-        _stem_order_qty_price_panel(7, "06 Exchange accepted placed orders", _latest_action_pipeline_stage_orders_sql("router_accepted"), x=0, y=53, w=24),
-        _stem_order_qty_price_panel(8, "07 Planner kept live orders", _latest_action_pipeline_stage_orders_sql("kept"), x=0, y=63, w=24),
-        _stem_order_qty_price_panel(9, "08 Planner cancel orders", _latest_action_pipeline_stage_orders_sql("planned_cancel"), x=0, y=73, w=24),
-        _stem_order_qty_price_panel(10, "09 Removed by venue rules: invalid price/qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_invalid_price_or_qty"), x=0, y=83, w=24),
-        _stem_order_qty_price_panel(11, "10 Removed by venue rules: min qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_qty"), x=0, y=93, w=24),
-        _stem_order_qty_price_panel(12, "11 Removed by venue rules: min notional", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_notional"), x=0, y=103, w=24),
+        _stem_order_qty_price_panel(5, "04 Removed by local risk / collateral", _latest_action_pipeline_stage_orders_sql("risk_approved_target", field="rejections", include_reason_in_series=True), x=0, y=33, w=24),
+        _stem_order_qty_price_panel(6, "05 Planner new place orders", _latest_action_pipeline_stage_orders_sql("planned_place"), x=0, y=43, w=24),
+        _stem_order_qty_price_panel(7, "06 Venue rules valid after rounding", _latest_action_pipeline_stage_orders_sql("rules_valid"), x=0, y=53, w=24),
+        _stem_order_qty_price_panel(8, "07 Exchange accepted placed orders", _latest_action_pipeline_stage_orders_sql("router_accepted"), x=0, y=63, w=24),
+        _stem_order_qty_price_panel(9, "08 Planner kept live orders", _latest_action_pipeline_stage_orders_sql("kept"), x=0, y=73, w=24),
+        _stem_order_qty_price_panel(10, "09 Planner cancel orders", _latest_action_pipeline_stage_orders_sql("planned_cancel"), x=0, y=83, w=24),
+        _stem_order_qty_price_panel(11, "10 Removed by venue adapter: invalid price/qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_invalid_price_or_qty"), x=0, y=93, w=24),
+        _stem_order_qty_price_panel(12, "11 Removed by venue adapter: min qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_qty"), x=0, y=103, w=24),
+        _stem_order_qty_price_panel(13, "12 Removed by venue adapter: min notional", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_notional"), x=0, y=113, w=24),
     ]
     return _dashboard(
         "mm-obs-v2-target-order-stems",
@@ -2444,6 +2480,7 @@ def target_order_stems() -> dict[str, Any]:
         panels,
         tags=["actions", "execution"],
         extra_templating=[
+            _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
             _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
         ],
     )

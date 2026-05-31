@@ -109,7 +109,14 @@ def optimize_joint_with_diagnostics(
     global_book_cum_bid, global_book_cum_ask = _book_cumulative_from_ob_rel(
         global_ob, mpc.grid_levels, mpc.spread_step, _device, dtype
     )
-    spread_grid = _spread_grid_tensor(torch_mod, mpc.grid_levels, mpc.spread_step, _device, dtype)
+    spread_grid = _spread_grid_tensor(
+        torch_mod,
+        mpc.grid_levels,
+        mpc.spread_step,
+        _device,
+        dtype,
+        spread_max=mpc.spread_max,
+    )
     mid_0 = float(state.mid)
     global_mid_0 = float(state.global_mid or state.reference_price or state.global_sell_vwap or mid_0)
     inv_0 = float(state.inventory)
@@ -240,7 +247,10 @@ def optimize_joint_with_diagnostics(
         fixed_samples = draw_samples()
         batch_time_sec = time.perf_counter() - t_batch
 
-    spread_levels = tuple(round(i * mpc.spread_step, 12) for i in range(mpc.grid_levels + 1))
+    spread_levels = tuple(
+        round(min(mpc.spread_max, i * mpc.spread_step), 12)
+        for i in range(mpc.grid_levels + 1)
+    )
     initial_flat = np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64)
     local_initial_flat, _ = split_venue_action_flat(initial_flat, n)
     initial_action = sigmoid_action_from_flat_raw(
