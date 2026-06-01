@@ -13,9 +13,11 @@ from mm.core.adapters.joint import joint_target_book_to_action
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import InstrumentSpec
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+from mm.core.models.private import OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.core.order_constraints import OrderConstraints
+from mm.core.wallet import make_balance, normalize_snapshot_balances_for_open_orders
 from mm.execution.memory import RecordingOrderManager
 from mm.execution.plan import apply_execution_stages_to_pipeline
 from mm.risk.engine import PassThroughRiskEngine
@@ -57,6 +59,47 @@ def _market_event() -> MarketEvent:
         imbalance=0.0,
         microprice=100.5,
     )
+
+
+def test_mpc_state_uses_normalized_wallet_total_including_locked_collateral_for_objective() -> None:
+    from mm.strategies.mpc_engine import _state_from_frame
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    snapshot = normalize_snapshot_balances_for_open_orders(
+        PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": make_balance("nobitex", "BTC", 1.0, 0.0, 2_000, total=1.0),
+                "IRT": make_balance("nobitex", "IRT", 10_000.0, 0.0, 2_000),
+            },
+            open_orders={
+                "sell-1": OpenOrder(
+                    exchange_order_id="sell-1",
+                    actor_id="mpc-controller",
+                    order=Order("nobitex", "BTC_IRT", "sell", 100.0, 2.0),
+                    remaining_qty=2.0,
+                    filled_qty=0.0,
+                    status="open",
+                    timestamp_ms=2_000,
+                )
+            },
+        ),
+        base_asset="BTC",
+        quote_asset="IRT",
+        trading_symbol="BTC_IRT",
+    )
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        local_private=snapshot,
+    )
+
+    state = _state_from_frame(frame, runtime.binding, spread_max=100.0)
+
+    assert state.inventory == pytest.approx(2.0)
+    assert state.cash == pytest.approx(10_000.0)
 
 
 def _sigmoid_action(*, bid_qty: float = 1.0, ask_qty: float = 0.5) -> SimpleNamespace:

@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `ControllerDiagnostics.state`, `risk.exposure_*`, and `risk.limits`.\n\nInventory/cash and wallet legs use **effective totals** (exchange total, wallet locked, and open-order collateral when locked under-reports). Net-delta risk exposure shows ledger locked collateral vs target-book locked collateral per venue.",
+        "content": "**Source:** `ControllerDiagnostics.state`, `risk.exposure_*`, and `risk.limits`.\n\nInventory/cash use normalized wallet totals (`free + locked`). Net-delta risk exposure shows ledger locked collateral vs target-book locked collateral per venue.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -203,11 +203,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Local quote wallet (free / locked / total / effective)",
+      "title": "Local quote wallet (free / locked / total)",
       "type": "timeseries"
     },
     {
@@ -249,11 +249,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Local base wallet (free / locked / total / effective)",
+      "title": "Local base wallet (free / locked / total)",
       "type": "timeseries"
     },
     {
@@ -387,11 +387,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Global quote wallet (free / locked / total / effective)",
+      "title": "Global quote wallet (free / locked / total)",
       "type": "timeseries"
     },
     {
@@ -433,11 +433,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet', leg], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN (\n  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')\n) AS legs(metric, leg)\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Global base wallet (free / locked / total / effective)",
+      "title": "Global base wallet (free / locked / total)",
       "type": "timeseries"
     },
     {

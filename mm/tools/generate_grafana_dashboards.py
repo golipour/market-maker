@@ -855,9 +855,8 @@ def portfolio_dashboard() -> dict[str, Any]:
             1,
             0,
             "**Source:** `ControllerDiagnostics.state`, `risk.exposure_*`, and `risk.limits`.\n\n"
-            "Inventory/cash and wallet legs use **effective totals** (exchange total, wallet locked, "
-            "and open-order collateral when locked under-reports). Net-delta risk exposure shows "
-            "ledger locked collateral vs target-book locked collateral per venue.",
+            "Inventory/cash use normalized wallet totals (`free + locked`). Net-delta risk exposure "
+            "shows ledger locked collateral vs target-book locked collateral per venue.",
         ),
         _panel_sql_timeseries(
             10,
@@ -913,12 +912,12 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             15,
             28,
-            "Local quote wallet (free / locked / total / effective)",
+            "Local quote wallet (free / locked / total)",
             f"""SELECT e.ts AS "time", metric,
   {_numeric_sql("e.payload #>> ARRAY['state','local_quote_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
-  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')
 ) AS legs(metric, leg)
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -926,12 +925,12 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             16,
             36,
-            "Local base wallet (free / locked / total / effective)",
+            "Local base wallet (free / locked / total)",
             f"""SELECT e.ts AS "time", metric,
   {_numeric_sql("e.payload #>> ARRAY['state','local_base_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
-  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')
 ) AS legs(metric, leg)
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -964,12 +963,12 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             17,
             60,
-            "Global quote wallet (free / locked / total / effective)",
+            "Global quote wallet (free / locked / total)",
             f"""SELECT e.ts AS "time", metric,
   {_numeric_sql("e.payload #>> ARRAY['state','global_quote_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
-  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')
 ) AS legs(metric, leg)
 WHERE {diag_filter}
 ORDER BY 1""",
@@ -977,12 +976,12 @@ ORDER BY 1""",
         _panel_sql_timeseries(
             18,
             68,
-            "Global base wallet (free / locked / total / effective)",
+            "Global base wallet (free / locked / total)",
             f"""SELECT e.ts AS "time", metric,
   {_numeric_sql("e.payload #>> ARRAY['state','global_base_wallet', leg]", default="NULL")} AS value
 FROM mm_events e
 CROSS JOIN (
-  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total'), ('effective_total', 'effective_total')
+  VALUES ('free', 'free'), ('locked', 'locked'), ('total', 'total')
 ) AS legs(metric, leg)
 WHERE {diag_filter}
 ORDER BY 1""",

@@ -1,4 +1,4 @@
-"""Wallet leg totals: available (free), locked, exchange total, and open-order collateral."""
+"""Normalized wallet leg totals: available (free), locked, and total."""
 
 from __future__ import annotations
 
@@ -82,25 +82,66 @@ def order_collateral_from_open_orders(
     return base_locked, quote_locked
 
 
-def effective_leg_total(
+def normalize_balance_lock(
     balance: Balance | None,
     *,
-    order_locked: float = 0.0,
-) -> float:
-    """
-    Total economic balance for one asset leg.
+    exchange: str,
+    asset: str,
+    timestamp_ms: int,
+    required_locked: float = 0.0,
+) -> Balance:
+    """Return a balance where ``locked`` covers live-order collateral and ``free + locked == total``."""
 
-    Uses exchange ``total`` when present, includes wallet ``locked``, and lifts collateral
-    implied by open orders when ``locked`` under-reports resting orders.
-    """
-
-    order_locked_f = max(0.0, float(order_locked))
+    required_locked_f = max(0.0, float(required_locked))
     if balance is None:
-        return order_locked_f
-    free = float(balance.free)
-    locked = float(balance.locked)
-    wallet_total = reported_wallet_total(balance)
-    return max(wallet_total, free + max(locked, order_locked_f))
+        total = required_locked_f
+        locked = required_locked_f
+        free = 0.0
+    else:
+        total = max(reported_wallet_total(balance), required_locked_f)
+        locked = min(total, max(0.0, float(balance.locked), required_locked_f))
+        free = max(0.0, total - locked)
+    return make_balance(exchange, asset, free, locked, timestamp_ms, total=total)
+
+
+def normalize_snapshot_balances_for_open_orders(
+    snapshot: PrivateStateSnapshot,
+    *,
+    base_asset: str,
+    quote_asset: str,
+    trading_symbol: str,
+) -> PrivateStateSnapshot:
+    """Normalize a private snapshot so wallet locked balances reflect live open-order collateral."""
+
+    base_order_locked, quote_order_locked = order_collateral_from_open_orders(
+        snapshot.open_orders,
+        trading_symbol=trading_symbol,
+        base_asset=base_asset,
+        quote_asset=quote_asset,
+    )
+    balances = dict(snapshot.balances)
+    exchange = snapshot.exchange
+    timestamp_ms = int(snapshot.timestamp_ms)
+    balances[base_asset] = normalize_balance_lock(
+        balances.get(base_asset),
+        exchange=exchange,
+        asset=base_asset,
+        timestamp_ms=timestamp_ms,
+        required_locked=base_order_locked,
+    )
+    balances[quote_asset] = normalize_balance_lock(
+        balances.get(quote_asset),
+        exchange=exchange,
+        asset=quote_asset,
+        timestamp_ms=timestamp_ms,
+        required_locked=quote_order_locked,
+    )
+    return PrivateStateSnapshot(
+        exchange=snapshot.exchange,
+        timestamp_ms=snapshot.timestamp_ms,
+        balances=balances,
+        open_orders=dict(snapshot.open_orders),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +151,6 @@ class WalletLegView:
     locked: float
     total: float
     order_locked: float
-    effective_total: float
 
     def as_dict(self) -> dict[str, float | str]:
         return {
@@ -119,7 +159,6 @@ class WalletLegView:
             "locked": self.locked,
             "total": self.total,
             "order_locked": self.order_locked,
-            "effective_total": self.effective_total,
         }
 
 
@@ -132,14 +171,12 @@ def wallet_leg_view(
     free = float(balance.free) if balance is not None else 0.0
     locked = float(balance.locked) if balance is not None else 0.0
     total = reported_wallet_total(balance)
-    effective = effective_leg_total(balance, order_locked=order_locked)
     return WalletLegView(
         asset=asset,
         free=free,
         locked=locked,
         total=total,
         order_locked=max(0.0, float(order_locked)),
-        effective_total=effective,
     )
 
 
@@ -150,20 +187,15 @@ def inventory_cash_from_snapshot(
     *,
     trading_symbol: str = "",
 ) -> tuple[float, float]:
-    """Primary economic inventory (base) and cash (quote) using total wallet legs."""
+    """Portfolio inventory/cash using normalized wallet totals: available + locked."""
 
     if snapshot is None:
         return 0.0, 0.0
-    base_order_locked, quote_order_locked = order_collateral_from_open_orders(
-        snapshot.open_orders,
-        trading_symbol=trading_symbol,
-        base_asset=base_asset,
-        quote_asset=quote_asset,
-    )
+    del trading_symbol
     base = snapshot.balances.get(base_asset)
     quote = snapshot.balances.get(quote_asset)
-    inventory = effective_leg_total(base, order_locked=base_order_locked)
-    cash = effective_leg_total(quote, order_locked=quote_order_locked)
+    inventory = reported_wallet_total(base)
+    cash = reported_wallet_total(quote)
     return float(inventory), float(cash)
 
 

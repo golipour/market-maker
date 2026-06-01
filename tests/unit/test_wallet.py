@@ -3,9 +3,9 @@ from __future__ import annotations
 from mm.core.models.execution import Order
 from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.wallet import (
-    effective_leg_total,
     inventory_cash_from_snapshot,
     make_balance,
+    normalize_snapshot_balances_for_open_orders,
     order_collateral_from_open_orders,
     portfolio_wealth,
     wallet_pair_from_snapshot,
@@ -60,17 +60,12 @@ def test_order_collateral_from_open_orders() -> None:
     assert quote_locked == 100.0
 
 
-def test_effective_leg_total_uses_open_order_collateral_when_locked_under_reports() -> None:
-    balance = make_balance("nobitex", "USDT", 0.0, 0.0, 1, total=0.0)
-    assert effective_leg_total(balance, order_locked=2.5) == 2.5
-
-
-def test_inventory_cash_from_snapshot_uses_effective_totals() -> None:
+def test_normalize_snapshot_balances_for_open_orders_lifts_locked_without_inflating_total() -> None:
     snapshot = PrivateStateSnapshot(
         exchange="nobitex",
         timestamp_ms=1,
         balances={
-            "USDT": make_balance("nobitex", "USDT", 0.0, 0.0, 1, total=0.0),
+            "USDT": make_balance("nobitex", "USDT", 23.0, 0.0, 1, total=23.0),
             "IRT": make_balance("nobitex", "IRT", 10.0, 0.0, 1),
         },
         open_orders={
@@ -91,13 +86,24 @@ def test_inventory_cash_from_snapshot_uses_effective_totals() -> None:
             ),
         },
     )
-    inventory, cash = inventory_cash_from_snapshot(
+    normalized = normalize_snapshot_balances_for_open_orders(
         snapshot,
+        base_asset="USDT",
+        quote_asset="IRT",
+        trading_symbol="USDT_IRT",
+    )
+
+    assert normalized.balances["USDT"].free == 20.0
+    assert normalized.balances["USDT"].locked == 3.0
+    assert normalized.balances["USDT"].total == 23.0
+
+    inventory, cash = inventory_cash_from_snapshot(
+        normalized,
         "USDT",
         "IRT",
         trading_symbol="USDT_IRT",
     )
-    assert inventory == 3.0
+    assert inventory == 23.0
     assert cash == 10.0
 
 
@@ -108,11 +114,9 @@ def test_wallet_pair_from_snapshot_exposes_breakdown() -> None:
         balances={"IRT": make_balance("nobitex", "IRT", 4.0, 1.0, 1, total=5.0)},
     )
     base, quote = wallet_pair_from_snapshot(snapshot, "USDT", "IRT", trading_symbol="USDT_IRT")
-    assert base.effective_total == 0.0
     assert quote.free == 4.0
     assert quote.locked == 1.0
     assert quote.total == 5.0
-    assert quote.effective_total == 5.0
 
 
 def test_portfolio_wealth_enforces_floor() -> None:

@@ -189,6 +189,45 @@ def test_build_joint_ledger_snapshot_consolidates_local_and_global() -> None:
     assert joint.consolidated_quote_wealth == pytest.approx(1500.0 + 1.5 * 100.0)
 
 
+def test_joint_ledger_wealth_uses_normalized_wallet_total_including_locked_collateral() -> None:
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    local = VenueLedgerStateMachine("nobitex", config.binding.local).apply_snapshot(
+        PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=1000,
+            balances={
+                "BTC": make_balance("nobitex", "BTC", 1.0, 0.0, 1000, total=1.0),
+                "IRT": make_balance("nobitex", "IRT", 1000.0, 0.0, 1000),
+            },
+            open_orders={
+                "sell-1": OpenOrder(
+                    exchange_order_id="sell-1",
+                    actor_id="actor-1",
+                    order=Order("nobitex", "BTC_IRT", "sell", 100.0, 2.0),
+                    remaining_qty=2.0,
+                    filled_qty=0.0,
+                    status="open",
+                    timestamp_ms=1000,
+                )
+            },
+        )
+    )
+
+    joint = build_joint_ledger_snapshot(
+        local,
+        None,
+        config.binding,
+        reference_price=100.0,
+        created_at_ms=2000,
+    )
+
+    assert local.locked_base == pytest.approx(2.0)
+    assert joint.consolidated_base_inventory == pytest.approx(2.0)
+    assert joint.consolidated_quote_wealth == pytest.approx(1200.0)
+
+
 @pytest.mark.asyncio
 async def test_portfolio_ledger_service_publishes_snapshots_from_private_topics(
     monkeypatch: pytest.MonkeyPatch,

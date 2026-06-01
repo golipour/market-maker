@@ -12,7 +12,11 @@ from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.models.execution import Action, Order
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
-from mm.diagnostics.models import CONTROLLER_DIAGNOSTICS_TYPE, CONTROLLER_DIAGNOSTICS_VERSION, ControllerDiagnostics
+from mm.diagnostics.models import (
+    CONTROLLER_DIAGNOSTICS_TYPE,
+    CONTROLLER_DIAGNOSTICS_VERSION,
+    ControllerDiagnostics,
+)
 from mm.execution.memory import RecordingOrderManager
 from mm.risk.engine import PassThroughRiskEngine
 from mm.runtime.config import (

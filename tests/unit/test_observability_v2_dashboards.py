@@ -311,6 +311,8 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert panel["gridPos"]["x"] == x
         assert panel["gridPos"]["y"] == y
         sql = panel["targets"][0]["rawSql"]
+        assert f"ARRAY['state','{role}_quote_wallet','total']" in sql
+        assert f"ARRAY['state','{role}_base_wallet','total']" in sql
         assert f"ARRAY['state','{role}_cash']" in sql
         assert f"ARRAY['state','{role}_inventory']" in sql
         assert f"ARRAY['state','{role}_sell_vwap']" in sql
@@ -340,10 +342,16 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert "(inventory_prev * delta_price) AS value" in sql
         assert "(delta_inventory * delta_price) AS value" in sql
         if scope == "total":
+            assert "ARRAY['state','local_quote_wallet','total']" in sql
+            assert "ARRAY['state','global_quote_wallet','total']" in sql
+            assert "ARRAY['state','local_base_wallet','total']" in sql
+            assert "ARRAY['state','global_base_wallet','total']" in sql
             assert "ARRAY['state','local_cash']" in sql
             assert "ARRAY['state','global_cash']" in sql
             assert "ARRAY['optimizer','config','reference_price']" in sql
         else:
+            assert f"ARRAY['state','{scope}_quote_wallet','total']" in sql
+            assert f"ARRAY['state','{scope}_base_wallet','total']" in sql
             assert f"ARRAY['state','{scope}_cash']" in sql
             assert f"ARRAY['state','{scope}_inventory']" in sql
             assert f"ARRAY['state','{scope}_sell_vwap']" in sql

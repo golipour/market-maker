@@ -3571,11 +3571,25 @@ WHERE {_diagnostics_filter()}
     return "\nUNION ALL\n".join(selects) + "\nORDER BY 1"
 
 
+def _portfolio_wallet_or_state_total(role: str, leg: str) -> str:
+    if role not in {"local", "global"}:
+        raise ValueError(f"unsupported portfolio role: {role}")
+    if leg == "cash":
+        wallet_path = f"e.payload #>> ARRAY['state','{role}_quote_wallet','total']"
+        state_path = f"e.payload #>> ARRAY['state','{role}_cash']"
+    elif leg == "inventory":
+        wallet_path = f"e.payload #>> ARRAY['state','{role}_base_wallet','total']"
+        state_path = f"e.payload #>> ARRAY['state','{role}_inventory']"
+    else:
+        raise ValueError(f"unsupported portfolio leg: {leg}")
+    return f"COALESCE({_numeric_sql(wallet_path, default='NULL')}, {_numeric_sql(state_path)})"
+
+
 def _portfolio_total_value_sql() -> str:
-    local_cash = _numeric_sql("e.payload #>> ARRAY['state','local_cash']")
-    global_cash = _numeric_sql("e.payload #>> ARRAY['state','global_cash']")
-    local_inventory = _numeric_sql("e.payload #>> ARRAY['state','local_inventory']")
-    global_inventory = _numeric_sql("e.payload #>> ARRAY['state','global_inventory']")
+    local_cash = _portfolio_wallet_or_state_total("local", "cash")
+    global_cash = _portfolio_wallet_or_state_total("global", "cash")
+    local_inventory = _portfolio_wallet_or_state_total("local", "inventory")
+    global_inventory = _portfolio_wallet_or_state_total("global", "inventory")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
@@ -3613,8 +3627,8 @@ ORDER BY 1"""
 def _portfolio_venue_value_sql(role: str) -> str:
     if role not in {"local", "global"}:
         raise ValueError(f"unsupported portfolio role: {role}")
-    cash = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_cash']")
-    inventory = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_inventory']")
+    cash = _portfolio_wallet_or_state_total(role, "cash")
+    inventory = _portfolio_wallet_or_state_total(role, "inventory")
     wealth = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_wealth']", default="NULL")
     role_sell_vwap = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
@@ -3650,10 +3664,10 @@ ORDER BY 1"""
 def _portfolio_step_pnl_decomposition_sql(scope: str) -> str:
     if scope not in {"local", "global", "total"}:
         raise ValueError(f"unsupported portfolio PnL scope: {scope}")
-    local_cash = _numeric_sql("e.payload #>> ARRAY['state','local_cash']")
-    global_cash = _numeric_sql("e.payload #>> ARRAY['state','global_cash']")
-    local_inventory = _numeric_sql("e.payload #>> ARRAY['state','local_inventory']")
-    global_inventory = _numeric_sql("e.payload #>> ARRAY['state','global_inventory']")
+    local_cash = _portfolio_wallet_or_state_total("local", "cash")
+    global_cash = _portfolio_wallet_or_state_total("global", "cash")
+    local_inventory = _portfolio_wallet_or_state_total("local", "inventory")
+    global_inventory = _portfolio_wallet_or_state_total("global", "inventory")
     local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")

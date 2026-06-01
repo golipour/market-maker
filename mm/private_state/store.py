@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mm.core.wallet import make_balance, reported_wallet_total
+from mm.core.wallet import make_balance, normalize_snapshot_balances_for_open_orders, reported_wallet_total
 from mm.core.asset_aliases import canonical_asset_code
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import split_symbol
@@ -136,9 +136,18 @@ class PrivateStateStore:
     def snapshot(self) -> PrivateStateSnapshot:
         balances = dict(self._balances)
         self._ensure_economy_balances(balances, timestamp_ms=self._timestamp_ms)
-        return PrivateStateSnapshot(
+        snapshot = PrivateStateSnapshot(
             exchange=self.exchange,
             timestamp_ms=self._timestamp_ms,
             balances=balances,
             open_orders=dict(self._open_orders),
         )
+        if self._trading_symbol:
+            base, quote = split_symbol(self._trading_symbol)
+            return normalize_snapshot_balances_for_open_orders(
+                snapshot,
+                base_asset=canonical_asset_code(base),
+                quote_asset=canonical_asset_code(quote),
+                trading_symbol=self._trading_symbol,
+            )
+        return snapshot

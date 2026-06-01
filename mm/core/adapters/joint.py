@@ -14,7 +14,7 @@ from mm.core.models.target_book import (
     TargetOrder,
     VenueTargetBook,
 )
-from mm.core.wallet import inventory_cash_from_snapshot, order_collateral_from_open_orders
+from mm.core.wallet import inventory_cash_from_snapshot
 
 
 def venue_ledger_from_private_snapshot(
@@ -31,16 +31,12 @@ def venue_ledger_from_private_snapshot(
             quote_asset=spec.quote_asset,
         )
 
-    base_order_locked, quote_order_locked = order_collateral_from_open_orders(
-        snapshot.open_orders,
-        trading_symbol=spec.symbol,
-        base_asset=spec.base_asset,
-        quote_asset=spec.quote_asset,
-    )
     base_balance = snapshot.balances.get(spec.base_asset)
     quote_balance = snapshot.balances.get(spec.quote_asset)
     available_base = float(base_balance.free) if base_balance is not None else 0.0
     available_quote = float(quote_balance.free) if quote_balance is not None else 0.0
+    locked_base = float(base_balance.locked) if base_balance is not None else 0.0
+    locked_quote = float(quote_balance.locked) if quote_balance is not None else 0.0
 
     return VenueLedger(
         exchange=spec.exchange,
@@ -49,8 +45,8 @@ def venue_ledger_from_private_snapshot(
         quote_asset=spec.quote_asset,
         balances=dict(snapshot.balances),
         live_orders=dict(snapshot.open_orders),
-        locked_base=base_order_locked,
-        locked_quote=quote_order_locked,
+        locked_base=locked_base,
+        locked_quote=locked_quote,
         available_base=available_base,
         available_quote=available_quote,
         last_private_event_ms=int(snapshot.timestamp_ms),

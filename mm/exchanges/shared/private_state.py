@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from mm.core.asset_aliases import canonical_asset_code
-from mm.core.wallet import make_balance
+from mm.core.wallet import make_balance, normalize_snapshot_balances_for_open_orders
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.instrument import split_symbol
 from mm.core.models.execution import Fill, Order
@@ -60,11 +60,18 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
             raise RuntimeError(f"{self.exchange} private open-order fetch returned invalid payload")
         balances = self.normalize_balances(raw_balances, timestamp_ms=timestamp_ms)
         open_orders = self.normalize_open_orders(raw_orders, timestamp_ms=timestamp_ms)
-        return PrivateStateSnapshot(
+        snapshot = PrivateStateSnapshot(
             exchange=self.exchange,
             timestamp_ms=timestamp_ms,
             balances=balances,
             open_orders=open_orders,
+        )
+        base_asset, quote_asset = split_symbol(self.symbol)
+        return normalize_snapshot_balances_for_open_orders(
+            snapshot,
+            base_asset=canonical_asset_code(base_asset),
+            quote_asset=canonical_asset_code(quote_asset),
+            trading_symbol=self.symbol,
         )
 
     async def balance_stream(self) -> AsyncIterator[Balance]:
