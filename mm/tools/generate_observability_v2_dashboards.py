@@ -2683,6 +2683,7 @@ def fill_spread_pnl() -> dict[str, Any]:
         _panel(4, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=10, y=3, w=5, h=5, unit="currency"),
         _panel(5, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=15, y=3, w=5, h=5, unit="currency"),
         _panel(6, "Average spread PnL / unit", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl_per_unit"), x=20, y=3, w=4, h=5, unit="currency"),
+        _panel(7, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=0, y=8, w=5, h=5, unit="currency"),
     ]
     return _dashboard(
         "mm-obs-v2-fill-spread-pnl",
@@ -3628,6 +3629,7 @@ def _fill_interval_stat_sql(stat: str) -> str:
         "bid_avg_price": "bid_avg_price",
         "ask_avg_price": "ask_avg_price",
         "spread_pnl_per_unit": "ask_avg_price - bid_avg_price",
+        "total_fee": "COALESCE(total_fee, 0.0)",
     }
     if stat not in stat_exprs:
         raise ValueError(f"unknown fill interval stat: {stat}")
@@ -3636,11 +3638,13 @@ def _fill_interval_stat_sql(stat: str) -> str:
     side = _side_sql("e.payload->>'side'")
     qty = _numeric_sql("e.payload->>'qty'")
     price = _numeric_sql("e.payload->>'price'", default="NULL")
+    fee = _numeric_sql("e.payload->>'fee'")
     return f"""WITH fills AS (
   SELECT
     {side} AS side,
     {qty} AS qty,
-    {price} AS price
+    {price} AS price,
+    {fee} AS fee
   FROM mm_events e
   WHERE e.topic LIKE 'private:state:%:fills'
     AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
@@ -3651,6 +3655,7 @@ agg AS (
   SELECT
     SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,
     SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,
+    SUM(fee) AS total_fee,
     SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)
       / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,
     SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)

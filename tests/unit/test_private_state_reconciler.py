@@ -188,6 +188,25 @@ def test_rest_private_state_normalize_balances_normalizes_irt_aliases() -> None:
     assert out["BTC"].locked == pytest.approx(0.0)
 
 
+def test_nobitex_irt_fill_normalizes_price_and_fee_from_rial_to_toman() -> None:
+    adapter = NobitexRestPrivateStateAdapter("BTC_IRT", api_token="token")
+
+    fill = adapter.normalize_fill(
+        {
+            "id": "o1",
+            "type": "buy",
+            "averagePrice": "10000000",
+            "matchedAmount": "0.1",
+            "fee": "5000",
+        },
+        timestamp_ms=1000,
+    )
+
+    assert fill is not None
+    assert fill.price == pytest.approx(1_000_000.0)
+    assert fill.fee == pytest.approx(500.0)
+
+
 def test_private_state_store_apply_balance_pops_zero() -> None:
     store = PrivateStateStore("wallex")
     store.apply_balance(Balance("wallex", "BTC", 1.0, 0.0, 1.0, 1))

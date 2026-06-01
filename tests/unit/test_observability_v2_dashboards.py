@@ -599,18 +599,21 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "Average bid fill price": (10, 5),
         "Average ask fill price": (15, 5),
         "Average spread PnL / unit": (20, 4),
+        "Total fill fee": (0, 5),
     }
 
     for title, (x, w) in expected_positions.items():
         panel = panels_by_title[title]
         assert panel["type"] == "stat"
-        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": 3}
+        expected_y = 8 if title == "Total fill fee" else 3
+        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": expected_y}
         sql = panel["targets"][0]["rawSql"]
         assert "private:state:%:fills" in sql
         assert "$__timeFilter(e.ts)" in sql
         assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
         assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
         assert "SUM(price * qty) FILTER" in sql
+        assert "e.payload->>'fee'" in sql
 
     bid_volume_sql = panels_by_title["Filled bid volume"]["targets"][0]["rawSql"]
     assert "COALESCE(bid_qty, 0.0) AS value" in bid_volume_sql
@@ -626,6 +629,10 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
 
     spread_sql = panels_by_title["Average spread PnL / unit"]["targets"][0]["rawSql"]
     assert "ask_avg_price - bid_avg_price AS value" in spread_sql
+
+    fee_sql = panels_by_title["Total fill fee"]["targets"][0]["rawSql"]
+    assert "SUM(fee) AS total_fee" in fee_sql
+    assert "COALESCE(total_fee, 0.0) AS value" in fee_sql
 
 
 def test_frame_readiness_legends_include_readiness_field() -> None:

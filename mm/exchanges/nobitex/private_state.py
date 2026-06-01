@@ -71,6 +71,6 @@ class NobitexRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
             side=fill.side,
             price=self._wire.scale_public_price_from_api(float(fill.price)),
             qty=fill.qty,
-            fee=fill.fee,
+            fee=self._wire.scale_public_price_from_api(float(fill.fee)),
             timestamp_ms=fill.timestamp_ms,
         )
