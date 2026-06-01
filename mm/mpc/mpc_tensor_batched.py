@@ -915,7 +915,11 @@ class MonteCarloMPCTensorBatched:
                 self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
         x_torch = self._x_torch
         optimizer = self._optimizer
-        maker_fee = getattr(self.execution_model, "maker_fee", 0.0)
+        maker_fee = getattr(
+            self.execution_model,
+            "local_maker_fee",
+            getattr(self.execution_model, "maker_fee", 0.0),
+        )
         vwap_depth = max(0.0, float(getattr(state, "vwap_depth", 0.0)))
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.

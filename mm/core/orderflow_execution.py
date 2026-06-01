@@ -180,14 +180,27 @@ class ObservedStepExecutionModel:
     PnL decomposition is chosen so components sum to ``wealth_pnl``.
 
     ``maker_fee`` is not applied inside ``state_after_step`` (observed fees come
-    from the step). MPC rollouts read it for fill simulation.
+    from the step). MPC rollouts read the venue-scoped maker fees for fill
+    simulation.
     """
 
     def __init__(
         self,
         maker_fee: float = 0.0,
+        local_maker_fee: float | None = None,
+        global_maker_fee: float | None = None,
     ) -> None:
-        self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
+        self.maker_fee = self._clamp_fee(maker_fee)
+        self.local_maker_fee = self._clamp_fee(
+            self.maker_fee if local_maker_fee is None else local_maker_fee
+        )
+        self.global_maker_fee = self._clamp_fee(
+            self.maker_fee if global_maker_fee is None else global_maker_fee
+        )
+
+    @staticmethod
+    def _clamp_fee(value: float) -> float:
+        return max(0.0, min(1.0 - 1e-9, float(value)))
 
     def state_after_step(
         self,

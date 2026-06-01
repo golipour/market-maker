@@ -220,6 +220,36 @@ def test_joint_optimizer_runs_with_consolidated_wealth() -> None:
     assert isinstance(joint._last_joint_action, JointSigmoidMixtureAction)
 
 
+def test_joint_optimizer_uses_separate_local_and_global_maker_fees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mm.mpc.joint_optimizer as joint_optimizer
+
+    state = _minimal_state(global_active=True)
+    joint = _build_optimizer(liquidity_sourcing_enabled=True)
+    joint.execution_model = RealExecutionModel(
+        maker_fee=0.0,
+        local_maker_fee=0.0002,
+        global_maker_fee=0.0007,
+    )
+    fees: list[float] = []
+    original_soft_fill = joint_optimizer.soft_fill_batched
+
+    def capture_soft_fill(*args: object, **kwargs: object) -> object:
+        fees.append(float(args[8]))
+        return original_soft_fill(*args, **kwargs)
+
+    monkeypatch.setattr(joint_optimizer, "soft_fill_batched", capture_soft_fill)
+
+    joint.optimize_with_diagnostics(state)
+
+    assert fees
+    assert fees[0::2]
+    assert fees[1::2]
+    assert all(fee == pytest.approx(0.0002) for fee in fees[0::2])
+    assert all(fee == pytest.approx(0.0007) for fee in fees[1::2])
+
+
 def test_build_controller_uses_global_price_model_not_local_residual() -> None:
     from mm.mpc.global_price_torch import GlobalGaussianPriceModel
     from mm.runtime.config import (

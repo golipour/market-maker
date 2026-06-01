@@ -466,6 +466,10 @@ cash_delta = ask_fill_cash * (1 - maker_fee) - bid_fill_cash
 inv_delta = bid_fill_qty * (1 - maker_fee) - ask_fill_qty
 ```
 
+In joint local/global optimization, `maker_fee` is the backward-compatible
+default. `local_maker_fee` is used for local simulated fills and
+`global_maker_fee` is used for global simulated fills.
+
 With `soft_fill_queue_model = "pro_rata"`, this is a differentiable
 liquidity-share model:
 

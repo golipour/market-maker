@@ -171,7 +171,12 @@ Without token, private reconciler is skipped and **no live orders** on that exch
   "local_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
   "global_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
   "global_price_model": {"kind": "ewma_gaussian", "decay": 0.95},
-  "execution_model": {"kind": "real", "maker_fee": 0.0},
+  "execution_model": {
+    "kind": "real",
+    "maker_fee": 0.0,
+    "local_maker_fee": 0.0,
+    "global_maker_fee": 0.0
+  },
   "optimizer": {
     "kind": "monte_carlo_mpc_tensor_batched",
     "n_samples": 64,

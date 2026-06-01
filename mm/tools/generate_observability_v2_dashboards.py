@@ -2665,7 +2665,9 @@ def portfolio_pnl() -> dict[str, Any]:
         _panel(3, "Cash", "timeseries", PG_DS, _portfolio_field_sql("local_cash", "global_cash"), x=12, y=3),
         _panel(4, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=11),
         _panel(5, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=11),
-        _panel(6, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=19, w=24),
+        _panel(6, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=19),
+        _panel(7, "Global cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("global"), x=12, y=19),
+        _panel(8, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=27, w=24),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
 
@@ -3601,6 +3603,43 @@ FROM state_rows
 UNION ALL
 SELECT "time", 'total_wealth',
        (local_cash + global_cash + (local_inventory + global_inventory) * reference_vwap) AS value
+FROM state_rows
+ORDER BY 1"""
+
+
+def _portfolio_venue_value_sql(role: str) -> str:
+    if role not in {"local", "global"}:
+        raise ValueError(f"unsupported portfolio role: {role}")
+    cash = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_cash']")
+    inventory = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_inventory']")
+    wealth = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_wealth']", default="NULL")
+    role_sell_vwap = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_sell_vwap']", default="NULL")
+    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
+    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    return f"""WITH state_rows AS (
+  SELECT e.ts AS "time",
+         {cash} AS cash,
+         {inventory} AS inventory,
+         {wealth} AS reported_wealth,
+         COALESCE(
+           {role_sell_vwap},
+           {reference_price},
+           {mid},
+           0.0
+         ) AS mark_price
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+)
+SELECT "time", '{role}_cash' AS metric,
+       cash AS value
+FROM state_rows
+UNION ALL
+SELECT "time", '{role}_inventory_value',
+       (inventory * mark_price) AS value
+FROM state_rows
+UNION ALL
+SELECT "time", '{role}_wealth',
+       COALESCE(reported_wealth, cash + inventory * mark_price) AS value
 FROM state_rows
 ORDER BY 1"""
 

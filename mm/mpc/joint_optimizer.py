@@ -196,6 +196,8 @@ def optimize_joint_with_diagnostics(
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
     maker_fee = getattr(mpc.execution_model, "maker_fee", 0.0)
+    local_maker_fee = getattr(mpc.execution_model, "local_maker_fee", maker_fee)
+    global_maker_fee = getattr(mpc.execution_model, "global_maker_fee", maker_fee)
     vwap_depth_0 = max(0.0, float(getattr(state, "vwap_depth", 0.0)))
     global_flow_model = mpc.global_market_flow_model
     global_price_model = mpc.global_price_model
@@ -451,7 +453,7 @@ def optimize_joint_with_diagnostics(
                     sell_h,
                     buy_h,
                     spread_grid,
-                    maker_fee,
+                    local_maker_fee,
                     soft_temp=local_opt.soft_fill_temp,
                     soft_fill_activation=local_opt.soft_fill_activation,
                     soft_fill_queue_model=local_opt.soft_fill_queue_model,
@@ -474,7 +476,7 @@ def optimize_joint_with_diagnostics(
                     global_sell_h,
                     global_buy_h,
                     spread_grid,
-                    maker_fee,
+                    global_maker_fee,
                     soft_temp=global_opt.soft_fill_temp,
                     soft_fill_activation=global_opt.soft_fill_activation,
                     soft_fill_queue_model=global_opt.soft_fill_queue_model,

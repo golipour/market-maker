@@ -9,6 +9,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     market_data_quality,
     model_quality,
     orderbook_depth,
+    portfolio_pnl,
     risk_execution,
     runtime_overview,
     target_order_stems,
@@ -294,6 +295,31 @@ def test_action_pipeline_side_counts_dashboard_splits_bid_and_ask() -> None:
     assert "risk_approved_target" in removed_sql
     assert "rules_valid" in removed_sql
     assert "router_accepted" in removed_sql
+
+
+def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
+    dashboard = portfolio_pnl()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected = {
+        "Local cash / inventory value / wealth": (0, 19, "local"),
+        "Global cash / inventory value / wealth": (12, 19, "global"),
+    }
+    for title, (x, y, role) in expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "timeseries"
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
+        sql = panel["targets"][0]["rawSql"]
+        assert f"ARRAY['state','{role}_cash']" in sql
+        assert f"ARRAY['state','{role}_inventory']" in sql
+        assert f"ARRAY['state','{role}_sell_vwap']" in sql
+        assert f"'{role}_cash' AS metric" in sql
+        assert f"'{role}_inventory_value'" in sql
+        assert f"'{role}_wealth'" in sql
+        assert "COALESCE(reported_wealth, cash + inventory * mark_price) AS value" in sql
+
+    assert panels_by_title["Step economics"]["gridPos"]["y"] == 27
 
 
 def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:

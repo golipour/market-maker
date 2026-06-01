@@ -35,7 +35,7 @@
     "fill_event_source": "exchange_fill_history"
   },
   "liquidity_sourcing": {
-    "enabled": true,
+    "enabled": false,
     "mode": "liquidity_sourcing",
     "global_live_orders": false
   },
@@ -85,10 +85,10 @@
     "decisions_topic": "strategy:decisions",
     "action_topic": "strategy:actions",
     "orderbook_grid": {
-      "spread_step": 5.0,
-      "spread_max": 100.0
+      "spread_step": 40.0,
+      "spread_max": 400.0
     },
-    "max_orders_per_side": 5,
+    "max_orders_per_side": 10,
     "risk": {
       "enabled": true,
       "engine": "net_delta",
@@ -138,7 +138,8 @@
     },
     "execution_model": {
       "kind": "real",
-      "maker_fee": 0.0
+      "local_maker_fee": 0.0015,
+      "global_maker_fee": 0.0025
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
@@ -154,13 +155,13 @@
         "objective_weight": 1.0,
         "return_risk_aversion_beta": 0.1,
         "inventory_threshold_penalty_weight": 0.001,
-        "cash_threshold": 10000000,
-        "inventory_threshold": 10,
+        "cash_threshold": 20000000,
+        "inventory_threshold": 20,
         "quote_size_min_per_side": 1.0,
         "quote_size_max_per_side": 10.0,
         "quote_capacity_ratio": 0.5,
-        "quote_spread_max": 100.0,
-        "quote_spread_min_depth": 0.3,
+        "quote_spread_max": 200.0,
+        "quote_spread_min_depth": 0.0,
         "quote_spread_k_epsilon": 0.01,
         "soft_fill_temp": 0.1,
         "soft_fill_activation": "hardsigmoid",

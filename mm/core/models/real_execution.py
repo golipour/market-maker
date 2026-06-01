@@ -14,8 +14,25 @@ class RealExecutionModel:
     def __init__(
         self,
         maker_fee: float = 0.0,
+        local_maker_fee: float | None = None,
+        global_maker_fee: float | None = None,
     ) -> None:
-        self.maker_fee = max(0.0, min(1.0 - 1e-9, float(maker_fee)))
+        self.maker_fee = self._clamp_fee(maker_fee)
+        self.local_maker_fee = self._clamp_fee(
+            self.maker_fee if local_maker_fee is None else local_maker_fee
+        )
+        self.global_maker_fee = self._clamp_fee(
+            self.maker_fee if global_maker_fee is None else global_maker_fee
+        )
+
+    @staticmethod
+    def _clamp_fee(value: float) -> float:
+        return max(0.0, min(1.0 - 1e-9, float(value)))
 
     def __repr__(self) -> str:
-        return f"RealExecutionModel(maker_fee={self.maker_fee!r})"
+        return (
+            "RealExecutionModel("
+            f"maker_fee={self.maker_fee!r}, "
+            f"local_maker_fee={self.local_maker_fee!r}, "
+            f"global_maker_fee={self.global_maker_fee!r})"
+        )
