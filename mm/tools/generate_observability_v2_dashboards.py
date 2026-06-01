@@ -66,9 +66,19 @@ def _panel(
     decimals: int = 3,
     legend: str | None = None,
 ) -> dict[str, Any]:
+    field_defaults: dict[str, Any] = {"unit": unit, "decimals": decimals}
+    if panel_type == "stat":
+        field_defaults["thresholds"] = {
+            "mode": "absolute",
+            "steps": [
+                {"color": "red", "value": None},
+                {"color": "gray", "value": 0},
+                {"color": "green", "value": 1e-12},
+            ],
+        }
     panel: dict[str, Any] = {
         "datasource": datasource,
-        "fieldConfig": {"defaults": {"unit": unit, "decimals": decimals}, "overrides": []},
+        "fieldConfig": {"defaults": field_defaults, "overrides": []},
         "gridPos": {"h": h, "w": w, "x": x, "y": y},
         "id": id_,
         "targets": [_target(datasource, expr, fmt=fmt, legend=legend)],
@@ -2667,10 +2677,47 @@ def portfolio_pnl() -> dict[str, Any]:
         _panel(5, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=11),
         _panel(6, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=19),
         _panel(7, "Global cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("global"), x=12, y=19),
-        _panel(8, "Local step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("local"), x=0, y=27),
-        _panel(9, "Global step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("global"), x=12, y=27),
-        _panel(10, "Total step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("total"), x=0, y=35, w=24),
-        _panel(11, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=43, w=24),
+        _panel(
+            8,
+            "Cumulative net spread capture PnL",
+            "timeseries",
+            PG_DS,
+            _portfolio_cumulative_pnl_component_sql("net_spread_capture"),
+            x=0,
+            y=27,
+            w=24,
+        ),
+        _panel(
+            9,
+            "Cumulative inventory drift PnL",
+            "timeseries",
+            PG_DS,
+            _portfolio_cumulative_pnl_component_sql("inventory_drift"),
+            x=0,
+            y=35,
+            w=24,
+        ),
+        _panel(
+            10,
+            "Cumulative adverse selection PnL",
+            "timeseries",
+            PG_DS,
+            _portfolio_cumulative_pnl_component_sql("adverse_selection"),
+            x=0,
+            y=43,
+            w=24,
+        ),
+        _panel(
+            11,
+            "Local interval deltas",
+            "stat",
+            PG_DS,
+            _portfolio_local_interval_delta_sql(),
+            x=0,
+            y=51,
+            w=24,
+            h=5,
+        ),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
 
@@ -2680,15 +2727,19 @@ def fill_spread_pnl() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL per unit is average ask fill price minus average bid fill price.",
+            "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL uses paired bid/ask volume times average spread.",
             y=0,
         ),
-        _panel(2, "Filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=5, h=5),
-        _panel(3, "Filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume"), x=5, y=3, w=5, h=5),
-        _panel(4, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=10, y=3, w=5, h=5, unit="currency"),
-        _panel(5, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=15, y=3, w=5, h=5, unit="currency"),
-        _panel(6, "Average spread PnL / unit", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl_per_unit"), x=20, y=3, w=4, h=5, unit="currency"),
-        _panel(7, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=0, y=8, w=5, h=5, unit="currency"),
+        _panel(2, "Filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=6, h=5),
+        _panel(3, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=6, y=3, w=6, h=5, unit="currency"),
+        _panel(4, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=12, y=3, w=6, h=5, unit="currency"),
+        _panel(5, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=18, y=3, w=6, h=5, unit="currency"),
+        _panel(6, "Filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume"), x=0, y=8, w=6, h=5),
+        _panel(7, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=6, y=8, w=6, h=5, unit="currency"),
+        _panel(8, "Local delta cash", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_cash"), x=0, y=13, w=6, h=5, unit="currency"),
+        _panel(9, "Local delta inventory", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_inventory"), x=6, y=13, w=6, h=5),
+        _panel(10, "Local delta wealth", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_wealth"), x=12, y=13, w=6, h=5, unit="currency"),
+        _panel(11, "Local delta price", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_price"), x=18, y=13, w=6, h=5, unit="currency"),
     ]
     return _dashboard(
         "mm-obs-v2-fill-spread-pnl",
@@ -3661,9 +3712,64 @@ FROM state_rows
 ORDER BY 1"""
 
 
-def _portfolio_step_pnl_decomposition_sql(scope: str) -> str:
-    if scope not in {"local", "global", "total"}:
-        raise ValueError(f"unsupported portfolio PnL scope: {scope}")
+def _portfolio_local_interval_delta_sql(metric: str | None = None) -> str:
+    if metric is not None and metric not in {"delta_cash", "delta_inventory", "delta_wealth", "delta_price"}:
+        raise ValueError(f"unsupported local interval delta metric: {metric}")
+    cash = _portfolio_wallet_or_state_total("local", "cash")
+    inventory = _portfolio_wallet_or_state_total("local", "inventory")
+    wealth = _numeric_sql("e.payload #>> ARRAY['state','local_wealth']", default="NULL")
+    local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
+    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    mark_price = f"COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0)"
+    return f"""WITH state_rows AS (
+  SELECT e.ts AS "time",
+         {cash} AS cash,
+         {inventory} AS inventory,
+         {mark_price} AS mark_price,
+         COALESCE({wealth}, ({cash}) + ({inventory}) * ({mark_price})) AS wealth
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+),
+ranked AS (
+  SELECT *,
+         ROW_NUMBER() OVER (ORDER BY "time" ASC) AS first_rank,
+         ROW_NUMBER() OVER (ORDER BY "time" DESC) AS last_rank
+  FROM state_rows
+),
+bounds AS (
+  SELECT
+    MAX(cash) FILTER (WHERE first_rank = 1) AS first_cash,
+    MAX(cash) FILTER (WHERE last_rank = 1) AS last_cash,
+    MAX(inventory) FILTER (WHERE first_rank = 1) AS first_inventory,
+    MAX(inventory) FILTER (WHERE last_rank = 1) AS last_inventory,
+    MAX(wealth) FILTER (WHERE first_rank = 1) AS first_wealth,
+    MAX(wealth) FILTER (WHERE last_rank = 1) AS last_wealth,
+    MAX(mark_price) FILTER (WHERE first_rank = 1) AS first_price,
+    MAX(mark_price) FILTER (WHERE last_rank = 1) AS last_price
+  FROM ranked
+)
+SELECT ($__timeTo())::timestamptz AS "time", metric, value
+FROM bounds
+CROSS JOIN LATERAL (
+  VALUES
+    ('delta_cash', last_cash - first_cash),
+    ('delta_inventory', last_inventory - first_inventory),
+    ('delta_wealth', last_wealth - first_wealth),
+    ('delta_price', last_price - first_price)
+) AS deltas(metric, value)
+WHERE value IS NOT NULL{f" AND metric = '{metric}'" if metric is not None else ""}
+ORDER BY metric"""
+
+
+def _portfolio_cumulative_pnl_component_sql(component: str) -> str:
+    component_expr = {
+        "net_spread_capture": "(delta_cash + delta_inventory * mark_price_prev)",
+        "inventory_drift": "(inventory_prev * delta_price)",
+        "adverse_selection": "(delta_inventory * delta_price)",
+    }.get(component)
+    if component_expr is None:
+        raise ValueError(f"unsupported portfolio PnL component: {component}")
     local_cash = _portfolio_wallet_or_state_total("local", "cash")
     global_cash = _portfolio_wallet_or_state_total("global", "cash")
     local_inventory = _portfolio_wallet_or_state_total("local", "inventory")
@@ -3672,38 +3778,51 @@ def _portfolio_step_pnl_decomposition_sql(scope: str) -> str:
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
-    if scope == "local":
-        cash = local_cash
-        inventory = local_inventory
-        mark_price = f"COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0)"
-    elif scope == "global":
-        cash = global_cash
-        inventory = global_inventory
-        mark_price = f"COALESCE({global_sell_vwap}, {reference_price}, {local_sell_vwap}, {mid}, 0.0)"
-    else:
-        cash = f"({local_cash} + {global_cash})"
-        inventory = f"({local_inventory} + {global_inventory})"
-        mark_price = f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
-         {cash} AS cash,
-         {inventory} AS inventory,
-         {mark_price} AS mark_price
+         {local_cash} AS local_cash,
+         {global_cash} AS global_cash,
+         {local_inventory} AS local_inventory,
+         {global_inventory} AS global_inventory,
+         COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0) AS local_mark_price,
+         COALESCE({global_sell_vwap}, {reference_price}, {local_sell_vwap}, {mid}, 0.0) AS global_mark_price,
+         COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0) AS total_mark_price
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 ),
+scope_rows AS (
+  SELECT "time", 'local' AS metric,
+         local_cash AS cash,
+         local_inventory AS inventory,
+         local_mark_price AS mark_price
+  FROM state_rows
+  UNION ALL
+  SELECT "time", 'global',
+         global_cash,
+         global_inventory,
+         global_mark_price
+  FROM state_rows
+  UNION ALL
+  SELECT "time", 'total',
+         (local_cash + global_cash),
+         (local_inventory + global_inventory),
+         total_mark_price
+  FROM state_rows
+),
 deltas AS (
   SELECT "time",
+         metric,
          cash,
          inventory,
          mark_price,
-         LAG(cash) OVER (ORDER BY "time") AS cash_prev,
-         LAG(inventory) OVER (ORDER BY "time") AS inventory_prev,
-         LAG(mark_price) OVER (ORDER BY "time") AS mark_price_prev
-  FROM state_rows
+         LAG(cash) OVER (PARTITION BY metric ORDER BY "time") AS cash_prev,
+         LAG(inventory) OVER (PARTITION BY metric ORDER BY "time") AS inventory_prev,
+         LAG(mark_price) OVER (PARTITION BY metric ORDER BY "time") AS mark_price_prev
+  FROM scope_rows
 ),
 step_parts AS (
   SELECT "time",
+         metric,
          (cash - cash_prev) AS delta_cash,
          (inventory - inventory_prev) AS delta_inventory,
          (mark_price - mark_price_prev) AS delta_price,
@@ -3713,19 +3832,20 @@ step_parts AS (
   WHERE cash_prev IS NOT NULL
     AND inventory_prev IS NOT NULL
     AND mark_price_prev IS NOT NULL
+),
+component_steps AS (
+  SELECT "time", metric,
+         {component_expr} AS step_value
+  FROM step_parts
 )
-SELECT "time", 'net_spread_capture' AS metric,
-       (delta_cash + delta_inventory * mark_price_prev) AS value
-FROM step_parts
-UNION ALL
-SELECT "time", 'inventory_drift',
-       (inventory_prev * delta_price) AS value
-FROM step_parts
-UNION ALL
-SELECT "time", 'adverse_selection',
-       (delta_inventory * delta_price) AS value
-FROM step_parts
-ORDER BY 1"""
+SELECT "time", metric,
+       SUM(step_value) OVER (
+         PARTITION BY metric
+         ORDER BY "time"
+         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+       ) AS value
+FROM component_steps
+ORDER BY 1, 2"""
 
 
 def _step_economics_sql() -> str:
@@ -3751,7 +3871,7 @@ def _fill_interval_stat_sql(stat: str) -> str:
         "ask_volume": "COALESCE(ask_qty, 0.0)",
         "bid_avg_price": "bid_avg_price",
         "ask_avg_price": "ask_avg_price",
-        "spread_pnl_per_unit": "ask_avg_price - bid_avg_price",
+        "spread_pnl": "LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) * (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0))",
         "total_fee": "COALESCE(total_fee, 0.0)",
     }
     if stat not in stat_exprs:

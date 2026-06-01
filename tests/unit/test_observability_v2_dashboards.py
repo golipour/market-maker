@@ -322,41 +322,48 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert "COALESCE(reported_wealth, cash + inventory * mark_price) AS value" in sql
 
     decomposition_expected = {
-        "Local step PnL decomposition": (0, 27, "local"),
-        "Global step PnL decomposition": (12, 27, "global"),
-        "Total step PnL decomposition": (0, 35, "total"),
+        "Cumulative net spread capture PnL": (0, 27, "(delta_cash + delta_inventory * mark_price_prev)"),
+        "Cumulative inventory drift PnL": (0, 35, "(inventory_prev * delta_price)"),
+        "Cumulative adverse selection PnL": (0, 43, "(delta_inventory * delta_price)"),
     }
-    for title, (x, y, scope) in decomposition_expected.items():
+    for title, (x, y, component_expr) in decomposition_expected.items():
         panel = panels_by_title[title]
         assert panel["type"] == "timeseries"
         assert panel["gridPos"]["x"] == x
         assert panel["gridPos"]["y"] == y
+        assert panel["gridPos"]["w"] == 24
         sql = panel["targets"][0]["rawSql"]
-        assert "LAG(cash) OVER" in sql
-        assert "LAG(inventory) OVER" in sql
-        assert "LAG(mark_price) OVER" in sql
-        assert "'net_spread_capture' AS metric" in sql
-        assert "'inventory_drift'" in sql
-        assert "'adverse_selection'" in sql
-        assert "(delta_cash + delta_inventory * mark_price_prev) AS value" in sql
-        assert "(inventory_prev * delta_price) AS value" in sql
-        assert "(delta_inventory * delta_price) AS value" in sql
-        if scope == "total":
-            assert "ARRAY['state','local_quote_wallet','total']" in sql
-            assert "ARRAY['state','global_quote_wallet','total']" in sql
-            assert "ARRAY['state','local_base_wallet','total']" in sql
-            assert "ARRAY['state','global_base_wallet','total']" in sql
-            assert "ARRAY['state','local_cash']" in sql
-            assert "ARRAY['state','global_cash']" in sql
-            assert "ARRAY['optimizer','config','reference_price']" in sql
-        else:
-            assert f"ARRAY['state','{scope}_quote_wallet','total']" in sql
-            assert f"ARRAY['state','{scope}_base_wallet','total']" in sql
-            assert f"ARRAY['state','{scope}_cash']" in sql
-            assert f"ARRAY['state','{scope}_inventory']" in sql
-            assert f"ARRAY['state','{scope}_sell_vwap']" in sql
+        assert "LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\")" in sql
+        assert "LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\")" in sql
+        assert "LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\")" in sql
+        assert component_expr in sql
+        assert "SUM(step_value) OVER" in sql
+        assert "PARTITION BY metric" in sql
+        assert "'local' AS metric" in sql
+        assert "'global'" in sql
+        assert "'total'" in sql
+        assert "ARRAY['state','local_quote_wallet','total']" in sql
+        assert "ARRAY['state','global_quote_wallet','total']" in sql
+        assert "ARRAY['state','local_base_wallet','total']" in sql
+        assert "ARRAY['state','global_base_wallet','total']" in sql
+        assert "ARRAY['optimizer','config','reference_price']" in sql
 
-    assert panels_by_title["Step economics"]["gridPos"]["y"] == 43
+    delta_panel = panels_by_title["Local interval deltas"]
+    assert delta_panel["type"] == "stat"
+    assert delta_panel["gridPos"] == {"h": 5, "w": 24, "x": 0, "y": 51}
+    delta_sql = delta_panel["targets"][0]["rawSql"]
+    assert "ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank" in delta_sql
+    assert "ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank" in delta_sql
+    assert "'delta_cash'" in delta_sql
+    assert "'delta_inventory'" in delta_sql
+    assert "'delta_wealth'" in delta_sql
+    assert "'delta_price'" in delta_sql
+    assert "last_cash - first_cash" in delta_sql
+    assert "last_inventory - first_inventory" in delta_sql
+    assert "last_wealth - first_wealth" in delta_sql
+    assert "last_price - first_price" in delta_sql
+
+    assert "Step economics" not in panels_by_title
 
 
 def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
@@ -657,26 +664,55 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     expected_positions = {
-        "Filled bid volume": (0, 5),
-        "Filled ask volume": (5, 5),
-        "Average bid fill price": (10, 5),
-        "Average ask fill price": (15, 5),
-        "Average spread PnL / unit": (20, 4),
-        "Total fill fee": (0, 5),
+        "Filled bid volume": (0, 3, 6),
+        "Average bid fill price": (6, 3, 6),
+        "Spread PnL": (12, 3, 6),
+        "Total fill fee": (18, 3, 6),
+        "Filled ask volume": (0, 8, 6),
+        "Average ask fill price": (6, 8, 6),
+        "Local delta cash": (0, 13, 6),
+        "Local delta inventory": (6, 13, 6),
+        "Local delta wealth": (12, 13, 6),
+        "Local delta price": (18, 13, 6),
     }
 
-    for title, (x, w) in expected_positions.items():
+    for title, (x, y, w) in expected_positions.items():
         panel = panels_by_title[title]
         assert panel["type"] == "stat"
-        expected_y = 8 if title == "Total fill fee" else 3
-        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": expected_y}
+        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": y}
+        assert panel["fieldConfig"]["defaults"]["thresholds"] == {
+            "mode": "absolute",
+            "steps": [
+                {"color": "red", "value": None},
+                {"color": "gray", "value": 0},
+                {"color": "green", "value": 1e-12},
+            ],
+        }
         sql = panel["targets"][0]["rawSql"]
-        assert "private:state:%:fills" in sql
         assert "$__timeFilter(e.ts)" in sql
-        assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
-        assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
-        assert "SUM(price * qty) FILTER" in sql
-        assert "e.payload->>'fee'" in sql
+        if title.startswith("Local delta "):
+            assert "e.event_type = 'ControllerDiagnostics'" in sql
+            assert "'delta_cash'" in sql
+            assert "'delta_inventory'" in sql
+            assert "'delta_wealth'" in sql
+            assert "'delta_price'" in sql
+            assert "last_cash - first_cash" in sql
+            assert "last_inventory - first_inventory" in sql
+            assert "last_wealth - first_wealth" in sql
+            assert "last_price - first_price" in sql
+            expected_metric = {
+                "Local delta cash": "delta_cash",
+                "Local delta inventory": "delta_inventory",
+                "Local delta wealth": "delta_wealth",
+                "Local delta price": "delta_price",
+            }[title]
+            assert f"AND metric = '{expected_metric}'" in sql
+        else:
+            assert "private:state:%:fills" in sql
+            assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
+            assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
+            assert "SUM(price * qty) FILTER" in sql
+            assert "e.payload->>'fee'" in sql
 
     bid_volume_sql = panels_by_title["Filled bid volume"]["targets"][0]["rawSql"]
     assert "COALESCE(bid_qty, 0.0) AS value" in bid_volume_sql
@@ -690,8 +726,11 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
     ask_avg_sql = panels_by_title["Average ask fill price"]["targets"][0]["rawSql"]
     assert "ask_avg_price AS value" in ask_avg_sql
 
-    spread_sql = panels_by_title["Average spread PnL / unit"]["targets"][0]["rawSql"]
-    assert "ask_avg_price - bid_avg_price AS value" in spread_sql
+    spread_sql = panels_by_title["Spread PnL"]["targets"][0]["rawSql"]
+    assert (
+        "LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) "
+        "* (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0)) AS value"
+    ) in spread_sql
 
     fee_sql = panels_by_title["Total fill fee"]["targets"][0]["rawSql"]
     assert "SUM(fee) AS total_fee" in fee_sql

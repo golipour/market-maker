@@ -33,7 +33,24 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 3
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },

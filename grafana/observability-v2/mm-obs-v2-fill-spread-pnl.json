@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL per unit is average ask fill price minus average bid fill price.",
+        "content": "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL uses paired bid/ask volume times average spread.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -33,13 +33,30 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "decimals": 3
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 6,
         "x": 0,
         "y": 3
       },
@@ -72,58 +89,35 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 3
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 5,
+        "w": 6,
+        "x": 6,
         "y": 3
       },
       "id": 3,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(ask_qty, 0.0) AS value\nFROM agg",
-          "refId": "A"
-        }
-      ],
-      "title": "Filled ask volume",
-      "type": "stat",
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currency",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 5,
-        "x": 10,
-        "y": 3
-      },
-      "id": 4,
       "targets": [
         {
           "datasource": {
@@ -153,17 +147,205 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currency",
-          "decimals": 3
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 15,
+        "w": 6,
+        "x": 12,
+        "y": 3
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) * (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0)) AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Spread PnL",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
         "y": 3
       },
       "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(total_fee, 0.0) AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Total fill fee",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(ask_qty, 0.0) AS value\nFROM agg",
+          "refId": "A"
+        }
+      ],
+      "title": "Filled ask volume",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "id": 7,
       "targets": [
         {
           "datasource": {
@@ -193,17 +375,34 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currency",
-          "decimals": 3
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 4,
-        "x": 20,
-        "y": 3
+        "w": 6,
+        "x": 0,
+        "y": 13
       },
-      "id": 6,
+      "id": 8,
       "targets": [
         {
           "datasource": {
@@ -213,11 +412,68 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       ask_avg_price - bid_avg_price AS value\nFROM agg",
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0) AS mark_price,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], ''))::double precision\n  ELSE NULL\nEND, (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND)) + (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND)) * (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0))) AS wealth\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n),\nranked AS (\n  SELECT *,\n         ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank,\n         ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank\n  FROM state_rows\n),\nbounds AS (\n  SELECT\n    MAX(cash) FILTER (WHERE first_rank = 1) AS first_cash,\n    MAX(cash) FILTER (WHERE last_rank = 1) AS last_cash,\n    MAX(inventory) FILTER (WHERE first_rank = 1) AS first_inventory,\n    MAX(inventory) FILTER (WHERE last_rank = 1) AS last_inventory,\n    MAX(wealth) FILTER (WHERE first_rank = 1) AS first_wealth,\n    MAX(wealth) FILTER (WHERE last_rank = 1) AS last_wealth,\n    MAX(mark_price) FILTER (WHERE first_rank = 1) AS first_price,\n    MAX(mark_price) FILTER (WHERE last_rank = 1) AS last_price\n  FROM ranked\n)\nSELECT ($__timeTo())::timestamptz AS \"time\", metric, value\nFROM bounds\nCROSS JOIN LATERAL (\n  VALUES\n    ('delta_cash', last_cash - first_cash),\n    ('delta_inventory', last_inventory - first_inventory),\n    ('delta_wealth', last_wealth - first_wealth),\n    ('delta_price', last_price - first_price)\n) AS deltas(metric, value)\nWHERE value IS NOT NULL AND metric = 'delta_cash'\nORDER BY metric",
           "refId": "A"
         }
       ],
-      "title": "Average spread PnL / unit",
+      "title": "Local delta cash",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 13
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0) AS mark_price,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], ''))::double precision\n  ELSE NULL\nEND, (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND)) + (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND)) * (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0))) AS wealth\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n),\nranked AS (\n  SELECT *,\n         ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank,\n         ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank\n  FROM state_rows\n),\nbounds AS (\n  SELECT\n    MAX(cash) FILTER (WHERE first_rank = 1) AS first_cash,\n    MAX(cash) FILTER (WHERE last_rank = 1) AS last_cash,\n    MAX(inventory) FILTER (WHERE first_rank = 1) AS first_inventory,\n    MAX(inventory) FILTER (WHERE last_rank = 1) AS last_inventory,\n    MAX(wealth) FILTER (WHERE first_rank = 1) AS first_wealth,\n    MAX(wealth) FILTER (WHERE last_rank = 1) AS last_wealth,\n    MAX(mark_price) FILTER (WHERE first_rank = 1) AS first_price,\n    MAX(mark_price) FILTER (WHERE last_rank = 1) AS last_price\n  FROM ranked\n)\nSELECT ($__timeTo())::timestamptz AS \"time\", metric, value\nFROM bounds\nCROSS JOIN LATERAL (\n  VALUES\n    ('delta_cash', last_cash - first_cash),\n    ('delta_inventory', last_inventory - first_inventory),\n    ('delta_wealth', last_wealth - first_wealth),\n    ('delta_price', last_price - first_price)\n) AS deltas(metric, value)\nWHERE value IS NOT NULL AND metric = 'delta_inventory'\nORDER BY metric",
+          "refId": "A"
+        }
+      ],
+      "title": "Local delta inventory",
       "type": "stat",
       "options": {
         "colorMode": "value",
@@ -233,17 +489,34 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currency",
-          "decimals": 3
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 0,
-        "y": 8
+        "w": 6,
+        "x": 12,
+        "y": 13
       },
-      "id": 7,
+      "id": 10,
       "targets": [
         {
           "datasource": {
@@ -253,11 +526,68 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH fills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic LIKE 'private:state:%:fills'\n    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(total_fee, 0.0) AS value\nFROM agg",
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0) AS mark_price,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], ''))::double precision\n  ELSE NULL\nEND, (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND)) + (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND)) * (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0))) AS wealth\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n),\nranked AS (\n  SELECT *,\n         ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank,\n         ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank\n  FROM state_rows\n),\nbounds AS (\n  SELECT\n    MAX(cash) FILTER (WHERE first_rank = 1) AS first_cash,\n    MAX(cash) FILTER (WHERE last_rank = 1) AS last_cash,\n    MAX(inventory) FILTER (WHERE first_rank = 1) AS first_inventory,\n    MAX(inventory) FILTER (WHERE last_rank = 1) AS last_inventory,\n    MAX(wealth) FILTER (WHERE first_rank = 1) AS first_wealth,\n    MAX(wealth) FILTER (WHERE last_rank = 1) AS last_wealth,\n    MAX(mark_price) FILTER (WHERE first_rank = 1) AS first_price,\n    MAX(mark_price) FILTER (WHERE last_rank = 1) AS last_price\n  FROM ranked\n)\nSELECT ($__timeTo())::timestamptz AS \"time\", metric, value\nFROM bounds\nCROSS JOIN LATERAL (\n  VALUES\n    ('delta_cash', last_cash - first_cash),\n    ('delta_inventory', last_inventory - first_inventory),\n    ('delta_wealth', last_wealth - first_wealth),\n    ('delta_price', last_price - first_price)\n) AS deltas(metric, value)\nWHERE value IS NOT NULL AND metric = 'delta_wealth'\nORDER BY metric",
           "refId": "A"
         }
       ],
-      "title": "Total fill fee",
+      "title": "Local delta wealth",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 13
+      },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0) AS mark_price,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_wealth'], ''))::double precision\n  ELSE NULL\nEND, (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND)) + (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND)) * (COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0))) AS wealth\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n),\nranked AS (\n  SELECT *,\n         ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank,\n         ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank\n  FROM state_rows\n),\nbounds AS (\n  SELECT\n    MAX(cash) FILTER (WHERE first_rank = 1) AS first_cash,\n    MAX(cash) FILTER (WHERE last_rank = 1) AS last_cash,\n    MAX(inventory) FILTER (WHERE first_rank = 1) AS first_inventory,\n    MAX(inventory) FILTER (WHERE last_rank = 1) AS last_inventory,\n    MAX(wealth) FILTER (WHERE first_rank = 1) AS first_wealth,\n    MAX(wealth) FILTER (WHERE last_rank = 1) AS last_wealth,\n    MAX(mark_price) FILTER (WHERE first_rank = 1) AS first_price,\n    MAX(mark_price) FILTER (WHERE last_rank = 1) AS last_price\n  FROM ranked\n)\nSELECT ($__timeTo())::timestamptz AS \"time\", metric, value\nFROM bounds\nCROSS JOIN LATERAL (\n  VALUES\n    ('delta_cash', last_cash - first_cash),\n    ('delta_inventory', last_inventory - first_inventory),\n    ('delta_wealth', last_wealth - first_wealth),\n    ('delta_price', last_price - first_price)\n) AS deltas(metric, value)\nWHERE value IS NOT NULL AND metric = 'delta_price'\nORDER BY metric",
+          "refId": "A"
+        }
+      ],
+      "title": "Local delta price",
       "type": "stat",
       "options": {
         "colorMode": "value",
