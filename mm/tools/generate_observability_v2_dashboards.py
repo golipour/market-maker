@@ -2667,7 +2667,10 @@ def portfolio_pnl() -> dict[str, Any]:
         _panel(5, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=11),
         _panel(6, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=19),
         _panel(7, "Global cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("global"), x=12, y=19),
-        _panel(8, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=27, w=24),
+        _panel(8, "Local step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("local"), x=0, y=27),
+        _panel(9, "Global step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("global"), x=12, y=27),
+        _panel(10, "Total step PnL decomposition", "timeseries", PG_DS, _portfolio_step_pnl_decomposition_sql("total"), x=0, y=35, w=24),
+        _panel(11, "Step economics", "timeseries", PG_DS, _step_economics_sql(), x=0, y=43, w=24),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
 
@@ -3641,6 +3644,73 @@ UNION ALL
 SELECT "time", '{role}_wealth',
        COALESCE(reported_wealth, cash + inventory * mark_price) AS value
 FROM state_rows
+ORDER BY 1"""
+
+
+def _portfolio_step_pnl_decomposition_sql(scope: str) -> str:
+    if scope not in {"local", "global", "total"}:
+        raise ValueError(f"unsupported portfolio PnL scope: {scope}")
+    local_cash = _numeric_sql("e.payload #>> ARRAY['state','local_cash']")
+    global_cash = _numeric_sql("e.payload #>> ARRAY['state','global_cash']")
+    local_inventory = _numeric_sql("e.payload #>> ARRAY['state','local_inventory']")
+    global_inventory = _numeric_sql("e.payload #>> ARRAY['state','global_inventory']")
+    local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
+    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
+    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    if scope == "local":
+        cash = local_cash
+        inventory = local_inventory
+        mark_price = f"COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0)"
+    elif scope == "global":
+        cash = global_cash
+        inventory = global_inventory
+        mark_price = f"COALESCE({global_sell_vwap}, {reference_price}, {local_sell_vwap}, {mid}, 0.0)"
+    else:
+        cash = f"({local_cash} + {global_cash})"
+        inventory = f"({local_inventory} + {global_inventory})"
+        mark_price = f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
+    return f"""WITH state_rows AS (
+  SELECT e.ts AS "time",
+         {cash} AS cash,
+         {inventory} AS inventory,
+         {mark_price} AS mark_price
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+),
+deltas AS (
+  SELECT "time",
+         cash,
+         inventory,
+         mark_price,
+         LAG(cash) OVER (ORDER BY "time") AS cash_prev,
+         LAG(inventory) OVER (ORDER BY "time") AS inventory_prev,
+         LAG(mark_price) OVER (ORDER BY "time") AS mark_price_prev
+  FROM state_rows
+),
+step_parts AS (
+  SELECT "time",
+         (cash - cash_prev) AS delta_cash,
+         (inventory - inventory_prev) AS delta_inventory,
+         (mark_price - mark_price_prev) AS delta_price,
+         inventory_prev,
+         mark_price_prev
+  FROM deltas
+  WHERE cash_prev IS NOT NULL
+    AND inventory_prev IS NOT NULL
+    AND mark_price_prev IS NOT NULL
+)
+SELECT "time", 'net_spread_capture' AS metric,
+       (delta_cash + delta_inventory * mark_price_prev) AS value
+FROM step_parts
+UNION ALL
+SELECT "time", 'inventory_drift',
+       (inventory_prev * delta_price) AS value
+FROM step_parts
+UNION ALL
+SELECT "time", 'adverse_selection',
+       (delta_inventory * delta_price) AS value
+FROM step_parts
 ORDER BY 1"""
 
 

@@ -319,7 +319,36 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert f"'{role}_wealth'" in sql
         assert "COALESCE(reported_wealth, cash + inventory * mark_price) AS value" in sql
 
-    assert panels_by_title["Step economics"]["gridPos"]["y"] == 27
+    decomposition_expected = {
+        "Local step PnL decomposition": (0, 27, "local"),
+        "Global step PnL decomposition": (12, 27, "global"),
+        "Total step PnL decomposition": (0, 35, "total"),
+    }
+    for title, (x, y, scope) in decomposition_expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "timeseries"
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
+        sql = panel["targets"][0]["rawSql"]
+        assert "LAG(cash) OVER" in sql
+        assert "LAG(inventory) OVER" in sql
+        assert "LAG(mark_price) OVER" in sql
+        assert "'net_spread_capture' AS metric" in sql
+        assert "'inventory_drift'" in sql
+        assert "'adverse_selection'" in sql
+        assert "(delta_cash + delta_inventory * mark_price_prev) AS value" in sql
+        assert "(inventory_prev * delta_price) AS value" in sql
+        assert "(delta_inventory * delta_price) AS value" in sql
+        if scope == "total":
+            assert "ARRAY['state','local_cash']" in sql
+            assert "ARRAY['state','global_cash']" in sql
+            assert "ARRAY['optimizer','config','reference_price']" in sql
+        else:
+            assert f"ARRAY['state','{scope}_cash']" in sql
+            assert f"ARRAY['state','{scope}_inventory']" in sql
+            assert f"ARRAY['state','{scope}_sell_vwap']" in sql
+
+    assert panels_by_title["Step economics"]["gridPos"]["y"] == 43
 
 
 def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
