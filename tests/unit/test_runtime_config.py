@@ -78,6 +78,26 @@ def test_private_runtime_config_prefers_nobitex_api_key_auth_over_token(monkeypa
     assert credentials.public_key == "public-key"
 
 
+def test_private_runtime_config_parses_fill_event_source() -> None:
+    config = runtime_config_from_mapping(
+        {
+            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
+            "local_private": {
+                "api_token_env": "NOBITEX_API_TOKEN",
+                "fill_event_source": "open_order_delta",
+            },
+        }
+    )
+
+    assert config.local_private is not None
+    assert config.local_private.fill_event_source == "open_order_delta"
+
+
+def test_private_runtime_config_rejects_invalid_fill_event_source() -> None:
+    with pytest.raises(ValueError, match="fill_event_source"):
+        PrivateRuntimeConfig(fill_event_source="both")  # type: ignore[arg-type]
+
+
 @pytest.mark.asyncio
 async def test_persistence_enabled_without_database_url_builds_no_writer(monkeypatch) -> None:
     monkeypatch.delenv("MM_DATABASE_URL", raising=False)

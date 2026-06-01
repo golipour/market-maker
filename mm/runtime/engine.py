@@ -199,6 +199,7 @@ async def build_runtime_components(
             exchange=source.normalized_exchange(),
             adapter=private_selection.adapter,
             bus=runtime_bus,
+            fill_event_source=private_config.fill_event_source,
         )
         if private_config.enable_execution:
             placement_max_concurrency = 8

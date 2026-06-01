@@ -310,7 +310,12 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
 async def test_rest_polling_reconciler_publishes_fill_deltas_from_open_order_snapshots() -> None:
     adapter = _FillingRestPolling()
     bus = InMemoryBus()
-    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    reconciler = PrivateStateReconciler(
+        "nobitex",
+        adapter,
+        bus,
+        fill_event_source="open_order_delta",
+    )
     fills = bus.subscribe_queue("private:state:nobitex:fills")
 
     try:
@@ -323,6 +328,43 @@ async def test_rest_polling_reconciler_publishes_fill_deltas_from_open_order_sna
         assert fill.side == "buy"
         assert fill.qty == pytest.approx(0.1)
         assert fill.price == pytest.approx(1_000_000.0)
+    finally:
+        await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_rest_polling_reconciler_suppresses_open_order_delta_fills_by_default() -> None:
+    adapter = _FillingRestPolling()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    snapshots = bus.subscribe_queue("private:state:nobitex:snapshot")
+    fills = bus.subscribe_queue("private:state:nobitex:fills")
+
+    try:
+        await reconciler.start()
+        await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(fills.get(), timeout=0.1)
+        assert adapter.open_order_calls >= 2
+    finally:
+        await reconciler.stop()
+
+
+@pytest.mark.asyncio
+async def test_rest_polling_reconciler_publishes_exchange_fill_history_by_default() -> None:
+    adapter = _FillHistoryRestPolling()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+    fills = bus.subscribe_queue("private:state:nobitex:fills")
+
+    try:
+        await reconciler.start()
+        fill = await asyncio.wait_for(fills.get(), timeout=2.0)
+
+        assert fill.exchange_order_id == "o1"
+        assert fill.qty == pytest.approx(0.1)
+        assert fill.fee == pytest.approx(0.01)
     finally:
         await reconciler.stop()
 

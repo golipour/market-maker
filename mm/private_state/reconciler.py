@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
@@ -8,6 +9,8 @@ from mm.core.models.execution import Fill
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 from mm.private_state.store import PrivateStateStore
+
+FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
 
 
 class PrivateStateReconciler:
@@ -25,6 +28,7 @@ class PrivateStateReconciler:
         adapter: AbstractPrivateStateAdapter,
         bus: AbstractEventBus | None = None,
         store: PrivateStateStore | None = None,
+        fill_event_source: FillEventSource = "exchange_fill_history",
     ):
         self.exchange = exchange.lower().strip()
         self.adapter = adapter
@@ -33,6 +37,11 @@ class PrivateStateReconciler:
             self.exchange,
             trading_symbol=getattr(adapter, "symbol", None),
         )
+        if fill_event_source not in ("exchange_fill_history", "open_order_delta"):
+            raise ValueError(
+                "fill_event_source must be 'exchange_fill_history' or 'open_order_delta'"
+            )
+        self.fill_event_source = fill_event_source
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -49,15 +58,17 @@ class PrivateStateReconciler:
             self._tasks = [
                 asyncio.create_task(self._listen_rest_polling_unified()),
                 asyncio.create_task(self._listen_order_updates()),
-                asyncio.create_task(self._listen_fills()),
             ]
+            if self.fill_event_source == "exchange_fill_history":
+                self._tasks.append(asyncio.create_task(self._listen_fills()))
         else:
             self._tasks = [
                 asyncio.create_task(self._listen_balances()),
                 asyncio.create_task(self._listen_open_orders()),
                 asyncio.create_task(self._listen_order_updates()),
-                asyncio.create_task(self._listen_fills()),
             ]
+            if self.fill_event_source == "exchange_fill_history":
+                self._tasks.append(asyncio.create_task(self._listen_fills()))
         if hasattr(self.adapter, "error_stream"):
             self._tasks.append(asyncio.create_task(self._listen_errors()))
 
@@ -83,8 +94,9 @@ class PrivateStateReconciler:
                         self.store.snapshot().open_orders,
                         snap_in.open_orders,
                     )
-                    for fill in fills:
-                        await self._publish(f"private:state:{self.exchange}:fills", fill)
+                    if self.fill_event_source == "open_order_delta":
+                        for fill in fills:
+                            await self._publish(f"private:state:{self.exchange}:fills", fill)
                     merged = self.store.apply_snapshot(snap_in)
                     await self._publish_snapshot(merged)
                     for balance in snap_in.balances.values():

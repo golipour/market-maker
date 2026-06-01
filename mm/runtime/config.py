@@ -20,6 +20,7 @@ NeutralVenueRole = Literal["local", "global"]
 LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 ReferenceVenueRole = Literal["global", "local"]
 BusKind = Literal["memory", "redis_streams"]
+FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
 
 
 def _normalize_reference_price_source(value: Any) -> ReferenceVenueRole:
@@ -71,6 +72,13 @@ class PrivateRuntimeConfig:
     api_private_key_env: str | None = None
     poll_interval_ms: int = 5000
     enable_execution: bool = True
+    fill_event_source: FillEventSource = "exchange_fill_history"
+
+    def __post_init__(self) -> None:
+        if self.fill_event_source not in ("exchange_fill_history", "open_order_delta"):
+            raise ValueError(
+                "private fill_event_source must be 'exchange_fill_history' or 'open_order_delta'"
+            )
 
     @property
     def enabled(self) -> bool:
@@ -598,6 +606,7 @@ def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | 
         "mode": private.mode,
         "poll_interval_ms": private.poll_interval_ms,
         "enable_execution": private.enable_execution,
+        "fill_event_source": private.fill_event_source,
         "enabled": private.enabled,
         "auth_type": "api_key" if private.resolved_api_key() and private.resolved_api_private_key() else "token",
     }
@@ -756,6 +765,7 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         api_private_key_env=payload.get("api_private_key_env"),
         poll_interval_ms=int(payload.get("poll_interval_ms", 5000)),
         enable_execution=bool(payload.get("enable_execution", True)),
+        fill_event_source=str(payload.get("fill_event_source", "exchange_fill_history")),
     )
 
 

@@ -70,13 +70,15 @@ rejected.
     "mode": "rest",
     "api_token_env": "NOBITEX_API_TOKEN",
     "poll_interval_ms": 10000,
-    "enable_execution": true
+    "enable_execution": true,
+    "fill_event_source": "exchange_fill_history"
   },
   "global_private": {
     "mode": "rest",
     "api_token_env": "WALLEX_API_TOKEN",
     "poll_interval_ms": 10000,
-    "enable_execution": true
+    "enable_execution": true,
+    "fill_event_source": "exchange_fill_history"
   }
 }
 ```
@@ -89,6 +91,7 @@ private key is used locally to sign requests with Ed25519.
 |-------|--------|
 | `api_token` / `api_token_env` | Credentials for private REST |
 | `enable_execution` | If true and token present, creates `OrderManager` + execution reconciler |
+| `fill_event_source` | One of `exchange_fill_history` or `open_order_delta`; controls which source publishes `private:state:{exchange}:fills` |
 
 Without token, private reconciler is skipped and **no live orders** on that exchange.
 
