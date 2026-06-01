@@ -348,20 +348,7 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert "ARRAY['state','global_base_wallet','total']" in sql
         assert "ARRAY['optimizer','config','reference_price']" in sql
 
-    delta_panel = panels_by_title["Local interval deltas"]
-    assert delta_panel["type"] == "stat"
-    assert delta_panel["gridPos"] == {"h": 5, "w": 24, "x": 0, "y": 51}
-    delta_sql = delta_panel["targets"][0]["rawSql"]
-    assert "ROW_NUMBER() OVER (ORDER BY \"time\" ASC) AS first_rank" in delta_sql
-    assert "ROW_NUMBER() OVER (ORDER BY \"time\" DESC) AS last_rank" in delta_sql
-    assert "'delta_cash'" in delta_sql
-    assert "'delta_inventory'" in delta_sql
-    assert "'delta_wealth'" in delta_sql
-    assert "'delta_price'" in delta_sql
-    assert "last_cash - first_cash" in delta_sql
-    assert "last_inventory - first_inventory" in delta_sql
-    assert "last_wealth - first_wealth" in delta_sql
-    assert "last_price - first_price" in delta_sql
+    assert "Local interval deltas" not in panels_by_title
 
     assert "Step economics" not in panels_by_title
 

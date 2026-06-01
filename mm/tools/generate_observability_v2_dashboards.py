@@ -2707,17 +2707,6 @@ def portfolio_pnl() -> dict[str, Any]:
             y=43,
             w=24,
         ),
-        _panel(
-            11,
-            "Local interval deltas",
-            "stat",
-            PG_DS,
-            _portfolio_local_interval_delta_sql(),
-            x=0,
-            y=51,
-            w=24,
-            h=5,
-        ),
     ]
     return _dashboard("mm-obs-v2-portfolio-pnl", "MM Observability v2 / 07 Portfolio And PnL", panels, tags=["portfolio"])
 
