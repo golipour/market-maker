@@ -148,6 +148,26 @@ def test_rest_private_state_normalizes_open_orders_to_float_domain() -> None:
     assert order.order.order_type == "limit"
 
 
+def test_nobitex_irt_open_order_normalizes_price_from_rial_to_toman() -> None:
+    adapter = NobitexRestPrivateStateAdapter("BTC_IRT", api_token="token")
+
+    order = adapter.normalize_open_order(
+        {
+            "id": "o1",
+            "type": "buy",
+            "price": "10000000",
+            "amount": "0.5",
+            "filledAmount": "0.1",
+            "status": "open",
+        },
+        timestamp_ms=1000,
+    )
+
+    assert order is not None
+    assert order.order.price == pytest.approx(1_000_000.0)
+    assert order.remaining_qty == pytest.approx(0.4)
+
+
 def test_rest_private_state_normalize_balances_skips_zero_rows() -> None:
     adapter = RestPollingPrivateStateAdapter(
         "wallex",
