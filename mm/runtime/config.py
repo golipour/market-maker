@@ -262,6 +262,7 @@ class VenueExecutionConfig:
 
     planner: ExecutionPlannerKind = "reconcile"
     observe_only: bool = False
+    max_orders_per_side: int | None = None
     max_order_qty: float | None = None
     max_quote_distance: float | None = None
 
@@ -274,6 +275,8 @@ class VenueExecutionConfig:
             payload["max_order_qty"] = float(self.max_order_qty)
         if self.max_quote_distance is not None:
             payload["max_quote_distance"] = float(self.max_quote_distance)
+        if self.max_orders_per_side is not None:
+            payload["max_orders_per_side"] = int(self.max_orders_per_side)
         return payload
 
 
@@ -706,9 +709,13 @@ def _venue_execution_from_mapping(payload: Any, *, default_planner: ExecutionPla
         raise ValueError("execution planner must be 'reconcile' or 'replace'")
     max_order_qty = payload.get("max_order_qty")
     max_quote_distance = payload.get("max_quote_distance")
+    max_orders_per_side = payload.get("max_orders_per_side")
     return VenueExecutionConfig(
         planner=planner,  # type: ignore[arg-type]
         observe_only=bool(payload.get("observe_only", False)),
+        max_orders_per_side=(
+            max(1, int(max_orders_per_side)) if max_orders_per_side is not None else None
+        ),
         max_order_qty=float(max_order_qty) if max_order_qty is not None else None,
         max_quote_distance=float(max_quote_distance) if max_quote_distance is not None else None,
     )
@@ -840,6 +847,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
     optimizer_payload = payload.get("optimizer")
     if isinstance(optimizer_payload, dict):
         venue_optimizer_keys = {
+            "n_components",
             "return_risk_aversion_beta",
             "objective_weight",
             "inventory_threshold_penalty_weight",
@@ -875,6 +883,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             key
             for key in (
                 "return_risk_aversion_beta",
+                "n_components",
                 "objective_weight",
                 "inventory_threshold_penalty_weight",
                 "inv_coef",

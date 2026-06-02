@@ -35,16 +35,18 @@
     "fill_event_source": "exchange_fill_history"
   },
   "liquidity_sourcing": {
-    "enabled": false,
+    "enabled": true,
     "mode": "liquidity_sourcing",
-    "global_live_orders": false
+    "global_live_orders": true
   },
   "execution": {
     "local": {
-      "planner": "replace"
+      "planner": "replace",
+      "max_orders_per_side": 5
     },
     "global": {
-      "planner": "replace"
+      "planner": "replace",
+      "max_orders_per_side": 2
     }
   },
   "bus": {
@@ -86,7 +88,6 @@
       "spread_step": 40.0,
       "spread_max": 400.0
     },
-    "max_orders_per_side": 10,
     "risk": {
       "enabled": true,
       "engine": "net_delta",
@@ -141,7 +142,6 @@
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",
-      "n_components": 4,
       "n_samples": 64,
       "warm_start": false,
       "fixed_mc_samples": true,
@@ -150,9 +150,10 @@
       "adam_lr": 1e0,
       "device": "cpu",
       "local": {
+        "n_components": 4,
         "objective_weight": 1.0,
         "return_risk_aversion_beta": 0.1,
-        "inventory_threshold_penalty_weight": 0.00001,
+        "inventory_threshold_penalty_weight": 0.0,
         "cash_threshold": 20000000,
         "inventory_threshold": 20,
         "quote_size_min_per_side": 1.0,
@@ -166,6 +167,7 @@
         "soft_fill_queue_model": "back_of_queue"
       },
       "global": {
+        "n_components": 2,
         "objective_weight": 1.0,
         "return_risk_aversion_beta": 0.1,
         "inventory_threshold_penalty_weight": 0.0,

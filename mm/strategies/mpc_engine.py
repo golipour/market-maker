@@ -41,6 +41,7 @@ from mm.strategies.target_book_builder import (
 
 
 _VENUE_OPTIMIZER_KEYS = {
+    "n_components",
     "return_risk_aversion_beta",
     "objective_weight",
     "inventory_threshold_penalty_weight",
@@ -275,9 +276,17 @@ class MpcStrategyEngine:
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._controller.optimize(state)
         optimizer_run = getattr(self._controller, "last_diagnostics", None)
+        local_max_orders_per_side = int(
+            self.execution.local.max_orders_per_side
+            or self.config.max_orders_per_side
+        )
+        global_max_orders_per_side = int(
+            self.execution.global_.max_orders_per_side
+            or self.config.max_orders_per_side
+        )
         order_constraints = local_constraints_from_spec(
             self.binding.local,
-            max_orders_per_side=self.config.max_orders_per_side,
+            max_orders_per_side=local_max_orders_per_side,
         )
         continuous_depth = _continuous_action_depth_series(
             sigmoid_action,
@@ -295,7 +304,7 @@ class MpcStrategyEngine:
         if global_event is not None and self.binding.global_ is not None:
             global_constraints = OrderConstraints.from_spec(
                 self.binding.global_,
-                max_orders_per_side=self.config.max_orders_per_side,
+                max_orders_per_side=global_max_orders_per_side,
             )
         joint_target_book, action_pipeline, ladder, _local_orders = build_joint_target_book_from_sigmoid(
             actor_id=self.config.actor_id,

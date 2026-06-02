@@ -125,6 +125,22 @@ def test_liquidity_sourcing_invalid_mode_raises() -> None:
         )
 
 
+def test_controller_optimizer_n_components_must_be_venue_scoped() -> None:
+    with pytest.raises(ValueError, match="optimizer.local/global"):
+        runtime_config_from_mapping(
+            {
+                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                "controller": {
+                    "enabled": True,
+                    "optimizer": {
+                        "kind": "monte_carlo_mpc_tensor_batched",
+                        "n_components": 4,
+                    },
+                },
+            }
+        )
+
+
 def test_removed_controller_model_config_names_are_rejected() -> None:
     with pytest.raises(ValueError, match="local_price_model"):
         runtime_config_from_mapping(
@@ -243,6 +259,11 @@ def test_example_config_loads_liquidity_sourcing() -> None:
     assert config.liquidity_sourcing.mode == "liquidity_sourcing"
     assert config.controller is not None
     assert config.controller.enabled is True
+    assert config.controller.optimizer is not None
+    assert config.controller.optimizer["local"]["n_components"] == 4
+    assert config.controller.optimizer["global"]["n_components"] == 2
+    assert config.execution.local.max_orders_per_side == 5
+    assert config.execution.global_.max_orders_per_side == 2
 
 
 

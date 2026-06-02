@@ -13,21 +13,28 @@ from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
 from mm.mpc.reward_tensor import objective_entropic_return, objective_threshold_shortfall_penalty
 
 
-def joint_action_param_len(n_components: int) -> int:
+def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
     """Flat optimizer vector length for local + global sigmoid curves per horizon step."""
 
-    return 2 * action_param_len(n_components)
+    local_n = max(1, int(n_components))
+    global_n = local_n if global_n_components is None else max(1, int(global_n_components))
+    return action_param_len(local_n) + action_param_len(global_n)
 
 
 def split_venue_action_flat(
     flat: np.ndarray | list[float],
     n_components: int,
+    global_n_components: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    single = action_param_len(n_components)
+    local_n = max(1, int(n_components))
+    global_n = local_n if global_n_components is None else max(1, int(global_n_components))
+    local_len = action_param_len(local_n)
+    global_len = action_param_len(global_n)
     arr = np.asarray(flat, dtype=np.float64)
-    if arr.size < 2 * single:
-        raise ValueError(f"joint action requires {2 * single} params, got {arr.size}")
-    return arr[:single], arr[single : 2 * single]
+    required = local_len + global_len
+    if arr.size < required:
+        raise ValueError(f"joint action requires {required} params, got {arr.size}")
+    return arr[:local_len], arr[local_len:required]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +51,19 @@ class JointSigmoidMixtureAction:
         flat: np.ndarray | list[float],
         *,
         n_components: int,
+        global_n_components: int | None = None,
         l_param: Any,
+        global_l_param: Any | None = None,
         global_active: bool,
     ) -> JointSigmoidMixtureAction:
-        local_flat, global_flat = split_venue_action_flat(flat, n_components)
+        global_n = n_components if global_n_components is None else global_n_components
+        local_flat, global_flat = split_venue_action_flat(flat, n_components, global_n)
         local = sigmoid_action_from_flat_raw(local_flat, n_components, l_param=l_param)
-        global_action = sigmoid_action_from_flat_raw(global_flat, n_components, l_param=l_param)
+        global_action = sigmoid_action_from_flat_raw(
+            global_flat,
+            global_n,
+            l_param=global_l_param or l_param,
+        )
         return cls(local=local, global_=global_action, global_active=global_active)
 
 

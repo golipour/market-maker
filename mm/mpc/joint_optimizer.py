@@ -141,9 +141,11 @@ def optimize_joint_with_diagnostics(
         dtype=dtype,
     )
 
-    n = mpc.n_components
-    venue_len = action_param_len(n)
-    joint_step_len = joint_action_param_len(n)
+    local_n = mpc.local_n_components
+    global_n = mpc.global_n_components
+    local_venue_len = action_param_len(local_n)
+    global_venue_len = action_param_len(global_n)
+    joint_step_len = joint_action_param_len(local_n, global_n)
     param_len = mpc.horizon * joint_step_len
     local_l_param = mpc._l_param_config("local")
     global_l_param = mpc._l_param_config("global")
@@ -166,20 +168,20 @@ def optimize_joint_with_diagnostics(
         one_action = np.array(mpc._last_raw_flat[:joint_step_len], dtype=np.float64)
     else:
         local_action = _initial_action_uniform_marginal_qrange(
-            n_components=n,
+            n_components=local_n,
             spread_max=mpc.spread_max,
             l_param=local_l_param,
         )
         global_action = _initial_action_uniform_marginal_qrange(
-            n_components=n,
+            n_components=global_n,
             spread_max=mpc.spread_max,
             l_param=global_l_param,
         )
         one_action = np.concatenate([local_action, global_action])
     x0_arr = np.tile(one_action, mpc.horizon)
 
-    local_bounds = _bounds_effective_to_raw(mpc.local_bounds)[:venue_len]
-    global_bounds = _bounds_effective_to_raw(mpc.global_bounds)[:venue_len]
+    local_bounds = _bounds_effective_to_raw(mpc.local_bounds)[:local_venue_len]
+    global_bounds = _bounds_effective_to_raw(mpc.global_bounds)[:global_venue_len]
     joint_bounds = local_bounds + global_bounds
     bounds_full = joint_bounds * mpc.horizon
     lower = torch_mod.tensor([b[0] for b in bounds_full], dtype=dtype, device=_device)
@@ -254,10 +256,10 @@ def optimize_joint_with_diagnostics(
         for i in range(mpc.grid_levels + 1)
     )
     initial_flat = np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64)
-    local_initial_flat, _ = split_venue_action_flat(initial_flat, n)
+    local_initial_flat, _ = split_venue_action_flat(initial_flat, local_n, global_n)
     initial_action = sigmoid_action_from_flat_raw(
         local_initial_flat,
-        n,
+        local_n,
         l_param=local_l_param,
         bid_quote_size_max=local_bid_quote_size_max_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
@@ -286,10 +288,10 @@ def optimize_joint_with_diagnostics(
     for epoch in range(mpc.adam_epochs):
         if mpc.verbose:
             cur_flat = x_torch.detach().cpu().numpy()[:joint_step_len]
-            local_flat, global_flat = split_venue_action_flat(cur_flat, n)
+            local_flat, global_flat = split_venue_action_flat(cur_flat, local_n, global_n)
             print(
-                f"  Epoch {epoch}: local {_format_action_verbose(local_flat, n)} | "
-                f"global {_format_action_verbose(global_flat, n)}"
+                f"  Epoch {epoch}: local {_format_action_verbose(local_flat, local_n)} | "
+                f"global {_format_action_verbose(global_flat, global_n)}"
             )
 
         def closure():
@@ -375,7 +377,10 @@ def optimize_joint_with_diagnostics(
                     )
 
                 joint_h = x_torch[h * joint_step_len : (h + 1) * joint_step_len]
-                local_h, global_h = torch_mod.split(joint_h, venue_len)
+                local_h, global_h = torch_mod.split(
+                    joint_h,
+                    [local_venue_len, global_venue_len],
+                )
 
                 sell_h = sell_vol[:, h : h + 1]
                 buy_h = buy_vol[:, h : h + 1]
@@ -446,7 +451,7 @@ def optimize_joint_with_diagnostics(
 
                 ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = soft_fill_batched(
                     local_h,
-                    n,
+                    local_n,
                     mid_t,
                     book_cum_bid_h,
                     book_cum_ask_h,
@@ -469,7 +474,7 @@ def optimize_joint_with_diagnostics(
                     global_inv_delta,
                 ) = soft_fill_batched(
                     global_h,
-                    n,
+                    global_n,
                     global_mid_t,
                     global_book_cum_bid_h,
                     global_book_cum_ask_h,
@@ -620,17 +625,17 @@ def optimize_joint_with_diagnostics(
 
     best_flat = best_x.cpu().numpy()
     best_joint_flat = best_flat[:joint_step_len]
-    local_flat, global_flat = split_venue_action_flat(best_joint_flat, n)
+    local_flat, global_flat = split_venue_action_flat(best_joint_flat, local_n, global_n)
     best_local = sigmoid_action_from_flat_raw(
         local_flat,
-        n,
+        local_n,
         l_param=local_l_param,
         bid_quote_size_max=local_bid_quote_size_max_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
     )
     best_global = sigmoid_action_from_flat_raw(
         global_flat,
-        n,
+        global_n,
         l_param=global_l_param,
         bid_quote_size_max=global_bid_quote_size_max_0,
         ask_quote_size_max=global_ask_quote_size_max_0,
@@ -646,11 +651,13 @@ def optimize_joint_with_diagnostics(
         mpc._last_raw_flat = np.array(best_joint_flat, dtype=np.float64)
 
     final_local_flat, _ = split_venue_action_flat(
-        np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64), n
+        np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64),
+        local_n,
+        global_n,
     )
     final_action = sigmoid_action_from_flat_raw(
         final_local_flat,
-        n,
+        local_n,
         l_param=local_l_param,
         bid_quote_size_max=local_bid_quote_size_max_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
@@ -673,11 +680,11 @@ def optimize_joint_with_diagnostics(
             "wealth_0": wealth_0,
             "local_optimizer": local_opt.as_config(
                 spread_max=mpc.spread_max,
-                n_components=mpc.n_components,
+                n_components=local_n,
             ),
             "global_optimizer": global_opt.as_config(
                 spread_max=mpc.spread_max,
-                n_components=mpc.n_components,
+                n_components=global_n,
             ),
         },
         timing={
@@ -706,6 +713,7 @@ def optimize_joint_with_diagnostics(
             "consolidated_wealth": True,
             "global_rollout": False,
             "joint_diagnostics": dict(joint_diag_accum),
+            "local_action_flat": list(local_flat),
             "global_action_flat": list(global_flat),
         },
     )

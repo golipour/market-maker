@@ -64,6 +64,7 @@ def _get_torch():
 class VenueOptimizerParams:
     """Venue-scoped optimizer, fill, and inventory-shaping parameters."""
 
+    n_components: int | None = None
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
     inventory_threshold_penalty_weight: float = 0.0
@@ -93,6 +94,11 @@ class VenueOptimizerParams:
             base.inventory_threshold_penalty_weight,
         )
         return cls(
+            n_components=(
+                max(1, int(data.get("n_components")))
+                if data.get("n_components") is not None
+                else base.n_components
+            ),
             return_risk_aversion_beta=max(
                 1e-6,
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
@@ -139,12 +145,15 @@ class VenueOptimizerParams:
             ),
         )
 
-    def validate(self, *, spread_max: float, n_components: int, venue: str) -> None:
+    def validate(self, *, spread_max: float, n_components: int | None, venue: str) -> None:
         if self.quote_size_min_per_side is None or self.quote_size_max_per_side is None:
             raise ValueError(
                 f"optimizer.{venue}.quote_size_min_per_side and quote_size_max_per_side are required"
             )
-        l_param = self.l_param_config(spread_max=spread_max, n_components=n_components)
+        l_param = self.l_param_config(
+            spread_max=spread_max,
+            n_components=n_components or self.n_components or 1,
+        )
         validate_l_param_config(l_param)
 
     def l_param_config(self, *, spread_max: float, n_components: int) -> LParamConfig:
@@ -161,8 +170,9 @@ class VenueOptimizerParams:
         )
 
     def as_config(self, *, spread_max: float, n_components: int) -> dict[str, Any]:
-        del spread_max, n_components
+        del spread_max
         return {
+            "n_components": int(self.n_components or n_components),
             "return_risk_aversion_beta": self.return_risk_aversion_beta,
             "objective_weight": self.objective_weight,
             "inventory_threshold_penalty_weight": self.inventory_threshold_penalty_weight,
@@ -694,6 +704,7 @@ class MonteCarloMPCTensorBatched:
         if self.reference_price_source not in ("global", "local"):
             raise ValueError("reference_price_source must be 'global' or 'local'")
         flat_defaults = VenueOptimizerParams(
+            n_components=self.n_components,
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
             inventory_threshold_penalty_weight=float(
@@ -735,14 +746,16 @@ class MonteCarloMPCTensorBatched:
             if isinstance(global_optimizer, VenueOptimizerParams)
             else VenueOptimizerParams.from_mapping(global_optimizer, defaults=self.local_optimizer)
         )
+        self.local_n_components = int(self.local_optimizer.n_components or self.n_components)
+        self.global_n_components = int(self.global_optimizer.n_components or self.n_components)
         self.local_optimizer.validate(
             spread_max=self.spread_max,
-            n_components=self.n_components,
+            n_components=self.local_n_components,
             venue="local",
         )
         self.global_optimizer.validate(
             spread_max=self.spread_max,
-            n_components=self.n_components,
+            n_components=self.global_n_components,
             venue="global",
         )
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
@@ -778,12 +791,17 @@ class MonteCarloMPCTensorBatched:
         self._optimizer: Any = None
 
         if bounds is None:
-            n = self.n_components
             logit_bound = (-30.0, 30.0)
             k_bound = (1e-6, 100.0)
             x0_bound = (-self.spread_max, self.spread_max)
-            local_bounds = [logit_bound, k_bound, x0_bound] * (2 * n) + [logit_bound, logit_bound]
-            global_bounds = [logit_bound, k_bound, x0_bound] * (2 * n) + [logit_bound, logit_bound]
+            local_bounds = [logit_bound, k_bound, x0_bound] * (2 * self.local_n_components) + [
+                logit_bound,
+                logit_bound,
+            ]
+            global_bounds = [logit_bound, k_bound, x0_bound] * (2 * self.global_n_components) + [
+                logit_bound,
+                logit_bound,
+            ]
         else:
             local_bounds = list(bounds)
             global_bounds = list(bounds)
@@ -799,9 +817,12 @@ class MonteCarloMPCTensorBatched:
         return self.global_optimizer if str(venue).lower() == "global" else self.local_optimizer
 
     def _l_param_config(self, venue: str = "local") -> LParamConfig:
+        n_components = (
+            self.global_n_components if str(venue).lower() == "global" else self.local_n_components
+        )
         return self._venue_optimizer(venue).l_param_config(
             spread_max=self.spread_max,
-            n_components=self.n_components,
+            n_components=n_components,
         )
 
     def _depth_call_kwargs(self, venue: str = "local") -> dict[str, Any]:
@@ -816,7 +837,7 @@ class MonteCarloMPCTensorBatched:
     ) -> SigmoidMixtureAction:
         return sigmoid_action_from_flat_raw(
             flat,
-            self.n_components,
+            self.local_n_components,
             l_param=self._l_param_config(),
             bid_quote_size_max=bid_quote_size_max,
             ask_quote_size_max=ask_quote_size_max,
@@ -878,7 +899,7 @@ class MonteCarloMPCTensorBatched:
             i = _spread_bucket_index(float(s), self.spread_step, self.grid_levels)
             if 0 <= i < self.grid_levels:
                 ob_asks_0[:, i] += float(q)
-        n = self.n_components
+        n = self.local_n_components
         single_len = action_param_len(n)
         param_len = self.horizon * single_len
 
@@ -1267,11 +1288,11 @@ class MonteCarloMPCTensorBatched:
                 "reference_price_source": self.reference_price_source,
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,
-                    n_components=self.n_components,
+                    n_components=self.local_n_components,
                 ),
                 "global_optimizer": self.global_optimizer.as_config(
                     spread_max=self.spread_max,
-                    n_components=self.n_components,
+                    n_components=self.global_n_components,
                 ),
             },
             timing={

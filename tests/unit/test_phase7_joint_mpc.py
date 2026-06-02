@@ -53,6 +53,8 @@ def _build_optimizer(
     *,
     liquidity_sourcing_enabled: bool = False,
     reference_price_source: str = "global",
+    local_optimizer: dict | None = None,
+    global_optimizer: dict | None = None,
 ) -> MonteCarloMPCTensorBatched:
     flow = TorchHurdleLogNormalModel()
     price = TorchResidualPriceModel(market_flow_model=flow)
@@ -75,6 +77,8 @@ def _build_optimizer(
         spread_step=5.0,
         quote_size_min_per_side=0.5,
         quote_size_max_per_side=2.0,
+        local_optimizer=local_optimizer,
+        global_optimizer=global_optimizer,
         device="cpu",
         fixed_mc_samples=True
     )
@@ -82,6 +86,17 @@ def _build_optimizer(
 
 def test_joint_action_param_len_is_twice_single_venue() -> None:
     assert joint_action_param_len(4) == 2 * action_param_len(4)
+
+
+def test_joint_action_param_len_allows_asymmetric_venue_complexity() -> None:
+    assert joint_action_param_len(4, 2) == action_param_len(4) + action_param_len(2)
+    local_flat, global_flat = split_venue_action_flat(
+        list(range(joint_action_param_len(4, 2))),
+        4,
+        2,
+    )
+    assert len(local_flat) == action_param_len(4)
+    assert len(global_flat) == action_param_len(2)
 
 
 def test_consolidated_wealth_marks_both_venues_to_reference() -> None:
@@ -359,9 +374,11 @@ def test_build_controller_keeps_global_models_for_global_reference_without_sourc
 def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     from mm.runtime.config import (
         ControllerRuntimeConfig,
+        ExecutionRuntimeConfig,
         LiquiditySourcingRuntimeConfig,
         MarketDataSourceConfig,
         MarketMakerRuntimeConfig,
+        VenueExecutionConfig,
     )
     from mm.strategies.mpc_engine import _build_controller
 
@@ -374,6 +391,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
             reference_price_source="local",
             optimizer={
                 "local": {
+                    "n_components": 3,
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
                     "inventory_threshold_penalty_weight": 0.01,
@@ -387,6 +405,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "soft_fill_queue_model": "pro_rata",
                 },
                 "global": {
+                    "n_components": 2,
                     "objective_weight": 0.4,
                     "return_risk_aversion_beta": 0.8,
                     "inventory_threshold_penalty_weight": 0.02,
@@ -401,6 +420,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                 },
             },
         ),
+        execution=ExecutionRuntimeConfig(
+            local=VenueExecutionConfig(max_orders_per_side=4),
+            global_=VenueExecutionConfig(planner="replace", max_orders_per_side=2),
+        ),
         liquidity_sourcing=sourcing,
     )
 
@@ -412,6 +435,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
 
     assert controller.local_optimizer.objective_weight == pytest.approx(0.7)
     assert controller.global_optimizer.objective_weight == pytest.approx(0.4)
+    assert controller.local_n_components == 3
+    assert controller.global_n_components == 2
+    assert runtime.execution.local.max_orders_per_side == 4
+    assert runtime.execution.global_.max_orders_per_side == 2
     assert controller.local_optimizer.return_risk_aversion_beta == pytest.approx(0.2)
     assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
     assert controller.local_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.01)
@@ -463,3 +490,23 @@ def test_joint_optimizer_can_emit_nonzero_global_curve() -> None:
         l_param=l_param,
     )
     assert math.isfinite(float(depth[-1]))
+
+
+def test_joint_optimizer_uses_global_component_count_override() -> None:
+    state = _minimal_state(global_active=True)
+    joint = _build_optimizer(
+        liquidity_sourcing_enabled=True,
+        local_optimizer={"n_components": 4},
+        global_optimizer={"n_components": 2},
+    )
+    joint.adam_epochs = 1
+    _, diagnostics = joint.optimize_with_diagnostics(state)
+
+    local_flat = diagnostics.rollout.get("local_action_flat") or []
+    global_flat = diagnostics.rollout.get("global_action_flat") or []
+    assert joint.local_n_components == 4
+    assert joint.global_n_components == 2
+    assert len(local_flat) == action_param_len(4)
+    assert len(global_flat) == action_param_len(2)
+    assert diagnostics.config["local_optimizer"]["n_components"] == 4
+    assert diagnostics.config["global_optimizer"]["n_components"] == 2
