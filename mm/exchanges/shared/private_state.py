@@ -39,6 +39,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         self._connected = False
         self._error_queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         self._seen_fill_qty_by_order: dict[str, float] = {}
+        self._seen_fill_fee_by_order: dict[str, float] = {}
         self._fill_history_seeded = False
 
     async def connect(self) -> None:
@@ -239,7 +240,12 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         if delta_qty <= 1e-12:
             return None
         price = _safe_float(_first_value(row, "price", "averagePrice", "avgFilledPrice", "executedPrice"))
-        fee = _safe_float(_first_value(row, "fee", "commission"), 0.0)
+        cumulative_fee = _safe_float(_first_value(row, "fee", "commission"), 0.0)
+        seen_fee = self._seen_fill_fee_by_order.get(order_id, 0.0)
+        fee = max(0.0, cumulative_fee - seen_fee)
+        if fee <= 1e-12 and cumulative_fee > 0.0:
+            fee = cumulative_fee
+        self._seen_fill_fee_by_order[order_id] = max(seen_fee, cumulative_fee)
         actor_id = _first_text(row, "actor_id", "actorId")
         return Fill(
             exchange_order_id=order_id,

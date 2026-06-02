@@ -684,7 +684,7 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "Global filled ask volume": (12, 8, 6),
         "Average ask fill price": (18, 8, 6),
         "Spread PnL": (0, 13, 6),
-        "Total fill fee (reported/estimated)": (6, 13, 6),
+        "Total fill fee": (6, 13, 6),
         "Total delta cash": (0, 18, 6),
         "Total delta inventory": (6, 18, 6),
         "Total delta wealth": (12, 18, 6),
@@ -783,13 +783,13 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "* (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0)) AS value"
     ) in spread_sql
 
-    fee_sql = panels_by_title["Total fill fee (reported/estimated)"]["targets"][0]["rawSql"]
+    fee_sql = panels_by_title["Total fill fee"]["targets"][0]["rawSql"]
     assert "SUM(fee) AS total_fee" in fee_sql
     assert "COALESCE(total_fee, 0.0) AS value" in fee_sql
-    assert "global_maker_fee" in fee_sql
-    assert "local_maker_fee" in fee_sql
-    assert "WHEN 'global' THEN fc.global_maker_fee" in fee_sql
-    assert "WHEN " in fee_sql and "e.payload->>'fee'" in fee_sql
+    assert "global_maker_fee" not in fee_sql
+    assert "local_maker_fee" not in fee_sql
+    assert "fee_config" not in fee_sql
+    assert "e.payload->>'fee'" in fee_sql
 
 
 def test_frame_readiness_legends_include_readiness_field() -> None:

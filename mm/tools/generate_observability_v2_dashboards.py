@@ -3053,7 +3053,7 @@ def fill_spread_pnl() -> dict[str, Any]:
         _panel(8, "Global filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume", role="global"), x=12, y=8, w=6, h=5),
         _panel(9, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=18, y=8, w=6, h=5, unit="currency"),
         _panel(10, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=0, y=13, w=6, h=5, unit="currency"),
-        _panel(11, "Total fill fee (reported/estimated)", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=6, y=13, w=6, h=5, unit="currency"),
+        _panel(11, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=6, y=13, w=6, h=5, unit="currency"),
         _panel(12, "Total delta cash", "stat", PG_DS, _portfolio_interval_delta_sql("delta_cash"), x=0, y=18, w=6, h=5, unit="currency"),
         _panel(13, "Total delta inventory", "stat", PG_DS, _portfolio_interval_delta_sql("delta_inventory"), x=6, y=18, w=6, h=5),
         _panel(14, "Total delta wealth", "stat", PG_DS, _portfolio_interval_delta_sql("delta_wealth"), x=12, y=18, w=6, h=5, unit="currency"),
@@ -4266,37 +4266,14 @@ role_exchanges AS (
   FROM latest_diagnostics d
   WHERE d.exchange IS NOT NULL
 ),
-fee_config AS (
-  SELECT
-    COALESCE(
-      {_numeric_sql("d.payload #>> ARRAY['optimizer','config','execution_model','local_maker_fee']", default="NULL")},
-      {_numeric_sql("d.payload #>> ARRAY['optimizer','config','execution_model','maker_fee']", default="NULL")},
-      0.0
-    ) AS local_maker_fee,
-    COALESCE(
-      {_numeric_sql("d.payload #>> ARRAY['optimizer','config','execution_model','global_maker_fee']", default="NULL")},
-      {_numeric_sql("d.payload #>> ARRAY['optimizer','config','execution_model','maker_fee']", default="NULL")},
-      0.0
-    ) AS global_maker_fee
-  FROM latest_diagnostics d
-),
 fills AS (
   SELECT
     {side} AS side,
     {qty} AS qty,
     {price} AS price,
-    CASE
-      WHEN {fee} > 0.0 THEN {fee}
-      WHEN {price} IS NOT NULL AND {qty} > 0.0 THEN
-        ABS({price} * {qty}) * CASE COALESCE(r.role, 'local')
-          WHEN 'global' THEN fc.global_maker_fee
-          ELSE fc.local_maker_fee
-        END
-      ELSE 0.0
-    END AS fee
+    {fee} AS fee
   FROM mm_events e
   LEFT JOIN role_exchanges r ON r.role_exchange = {exchange}
-  CROSS JOIN fee_config fc
   WHERE e.topic LIKE 'private:state:%:fills'
     AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND {symbol} = ANY(ARRAY[${{symbol:sqlstring}}]::text[])

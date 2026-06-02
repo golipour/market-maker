@@ -1,6 +1,6 @@
 {
   "venues": {
-    "local": {
+    "global": {
       "exchange": "nobitex",
       "symbol": "USDT_IRT",
       "mode": "rest",
@@ -8,7 +8,7 @@
       "trades_limit": 200,
       "poll_interval_ms": 1000
     },
-    "global": {
+    "local": {
       "exchange": "wallex",
       "symbol": "USDT_IRT",
       "mode": "rest",
@@ -20,14 +20,14 @@
   "interval_ms": 10000,
   "max_global_lag_ms": 2000,
   "global_grace_ms": 250,
-  "local_private": {
+  "global_private": {
     "mode": "rest",
     "api_token_env": "NOBITEX_API_TOKEN",
     "poll_interval_ms": 10000,
     "enable_execution": true,
     "fill_event_source": "exchange_fill_history"
   },
-  "global_private": {
+  "local_private": {
     "mode": "rest",
     "api_token_env": "WALLEX_API_TOKEN",
     "poll_interval_ms": 10000,

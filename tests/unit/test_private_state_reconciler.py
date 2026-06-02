@@ -12,6 +12,8 @@ from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateState
 from mm.exchanges.factory import select_private_state_adapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
+from mm.exchanges.wallex import private_rest as wallex_private_rest
+from mm.exchanges.wallex.private_state import WallexRestPrivateStateAdapter
 from mm.private_state.reconciler import PrivateStateReconciler
 from mm.private_state.store import PrivateStateStore
 
@@ -225,6 +227,124 @@ def test_nobitex_irt_fill_normalizes_price_and_fee_from_rial_to_toman() -> None:
     assert fill is not None
     assert fill.price == pytest.approx(1_000_000.0)
     assert fill.fee == pytest.approx(500.0)
+
+
+def test_wallex_fill_detail_normalizes_fee_to_quote_units() -> None:
+    adapter = WallexRestPrivateStateAdapter("USDT_IRT", api_token="token")
+
+    buy_fill = adapter.normalize_fill(
+        {
+            "clientOrderId": "buy-1",
+            "side": "BUY",
+            "fills": [
+                {
+                    "price": "173193",
+                    "quantity": "0.64",
+                    "fee": "0.00192",
+                    "feeAsset": "USDT",
+                    "sum": "110843.52",
+                }
+            ],
+        },
+        timestamp_ms=1000,
+    )
+    sell_fill = adapter.normalize_fill(
+        {
+            "clientOrderId": "sell-1",
+            "side": "SELL",
+            "fills": [
+                {
+                    "price": "173209",
+                    "quantity": "0.6",
+                    "fee": "259.8135",
+                    "feeAsset": "TMN",
+                    "sum": "103925.4",
+                }
+            ],
+        },
+        timestamp_ms=1000,
+    )
+
+    assert buy_fill is not None
+    assert buy_fill.price == pytest.approx(173193.0)
+    assert buy_fill.qty == pytest.approx(0.64)
+    assert buy_fill.fee == pytest.approx(0.00192 * 173193.0)
+    assert sell_fill is not None
+    assert sell_fill.fee == pytest.approx(259.8135)
+
+
+def test_rest_fill_normalizer_emits_fee_delta_once() -> None:
+    adapter = RestPollingPrivateStateAdapter("nobitex", "BTC_IRT", api_token="token")
+
+    first = adapter.normalize_fill(
+        {"id": "o1", "side": "buy", "executedQty": "0.5", "executedPrice": "100.0", "fee": "2.0"},
+        timestamp_ms=1000,
+    )
+    second = adapter.normalize_fill(
+        {"id": "o1", "side": "buy", "executedQty": "0.8", "executedPrice": "100.0", "fee": "3.0"},
+        timestamp_ms=1001,
+    )
+    duplicate = adapter.normalize_fill(
+        {"id": "o1", "side": "buy", "executedQty": "0.8", "executedPrice": "100.0", "fee": "3.0"},
+        timestamp_ms=1002,
+    )
+
+    assert first is not None
+    assert first.qty == pytest.approx(0.5)
+    assert first.fee == pytest.approx(2.0)
+    assert second is not None
+    assert second.qty == pytest.approx(0.3)
+    assert second.fee == pytest.approx(1.0)
+    assert duplicate is None
+
+
+def test_wallex_filled_order_history_fetches_detail_when_fills_missing(monkeypatch) -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    def fake_get_auth(path, api_token, params=None):
+        calls.append((path, params))
+        if path == "/v1/account/orders":
+            return {
+                "success": True,
+                "result": {
+                    "orders": [
+                        {
+                            "clientOrderId": "order-1",
+                            "status": "FILLED",
+                            "executedQty": "0.6",
+                            "fills": None,
+                        }
+                    ]
+                },
+            }
+        if path == "/v1/account/orders/order-1":
+            return {
+                "success": True,
+                "result": {
+                    "clientOrderId": "order-1",
+                    "status": "FILLED",
+                    "executedQty": "0.6",
+                    "fee": "259.8135",
+                    "fills": [{"fee": "259.8135", "feeAsset": "TMN"}],
+                },
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(wallex_private_rest, "_get_auth", fake_get_auth)
+
+    rows = wallex_private_rest.list_filled_orders("USDT_IRT", "token")
+
+    assert rows == [
+        {
+            "clientOrderId": "order-1",
+            "status": "FILLED",
+            "executedQty": "0.6",
+            "fee": "259.8135",
+            "fills": [{"fee": "259.8135", "feeAsset": "TMN"}],
+        }
+    ]
+    assert calls[0] == ("/v1/account/orders", {"market": "USDTTMN", "per_page": 100})
+    assert calls[1] == ("/v1/account/orders/order-1", None)
 
 
 def test_private_state_store_apply_balance_pops_zero() -> None:

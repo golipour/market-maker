@@ -197,12 +197,42 @@ def list_filled_orders(symbol: str, api_token: str | None) -> list[dict]:
                 rows.extend(row for row in value if isinstance(row, dict))
     elif isinstance(result, list):
         rows.extend(row for row in result if isinstance(row, dict))
-    return [
+    filled_rows = [
         row
         for row in rows
         if str(row.get("status", "")).upper() in {"FILLED", "PARTIALLY_FILLED", "PARTIAL_FILLED"}
         or _safe_float(row.get("executedQty", row.get("filledAmount", 0.0))) > 0.0
     ]
+    enriched: list[dict] = []
+    for row in filled_rows:
+        fills = row.get("fills")
+        if fills:
+            enriched.append(row)
+            continue
+        client_order_id = str(row.get("clientOrderId") or row.get("client_order_id") or "").strip()
+        if not client_order_id:
+            enriched.append(row)
+            continue
+        try:
+            detail = get_order(client_order_id, api_token)
+        except Exception:
+            enriched.append(row)
+            continue
+        enriched.append(detail if detail else row)
+    return enriched
+
+
+def get_order(client_order_id: str, api_token: str | None) -> dict:
+    if not api_token:
+        return {}
+    order_id = str(client_order_id or "").strip()
+    if not order_id:
+        return {}
+    out = _get_auth(f"/v1/account/orders/{order_id}", api_token)
+    if not isinstance(out, dict) or not out.get("success"):
+        return {}
+    result = out.get("result") or {}
+    return result if isinstance(result, dict) else {}
 
 
 def place_market_order(
