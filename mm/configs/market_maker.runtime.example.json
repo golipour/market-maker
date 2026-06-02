@@ -44,9 +44,7 @@
       "planner": "replace"
     },
     "global": {
-      "planner": "replace",
-      "max_order_qty": 0.5,
-      "max_quote_distance": 10.0
+      "planner": "replace"
     }
   },
   "bus": {

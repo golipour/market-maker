@@ -2456,11 +2456,10 @@ def model_quality() -> dict[str, Any]:
 
 def optimizer_diagnostics() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Optimizer objective, contribution fractions, timing, and gradient health.", y=0),
+        _text(1, "Scope", "Optimizer objective, contribution fractions, and timing.", y=0),
         _panel(2, "Objective value", "timeseries", PG_DS, _optimizer_objective_sql(), x=0, y=3, w=24, unit="sci", decimals=4),
         _panel(3, "Contribution fractions", "timeseries", PG_DS, _optimizer_contrib_sql(), x=0, y=11),
         _panel(4, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11),
-        _panel(5, "Nonfinite counts", "timeseries", PG_DS, _optimizer_gradients_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 

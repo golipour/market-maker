@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Optimizer objective, contribution fractions, timing, and gradient health.",
+        "content": "Optimizer objective, contribution fractions, and timing.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -150,52 +150,6 @@
         }
       ],
       "title": "Optimizer timings",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 19
-      },
-      "id": 5,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','gradients'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Nonfinite counts",
       "type": "timeseries",
       "options": {
         "legend": {
