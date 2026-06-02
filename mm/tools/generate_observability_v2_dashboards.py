@@ -450,13 +450,13 @@ def _templating() -> list[dict[str, Any]]:
         _query_var(
             "exchange",
             "Exchange",
-            f"SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL AND event_type IN ({MM_SCOPE_EVENT_TYPES}) ORDER BY 1",
+            _exchange_var_query(),
             multi=True,
         ),
         _query_var(
             "symbol",
             "Symbol",
-            f"SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL AND event_type IN ({MM_SCOPE_EVENT_TYPES}) ORDER BY 1",
+            _symbol_var_query(),
             multi=True,
         ),
         _query_var(
@@ -474,6 +474,52 @@ def _templating() -> list[dict[str, Any]]:
             _interval_ms_query(),
         ),
     ]
+
+
+def _exchange_var_query() -> str:
+    return f"""SELECT DISTINCT exchange
+FROM (
+  SELECT exchange
+  FROM mm_events
+  WHERE exchange IS NOT NULL
+    AND event_type IN ({MM_SCOPE_EVENT_TYPES})
+  UNION ALL
+  SELECT gates.key AS exchange
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)) AS gates(key, value)
+  WHERE e.event_type = 'ControllerDiagnostics'
+    AND gates.key IS NOT NULL
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+) x
+WHERE exchange IS NOT NULL AND exchange <> ''
+ORDER BY 1"""
+
+
+def _symbol_var_query() -> str:
+    return f"""SELECT DISTINCT symbol
+FROM (
+  SELECT symbol
+  FROM mm_events
+  WHERE symbol IS NOT NULL
+    AND event_type IN ({MM_SCOPE_EVENT_TYPES})
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+) x
+WHERE symbol IS NOT NULL AND symbol <> ''
+ORDER BY 1"""
 
 
 def _query_var(name: str, label: str, query: str, *, multi: bool = False, refresh: int = 1) -> dict[str, Any]:
