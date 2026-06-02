@@ -1823,7 +1823,10 @@ def _latest_action_pipeline_stage_orders_sql(
     field: str = "orders",
     reason: str | None = None,
     include_reason_in_series: bool = False,
+    role: str | None = None,
 ) -> str:
+    if role is not None and role not in {"local", "global"}:
+        raise ValueError(f"unknown action pipeline role: {role}")
     side = _side_sql("o.value->>'side'")
     series = side
     if include_reason_in_series:
@@ -1835,8 +1838,20 @@ def _latest_action_pipeline_stage_orders_sql(
     reason_filter = ""
     if reason is not None:
         reason_filter = f"\n    AND COALESCE(o.value->>'reason', '') = '{reason}'"
+    role_filter = ""
+    axis_role_filter = ""
+    if role is not None:
+        role_filter = f"""
+    AND COALESCE(o.value->>'exchange', '') IN (
+      SELECT exchange FROM role_exchanges WHERE role = '{role}'
+    )"""
+        axis_role_filter = f"""
+    AND COALESCE(axis_o.value->>'exchange', '') IN (
+      SELECT exchange FROM role_exchanges WHERE role = '{role}'
+    )"""
     return f"""WITH latest AS (
-  SELECT e.payload
+  SELECT e.exchange,
+         e.payload
   FROM mm_events e
   WHERE e.topic = '${{diagnostics_topic}}'
     AND e.event_type = 'ControllerDiagnostics'
@@ -1851,6 +1866,20 @@ def _latest_action_pipeline_stage_orders_sql(
   ORDER BY e.ts DESC
   LIMIT 1
 ),
+role_exchanges AS (
+  SELECT 'local'::text AS role,
+         l.exchange AS exchange
+  FROM latest l
+  WHERE l.exchange IS NOT NULL
+  UNION
+  SELECT gates.value->>'role' AS role,
+         gates.key AS exchange
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(l.payload #> ARRAY['execution_gates', 'venue_gates'], '{{}}'::jsonb)
+  ) AS gates(key, value)
+  WHERE gates.value->>'role' IN ('local', 'global')
+),
 orders AS (
   SELECT {series} AS series,
          {price} AS price,
@@ -1860,7 +1889,7 @@ orders AS (
     COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', '{field}'], '[]'::jsonb)
   ) AS o(value)
   WHERE {side} IN ('bid', 'ask')
-    AND {price} IS NOT NULL{reason_filter}
+    AND {price} IS NOT NULL{reason_filter}{role_filter}
 ),
 axis_points AS (
   SELECT {axis_price} AS price,
@@ -1869,7 +1898,7 @@ axis_points AS (
   CROSS JOIN LATERAL jsonb_array_elements(
     COALESCE(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders'], '[]'::jsonb)
   ) AS axis_o(value)
-  WHERE {axis_price} IS NOT NULL
+  WHERE {axis_price} IS NOT NULL{axis_role_filter}
 ),
 axis_frame AS (
   SELECT MIN(price) AS price_min,
@@ -1907,6 +1936,101 @@ UNION ALL
 SELECT series, price, value
 FROM axis_rows
 ORDER BY price, series"""
+
+
+def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str) -> str:
+    if role not in {"local", "global"}:
+        raise ValueError(f"unknown action pipeline depth role: {role}")
+    side = _side_sql("o.value->>'side'")
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
+    state_mid_path = "global_mid" if role == "global" else "mid"
+    clean_bid = _numeric_sql(
+        f"l.payload #>> ARRAY['{clean_payload_path}', 'bids', '0', 'price']",
+        default="NULL",
+    )
+    clean_ask = _numeric_sql(
+        f"l.payload #>> ARRAY['{clean_payload_path}', 'asks', '0', 'price']",
+        default="NULL",
+    )
+    return f"""WITH latest AS (
+  SELECT e.exchange,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{diagnostics_topic}}'
+    AND e.event_type = 'ControllerDiagnostics'
+    AND (
+      '${{target_frame_mode}}' = 'latest'
+      OR e.event_id = ${{target_frame_event_id:sqlstring}}
+    )
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+role_exchanges AS (
+  SELECT 'local'::text AS role,
+         l.exchange AS exchange
+  FROM latest l
+  WHERE l.exchange IS NOT NULL
+  UNION
+  SELECT gates.value->>'role' AS role,
+         gates.key AS exchange
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(l.payload #> ARRAY['execution_gates', 'venue_gates'], '{{}}'::jsonb)
+  ) AS gates(key, value)
+  WHERE gates.value->>'role' IN ('local', 'global')
+),
+selected AS (
+  SELECT COALESCE(
+           {_numeric_sql(f"l.payload #>> ARRAY['state', '{state_mid_path}']", default="NULL")},
+           ({clean_bid} + {clean_ask}) / 2.0,
+           0.0
+         ) AS mid,
+         GREATEST({_numeric_sql("'${spread_max}'", default="100.0")}, 1.0) AS spread_max
+  FROM latest l
+),
+bid_levels AS (
+  SELECT {price} AS price,
+         {qty} AS qty
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', 'orders'], '[]'::jsonb)
+  ) AS o(value)
+  WHERE {side} = 'bid'
+    AND {price} IS NOT NULL
+    AND COALESCE(o.value->>'exchange', '') IN (
+      SELECT exchange FROM role_exchanges WHERE role = '{role}'
+    )
+),
+ask_levels AS (
+  SELECT {price} AS price,
+         {qty} AS qty
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', 'orders'], '[]'::jsonb)
+  ) AS o(value)
+  WHERE {side} = 'ask'
+    AND {price} IS NOT NULL
+    AND COALESCE(o.value->>'exchange', '') IN (
+      SELECT exchange FROM role_exchanges WHERE role = '{role}'
+    )
+),
+{_orderbook_depth_plot_ctes()}
+SELECT 'bid'::text AS side,
+       spread,
+       value
+FROM bid_step_plot
+UNION ALL
+SELECT 'ask'::text AS side,
+       spread,
+       value
+FROM ask_step_plot
+ORDER BY side, spread"""
 
 
 def _stem_raw_to_target_sql() -> str:
@@ -2404,30 +2528,55 @@ def orderbook_depth() -> dict[str, Any]:
         _xy_depth_panel(3, "Global orderbook depth", _orderbook_depth_sql("raw", role="global"), x=12, y=3, w=12),
         _xy_depth_panel(4, "Local clean orderbook depth", _orderbook_depth_sql("clean", role="local"), x=0, y=11, w=12),
         _xy_depth_panel(5, "Global clean orderbook depth", _orderbook_depth_sql("clean", role="global"), x=12, y=11, w=12),
-        _xy_depth_panel(6, "Action ladder depth", _orderbook_depth_sql("ladder", role="local"), y=19),
-        _stem_order_qty_price_panel(
-            7,
-            "Marginal ladder",
-            _latest_action_pipeline_stage_orders_sql("ladder"),
-            x=0,
-            y=27,
-            w=24,
-        ),
+        _xy_depth_panel(6, "Local action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role="local"), x=0, y=19, w=12),
+        _xy_depth_panel(7, "Global action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role="global"), x=12, y=19, w=12),
         _stem_order_qty_price_panel(
             8,
-            "After venue rounding",
-            _latest_action_pipeline_stage_orders_sql("rules_valid"),
+            "Local marginal ladder",
+            _latest_action_pipeline_stage_orders_sql("ladder", role="local"),
             x=0,
-            y=37,
-            w=24,
+            y=27,
+            w=12,
         ),
         _stem_order_qty_price_panel(
             9,
-            "Exchange-accepted placements",
-            _latest_action_pipeline_stage_orders_sql("router_accepted"),
+            "Global marginal ladder",
+            _latest_action_pipeline_stage_orders_sql("ladder", role="global"),
+            x=12,
+            y=27,
+            w=12,
+        ),
+        _stem_order_qty_price_panel(
+            10,
+            "Local after venue rounding",
+            _latest_action_pipeline_stage_orders_sql("rules_valid", role="local"),
+            x=0,
+            y=37,
+            w=12,
+        ),
+        _stem_order_qty_price_panel(
+            11,
+            "Global after venue rounding",
+            _latest_action_pipeline_stage_orders_sql("rules_valid", role="global"),
+            x=12,
+            y=37,
+            w=12,
+        ),
+        _stem_order_qty_price_panel(
+            12,
+            "Local exchange-accepted placements",
+            _latest_action_pipeline_stage_orders_sql("router_accepted", role="local"),
             x=0,
             y=47,
-            w=24,
+            w=12,
+        ),
+        _stem_order_qty_price_panel(
+            13,
+            "Global exchange-accepted placements",
+            _latest_action_pipeline_stage_orders_sql("router_accepted", role="global"),
+            x=12,
+            y=47,
+            w=12,
         ),
     ]
     return _dashboard(

@@ -99,12 +99,12 @@ class ExecutionSyncReport:
         for key, count in other.venue_rejection_counts.items():
             merged_rejections[key] = merged_rejections.get(key, 0) + int(count)
         return ExecutionSyncReport(
-            target=_merge_stage_reports(self.target, other.target),
-            kept=_merge_stage_reports(self.kept, other.kept),
-            canceled=_merge_stage_reports(self.canceled, other.canceled),
-            to_place=_merge_stage_reports(self.to_place, other.to_place),
-            limit_valid=_merge_stage_reports(self.limit_valid, other.limit_valid),
-            accepted=_merge_stage_reports(self.accepted, other.accepted),
+            target=merge_stage_reports(self.target, other.target),
+            kept=merge_stage_reports(self.kept, other.kept),
+            canceled=merge_stage_reports(self.canceled, other.canceled),
+            to_place=merge_stage_reports(self.to_place, other.to_place),
+            limit_valid=merge_stage_reports(self.limit_valid, other.limit_valid),
+            accepted=merge_stage_reports(self.accepted, other.accepted),
             venue_rejection_counts=merged_rejections,
             cancel_count=self.cancel_count + other.cancel_count,
             placed=self.placed or other.placed,
@@ -245,7 +245,9 @@ def apply_execution_stages_to_pipeline(
     )
 
 
-def _merge_stage_reports(left: ActionStageReport, right: ActionStageReport) -> ActionStageReport:
+def merge_stage_reports(left: ActionStageReport, right: ActionStageReport) -> ActionStageReport:
+    """Combine same-stage diagnostics from multiple venue routes."""
+
     rejections = dict(left.rejection_counts)
     for key, count in right.rejection_counts.items():
         rejections[key] = rejections.get(key, 0) + int(count)

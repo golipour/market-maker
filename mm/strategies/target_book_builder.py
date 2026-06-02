@@ -15,7 +15,7 @@ from mm.core.models.target_book import (
     VenueTargetBook,
 )
 from mm.core.order_constraints import OrderConstraints, build_orders_from_sigmoid_with_report
-from mm.execution.plan import ActionPipelineReport, summarize_orders
+from mm.execution.plan import ActionPipelineReport, merge_stage_reports, summarize_orders
 
 
 def _order_to_target_order(order: Order) -> TargetOrder:
@@ -83,6 +83,7 @@ def build_joint_target_book_from_sigmoid(
         constraints=local_constraints,
         continuous=continuous,
     )
+    action_ladder = list(ladder)
     local_book = build_venue_target_book_from_orders(
         actor_id=actor_id,
         orders=local_orders,
@@ -96,13 +97,20 @@ def build_joint_target_book_from_sigmoid(
         and global_constraints is not None
         and global_sigmoid_action is not None
     ):
-        global_orders, _global_pipeline, _ = build_orders_from_sigmoid_with_report(
+        global_orders, global_pipeline, global_ladder = build_orders_from_sigmoid_with_report(
             actor_id=actor_id,
             event=global_event,
             sigmoid_action=global_sigmoid_action,
             orderbook_grid=orderbook_grid,
             constraints=global_constraints,
         )
+        action_ladder.extend(global_ladder)
+        pipeline.ladder = merge_stage_reports(pipeline.ladder, global_pipeline.ladder)
+        pipeline.venue_quantized = merge_stage_reports(
+            pipeline.venue_quantized,
+            global_pipeline.venue_quantized,
+        )
+        pipeline.capped = merge_stage_reports(pipeline.capped, global_pipeline.capped)
         global_book = build_venue_target_book_from_orders(
             actor_id=actor_id,
             orders=global_orders,
@@ -137,7 +145,7 @@ def build_joint_target_book_from_sigmoid(
             "global_order_count": len(global_book.orders) if global_book is not None else 0,
         },
     )
-    return joint_book, pipeline, ladder, local_orders
+    return joint_book, pipeline, action_ladder, local_orders
 
 
 def local_constraints_from_spec(

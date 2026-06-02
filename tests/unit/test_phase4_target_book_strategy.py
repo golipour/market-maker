@@ -36,18 +36,18 @@ from mm.strategies.target_book_builder import (
 from tests.unit.conftest import joint_frame_for_input
 
 
-def _market_event() -> MarketEvent:
+def _market_event(*, exchange: str = "nobitex", symbol: str = "BTC_IRT") -> MarketEvent:
     book = RawOrderbook(
-        exchange="nobitex",
-        symbol="BTC_IRT",
+        exchange=exchange,
+        symbol=symbol,
         timestamp_ms=2_000,
         bids=(PriceLevel(100.0, 5.0),),
         asks=(PriceLevel(101.0, 4.0),),
         is_snapshot=True,
     )
     return MarketEvent(
-        exchange="nobitex",
-        symbol="BTC_IRT",
+        exchange=exchange,
+        symbol=symbol,
         interval_ms=1000,
         t_start_ms=1000,
         t_end_ms=2000,
@@ -153,6 +153,35 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert pipeline.target_book.order_count == len(local_orders)
     assert pipeline.target_book.orders
     assert pipeline.venue_quantized.order_count == 0
+
+
+def test_build_joint_target_book_from_sigmoid_merges_global_action_diagnostics() -> None:
+    joint_book, pipeline, ladder, local_orders = build_joint_target_book_from_sigmoid(
+        actor_id="actor-1",
+        local_event=_market_event(exchange="nobitex", symbol="BTC_IRT"),
+        sigmoid_action=_sigmoid_action(bid_qty=1.0, ask_qty=0.5),
+        orderbook_grid=_grid(),
+        local_constraints=_constraints(),
+        mode="liquidity_sourcing",
+        global_event=_market_event(exchange="binance", symbol="BTC_USDT"),
+        global_constraints=OrderConstraints.from_spec(
+            InstrumentSpec(
+                exchange="binance",
+                symbol="BTC_USDT",
+                base_asset="BTC",
+                quote_asset="USDT",
+            ),
+            max_orders_per_side=4,
+        ),
+        global_sigmoid_action=_sigmoid_action(bid_qty=0.25, ask_qty=0.75),
+    )
+
+    assert joint_book.global_ is not None
+    assert len(joint_book.local.orders) == len(local_orders)
+    assert len(ladder) > len(local_orders)
+    assert pipeline.target_book.order_count == len(joint_book.local.orders) + len(joint_book.global_.orders)
+    assert {order["exchange"] for order in pipeline.ladder.orders} == {"nobitex", "binance"}
+    assert {order["exchange"] for order in pipeline.capped.orders} == {"nobitex", "binance"}
 
 
 def test_target_book_builder_does_not_apply_venue_minimums() -> None:
