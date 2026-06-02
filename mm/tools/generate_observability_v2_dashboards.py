@@ -1125,6 +1125,152 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
+def _execution_error_event_filter(alias: str = "e") -> str:
+    return f"""{alias}.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND (
+    {alias}.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    OR {alias}.symbol IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE({alias}.payload->'orders', '[]'::jsonb)) AS ord(value)
+      WHERE ord.value->>'symbol' = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    )
+  )
+  AND $__timeFilter({alias}.ts)"""
+
+
+def _execution_error_totals_sql() -> str:
+    return f"""SELECT
+  CASE e.event_type
+    WHEN 'PlaceOrdersFailed' THEN 'place failed'
+    WHEN 'CancelOrdersFailed' THEN 'cancel failed'
+    WHEN 'OrderValidationRejected' THEN 'validation rejected'
+    WHEN 'ExecutionSyncFailed' THEN 'sync failed'
+    ELSE e.event_type
+  END AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+  AND {_execution_error_event_filter()}
+GROUP BY 1
+ORDER BY 2 DESC"""
+
+
+def _execution_error_by_exchange_sql() -> str:
+    return f"""SELECT
+  e.exchange || ' ' ||
+  CASE e.event_type
+    WHEN 'PlaceOrdersFailed' THEN 'place failed'
+    WHEN 'CancelOrdersFailed' THEN 'cancel failed'
+    WHEN 'OrderValidationRejected' THEN 'validation rejected'
+    WHEN 'ExecutionSyncFailed' THEN 'sync failed'
+    ELSE e.event_type
+  END AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+  AND {_execution_error_event_filter()}
+GROUP BY 1
+ORDER BY 2 DESC"""
+
+
+def _execution_error_flow_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  metric,
+  COUNT(*)::double precision AS value
+FROM (
+  SELECT e.ts,
+         e.payload,
+         e.event_type,
+         CASE e.event_type
+           WHEN 'PlaceOrdersRequested' THEN e.exchange || ' place requested'
+           WHEN 'PlaceOrdersAccepted' THEN e.exchange || ' place accepted'
+           WHEN 'PlaceOrdersFailed' THEN e.exchange || ' place failed'
+           WHEN 'CancelOrdersFailed' THEN e.exchange || ' cancel failed'
+           WHEN 'OrderValidationRejected' THEN e.exchange || ' validation rejected'
+           ELSE e.exchange || ' sync failed'
+         END AS metric
+  FROM mm_events e
+  WHERE e.event_type IN ('PlaceOrdersRequested', 'PlaceOrdersAccepted', 'PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+    AND {_execution_error_event_filter()}
+) e
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT scope.exchange || ' ' || state.state AS metric
+  FROM (
+    {_mm_scope_pairs_sql()}
+  ) AS scope
+  CROSS JOIN (
+    VALUES ('place requested'), ('place accepted'), ('place failed'), ('cancel failed'), ('validation rejected'), ('sync failed')
+  ) AS state(state)"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _execution_error_reason_step_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    data_sql = f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  e.exchange || ' ' ||
+  CASE
+    WHEN e.event_type = 'OrderValidationRejected' THEN COALESCE(NULLIF(e.payload->>'reason', ''), 'unknown')
+    WHEN e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'ExecutionSyncFailed') THEN
+      COALESCE(NULLIF(e.payload->>'error', ''), 'unknown')
+    ELSE 'unknown'
+  END AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+  AND {_execution_error_event_filter()}
+GROUP BY 1, 2"""
+    metrics_sql = f"""  SELECT scope.exchange || ' unknown' AS metric
+  FROM (
+    {_mm_scope_pairs_sql()}
+  ) AS scope"""
+    return _zero_filled_step_sql(data_sql, metrics_sql)
+
+
+def _execution_error_message_table_sql() -> str:
+    return f"""SELECT
+  MAX(e.ts) AS last_seen,
+  e.exchange,
+  CASE e.event_type
+    WHEN 'PlaceOrdersFailed' THEN 'place'
+    WHEN 'CancelOrdersFailed' THEN 'cancel'
+    WHEN 'OrderValidationRejected' THEN 'validation'
+    WHEN 'ExecutionSyncFailed' THEN 'sync'
+    ELSE e.event_type
+  END AS operation,
+  COALESCE(NULLIF(e.payload->>'error', ''), NULLIF(e.payload->>'reason', ''), 'unknown') AS error_or_reason,
+  COALESCE(NULLIF(e.payload->>'message', ''), NULLIF(e.payload->>'reason', ''), 'unknown') AS message,
+  COUNT(*) AS count
+FROM mm_events e
+WHERE e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+  AND {_execution_error_event_filter()}
+GROUP BY 2, 3, 4, 5
+ORDER BY count DESC, last_seen DESC
+LIMIT 100"""
+
+
+def _recent_execution_errors_sql() -> str:
+    return f"""SELECT
+  e.ts,
+  e.exchange,
+  COALESCE(e.symbol, ord.value->>'symbol') AS symbol,
+  e.event_type,
+  COALESCE(NULLIF(e.payload->>'error', ''), NULLIF(e.payload->>'reason', ''), 'unknown') AS error_or_reason,
+  COALESCE(NULLIF(e.payload->>'message', ''), NULLIF(e.payload->>'reason', ''), '') AS message,
+  COALESCE(e.payload->>'side', ord.value->>'side') AS side,
+  COALESCE(e.payload->>'price', ord.value->>'price') AS price,
+  COALESCE(e.payload->>'qty', ord.value->>'qty') AS qty
+FROM mm_events e
+LEFT JOIN LATERAL jsonb_array_elements(COALESCE(e.payload->'orders', '[{{}}]'::jsonb)) AS ord(value) ON TRUE
+WHERE e.event_type IN ('PlaceOrdersFailed', 'CancelOrdersFailed', 'OrderValidationRejected', 'ExecutionSyncFailed')
+  AND {_execution_error_event_filter()}
+ORDER BY e.ts DESC
+LIMIT 200"""
+
+
 def _operator_order_flow_step_sql() -> str:
     target_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     event_step = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
@@ -2767,6 +2913,40 @@ def risk_execution() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-risk-execution", "MM Observability v2 / 06 Risk And Execution", panels, tags=["risk", "execution"])
 
 
+def execution_errors() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Structured execution failures from persisted events: adapter/place/cancel failures, validation rejects, and sync failures. Use the tables to inspect exact exchange messages.",
+            y=0,
+        ),
+        _panel(2, "Execution error totals", "stat", PG_DS, _execution_error_totals_sql(), x=0, y=3, w=8, h=5),
+        _panel(3, "Errors by exchange", "stat", PG_DS, _execution_error_by_exchange_sql(), x=8, y=3, w=8, h=5),
+        _panel(4, "Execution error flow / step", "timeseries", PG_DS, _execution_error_flow_sql(), x=0, y=8, w=24),
+        _panel(5, "Errors by reason / step", "timeseries", PG_DS, _execution_error_reason_step_sql(), x=0, y=16, w=24),
+        _panel(6, "Grouped exchange error messages", "table", PG_DS, _execution_error_message_table_sql(), x=0, y=24, w=24, h=9, fmt="table"),
+        _panel(7, "Recent execution errors", "table", PG_DS, _recent_execution_errors_sql(), x=0, y=33, w=24, h=11, fmt="table"),
+        _panel(
+            8,
+            "Runtime error logs",
+            "logs",
+            LOKI_DS,
+            '{job="market-maker-runtime"} | json |~ "PlaceOrdersFailed|CancelOrdersFailed|OrderValidationRejected|ExecutionSyncFailed|adapter_failure|failed|error"',
+            x=0,
+            y=44,
+            w=24,
+            h=8,
+        ),
+    ]
+    return _dashboard(
+        "mm-obs-v2-execution-errors",
+        "MM Observability v2 / 06B Execution Errors",
+        panels,
+        tags=["execution", "errors"],
+    )
+
+
 def portfolio_pnl() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Inventory, cash, total marked value, wealth, and step economics.", y=0),
@@ -4186,6 +4366,7 @@ def dashboards() -> list[dict[str, Any]]:
         target_order_stems(),
         action_pipeline_side_counts(),
         risk_execution(),
+        execution_errors(),
         portfolio_pnl(),
         fill_spread_pnl(),
         liquidity_sourcing(),

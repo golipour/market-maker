@@ -4,6 +4,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     action_pipeline_side_counts,
     controller_health,
     dashboards,
+    execution_errors,
     fill_spread_pnl,
     liquidity_sourcing,
     market_data_quality,
@@ -31,6 +32,7 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         market_data_quality(),
         controller_health(),
         risk_execution(),
+        execution_errors(),
         action_pipeline(),
         target_order_stems(),
         action_pipeline_side_counts(),
@@ -59,6 +61,8 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Risk reject reasons / step",
         "Gate block reasons / step",
         "Router failures / step",
+        "Execution error flow / step",
+        "Errors by reason / step",
         "Target orders / step",
         "Target quantity / step",
         "Frame order flow / step",
@@ -512,6 +516,42 @@ def test_risk_execution_exposes_order_flow_charts() -> None:
     assert "has orders" in venue_gate_sql
     assert "can sync" in venue_gate_sql
     assert "live" in venue_gate_sql
+
+
+def test_execution_errors_dashboard_surfaces_adapter_and_validation_failures() -> None:
+    dashboard = execution_errors()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected_titles = {
+        "Execution error totals",
+        "Errors by exchange",
+        "Execution error flow / step",
+        "Errors by reason / step",
+        "Grouped exchange error messages",
+        "Recent execution errors",
+        "Runtime error logs",
+    }
+    assert expected_titles.issubset(panels_by_title)
+    assert dashboard["uid"] == "mm-obs-v2-execution-errors"
+    assert dashboard["title"] == "MM Observability v2 / 06B Execution Errors"
+
+    flow_sql = panels_by_title["Execution error flow / step"]["targets"][0]["rawSql"]
+    reason_sql = panels_by_title["Errors by reason / step"]["targets"][0]["rawSql"]
+    grouped_sql = panels_by_title["Grouped exchange error messages"]["targets"][0]["rawSql"]
+    recent_sql = panels_by_title["Recent execution errors"]["targets"][0]["rawSql"]
+    logs_expr = panels_by_title["Runtime error logs"]["targets"][0]["expr"]
+
+    for sql in (flow_sql, reason_sql, grouped_sql, recent_sql):
+        assert "PlaceOrdersFailed" in sql
+        assert "CancelOrdersFailed" in sql
+        assert "OrderValidationRejected" in sql
+        assert "ExecutionSyncFailed" in sql
+
+    assert "PlaceOrdersRequested" in flow_sql
+    assert "PlaceOrdersAccepted" in flow_sql
+    assert "payload->>'message'" in grouped_sql
+    assert "jsonb_array_elements" in recent_sql
+    assert "PlaceOrdersFailed" in logs_expr
 
 
 def test_runtime_overview_uses_per_step_counts_not_per_second_rates() -> None:
