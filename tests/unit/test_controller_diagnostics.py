@@ -335,6 +335,52 @@ def test_sync_status_marks_stale_global_market_not_ready() -> None:
     assert sync_status["ledger_fresh"] is False
 
 
+def test_optimizer_diagnostics_include_execution_model_config() -> None:
+    frame = StrategyInputFrame(local=_market_event(), created_at_ms=1_000)
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    from mm.application.trading_context import trading_state_from_frame
+
+    config = ControllerRuntimeConfig(
+        enabled=True,
+        actor_id="test-runner",
+        observe_only=True,
+        action_start_after_steps=0,
+        risk=RiskRuntimeConfig(enabled=True),
+        execution_model={
+            "kind": "real",
+            "local_maker_fee": 0.0001,
+            "global_maker_fee": 0.0002,
+        },
+        optimizer={
+            "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+            "global": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+        },
+    )
+    ctx = DecisionContext(
+        config=config,
+        frame=frame,
+        clean_frame=frame,
+        trading_state=trading_state_from_frame(
+            frame,
+            runtime.binding,
+            actor_id="test-runner",
+            open_orders={},
+        ),
+        frame_step=2,
+        now_ms=2_500,
+    )
+
+    optimizer = ctx.to_diagnostics().as_payload()["optimizer"]
+
+    assert optimizer["config"]["execution_model"] == {
+        "kind": "real",
+        "local_maker_fee": 0.0001,
+        "global_maker_fee": 0.0002,
+    }
+
+
 def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None:
     from mm.application.orderbook_view import subtract_own_orders
 

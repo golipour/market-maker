@@ -342,15 +342,22 @@ class DecisionContext:
         stage_timing_payload = {f"{stage}_ms": value for stage, value in self.stage_timings_ms.items()}
         if self.latency_ms:
             stage_timing_payload["controller_total_ms"] = max(0.0, float(self.latency_ms))
+        def config_payload(base: dict[str, Any]) -> dict[str, Any]:
+            return {
+                **dict(base),
+                "execution_model": dict(self.config.execution_model or {"kind": "real"}),
+            }
         if decision is None:
             return OptimizerDiagnostics(
-                config={"kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched")},
+                config=config_payload(
+                    {"kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched")}
+                ),
                 timing=stage_timing_payload,
             )
         opt = dict(decision.diagnostics.optimizer)
         if "objective" in opt and isinstance(opt.get("objective"), dict):
             return OptimizerDiagnostics(
-                config=dict(opt.get("config", {})),
+                config=config_payload(dict(opt.get("config", {}))),
                 timing={**dict(opt.get("timing", {})), **stage_timing_payload},
                 objective=dict(opt.get("objective", {})),
                 action=dict(opt.get("action", {})),
@@ -358,7 +365,9 @@ class DecisionContext:
                 rollout=dict(opt.get("rollout", {})),
             )
         return OptimizerDiagnostics(
-            config={"kind": opt.get("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))},
+            config=config_payload(
+                {"kind": opt.get("kind", (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"))}
+            ),
             timing=stage_timing_payload,
             objective={
                 "summary": {
