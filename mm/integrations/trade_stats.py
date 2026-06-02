@@ -683,7 +683,23 @@ class WallexAdapter:
             tick = Decimal(10) ** (-int(tick_decimals))
         except Exception:
             tick = Decimal("1")
-        return {"filters": [{"filterType": "PRICE_FILTER", "tickSize": str(tick)}]}
+        qty_decimals = info.get("stepSize")
+        try:
+            qty_step = Decimal(10) ** (-int(qty_decimals))
+        except Exception:
+            qty_step = Decimal("0.0001")
+        filters = [
+            {"filterType": "PRICE_FILTER", "tickSize": str(tick)},
+            {
+                "filterType": "LOT_SIZE",
+                "stepSize": str(qty_step),
+                "minQty": str(info.get("minQty", "0") or "0"),
+            },
+        ]
+        min_notional = info.get("minNotional")
+        if min_notional is not None and str(min_notional).strip():
+            filters.append({"filterType": "MIN_NOTIONAL", "minNotional": str(min_notional)})
+        return {"filters": filters}
 
     def balances(self, api_token: str | None = None) -> dict[str, dict[str, float]]:
         if not api_token:
@@ -1793,4 +1809,3 @@ def animate_empirical_fill_rates(
     plt.ioff()
     plt.show()
     return dataset
-

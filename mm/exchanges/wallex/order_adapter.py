@@ -11,6 +11,11 @@ from mm.exchanges.shared.order_response import order_id_from_response
 from mm.exchanges.wallex import private_rest
 
 
+def _decimal_payload(value: float) -> str:
+    text = f"{float(value):.10f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 class WallexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
     """Limit place/cancel via ``mm.exchanges.wallex.private_rest``."""
 
@@ -57,15 +62,15 @@ class WallexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
             return private_rest.place_market_order(
                 sym,
                 order.side,
-                str(order.qty),
+                _decimal_payload(order.qty),
                 self.api_token,
                 client_order_id=order.client_order_id,
             )
         return private_rest.place_limit_order(
             sym,
             order.side,
-            str(order.qty),
-            str(order.price),
+            _decimal_payload(order.qty),
+            _decimal_payload(order.price),
             self.api_token,
             client_order_id=order.client_order_id,
         )

@@ -33,7 +33,11 @@ def instrument_spec_from_trade_stats(exchange: str, symbol: str) -> InstrumentSp
 
     price_step_api = float(get_tick_size(symbol, exchange_key))
     qty_step = float(get_lot_size(symbol, exchange_key))
-    limits = _limits_from_exchange_info(get_exchange_info(symbol, exchange_key))
+    limits = _limits_from_exchange_info(
+        get_exchange_info(symbol, exchange_key),
+        exchange=exchange_key,
+        symbol=symbol,
+    )
 
     price_step = _quote_from_api(exchange_key, symbol, price_step_api)
     min_notional = _quote_from_api(
