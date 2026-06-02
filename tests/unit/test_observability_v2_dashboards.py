@@ -115,6 +115,20 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     dashboard = orderbook_depth()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
+    depth_expected = {
+        "Local orderbook depth": (0, 3, "MarketEvent", "m.exchange = ctx.exchange"),
+        "Global orderbook depth": (12, 3, "MarketEvent", "gates.value->>'role' = 'global'"),
+        "Local clean orderbook depth": (0, 11, "cleared_orderbook", "e.exchange AS exchange"),
+        "Global clean orderbook depth": (12, 11, "global_cleared_orderbook", "gates.value->>'role' = 'global'"),
+    }
+    for title, (x, y, expected_sql, role_sql) in depth_expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "xychart"
+        assert panel["gridPos"] == {"h": 8, "w": 12, "x": x, "y": y}
+        sql = panel["targets"][0]["rawSql"]
+        assert expected_sql in sql
+        assert role_sql in sql
+
     expected = {
         "Marginal ladder": (27, "ladder"),
         "After venue rounding": (37, "rules_valid"),

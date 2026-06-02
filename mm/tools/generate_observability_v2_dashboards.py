@@ -99,7 +99,15 @@ def _panel(
     return panel
 
 
-def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
+def _xy_depth_panel(
+    id_: int,
+    title: str,
+    expr: str,
+    *,
+    y: int,
+    x: int = 0,
+    w: int = 24,
+) -> dict[str, Any]:
     return {
         "datasource": PG_DS,
         "fieldConfig": {
@@ -159,7 +167,7 @@ def _xy_depth_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any
                 },
             ],
         },
-        "gridPos": {"h": 8, "w": 24, "x": 0, "y": y},
+        "gridPos": {"h": 8, "w": w, "x": x, "y": y},
         "id": id_,
         "options": {
             "legend": {"calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": True},
@@ -2392,11 +2400,13 @@ def orderbook_depth() -> dict[str, Any]:
             "Depth curves use `price - mid` on the x-axis, so zero is the selected frame mid. Bid and ask depth are shown together on each chart.",
             y=0,
         ),
-        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw"), y=3),
-        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean"), y=11),
-        _xy_depth_panel(4, "Action ladder depth", _orderbook_depth_sql("ladder"), y=19),
+        _xy_depth_panel(2, "Local orderbook depth", _orderbook_depth_sql("raw", role="local"), x=0, y=3, w=12),
+        _xy_depth_panel(3, "Global orderbook depth", _orderbook_depth_sql("raw", role="global"), x=12, y=3, w=12),
+        _xy_depth_panel(4, "Local clean orderbook depth", _orderbook_depth_sql("clean", role="local"), x=0, y=11, w=12),
+        _xy_depth_panel(5, "Global clean orderbook depth", _orderbook_depth_sql("clean", role="global"), x=12, y=11, w=12),
+        _xy_depth_panel(6, "Action ladder depth", _orderbook_depth_sql("ladder", role="local"), y=19),
         _stem_order_qty_price_panel(
-            5,
+            7,
             "Marginal ladder",
             _latest_action_pipeline_stage_orders_sql("ladder"),
             x=0,
@@ -2404,7 +2414,7 @@ def orderbook_depth() -> dict[str, Any]:
             w=24,
         ),
         _stem_order_qty_price_panel(
-            6,
+            8,
             "After venue rounding",
             _latest_action_pipeline_stage_orders_sql("rules_valid"),
             x=0,
@@ -2412,7 +2422,7 @@ def orderbook_depth() -> dict[str, Any]:
             w=24,
         ),
         _stem_order_qty_price_panel(
-            7,
+            9,
             "Exchange-accepted placements",
             _latest_action_pipeline_stage_orders_sql("router_accepted"),
             x=0,
@@ -2709,7 +2719,9 @@ ORDER BY e.ts DESC
 LIMIT {limit}"""
 
 
-def _orderbook_depth_sql(kind: str) -> str:
+def _orderbook_depth_sql(kind: str, *, role: str = "local") -> str:
+    if role not in {"local", "global"}:
+        raise ValueError(f"unknown orderbook depth role: {role}")
     if kind == "raw":
         raw_bid_price = _numeric_sql("m.payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
         raw_ask_price = _numeric_sql("m.payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
@@ -2750,6 +2762,7 @@ def _orderbook_depth_sql(kind: str) -> str:
   FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a
 )"""
     elif kind == "clean":
+        clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
         selected = """selected AS (
   SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload
   FROM ctx
@@ -2757,12 +2770,12 @@ def _orderbook_depth_sql(kind: str) -> str:
         bid_levels = f"""bid_levels AS (
   SELECT {_numeric_sql("b->>'price'", default="NULL")} AS price,
          {_numeric_sql("b->>'qty'")} AS qty
-  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'{clean_payload_path}'->'bids', '[]'::jsonb)) AS b
 )"""
         ask_levels = f"""ask_levels AS (
   SELECT {_numeric_sql("a->>'price'", default="NULL")} AS price,
          {_numeric_sql("a->>'qty'")} AS qty
-  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a
+  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'{clean_payload_path}'->'asks', '[]'::jsonb)) AS a
 )"""
     elif kind == "ladder":
         decision_mid = _numeric_sql("d.payload->>'mid'", default="NULL")
@@ -2804,7 +2817,7 @@ def _orderbook_depth_sql(kind: str) -> str:
 )"""
     else:
         raise ValueError(f"unknown orderbook depth kind: {kind}")
-    return f"""WITH {_orderbook_context_cte()},
+    return f"""WITH {_orderbook_context_cte(role)},
 {selected},
 {bid_levels},
 {ask_levels},
@@ -2821,16 +2834,30 @@ FROM ask_step_plot
 ORDER BY side, spread"""
 
 
-def _orderbook_context_cte() -> str:
+def _orderbook_context_cte(role: str = "local") -> str:
     t_end_ms = _numeric_sql("e.payload->>'t_end_ms'")
-    state_mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
-    clean_bid = _numeric_sql("e.payload #>> ARRAY['cleared_orderbook','bids','0','price']", default="NULL")
-    clean_ask = _numeric_sql("e.payload #>> ARRAY['cleared_orderbook','asks','0','price']", default="NULL")
+    state_mid_path = "global_mid" if role == "global" else "mid"
+    clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
+    state_mid = _numeric_sql(f"e.payload #>> ARRAY['state','{state_mid_path}']", default="NULL")
+    clean_bid = _numeric_sql(f"e.payload #>> ARRAY['{clean_payload_path}','bids','0','price']", default="NULL")
+    clean_ask = _numeric_sql(f"e.payload #>> ARRAY['{clean_payload_path}','asks','0','price']", default="NULL")
     spread_max = _numeric_sql("'${spread_max}'", default="100.0")
+    exchange_expr = "gates.key" if role == "global" else "e.exchange"
+    role_join = ""
+    role_where = ""
+    if role == "global":
+        role_join = """
+  LEFT JOIN LATERAL (
+    SELECT gates.key
+    FROM jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)
+    WHERE gates.value->>'role' = 'global'
+    LIMIT 1
+  ) gates ON TRUE"""
+        role_where = " AND gates.key IS NOT NULL"
     return f"""ctx AS (
   SELECT e.ts AS diag_ts,
          e.payload AS diag_payload,
-         e.exchange,
+         {exchange_expr} AS exchange,
          e.symbol,
          e.actor_id,
          {t_end_ms} AS t_end_ms,
@@ -2840,11 +2867,13 @@ def _orderbook_context_cte() -> str:
              {clean_bid} +
              {clean_ask}
            ) / 2.0,
-           0.0
+         0.0
          ) AS mid,
          GREATEST({spread_max}, 1.0) AS spread_max
   FROM mm_events e
+  {role_join}
   WHERE {_diagnostics_filter()}
+    {role_where}
   ORDER BY e.ts DESC
   LIMIT 1
 )"""

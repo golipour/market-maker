@@ -234,6 +234,11 @@ class DecisionContext:
             execution_gates=execution_gates,
             warnings=tuple(warnings),
             cleared_orderbook=orderbook_snapshot_payload(self.clean_frame.local.orderbook),
+            global_cleared_orderbook=(
+                orderbook_snapshot_payload(self.clean_frame.global_.orderbook)
+                if self.clean_frame.global_ is not None
+                else {}
+            ),
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:

@@ -150,6 +150,7 @@ class ControllerDiagnostics:
     execution_gates: ExecutionGateDiagnostics = field(default_factory=ExecutionGateDiagnostics)
     warnings: tuple[str, ...] = ()
     cleared_orderbook: dict[str, Any] = field(default_factory=dict)
+    global_cleared_orderbook: dict[str, Any] = field(default_factory=dict)
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -175,6 +176,7 @@ class ControllerDiagnostics:
             },
             "warnings": list(self.warnings),
             "cleared_orderbook": dict(self.cleared_orderbook),
+            "global_cleared_orderbook": dict(self.global_cleared_orderbook),
         }
 
 

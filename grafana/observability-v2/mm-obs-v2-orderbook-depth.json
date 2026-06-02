@@ -160,7 +160,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 3
       },
@@ -188,11 +188,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n         0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n    \n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Orderbook depth",
+      "title": "Local orderbook depth",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -346,9 +346,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 11
+        "w": 12,
+        "x": 12,
+        "y": 3
       },
       "id": 3,
       "options": {
@@ -374,11 +374,383 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         gates.key AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n         0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  LEFT JOIN LATERAL (\n    SELECT gates.key\n    FROM jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n    WHERE gates.value->>'role' = 'global'\n    LIMIT 1\n  ) gates ON TRUE\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n     AND gates.key IS NOT NULL\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           (\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
-      "title": "Clean orderbook depth",
+      "title": "Global orderbook depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price - mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n         0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n    \n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Local clean orderbook depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 4,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "lines",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "spread"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price - mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bid"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "Bid"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ask"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "Ask"
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         gates.key AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n         0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  LEFT JOIN LATERAL (\n    SELECT gates.key\n    FROM jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n    WHERE gates.value->>'role' = 'global'\n    LIMIT 1\n  ) gates ON TRUE\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n     AND gates.key IS NOT NULL\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'global_cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'global_cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Global clean orderbook depth",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -536,7 +908,7 @@
         "x": 0,
         "y": 19
       },
-      "id": 4,
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [],
@@ -560,7 +932,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           CASE\n  WHEN trim(COALESCE(d.payload->>'mid', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'mid', ''))::double precision\n  ELSE NULL\nEND,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         d.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT d.payload, d.ts\n    FROM mm_events d\n    WHERE d.event_type = 'StrategyDecision'\n      AND d.exchange = ctx.exchange\n      AND d.symbol = ctx.symbol\n      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id\n      AND d.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(d.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(d.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(d.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, d.ts DESC\n    LIMIT 1\n  ) d ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         e.exchange AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n         0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n    \n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           NULLIF(ctx.mid, 0.0),\n           CASE\n  WHEN trim(COALESCE(d.payload->>'mid', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'mid', ''))::double precision\n  ELSE NULL\nEND,\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         d.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT d.payload, d.ts\n    FROM mm_events d\n    WHERE d.event_type = 'StrategyDecision'\n      AND d.exchange = ctx.exchange\n      AND d.symbol = ctx.symbol\n      AND COALESCE(d.actor_id, d.payload->>'actor_id', '') = ctx.actor_id\n      AND d.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(d.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(d.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(d.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, d.ts DESC\n    LIMIT 1\n  ) d ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'buy'\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'ladder_orders', '[]'::jsonb)) AS o\n  WHERE lower(trim(o->>'side')) = 'sell'\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
           "refId": "A"
         }
       ],
@@ -713,7 +1085,7 @@
         "x": 0,
         "y": 27
       },
-      "id": 5,
+      "id": 7,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -889,7 +1261,7 @@
         "x": 0,
         "y": 37
       },
-      "id": 6,
+      "id": 8,
       "options": {
         "legend": {
           "displayMode": "list",
@@ -1065,7 +1437,7 @@
         "x": 0,
         "y": 47
       },
-      "id": 7,
+      "id": 9,
       "options": {
         "legend": {
           "displayMode": "list",

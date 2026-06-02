@@ -245,7 +245,30 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
 
 
 def test_decision_context_maps_frame_fields() -> None:
+    global_book = RawOrderbook(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        timestamp_ms=2_000,
+        bids=(PriceLevel(99.0, 7.0),),
+        asks=(PriceLevel(102.0, 6.0),),
+        is_snapshot=True,
+    )
+    global_event = MarketEvent(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=1000,
+        t_end_ms=2000,
+        orderbook=global_book,
+        trades=(),
+        buy_volume=1.0,
+        sell_volume=2.0,
+        vwap=0.0,
+        imbalance=0.0,
+        microprice=100.5,
+    )
     frame = StrategyInputFrame(local=_market_event(),
+        global_=global_event,
         global_status="ready",
         global_lag_ms=12,
         created_at_ms=1_000,
@@ -274,6 +297,8 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.frame.frame_age_ms == 1500
     assert diag.cleared_orderbook["bids"] == [{"price": 100.0, "qty": 5.0}]
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
+    assert diag.global_cleared_orderbook["bids"] == [{"price": 99.0, "qty": 7.0}]
+    assert diag.global_cleared_orderbook["asks"] == [{"price": 102.0, "qty": 6.0}]
 
 
 def test_sync_status_marks_stale_global_market_not_ready() -> None:
