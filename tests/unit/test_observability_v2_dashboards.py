@@ -651,16 +651,22 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     expected_positions = {
-        "Filled bid volume": (0, 3, 6),
-        "Average bid fill price": (6, 3, 6),
-        "Spread PnL": (12, 3, 6),
-        "Total fill fee": (18, 3, 6),
-        "Filled ask volume": (0, 8, 6),
-        "Average ask fill price": (6, 8, 6),
-        "Local delta cash": (0, 13, 6),
-        "Local delta inventory": (6, 13, 6),
-        "Local delta wealth": (12, 13, 6),
-        "Local delta price": (18, 13, 6),
+        "Total filled bid volume": (0, 3, 6),
+        "Local filled bid volume": (6, 3, 6),
+        "Global filled bid volume": (12, 3, 6),
+        "Average bid fill price": (18, 3, 6),
+        "Total filled ask volume": (0, 8, 6),
+        "Local filled ask volume": (6, 8, 6),
+        "Global filled ask volume": (12, 8, 6),
+        "Average ask fill price": (18, 8, 6),
+        "Spread PnL": (0, 13, 6),
+        "Total fill fee": (6, 13, 6),
+        "Total delta cash": (0, 18, 6),
+        "Total delta inventory": (6, 18, 6),
+        "Total delta wealth": (12, 18, 6),
+        "Total delta ref price": (18, 18, 6),
+        "Latest total cash": (0, 23, 6),
+        "Latest total inventory": (6, 23, 6),
     }
 
     for title, (x, y, w) in expected_positions.items():
@@ -677,7 +683,17 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         }
         sql = panel["targets"][0]["rawSql"]
         assert "$__timeFilter(e.ts)" in sql
-        if title.startswith("Local delta "):
+        if title.startswith("Latest total "):
+            assert "e.event_type = 'ControllerDiagnostics'" in sql
+            assert "ORDER BY e.ts DESC" in sql
+            assert "LIMIT 1" in sql
+            if title == "Latest total cash":
+                assert "ARRAY['state','local_quote_wallet','total']" in sql
+                assert "ARRAY['state','global_quote_wallet','total']" in sql
+            else:
+                assert "ARRAY['state','local_base_wallet','total']" in sql
+                assert "ARRAY['state','global_base_wallet','total']" in sql
+        elif title.startswith("Total delta "):
             assert "e.event_type = 'ControllerDiagnostics'" in sql
             assert "'delta_cash'" in sql
             assert "'delta_inventory'" in sql
@@ -687,31 +703,55 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
             assert "last_inventory - first_inventory" in sql
             assert "last_wealth - first_wealth" in sql
             assert "last_price - first_price" in sql
+            assert "ARRAY['state','local_quote_wallet','total']" in sql
+            assert "ARRAY['state','global_quote_wallet','total']" in sql
+            assert "ARRAY['optimizer','config','reference_price']" in sql
             expected_metric = {
-                "Local delta cash": "delta_cash",
-                "Local delta inventory": "delta_inventory",
-                "Local delta wealth": "delta_wealth",
-                "Local delta price": "delta_price",
+                "Total delta cash": "delta_cash",
+                "Total delta inventory": "delta_inventory",
+                "Total delta wealth": "delta_wealth",
+                "Total delta ref price": "delta_price",
             }[title]
             assert f"AND metric = '{expected_metric}'" in sql
         else:
             assert "private:state:%:fills" in sql
+            assert "role_exchanges" in sql
             assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
             assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
             assert "SUM(price * qty) FILTER" in sql
             assert "e.payload->>'fee'" in sql
 
-    bid_volume_sql = panels_by_title["Filled bid volume"]["targets"][0]["rawSql"]
-    assert "COALESCE(bid_qty, 0.0) AS value" in bid_volume_sql
+    total_bid_volume_sql = panels_by_title["Total filled bid volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(bid_qty, 0.0) AS value" in total_bid_volume_sql
+    assert "WHERE role = " not in total_bid_volume_sql
 
-    ask_volume_sql = panels_by_title["Filled ask volume"]["targets"][0]["rawSql"]
+    bid_volume_sql = panels_by_title["Local filled bid volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(bid_qty, 0.0) AS value" in bid_volume_sql
+    assert "WHERE role = 'local'" in bid_volume_sql
+
+    global_bid_volume_sql = panels_by_title["Global filled bid volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(bid_qty, 0.0) AS value" in global_bid_volume_sql
+    assert "WHERE role = 'global'" in global_bid_volume_sql
+
+    total_ask_volume_sql = panels_by_title["Total filled ask volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(ask_qty, 0.0) AS value" in total_ask_volume_sql
+    assert "WHERE role = " not in total_ask_volume_sql
+
+    ask_volume_sql = panels_by_title["Local filled ask volume"]["targets"][0]["rawSql"]
     assert "COALESCE(ask_qty, 0.0) AS value" in ask_volume_sql
+    assert "WHERE role = 'local'" in ask_volume_sql
+
+    global_ask_volume_sql = panels_by_title["Global filled ask volume"]["targets"][0]["rawSql"]
+    assert "COALESCE(ask_qty, 0.0) AS value" in global_ask_volume_sql
+    assert "WHERE role = 'global'" in global_ask_volume_sql
 
     bid_avg_sql = panels_by_title["Average bid fill price"]["targets"][0]["rawSql"]
     assert "bid_avg_price AS value" in bid_avg_sql
+    assert "WHERE role = " not in bid_avg_sql
 
     ask_avg_sql = panels_by_title["Average ask fill price"]["targets"][0]["rawSql"]
     assert "ask_avg_price AS value" in ask_avg_sql
+    assert "WHERE role = " not in ask_avg_sql
 
     spread_sql = panels_by_title["Spread PnL"]["targets"][0]["rawSql"]
     assert (

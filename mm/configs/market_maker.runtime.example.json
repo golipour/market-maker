@@ -154,7 +154,7 @@
       "local": {
         "objective_weight": 1.0,
         "return_risk_aversion_beta": 0.1,
-        "inventory_threshold_penalty_weight": 0.001,
+        "inventory_threshold_penalty_weight": 0.00001,
         "cash_threshold": 20000000,
         "inventory_threshold": 20,
         "quote_size_min_per_side": 1.0,

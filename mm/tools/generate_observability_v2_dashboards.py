@@ -2633,16 +2633,22 @@ def fill_spread_pnl() -> dict[str, Any]:
             "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL uses paired bid/ask volume times average spread.",
             y=0,
         ),
-        _panel(2, "Filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=6, h=5),
-        _panel(3, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=6, y=3, w=6, h=5, unit="currency"),
-        _panel(4, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=12, y=3, w=6, h=5, unit="currency"),
-        _panel(5, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=18, y=3, w=6, h=5, unit="currency"),
-        _panel(6, "Filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume"), x=0, y=8, w=6, h=5),
-        _panel(7, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=6, y=8, w=6, h=5, unit="currency"),
-        _panel(8, "Local delta cash", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_cash"), x=0, y=13, w=6, h=5, unit="currency"),
-        _panel(9, "Local delta inventory", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_inventory"), x=6, y=13, w=6, h=5),
-        _panel(10, "Local delta wealth", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_wealth"), x=12, y=13, w=6, h=5, unit="currency"),
-        _panel(11, "Local delta price", "stat", PG_DS, _portfolio_local_interval_delta_sql("delta_price"), x=18, y=13, w=6, h=5, unit="currency"),
+        _panel(2, "Total filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=6, h=5),
+        _panel(3, "Local filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume", role="local"), x=6, y=3, w=6, h=5),
+        _panel(4, "Global filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume", role="global"), x=12, y=3, w=6, h=5),
+        _panel(5, "Average bid fill price", "stat", PG_DS, _fill_interval_stat_sql("bid_avg_price"), x=18, y=3, w=6, h=5, unit="currency"),
+        _panel(6, "Total filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume"), x=0, y=8, w=6, h=5),
+        _panel(7, "Local filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume", role="local"), x=6, y=8, w=6, h=5),
+        _panel(8, "Global filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume", role="global"), x=12, y=8, w=6, h=5),
+        _panel(9, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=18, y=8, w=6, h=5, unit="currency"),
+        _panel(10, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=0, y=13, w=6, h=5, unit="currency"),
+        _panel(11, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=6, y=13, w=6, h=5, unit="currency"),
+        _panel(12, "Total delta cash", "stat", PG_DS, _portfolio_interval_delta_sql("delta_cash"), x=0, y=18, w=6, h=5, unit="currency"),
+        _panel(13, "Total delta inventory", "stat", PG_DS, _portfolio_interval_delta_sql("delta_inventory"), x=6, y=18, w=6, h=5),
+        _panel(14, "Total delta wealth", "stat", PG_DS, _portfolio_interval_delta_sql("delta_wealth"), x=12, y=18, w=6, h=5, unit="currency"),
+        _panel(15, "Total delta ref price", "stat", PG_DS, _portfolio_interval_delta_sql("delta_price"), x=18, y=18, w=6, h=5, unit="currency"),
+        _panel(16, "Latest total cash", "stat", PG_DS, _portfolio_latest_total_sql("cash"), x=0, y=23, w=6, h=5, unit="currency"),
+        _panel(17, "Latest total inventory", "stat", PG_DS, _portfolio_latest_total_sql("inventory"), x=6, y=23, w=6, h=5),
     ]
     return _dashboard(
         "mm-obs-v2-fill-spread-pnl",
@@ -3615,22 +3621,26 @@ FROM state_rows
 ORDER BY 1"""
 
 
-def _portfolio_local_interval_delta_sql(metric: str | None = None) -> str:
+def _portfolio_interval_delta_sql(metric: str | None = None) -> str:
     if metric is not None and metric not in {"delta_cash", "delta_inventory", "delta_wealth", "delta_price"}:
-        raise ValueError(f"unsupported local interval delta metric: {metric}")
-    cash = _portfolio_wallet_or_state_total("local", "cash")
-    inventory = _portfolio_wallet_or_state_total("local", "inventory")
-    wealth = _numeric_sql("e.payload #>> ARRAY['state','local_wealth']", default="NULL")
+        raise ValueError(f"unsupported interval delta metric: {metric}")
+    local_cash = _portfolio_wallet_or_state_total("local", "cash")
+    global_cash = _portfolio_wallet_or_state_total("global", "cash")
+    local_inventory = _portfolio_wallet_or_state_total("local", "inventory")
+    global_inventory = _portfolio_wallet_or_state_total("global", "inventory")
     local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
-    mark_price = f"COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0)"
+    mark_price = f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
+    cash = f"({local_cash} + {global_cash})"
+    inventory = f"({local_inventory} + {global_inventory})"
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
          {cash} AS cash,
          {inventory} AS inventory,
          {mark_price} AS mark_price,
-         COALESCE({wealth}, ({cash}) + ({inventory}) * ({mark_price})) AS wealth
+         ({cash}) + ({inventory}) * ({mark_price}) AS wealth
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 ),
@@ -3663,6 +3673,19 @@ CROSS JOIN LATERAL (
 ) AS deltas(metric, value)
 WHERE value IS NOT NULL{f" AND metric = '{metric}'" if metric is not None else ""}
 ORDER BY metric"""
+
+
+def _portfolio_latest_total_sql(leg: str) -> str:
+    if leg not in {"cash", "inventory"}:
+        raise ValueError(f"unsupported latest total portfolio leg: {leg}")
+    local_value = _portfolio_wallet_or_state_total("local", leg)
+    global_value = _portfolio_wallet_or_state_total("global", leg)
+    return f"""SELECT e.ts AS "time",
+       ({local_value} + {global_value}) AS value
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+ORDER BY e.ts DESC
+LIMIT 1"""
 
 
 def _portfolio_cumulative_pnl_component_sql(component: str) -> str:
@@ -3768,7 +3791,9 @@ WHERE exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
 ORDER BY 1"""
 
 
-def _fill_interval_stat_sql(stat: str) -> str:
+def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:
+    if role is not None and role not in {"local", "global"}:
+        raise ValueError(f"unsupported fill interval role: {role}")
     stat_exprs = {
         "bid_volume": "COALESCE(bid_qty, 0.0)",
         "ask_volume": "COALESCE(ask_qty, 0.0)",
@@ -3785,7 +3810,33 @@ def _fill_interval_stat_sql(stat: str) -> str:
     qty = _numeric_sql("e.payload->>'qty'")
     price = _numeric_sql("e.payload->>'price'", default="NULL")
     fee = _numeric_sql("e.payload->>'fee'")
-    return f"""WITH fills AS (
+    role_filter = ""
+    if role is not None:
+        role_filter = f"""
+    AND {exchange} IN (
+      SELECT role_exchange
+      FROM role_exchanges
+      WHERE role = '{role}'
+    )"""
+    return f"""WITH latest_diagnostics AS (
+  SELECT e.payload, e.exchange
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+role_exchanges AS (
+  SELECT gates.key AS role_exchange,
+         gates.value->>'role' AS role
+  FROM latest_diagnostics d
+  CROSS JOIN LATERAL jsonb_each(COALESCE(d.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)) AS gates
+  UNION
+  SELECT d.exchange AS role_exchange,
+         'local' AS role
+  FROM latest_diagnostics d
+  WHERE d.exchange IS NOT NULL
+),
+fills AS (
   SELECT
     {side} AS side,
     {qty} AS qty,
@@ -3795,6 +3846,7 @@ def _fill_interval_stat_sql(stat: str) -> str:
   WHERE e.topic LIKE 'private:state:%:fills'
     AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND {symbol} = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    {role_filter}
     AND $__timeFilter(e.ts)
 ),
 agg AS (
