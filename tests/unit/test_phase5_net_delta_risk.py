@@ -11,7 +11,7 @@ from mm.core.models.market import MarketEvent, RawOrderbook
 from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
-from mm.core.risk_limits import VenueRiskLimits
+from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.risk.engine import RiskLimits, RuntimeRiskEngine
 from mm.risk.factory import build_risk_engine
 from mm.risk.net_delta import NetDeltaRiskEngine, evaluate_venue_target_transition
@@ -29,6 +29,22 @@ def _binding() -> SymbolBinding:
     return SymbolBinding(local=local, global_=None)
 
 
+def _global_binding() -> SymbolBinding:
+    local = InstrumentSpec(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+    )
+    global_ = InstrumentSpec(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+    )
+    return SymbolBinding(local=local, global_=global_)
+
+
 def _market_event(*, t_end_ms: int = 1000) -> MarketEvent:
     return MarketEvent(
         exchange="nobitex",
@@ -37,6 +53,23 @@ def _market_event(*, t_end_ms: int = 1000) -> MarketEvent:
         t_start_ms=0,
         t_end_ms=t_end_ms,
         orderbook=RawOrderbook("nobitex", "BTC_IRT", t_end_ms, (), (), True),
+        trades=(),
+        buy_volume=0.0,
+        sell_volume=0.0,
+        vwap=0.0,
+        imbalance=0.0,
+        microprice=100.0,
+    )
+
+
+def _global_market_event(*, t_end_ms: int = 1000) -> MarketEvent:
+    return MarketEvent(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=0,
+        t_end_ms=t_end_ms,
+        orderbook=RawOrderbook("wallex", "BTC_IRT", t_end_ms, (), (), True),
         trades=(),
         buy_volume=0.0,
         sell_volume=0.0,
@@ -60,6 +93,25 @@ def _private_snapshot(
         balances={
             "BTC": Balance("nobitex", "BTC", base_free, 0.0, base_free, timestamp_ms),
             "IRT": Balance("nobitex", "IRT", quote_free, quote_locked, quote_free + quote_locked, timestamp_ms),
+        },
+        open_orders=open_orders or {},
+    )
+
+
+def _global_private_snapshot(
+    *,
+    timestamp_ms: int = 1000,
+    base_free: float = 10.0,
+    quote_free: float = 200.0,
+    quote_locked: float = 0.0,
+    open_orders: dict[str, OpenOrder] | None = None,
+) -> PrivateStateSnapshot:
+    return PrivateStateSnapshot(
+        exchange="wallex",
+        timestamp_ms=timestamp_ms,
+        balances={
+            "BTC": Balance("wallex", "BTC", base_free, 0.0, base_free, timestamp_ms),
+            "IRT": Balance("wallex", "IRT", quote_free, quote_locked, quote_free + quote_locked, timestamp_ms),
         },
         open_orders=open_orders or {},
     )
@@ -249,6 +301,67 @@ def test_net_delta_partial_approval_preserves_asks_when_bid_collateral_fails() -
     assert result.target_book_gate_reasons == (
         "insufficient_quote_for_bid_orders",
         "min_cash",
+    )
+
+
+def test_global_partial_approval_preserves_asks_when_bid_collateral_fails() -> None:
+    binding = _global_binding()
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        global_=_global_market_event(),
+        local_private=_private_snapshot(),
+        global_private=_global_private_snapshot(base_free=10.0, quote_free=0.0),
+        global_status="ready",
+        created_at_ms=1000,
+    )
+    ledger = joint_ledger_from_frame(frame, binding, created_at_ms=1000)
+    target = JointTargetBook(
+        actor_id="actor-1",
+        local=VenueTargetBook("nobitex", "BTC_IRT", "actor-1", ()),
+        global_=VenueTargetBook(
+            "wallex",
+            "BTC_IRT",
+            "actor-1",
+            (
+                TargetOrder("wallex", "BTC_IRT", "buy", 100.0, 1.0),
+                TargetOrder("wallex", "BTC_IRT", "sell", 101.0, 1.0),
+            ),
+            policy="replace",
+        ),
+        mode="liquidity_sourcing",
+    )
+    engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            ),
+            global_=GlobalVenueRiskLimits(
+                min_cash=0.0,
+                min_inventory=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            ),
+        ),
+        binding=binding,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
+        clock_ms=lambda: 1000,
+    )
+
+    result = engine.validate_target_book_with_result(
+        target,
+        ledger,
+        frame,
+        live_execution=True,
+        global_live_execution=True,
+    )
+
+    assert result.approved is not None
+    assert result.approved.global_ is not None
+    assert [order.side for order in result.approved.global_.orders] == ["sell"]
+    assert result.target_book_gate_reasons == (
+        "global_insufficient_quote_for_bid_orders",
+        "global_min_cash",
     )
 
 

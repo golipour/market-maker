@@ -12,10 +12,9 @@ from mm.application.venue_execution import (
     prepare_execution_joint_book,
     route_joint_target_book_with_report,
 )
-from mm.core.adapters.joint import venue_target_book_to_action
+from mm.core.adapters.joint import joint_target_book_to_action
 from mm.execution.plan import (
     ExecutionSyncReport,
-    filter_execution_sync_report,
     stage_report_with_rejections,
 )
 from mm.application.frame_preparation import clean_strategy_frame
@@ -253,7 +252,7 @@ class StrategyRunner:
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
                 if target_risk_result.approved is not None:
                     risk_stage_orders = tuple(
-                        venue_target_book_to_action(target_risk_result.approved.local).orders
+                        joint_target_book_to_action(target_risk_result.approved).orders
                     )
                     if not risk_stage_orders and local_risk_rejection_counts:
                         risk_rejections = _risk_rejection_rows(
@@ -397,11 +396,6 @@ class StrategyRunner:
                     )
             ctx.record_stage_latency("execute", _elapsed_ms(execute_started))
             if execution_report is not None:
-                execution_report = filter_execution_sync_report(
-                    execution_report,
-                    exchange=frame.local.exchange,
-                    symbol=frame.local.symbol,
-                )
                 ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
 
             if self.bus is not None:

@@ -2626,26 +2626,53 @@ def optimizer_diagnostics() -> dict[str, Any]:
 def target_order_stems() -> dict[str, Any]:
     stem_h = 7
     stem_gap = 7
+    stages = [
+        ("01 Strategy raw ladder", "ladder", "orders", None, False),
+        ("02 Strategy cap -> target orderbook", "capped", "orders", None, False),
+        ("03 Risk-approved target", "risk_approved_target", "orders", None, False),
+        ("04 Planner new place orders", "planned_place", "orders", None, False),
+        ("05 Venue rules valid after rounding", "rules_valid", "orders", None, False),
+        ("06 Exchange accepted placed orders", "router_accepted", "orders", None, False),
+        ("07 Planner kept live orders", "kept", "orders", None, False),
+        ("08 Planner cancel orders", "planned_cancel", "orders", None, False),
+        ("09 Removed by risk / collateral", "risk_approved_target", "rejections", None, True),
+        ("10 Removed by venue adapter: invalid price/qty", "rules_valid", "rejections", "rules_invalid_price_or_qty", False),
+        ("11 Removed by venue adapter: min qty", "rules_valid", "rejections", "rules_min_qty", False),
+        ("12 Removed by venue adapter: min notional", "rules_valid", "rejections", "rules_min_notional", False),
+    ]
     panels = [
         _text(
             1,
             "Scope",
-            "Live or pinned strategy-to-execution ladder. Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the selected target frame. Every chart uses the same raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
+            "Live or pinned strategy-to-execution ladder, split local left and global right. Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the selected target frame. Every chart uses its venue raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
             y=0,
         ),
-        _stem_order_qty_price_panel(2, "01 Strategy raw ladder", _latest_action_pipeline_stage_orders_sql("ladder"), x=0, y=3, w=24, h=stem_h),
-        _stem_order_qty_price_panel(3, "02 Strategy cap -> target orderbook", _latest_action_pipeline_stage_orders_sql("capped"), x=0, y=3 + stem_gap, w=24, h=stem_h),
-        _stem_order_qty_price_panel(4, "03 Risk-approved target", _latest_action_pipeline_stage_orders_sql("risk_approved_target"), x=0, y=3 + stem_gap * 2, w=24, h=stem_h),
-        _stem_order_qty_price_panel(5, "04 Planner new place orders", _latest_action_pipeline_stage_orders_sql("planned_place"), x=0, y=3 + stem_gap * 3, w=24, h=stem_h),
-        _stem_order_qty_price_panel(6, "05 Venue rules valid after rounding", _latest_action_pipeline_stage_orders_sql("rules_valid"), x=0, y=3 + stem_gap * 4, w=24, h=stem_h),
-        _stem_order_qty_price_panel(7, "06 Exchange accepted placed orders", _latest_action_pipeline_stage_orders_sql("router_accepted"), x=0, y=3 + stem_gap * 5, w=24, h=stem_h),
-        _stem_order_qty_price_panel(8, "07 Planner kept live orders", _latest_action_pipeline_stage_orders_sql("kept"), x=0, y=3 + stem_gap * 6, w=24, h=stem_h),
-        _stem_order_qty_price_panel(9, "08 Planner cancel orders", _latest_action_pipeline_stage_orders_sql("planned_cancel"), x=0, y=3 + stem_gap * 7, w=24, h=stem_h),
-        _stem_order_qty_price_panel(10, "09 Removed by local risk / collateral", _latest_action_pipeline_stage_orders_sql("risk_approved_target", field="rejections", include_reason_in_series=True), x=0, y=3 + stem_gap * 8, w=24, h=stem_h),
-        _stem_order_qty_price_panel(11, "10 Removed by venue adapter: invalid price/qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_invalid_price_or_qty"), x=0, y=3 + stem_gap * 9, w=24, h=stem_h),
-        _stem_order_qty_price_panel(12, "11 Removed by venue adapter: min qty", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_qty"), x=0, y=3 + stem_gap * 10, w=24, h=stem_h),
-        _stem_order_qty_price_panel(13, "12 Removed by venue adapter: min notional", _latest_action_pipeline_stage_orders_sql("rules_valid", field="rejections", reason="rules_min_notional"), x=0, y=3 + stem_gap * 11, w=24, h=stem_h),
     ]
+    panel_id = 2
+    for row, (title, stage, field, reason, include_reason) in enumerate(stages):
+        y = 3 + stem_gap * row
+        for role, x in (("local", 0), ("global", 12)):
+            role_title = title
+            if title == "09 Removed by risk / collateral":
+                role_title = f"09 Removed by {role} risk / collateral"
+            panels.append(
+                _stem_order_qty_price_panel(
+                    panel_id,
+                    f"{role.title()} {role_title}",
+                    _latest_action_pipeline_stage_orders_sql(
+                        stage,
+                        field=field,
+                        reason=reason,
+                        include_reason_in_series=include_reason,
+                        role=role,
+                    ),
+                    x=x,
+                    y=y,
+                    w=12,
+                    h=stem_h,
+                )
+            )
+            panel_id += 1
     return _dashboard(
         "mm-obs-v2-target-order-stems",
         "MM Observability v2 / 05C Target Order Stems",

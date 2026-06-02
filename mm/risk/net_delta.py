@@ -347,6 +347,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             counter_inc("mm_risk_reject_total", labels={"reason": reason})
 
         global_ok = True
+        global_reasons: list[str] = []
         if target_book.global_ is not None and target_book.global_.orders:
             global_stale = frame.global_ is None or frame.global_status not in {"ready"}
             if not global_stale and frame.global_ is not None:
@@ -406,6 +407,11 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         if target_book.global_ is not None:
             if local_can_execute and global_ok:
                 approved_global = target_book.global_
+            elif local_can_execute and _can_approve_partial_book(global_reasons):
+                approved_global = _venue_target_book_without_rejected_sides(
+                    target_book.global_,
+                    global_reasons,
+                )
             elif local_can_execute and global_orders_rejected:
                 approved_global = _empty_venue_target_book(target_book.global_)
             elif not local_can_execute and target_book.global_.policy == "replace":

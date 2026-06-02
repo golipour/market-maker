@@ -137,8 +137,8 @@
     },
     "execution_model": {
       "kind": "real",
-      "local_maker_fee": 0.0015,
-      "global_maker_fee": 0.0025
+      "local_maker_fee": 0.000015,
+      "global_maker_fee": 0.000025
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",

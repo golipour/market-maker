@@ -13,7 +13,7 @@ from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
-from mm.core.risk_limits import VenueRiskLimits
+from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.execution.plan import (
     ActionPipelineReport,
     ActionStageReport,
@@ -515,6 +515,136 @@ async def test_strategy_runner_records_local_risk_approved_target_for_net_delta(
     assert diagnostics["action_pipeline"]["risk_approved_target"]["order_count"] == 1
     assert diagnostics["action_pipeline"]["risk_approved_target"]["orders"][0]["exchange"] == "nobitex"
     assert diagnostics["action_pipeline"]["planned_place"]["order_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_records_global_risk_approved_target_for_net_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_order = Order("nobitex", "BTC_IRT", "sell", 101.0, 1.0)
+    global_order = Order("wallex", "BTC_IRT", "sell", 102.0, 2.0)
+
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(actor_id="test-runner", orders=(local_order, global_order)),
+            joint_target_book=JointTargetBook(
+                actor_id="test-runner",
+                local=VenueTargetBook(
+                    "nobitex",
+                    "BTC_IRT",
+                    "test-runner",
+                    (TargetOrder("nobitex", "BTC_IRT", "sell", 101.0, 1.0),),
+                    policy="replace",
+                ),
+                global_=VenueTargetBook(
+                    "wallex",
+                    "BTC_IRT",
+                    "test-runner",
+                    (TargetOrder("wallex", "BTC_IRT", "sell", 102.0, 2.0),),
+                    policy="replace",
+                ),
+                mode="liquidity_sourcing",
+            ),
+            action_pipeline_report=ActionPipelineReport(
+                capped=summarize_orders((local_order, global_order)),
+                target_book=summarize_orders((local_order, global_order)),
+            ),
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        global_=MarketDataSourceConfig(role="global", exchange="wallex", symbol="BTC_IRT"),
+    )
+    risk_engine = NetDeltaRiskEngine(
+        limits=RiskLimits(
+            local=VenueRiskLimits(
+                min_cash=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            ),
+            global_=GlobalVenueRiskLimits(
+                min_cash=0.0,
+                min_inventory=0.0,
+                max_market_data_age_ms=10_000,
+                max_private_state_age_ms=10_000,
+            ),
+        ),
+        binding=runtime.binding,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
+        clock_ms=lambda: 2_000,
+    )
+    frame = StrategyInputFrame(
+        local=_market_event(),
+        global_=MarketEvent(
+            exchange="wallex",
+            symbol="BTC_IRT",
+            interval_ms=1000,
+            t_start_ms=1000,
+            t_end_ms=2000,
+            orderbook=RawOrderbook("wallex", "BTC_IRT", 2000, (), (), True),
+            trades=(),
+            buy_volume=0.0,
+            sell_volume=0.0,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=100.5,
+        ),
+        local_private=PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": Balance("nobitex", "BTC", 10.0, 0.0, 10.0, 2_000),
+                "IRT": Balance("nobitex", "IRT", 1_000.0, 0.0, 1_000.0, 2_000),
+            },
+            open_orders={},
+        ),
+        global_private=PrivateStateSnapshot(
+            exchange="wallex",
+            timestamp_ms=2_000,
+            balances={
+                "BTC": Balance("wallex", "BTC", 10.0, 0.0, 10.0, 2_000),
+                "IRT": Balance("wallex", "IRT", 0.0, 0.0, 0.0, 2_000),
+            },
+            open_orders={},
+        ),
+        global_status="ready",
+        created_at_ms=2_000,
+    )
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    runner = StrategyRunner(
+        config=_runner_config(placement_timeout_ms=1000),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={},
+        risk_engine=risk_engine,
+        liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
+        execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
+        bus=bus,
+    )
+
+    approved = await runner.on_joint_frame(
+        joint_frame_for_input(
+            frame,
+            binding=runtime.binding,
+            liquidity_sourcing=LiquiditySourcingRuntimeConfig(enabled=True, mode="liquidity_sourcing"),
+        )
+    )
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert len(approved) == 1
+    risk_orders = diagnostics["action_pipeline"]["risk_approved_target"]["orders"]
+    assert {(order["exchange"], order["side"]) for order in risk_orders} == {
+        ("nobitex", "sell"),
+        ("wallex", "sell"),
+    }
 
 
 @pytest.mark.asyncio

@@ -378,41 +378,35 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     dashboard = target_order_stems()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
-    stem_titles = {
-        "01 Strategy raw ladder",
-        "02 Strategy cap -> target orderbook",
-        "03 Risk-approved target",
-        "04 Planner new place orders",
-        "05 Venue rules valid after rounding",
-        "06 Exchange accepted placed orders",
-        "07 Planner kept live orders",
-        "08 Planner cancel orders",
-        "09 Removed by local risk / collateral",
-        "10 Removed by venue adapter: invalid price/qty",
-        "11 Removed by venue adapter: min qty",
-        "12 Removed by venue adapter: min notional",
-    }
-    assert stem_titles.issubset(panels_by_title)
-
-    expected_y = {
-        "01 Strategy raw ladder": 3,
-        "02 Strategy cap -> target orderbook": 10,
-        "03 Risk-approved target": 17,
-        "04 Planner new place orders": 24,
-        "05 Venue rules valid after rounding": 31,
-        "06 Exchange accepted placed orders": 38,
-        "07 Planner kept live orders": 45,
-        "08 Planner cancel orders": 52,
-        "09 Removed by local risk / collateral": 59,
-        "10 Removed by venue adapter: invalid price/qty": 66,
-        "11 Removed by venue adapter: min qty": 73,
-        "12 Removed by venue adapter: min notional": 80,
-    }
-    for title in stem_titles:
-        assert panels_by_title[title]["gridPos"]["x"] == 0
-        assert panels_by_title[title]["gridPos"]["w"] == 24
-        assert panels_by_title[title]["gridPos"]["h"] == 7
-        assert panels_by_title[title]["gridPos"]["y"] == expected_y[title]
+    stages = [
+        ("01 Strategy raw ladder", 3, "ladder", "orders", None),
+        ("02 Strategy cap -> target orderbook", 10, "capped", "orders", None),
+        ("03 Risk-approved target", 17, "risk_approved_target", "orders", None),
+        ("04 Planner new place orders", 24, "planned_place", "orders", None),
+        ("05 Venue rules valid after rounding", 31, "rules_valid", "orders", None),
+        ("06 Exchange accepted placed orders", 38, "router_accepted", "orders", None),
+        ("07 Planner kept live orders", 45, "kept", "orders", None),
+        ("08 Planner cancel orders", 52, "planned_cancel", "orders", None),
+        ("09 Removed by local risk / collateral", 59, "risk_approved_target", "rejections", None),
+        ("10 Removed by venue adapter: invalid price/qty", 66, "rules_valid", "rejections", "rules_invalid_price_or_qty"),
+        ("11 Removed by venue adapter: min qty", 73, "rules_valid", "rejections", "rules_min_qty"),
+        ("12 Removed by venue adapter: min notional", 80, "rules_valid", "rejections", "rules_min_notional"),
+    ]
+    stem_titles: list[str] = []
+    stage_by_title: dict[str, tuple[str, str, str | None, str]] = {}
+    for stage_title, y, stage, field, reason in stages:
+        local_title = f"Local {stage_title}"
+        global_stage_title = stage_title.replace("09 Removed by local risk", "09 Removed by global risk")
+        global_title = f"Global {global_stage_title}"
+        expected = ((local_title, 0, "local"), (global_title, 12, "global"))
+        for title, x, role in expected:
+            stem_titles.append(title)
+            stage_by_title[title] = (stage, field, reason, role)
+            assert title in panels_by_title
+            assert panels_by_title[title]["gridPos"]["x"] == x
+            assert panels_by_title[title]["gridPos"]["w"] == 12
+            assert panels_by_title[title]["gridPos"]["h"] == 7
+            assert panels_by_title[title]["gridPos"]["y"] == y
 
     for title in stem_titles:
         panel = panels_by_title[title]
@@ -442,19 +436,6 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         assert "green" in overrides
         assert "red" in overrides
 
-    raw_sql = panels_by_title["01 Strategy raw ladder"]["targets"][0]["rawSql"]
-    target_sql = panels_by_title["02 Strategy cap -> target orderbook"]["targets"][0]["rawSql"]
-    risk_sql = panels_by_title["03 Risk-approved target"]["targets"][0]["rawSql"]
-    place_sql = panels_by_title["04 Planner new place orders"]["targets"][0]["rawSql"]
-    rules_sql = panels_by_title["05 Venue rules valid after rounding"]["targets"][0]["rawSql"]
-    accepted_sql = panels_by_title["06 Exchange accepted placed orders"]["targets"][0]["rawSql"]
-    kept_sql = panels_by_title["07 Planner kept live orders"]["targets"][0]["rawSql"]
-    cancel_sql = panels_by_title["08 Planner cancel orders"]["targets"][0]["rawSql"]
-    risk_removed_sql = panels_by_title["09 Removed by local risk / collateral"]["targets"][0]["rawSql"]
-    invalid_sql = panels_by_title["10 Removed by venue adapter: invalid price/qty"]["targets"][0]["rawSql"]
-    min_qty_sql = panels_by_title["11 Removed by venue adapter: min qty"]["targets"][0]["rawSql"]
-    min_notional_sql = panels_by_title["12 Removed by venue adapter: min notional"]["targets"][0]["rawSql"]
-
     mode_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "target_frame_mode")
     assert mode_var["label"] == "Target frame mode"
     assert mode_var["current"]["value"] == "latest"
@@ -464,37 +445,16 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     assert "e.event_id AS __value" in frame_var["query"]
     assert "ControllerDiagnostics" in frame_var["query"]
 
-    assert "ARRAY['action_pipeline', 'ladder', 'orders']" in raw_sql
-    assert "ARRAY['action_pipeline', 'capped', 'orders']" in target_sql
-    assert "ARRAY['action_pipeline', 'risk_approved_target', 'orders']" in risk_sql
-    assert "ARRAY['action_pipeline', 'risk_approved_target', 'rejections']" in risk_removed_sql
-    assert "COALESCE(NULLIF(o.value->>'reason', ''), 'unknown')" in risk_removed_sql
-    assert "ARRAY['action_pipeline', 'kept', 'orders']" in kept_sql
-    assert "ARRAY['action_pipeline', 'planned_cancel', 'orders']" in cancel_sql
-    assert "ARRAY['action_pipeline', 'planned_place', 'orders']" in place_sql
-    assert "ARRAY['action_pipeline', 'rules_valid', 'orders']" in rules_sql
-    assert "ARRAY['action_pipeline', 'router_accepted', 'orders']" in accepted_sql
-    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in invalid_sql
-    assert "rules_invalid_price_or_qty" in invalid_sql
-    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in min_qty_sql
-    assert "rules_min_qty" in min_qty_sql
-    assert "ARRAY['action_pipeline', 'rules_valid', 'rejections']" in min_notional_sql
-    assert "rules_min_notional" in min_notional_sql
-
-    for sql in (
-        raw_sql,
-        target_sql,
-        risk_sql,
-        risk_removed_sql,
-        place_sql,
-        rules_sql,
-        accepted_sql,
-        kept_sql,
-        cancel_sql,
-        invalid_sql,
-        min_qty_sql,
-        min_notional_sql,
-    ):
+    for title in stem_titles:
+        stage, field, reason, role = stage_by_title[title]
+        sql = panels_by_title[title]["targets"][0]["rawSql"]
+        assert f"ARRAY['action_pipeline', '{stage}', '{field}']" in sql
+        if title.endswith("09 Removed by local risk / collateral") or title.endswith("09 Removed by global risk / collateral"):
+            assert "COALESCE(NULLIF(o.value->>'reason', ''), 'unknown')" in sql
+        if reason is not None:
+            assert reason in sql
+        assert "role_exchanges" in sql
+        assert f"WHERE role = '{role}'" in sql
         assert "ControllerDiagnostics" in sql
         assert "'${target_frame_mode}' = 'latest'" in sql
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
