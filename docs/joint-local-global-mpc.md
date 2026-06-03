@@ -191,12 +191,11 @@ J =
   + global_active
     * global.objective_weight
     * entropic_return_beta(global_returns, global.return_risk_aversion_beta)
-  - local.inventory_threshold_penalty_weight
-    * local_threshold_shortfall_penalty
-  - global_active
-    * global.inventory_threshold_penalty_weight
-    * global_threshold_shortfall_penalty
 ```
+
+Cash/inventory shortage penalties are no longer active objective terms. Venue
+liquidity availability is enforced structurally through per-side capacity caps,
+and long-run balance pressure is applied through imbalance-skewed quote floors.
 
 The optimizer minimizes:
 
@@ -212,9 +211,9 @@ Objective components reported in diagnostics:
 | `risk_adjusted_return`               | Sum of local and active global weighted return terms                   |
 | `local_risk_adjusted_return`         | Local weighted entropic return term                                    |
 | `global_risk_adjusted_return`        | Global weighted entropic return term, masked when inactive             |
-| `threshold_shortfall_penalty`        | Combined weighted one-sided cash/inventory threshold shortfall penalty |
-| `local_threshold_shortfall_penalty`  | Local weighted threshold contribution                                  |
-| `global_threshold_shortfall_penalty` | Global weighted threshold contribution, masked when inactive           |
+| `threshold_shortfall_penalty`        | Legacy/no-op threshold component, expected to remain zero              |
+| `local_threshold_shortfall_penalty`  | Legacy/no-op local threshold contribution                              |
+| `global_threshold_shortfall_penalty` | Legacy/no-op global threshold contribution                             |
 
 
 ## What "Mixed Objective" Means Here
@@ -257,17 +256,11 @@ These current joint objective parameters are configured under
   "optimizer": {
     "local": {
       "objective_weight": 1.0,
-      "return_risk_aversion_beta": 0.1,
-      "inventory_threshold_penalty_weight": 0.000001,
-      "cash_threshold": 0.0,
-      "inventory_threshold": 0.0
+      "return_risk_aversion_beta": 0.1
     },
     "global": {
       "objective_weight": 1.0,
-      "return_risk_aversion_beta": 0.1,
-      "inventory_threshold_penalty_weight": 0.000001,
-      "cash_threshold": 0.0,
-      "inventory_threshold": 0.0
+      "return_risk_aversion_beta": 0.1
     }
   }
 }
@@ -280,18 +273,9 @@ Meaning:
 | ------------------------------------ | ----------------------------------------------- |
 | `objective_weight`                   | Venue return-term multiplier                    |
 | `return_risk_aversion_beta`          | Venue risk aversion for entropic return         |
-| `inventory_threshold_penalty_weight` | Venue one-sided threshold penalty weight        |
-| `cash_threshold`                     | Venue quote-cash floor; no penalty above it     |
-| `inventory_threshold`                | Venue base-inventory floor; no penalty above it |
-
-
-The threshold term is linear and normalized:
-
-```text
-penalty =
-  relu(cash_threshold - cash) / max(abs(cash_threshold), 1)
-  + relu(inventory_threshold - inventory) / max(abs(inventory_threshold), 1)
-```
+| `inventory_threshold_penalty_weight` | Legacy/no-op shortage penalty key               |
+| `cash_threshold`                     | Legacy/no-op quote-cash threshold               |
+| `inventory_threshold`                | Legacy/no-op base-inventory threshold           |
 
 ## Separate Optimizer Parameters
 
@@ -303,12 +287,9 @@ These optimizer parameters are separate for local and global:
     "local": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_threshold_penalty_weight": 0.000001,
-      "cash_threshold": 0.0,
-      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
-      "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,
+      "quote_imbalance_skew_strength": 0.5,
       "quote_spread_max": 100.0,
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
@@ -319,12 +300,9 @@ These optimizer parameters are separate for local and global:
     "global": {
       "objective_weight": 1.0,
       "return_risk_aversion_beta": 0.1,
-      "inventory_threshold_penalty_weight": 0.000001,
-      "cash_threshold": 0.0,
-      "inventory_threshold": 0.0,
       "quote_size_min_per_side": 0.3,
-      "quote_size_max_per_side": 10.0,
       "quote_capacity_ratio": 1.0,
+      "quote_imbalance_skew_strength": 0.5,
       "quote_spread_max": 100.0,
       "quote_spread_min_depth": 0.3,
       "quote_spread_k_epsilon": 0.01,
@@ -343,12 +321,13 @@ Current behavior:
 | ------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `objective_weight`                   | Yes           | Venue multiplier in mixed objective                                                                                |
 | `return_risk_aversion_beta`          | Yes           | Venue entropic-return risk aversion                                                                                |
-| `inventory_threshold_penalty_weight` | Yes           | Venue threshold shortfall penalty weight                                                                           |
-| `cash_threshold`                     | Yes           | Venue quote-cash floor                                                                                             |
-| `inventory_threshold`                | Yes           | Venue base-inventory floor                                                                                         |
-| `quote_size_min_per_side`            | Yes           | Venue sigmoid depth lower range                                                                                    |
-| `quote_size_max_per_side`            | Yes           | Venue sigmoid depth upper range                                                                                    |
-| `quote_capacity_ratio`               | Yes           | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory, both floored at `quote_size_min_per_side` |
+| `inventory_threshold_penalty_weight` | Yes           | Legacy/no-op shortage penalty key                                                                                  |
+| `cash_threshold`                     | Yes           | Legacy/no-op quote-cash threshold                                                                                  |
+| `inventory_threshold`                | Yes           | Legacy/no-op base-inventory threshold                                                                              |
+| `quote_size_min_per_side`            | Yes           | Venue baseline sigmoid depth floor                                                                                 |
+| `quote_size_max_per_side`            | Yes           | Optional venue sigmoid depth safety cap                                                                            |
+| `quote_capacity_ratio`               | Yes           | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory                                            |
+| `quote_imbalance_skew_strength`      | Yes           | Raises the correcting-side depth floor based on cash/base imbalance                                                |
 | `quote_spread_max`                   | Yes           | Venue structured spread cap                                                                                        |
 | `quote_spread_min_depth`             | Yes           | Venue structured minimum depth                                                                                     |
 | `quote_spread_k_epsilon`             | Yes           | Venue spread-parameter numerical guard                                                                             |
@@ -407,16 +386,14 @@ show the resolved venue-scoped optimizer parameters.
 return contribution.
 - `optimizer.objective.*.components.global_risk_adjusted_return` is the global
 return contribution.
-- `optimizer.objective.*.components.local_threshold_shortfall_penalty` is the
-local threshold term.
-- `optimizer.objective.*.components.global_threshold_shortfall_penalty` is the
-global threshold term.
+- `optimizer.objective.*.components.local_threshold_shortfall_penalty` and
+`global_threshold_shortfall_penalty` are legacy/no-op threshold components.
 - `optimizer.rollout.local_fill_*_mean` and `global_fill_*_mean` show expected
 first-step simulated fills.
 - `optimizer.rollout.global_action_flat` is the optimized global first-step raw
 vector when joint mode runs.
 
-If `global_threshold_shortfall_penalty` is zero and global fill means are zero, check
-`global_active`, frame readiness, global staleness, and global model outputs.
+If global fill means are zero, check `global_active`, frame readiness, global
+staleness, global model outputs, and the global venue's cash/inventory capacity.
 `liquidity_sourcing.global_live_orders` is an execution switch after
 optimization; it does not change the optimizer simulation itself.

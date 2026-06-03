@@ -244,12 +244,16 @@ The terminal objective is built by `terminal_objective()`:
 ```text
 J =
   expected_pnl_weight * E[total_reward]
-  - inventory_threshold_penalty_weight * threshold_shortfall_term
   - pnl_volatility_penalty_weight * Std(total_reward)
   - quote_shape_uniformity_penalty_weight * uniformity_penalty
   - quote_size_target_penalty_weight * size_penalty
   - quote_spread_penalty_weight * spread_penalty
 ```
+
+The former cash/inventory threshold-shortfall term is no longer applied by the
+optimizer. Cash and inventory availability now enter through structural
+side-specific quote capacity bounds, with optional imbalance-skewed quote
+floors.
 
 The reported objective components are weighted terms:
 

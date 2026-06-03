@@ -50,6 +50,7 @@ _VENUE_OPTIMIZER_KEYS = {
     "quote_size_min_per_side",
     "quote_size_max_per_side",
     "quote_capacity_ratio",
+    "quote_imbalance_skew_strength",
     "quote_spread_max",
     "quote_spread_min_depth",
     "quote_spread_k_epsilon",
@@ -493,11 +494,9 @@ def _build_controller(
     global_min_qty = float(global_constraints.min_qty or local_min_qty)
     local_optimizer_defaults = {
         "quote_size_min_per_side": local_min_qty,
-        "quote_size_max_per_side": max(local_min_qty, 10.0),
     }
     global_optimizer_defaults = {
         "quote_size_min_per_side": global_min_qty,
-        "quote_size_max_per_side": max(global_min_qty, 10.0),
     }
     local_optimizer_defaults.update(local_optimizer_cfg)
     global_optimizer_defaults.update(global_optimizer_cfg)

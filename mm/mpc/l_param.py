@@ -45,10 +45,12 @@ class LParamConfig:
 
     Total per-side depth at ``spread_max`` is selected by a depth logit:
     ``quote_size_min + sigmoid(u_depth) * (quote_size_max - quote_size_min)``.
+    Runtime callers may pass dynamic per-side min/max bounds; when
+    ``quote_size_max`` is not configured, the dynamic max is the structural cap.
     """
 
     quote_size_min: float
-    quote_size_max: float
+    quote_size_max: float | None
     spread_max: float
     n_components: int = 1
     quote_spread_max: float | None = None
@@ -64,17 +66,26 @@ class LParamConfig:
         return True
 
     def quote_size_midpoint(self) -> float:
-        return 0.5 * (float(self.quote_size_min) + float(self.quote_size_max))
+        hi = float(self.quote_size_max) if self.quote_size_max is not None else float(self.quote_size_min)
+        return 0.5 * (float(self.quote_size_min) + hi)
 
     def quote_size_from_depth_logit(
         self,
         u_depth: float,
         *,
+        quote_size_min: float | None = None,
         quote_size_max: float | None = None,
     ) -> float:
-        lo = float(self.quote_size_min)
-        configured_hi = float(self.quote_size_max)
-        hi_raw = configured_hi if quote_size_max is None else float(quote_size_max)
+        lo = max(0.0, float(self.quote_size_min if quote_size_min is None else quote_size_min))
+        configured_hi = (
+            float(self.quote_size_max)
+            if self.quote_size_max is not None
+            else float("inf")
+        )
+        if quote_size_max is None and self.quote_size_max is None:
+            hi_raw = lo
+        else:
+            hi_raw = configured_hi if quote_size_max is None else max(0.0, float(quote_size_max))
         hi = max(lo, min(configured_hi, hi_raw))
         return lo + _sigmoid_np(u_depth) * (hi - lo)
 
@@ -84,11 +95,13 @@ class LParamConfig:
         *,
         side_off: int,
         n_components: int,
+        quote_size_min: float | None = None,
         quote_size_max: float | None = None,
     ) -> float:
         idx = depth_logit_index(side_off=side_off, n_components=n_components)
         return self.quote_size_from_depth_logit(
             float(flat[idx]),
+            quote_size_min=quote_size_min,
             quote_size_max=quote_size_max,
         )
 
@@ -96,31 +109,44 @@ class LParamConfig:
         self,
         u_depth: Any,
         *,
+        quote_size_min: Any | None = None,
         quote_size_max: Any | None = None,
     ) -> Any:
         torch = __import__("torch")
-        lo = torch.tensor(float(self.quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
-        configured_hi = torch.tensor(
-            float(self.quote_size_max),
-            dtype=u_depth.dtype,
-            device=u_depth.device,
+        if quote_size_min is None:
+            lo = torch.tensor(float(self.quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
+        elif torch.is_tensor(quote_size_min):
+            lo = quote_size_min.to(dtype=u_depth.dtype, device=u_depth.device)
+        else:
+            lo = torch.tensor(float(quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
+        lo = torch.clamp(lo, min=0.0)
+        configured_hi_val = (
+            float(self.quote_size_max)
+            if self.quote_size_max is not None
+            else float("inf")
         )
-        if quote_size_max is None:
+        configured_hi = torch.tensor(configured_hi_val, dtype=u_depth.dtype, device=u_depth.device)
+        if quote_size_max is None and self.quote_size_max is None:
+            hi = lo
+        elif quote_size_max is None:
             hi = configured_hi
         elif torch.is_tensor(quote_size_max):
             hi = quote_size_max.to(dtype=u_depth.dtype, device=u_depth.device)
         else:
             hi = torch.tensor(float(quote_size_max), dtype=u_depth.dtype, device=u_depth.device)
+        hi = torch.clamp(hi, min=0.0)
         hi = torch.maximum(lo, torch.minimum(configured_hi, hi))
         return lo + torch.sigmoid(u_depth) * (hi - lo)
 
 
 def validate_l_param_config(l_param: LParamConfig) -> None:
     lo = float(l_param.quote_size_min)
-    hi = float(l_param.quote_size_max)
-    if lo <= 0.0 or hi <= 0.0:
-        raise ValueError("quote_size_min_per_side and quote_size_max_per_side must be positive")
-    if lo > hi:
+    hi = float(l_param.quote_size_max) if l_param.quote_size_max is not None else None
+    if lo <= 0.0:
+        raise ValueError("quote_size_min_per_side must be positive")
+    if hi is not None and hi <= 0.0:
+        raise ValueError("quote_size_max_per_side must be positive when configured")
+    if hi is not None and lo > hi:
         raise ValueError(
             f"quote_size_min_per_side ({lo}) must be <= quote_size_max_per_side ({hi})"
         )
@@ -131,7 +157,7 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
             raise ValueError(
                 f"quote_spread_max ({s_max}) must be <= spread_max ({l_param.spread_max})"
             )
-        if q_spread > hi:
+        if hi is not None and q_spread > hi:
             raise ValueError(
                 f"quote_spread_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
             )
@@ -265,6 +291,7 @@ def materialize_side_np(
     side_off: int,
     n_components: int,
     l_param: LParamConfig,
+    quote_size_min: float | None = None,
     quote_size_max: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode one side of a flat action into effective (L, k, x0)."""
@@ -302,6 +329,7 @@ def materialize_side_np(
         flat,
         side_off=side_off,
         n_components=n,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     if l_param.spread_structured:
@@ -389,6 +417,8 @@ def sigmoid_action_from_flat_raw(
     l_param: LParamConfig,
     bid_quote_size_max: float | None = None,
     ask_quote_size_max: float | None = None,
+    bid_quote_size_min: float | None = None,
+    ask_quote_size_min: float | None = None,
     use_softplus: bool = True,
 ) -> EffectiveSigmoidMixtureAction:
     del use_softplus
@@ -401,6 +431,7 @@ def sigmoid_action_from_flat_raw(
         side_off=0,
         n_components=n,
         l_param=l_param,
+        quote_size_min=bid_quote_size_min,
         quote_size_max=bid_quote_size_max,
     )
     ask_L, ask_k, ask_x0 = materialize_side_np(
@@ -408,6 +439,7 @@ def sigmoid_action_from_flat_raw(
         side_off=3 * n,
         n_components=n,
         l_param=l_param,
+        quote_size_min=ask_quote_size_min,
         quote_size_max=ask_quote_size_max,
     )
     return EffectiveSigmoidMixtureAction(
@@ -498,6 +530,7 @@ def materialize_side_torch(
     side_off: int,
     n_components: int,
     l_param: LParamConfig,
+    quote_size_min: Any | None = None,
     quote_size_max: Any | None = None,
 ) -> tuple[Any, Any, Any]:
     torch = __import__("torch")
@@ -552,6 +585,7 @@ def materialize_side_torch(
 
     q_total = l_param.quote_size_from_depth_logit_torch(
         u_depth,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     if l_param.spread_structured:

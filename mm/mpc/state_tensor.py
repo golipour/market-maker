@@ -112,6 +112,7 @@ def depth_bid_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """
@@ -128,6 +129,7 @@ def depth_bid_tensor(
             side_off=0,
             n_components=n_components,
             l_param=l_param,
+            quote_size_min=quote_size_min,
             quote_size_max=quote_size_max,
         )
     else:
@@ -162,6 +164,7 @@ def depth_ask_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Cumulative ask depth at quote-price spread (same formula as bid, ask-side params)."""
@@ -175,6 +178,7 @@ def depth_ask_tensor(
             side_off=base,
             n_components=n_components,
             l_param=l_param,
+            quote_size_min=quote_size_min,
             quote_size_max=quote_size_max,
         )
     else:
@@ -213,6 +217,7 @@ def effective_depth_bid_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
@@ -223,6 +228,7 @@ def effective_depth_bid_tensor(
         n_components,
         use_softplus=use_softplus,
         l_param=l_param,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
@@ -232,6 +238,7 @@ def effective_depth_bid_tensor(
         n_components,
         use_softplus=use_softplus,
         l_param=l_param,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     if raw.ndim == 1:
@@ -245,6 +252,7 @@ def effective_depth_ask_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
@@ -255,6 +263,7 @@ def effective_depth_ask_tensor(
         n_components,
         use_softplus=use_softplus,
         l_param=l_param,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
@@ -264,6 +273,7 @@ def effective_depth_ask_tensor(
         n_components,
         use_softplus=use_softplus,
         l_param=l_param,
+        quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
     if raw.ndim == 1:

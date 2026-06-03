@@ -186,7 +186,8 @@ per-venue fields are present under `controller.optimizer.local` or
 `controller.optimizer.global`:
 
 - `quote_size_min_per_side`
-- `quote_size_max_per_side`
+- `quote_size_max_per_side` (optional safety cap)
+- `quote_imbalance_skew_strength`
 - `quote_spread_max`
 - `quote_spread_min_depth`
 - `quote_spread_k_epsilon`
@@ -202,31 +203,45 @@ q_total =
     * (quote_size_max_per_side - quote_size_min_per_side)
 ```
 
-So the executable cumulative depth at `spread_max` is constrained to the
-configured quote-size range.
+When `quote_size_max_per_side` is not configured, the static decoder uses the
+baseline minimum until runtime cash/inventory capacity supplies a dynamic
+side-specific maximum.
 
 At rollout time, the decoder's per-side `quote_size_max` is replaced by a
 live/simulated side-capacity maximum:
 
 ```text
-bid_max_qty = max(quote_size_min_per_side, min(
-  quote_size_max_per_side,
-  quote_capacity_ratio * max(cash, 0) / mid
-))
+bid_capacity = quote_capacity_ratio * max(cash, 0) / mid
+ask_capacity = quote_capacity_ratio * max(inventory, 0)
 
-ask_max_qty = max(quote_size_min_per_side, min(
-  quote_size_max_per_side,
-  quote_capacity_ratio * max(inventory, 0)
-))
+bid_max_qty = min(optional_quote_size_max_per_side, bid_capacity)
+ask_max_qty = min(optional_quote_size_max_per_side, ask_capacity)
+
+imbalance =
+  (inventory * mid - cash)
+  / (abs(inventory * mid) + abs(cash) + EPS)
+
+bid_floor = quote_size_min_per_side
+  * (1 + quote_imbalance_skew_strength * relu(-imbalance))
+ask_floor = quote_size_min_per_side
+  * (1 + quote_imbalance_skew_strength * relu(imbalance))
+
+bid_min_qty = min(bid_floor, bid_max_qty)
+ask_min_qty = min(ask_floor, ask_max_qty)
 ```
 
 Then the usual structural decoder uses that dynamic maximum:
 
 ```text
 q_total_side =
-  quote_size_min_per_side
-  + sigmoid(depth_logit_side) * (side_max_qty - quote_size_min_per_side)
+  side_min_qty
+  + sigmoid(depth_logit_side) * (side_max_qty - side_min_qty)
 ```
+
+The skew only raises the correcting side's desired floor: cash-heavy portfolios
+raise the bid floor, base-heavy portfolios raise the ask floor. If the venue
+does not have enough cash or inventory, the min collapses to the feasible cap
+instead of forcing an impossible minimum.
 
 `min_cash` and `min_inventory` are treated as zero in this optimizer formula.
 
@@ -272,17 +287,17 @@ delta at a near-zero center becomes tiny, and enforcing
 L_1 ~= quote_spread_min_depth / tiny_activation_delta
 ```
 
-That can create impossible ladder sizes even when
-`quote_size_max_per_side = 10.0`. The center floor prevents this divide-through
-near zero in both NumPy diagnostics and Torch rollout.
+That can create impossible ladder sizes even with a configured safety cap. The
+center floor prevents this divide-through near zero in both NumPy diagnostics
+and Torch rollout.
 
 ## Initialization And Warm Start
 
 Single-venue initialization order:
 
 1. Use previous best action if `warm_start=True` and available.
-2. Else use `_initial_action_uniform_marginal_qrange()` if
-   `quote_size_min_per_side` and `quote_size_max_per_side` are configured.
+2. Else use `_initial_action_uniform_marginal_qrange()` from
+   `quote_size_min_per_side` and the optional static max when configured.
 3. Else use the handcrafted default with increasing `L`, decreasing `k`, and
    centers across `[1, spread_max]`.
 
@@ -530,20 +545,16 @@ J =
   + global_active
     * global.objective_weight
     * entropic_return_beta(global_returns, global.return_risk_aversion_beta)
-  - local.inventory_threshold_penalty_weight * local_threshold_shortfall_penalty
-  - global_active
-    * global.inventory_threshold_penalty_weight * global_threshold_shortfall_penalty
 ```
 
-Threshold penalties are one-sided and normalized:
+Cash/inventory shortage penalties are no longer active objective terms.
+Liquidity availability is handled structurally through side-specific capacity
+bounds, and long-run balance pressure is handled through
+`quote_imbalance_skew_strength`.
 
-```text
-threshold_shortfall =
-  relu(cash_threshold - cash) / max(abs(cash_threshold), 1)
-  + relu(inventory_threshold - inventory) / max(abs(inventory_threshold), 1)
-```
-
-`target_inventory_multiplier` and `target_inventory` are no longer used.
+`target_inventory_multiplier`, `target_inventory`, `cash_threshold`,
+`inventory_threshold`, and `inventory_threshold_penalty_weight` are legacy
+configuration fields and are not used to shape the optimizer objective.
 
 Implemented joint components:
 
@@ -552,9 +563,9 @@ Implemented joint components:
 | `risk_adjusted_return` | Sum of local and active global weighted return terms |
 | `local_risk_adjusted_return` | Local weighted entropic return term |
 | `global_risk_adjusted_return` | Global weighted entropic return term |
-| `threshold_shortfall_penalty` | Total threshold shortfall penalty |
-| `local_threshold_shortfall_penalty` | Local threshold contribution |
-| `global_threshold_shortfall_penalty` | Global contribution, masked when inactive |
+| `threshold_shortfall_penalty` | Legacy/no-op; expected to remain zero in current optimizer wiring |
+| `local_threshold_shortfall_penalty` | Legacy/no-op local threshold contribution |
+| `global_threshold_shortfall_penalty` | Legacy/no-op global threshold contribution |
 
 Joint diagnostics also record:
 
@@ -577,13 +588,15 @@ The local-only objective remains:
 ```text
 J =
   expected_pnl_weight * reward_term
-  - inventory_threshold_penalty_weight * threshold_shortfall_term
   - pnl_volatility_penalty_weight * volatility_term
   - pnl_cvar_penalty_weight * soft_cvar_term
   - quote_shape_concentration_penalty_weight * concentration_term
   - quote_size_target_penalty_weight * size_term
   - quote_spread_penalty_weight * quoted_spread_term
 ```
+
+The former `inventory_threshold_penalty_weight * threshold_shortfall_term`
+shortage penalty is no longer applied; shortage/balance behavior is structural.
 
 When `objective_normalize_components=true`, reward, volatility, and CVaR are
 scaled by wealth, inventory miss by an inventory scale, quote-size and spread

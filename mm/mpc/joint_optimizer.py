@@ -28,8 +28,8 @@ from mm.mpc.mpc_tensor_batched import (
     _grid_levels,
     _initial_action_uniform_marginal_qrange,
     _mid_from_book_best_levels_batched,
-    _quote_capacity_maxima_batched,
-    _quote_capacity_maxima_scalar,
+    _quote_capacity_bounds_batched,
+    _quote_capacity_bounds_scalar,
     _spread_bucket_index,
     _spread_grid_tensor,
     soft_fill_batched,
@@ -151,13 +151,23 @@ def optimize_joint_with_diagnostics(
     global_l_param = mpc._l_param_config("global")
     local_depth_kw = mpc._depth_call_kwargs("local")
     global_depth_kw = mpc._depth_call_kwargs("global")
-    local_bid_quote_size_max_0, local_ask_quote_size_max_0 = _quote_capacity_maxima_scalar(
+    (
+        local_bid_quote_size_min_0,
+        local_bid_quote_size_max_0,
+        local_ask_quote_size_min_0,
+        local_ask_quote_size_max_0,
+    ) = _quote_capacity_bounds_scalar(
         cash=cash_0,
         inventory=inv_0,
         mid_price=mid_0,
         optimizer=mpc.local_optimizer,
     )
-    global_bid_quote_size_max_0, global_ask_quote_size_max_0 = _quote_capacity_maxima_scalar(
+    (
+        global_bid_quote_size_min_0,
+        global_bid_quote_size_max_0,
+        global_ask_quote_size_min_0,
+        global_ask_quote_size_max_0,
+    ) = _quote_capacity_bounds_scalar(
         cash=global_cash_0,
         inventory=global_inv_0,
         mid_price=global_mid_0,
@@ -261,7 +271,9 @@ def optimize_joint_with_diagnostics(
         local_initial_flat,
         local_n,
         l_param=local_l_param,
+        bid_quote_size_min=local_bid_quote_size_min_0,
         bid_quote_size_max=local_bid_quote_size_max_0,
+        ask_quote_size_min=local_ask_quote_size_min_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
     )
     action_initial_snap = build_action_snapshot(initial_action, mid=mid_0, spread_levels=spread_levels)
@@ -406,13 +418,23 @@ def optimize_joint_with_diagnostics(
                     global_mid_fallback_t,
                     spread_grid,
                 )
-                local_bid_quote_size_max_t, local_ask_quote_size_max_t = _quote_capacity_maxima_batched(
+                (
+                    local_bid_quote_size_min_t,
+                    local_bid_quote_size_max_t,
+                    local_ask_quote_size_min_t,
+                    local_ask_quote_size_max_t,
+                ) = _quote_capacity_bounds_batched(
                     cash=cash_t,
                     inventory=inv_t,
                     mid_price=mid_t,
                     optimizer=local_opt,
                 )
-                global_bid_quote_size_max_t, global_ask_quote_size_max_t = _quote_capacity_maxima_batched(
+                (
+                    global_bid_quote_size_min_t,
+                    global_bid_quote_size_max_t,
+                    global_ask_quote_size_min_t,
+                    global_ask_quote_size_max_t,
+                ) = _quote_capacity_bounds_batched(
                     cash=global_cash_t,
                     inventory=global_inv_t,
                     mid_price=global_mid_t,
@@ -462,7 +484,9 @@ def optimize_joint_with_diagnostics(
                     soft_temp=local_opt.soft_fill_temp,
                     soft_fill_activation=local_opt.soft_fill_activation,
                     soft_fill_queue_model=local_opt.soft_fill_queue_model,
+                    bid_quote_size_min=local_bid_quote_size_min_t,
                     bid_quote_size_max=local_bid_quote_size_max_t,
+                    ask_quote_size_min=local_ask_quote_size_min_t,
                     ask_quote_size_max=local_ask_quote_size_max_t,
                     depth_scale=1.0,
                     **local_depth_kw,
@@ -485,7 +509,9 @@ def optimize_joint_with_diagnostics(
                     soft_temp=global_opt.soft_fill_temp,
                     soft_fill_activation=global_opt.soft_fill_activation,
                     soft_fill_queue_model=global_opt.soft_fill_queue_model,
+                    bid_quote_size_min=global_bid_quote_size_min_t,
                     bid_quote_size_max=global_bid_quote_size_max_t,
+                    ask_quote_size_min=global_ask_quote_size_min_t,
                     ask_quote_size_max=global_ask_quote_size_max_t,
                     depth_scale=global_mask,
                     **global_depth_kw,
@@ -547,10 +573,10 @@ def optimize_joint_with_diagnostics(
                 local_objective_weight=local_opt.objective_weight,
                 global_objective_weight=global_opt.objective_weight,
                 local_inventory_threshold_penalty_weight=(
-                    local_opt.inventory_threshold_penalty_weight
+                    0.0
                 ),
                 global_inventory_threshold_penalty_weight=(
-                    global_opt.inventory_threshold_penalty_weight
+                    0.0
                 ),
                 local_cash_threshold=local_opt.cash_threshold,
                 local_inventory_threshold=local_opt.inventory_threshold,
@@ -630,14 +656,18 @@ def optimize_joint_with_diagnostics(
         local_flat,
         local_n,
         l_param=local_l_param,
+        bid_quote_size_min=local_bid_quote_size_min_0,
         bid_quote_size_max=local_bid_quote_size_max_0,
+        ask_quote_size_min=local_ask_quote_size_min_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
     )
     best_global = sigmoid_action_from_flat_raw(
         global_flat,
         global_n,
         l_param=global_l_param,
+        bid_quote_size_min=global_bid_quote_size_min_0,
         bid_quote_size_max=global_bid_quote_size_max_0,
+        ask_quote_size_min=global_ask_quote_size_min_0,
         ask_quote_size_max=global_ask_quote_size_max_0,
     )
     joint_action = JointSigmoidMixtureAction(
@@ -659,7 +689,9 @@ def optimize_joint_with_diagnostics(
         final_local_flat,
         local_n,
         l_param=local_l_param,
+        bid_quote_size_min=local_bid_quote_size_min_0,
         bid_quote_size_max=local_bid_quote_size_max_0,
+        ask_quote_size_min=local_ask_quote_size_min_0,
         ask_quote_size_max=local_ask_quote_size_max_0,
     )
 

@@ -9,7 +9,7 @@ import torch
 from mm.mpc.mpc_tensor_batched import (
     MonteCarloMPCTensorBatched,
     VenueOptimizerParams,
-    _quote_capacity_maxima_batched,
+    _quote_capacity_bounds_batched,
     _soft_fill_fraction,
     soft_fill_batched,
 )
@@ -33,14 +33,16 @@ def test_optimizer_stores_objective_params() -> None:
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
         quote_capacity_ratio=0.5,
+        quote_imbalance_skew_strength=0.4,
     )
     assert mpc.return_risk_aversion_beta == 2.0
-    assert mpc.inventory_threshold_penalty_weight == 4.0
+    assert mpc.inventory_threshold_penalty_weight == 0.0
     assert mpc.cash_threshold == 500.0
     assert mpc.inventory_threshold == 5.0
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
     assert mpc.quote_capacity_ratio == 0.5
+    assert mpc.quote_imbalance_skew_strength == 0.4
     assert mpc.soft_fill_queue_model == "back_of_queue"
 
 
@@ -319,25 +321,28 @@ def test_soft_fill_dynamic_decoder_max_limits_simulated_fill_qty() -> None:
     assert float(inv_delta[0]) == pytest.approx(0.3, rel=1e-6)
 
 
-def test_quote_capacity_maxima_use_min_as_lower_structural_bound() -> None:
+def test_quote_capacity_bounds_shrink_to_capacity_and_skew_correcting_side() -> None:
     optimizer = VenueOptimizerParams(
         quote_size_min_per_side=0.3,
-        quote_size_max_per_side=10.0,
+        quote_size_max_per_side=None,
         quote_capacity_ratio=1.0,
+        quote_imbalance_skew_strength=1.0,
     )
-    cash = torch.tensor([[20.0], [100.0]], dtype=torch.float64)
-    inventory = torch.tensor([[0.2], [0.5]], dtype=torch.float64)
-    mid = torch.tensor([[100.0], [100.0]], dtype=torch.float64)
+    cash = torch.tensor([[20.0], [100.0], [20.0]], dtype=torch.float64)
+    inventory = torch.tensor([[0.2], [0.5], [2.0]], dtype=torch.float64)
+    mid = torch.full_like(cash, 100.0)
 
-    bid_cap, ask_cap = _quote_capacity_maxima_batched(
+    bid_min, bid_max, ask_min, ask_max = _quote_capacity_bounds_batched(
         cash=cash,
         inventory=inventory,
         mid_price=mid,
         optimizer=optimizer,
     )
 
-    assert bid_cap[:, 0].tolist() == pytest.approx([0.3, 1.0])
-    assert ask_cap[:, 0].tolist() == pytest.approx([0.3, 0.5])
+    assert bid_max[:, 0].tolist() == pytest.approx([0.2, 1.0, 0.2])
+    assert ask_max[:, 0].tolist() == pytest.approx([0.2, 0.5, 2.0])
+    assert bid_min[:, 0].tolist() == pytest.approx([0.2, 0.4, 0.2])
+    assert ask_min[:, 0].tolist() == pytest.approx([0.2, 0.3, 0.5454545455])
 
 
 def test_soft_fill_fraction_hardsigmoid_truncates_negative_reach() -> None:

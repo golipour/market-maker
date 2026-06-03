@@ -856,6 +856,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "quote_size_min_per_side",
             "quote_size_max_per_side",
             "quote_capacity_ratio",
+            "quote_imbalance_skew_strength",
             "quote_spread_max",
             "quote_spread_min_depth",
             "quote_spread_k_epsilon",
@@ -896,6 +897,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "quote_size_min_per_side",
                 "quote_size_max_per_side",
                 "quote_capacity_ratio",
+                "quote_imbalance_skew_strength",
                 "quote_spread_max",
                 "quote_spread_min_depth",
                 "quote_spread_k_epsilon",
@@ -1079,15 +1081,16 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.local/global quote_size_min_per_side and quote_size_max_per_side "
-            "bound venue cumulative per-side depth at spread_max; each venue default "
-            "inventory and cash threshold penalties are one-sided shortfall terms"
+            "optimizer.local/global quote_size_min_per_side sets the baseline "
+            "per-side depth floor; quote_size_max_per_side is an optional safety "
+            "cap. Cash/inventory capacity structurally caps each side, and "
+            "quote_imbalance_skew_strength can raise only the correcting-side floor."
         ),
         "risk": {
             "enabled": config.risk.enabled,
             "local": config.risk.local.as_dict(),
             "global": config.risk.global_.as_dict(),
-            "note": "hard gates only; inventory_threshold_penalty_weight lives under optimizer",
+            "note": "hard gates only; optimizer threshold-shortfall keys are legacy/no-op",
         },
         "reconcile": {
             **config.reconcile.as_dict(),
@@ -1103,15 +1106,19 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
             "inventory_threshold_penalty_weight": (
-                "venue lambda threshold shortfall penalty weight"
+                "legacy/no-op; shortage penalties are not applied by the optimizer"
             ),
-            "cash_threshold": "quote-cash floor; no penalty above this threshold",
-            "inventory_threshold": "base-inventory floor; no penalty above this threshold",
-            "quote_size_min_per_side": "venue minimum cumulative quote depth per side at spread_max",
-            "quote_size_max_per_side": "venue maximum cumulative quote depth per side at spread_max",
+            "cash_threshold": "legacy/no-op quote-cash threshold",
+            "inventory_threshold": "legacy/no-op base-inventory threshold",
+            "quote_size_min_per_side": "baseline venue cumulative quote depth floor per side at spread_max",
+            "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
             "quote_capacity_ratio": (
-                "venue side-cap ratio: bid max=min(config max, ratio*cash/mid); "
-                "ask max=min(config max, ratio*inventory), then both are floored at quote_size_min"
+                "venue side-cap ratio: bid max=min(optional config max, ratio*cash/mid); "
+                "ask max=min(optional config max, ratio*inventory)"
+            ),
+            "quote_imbalance_skew_strength": (
+                "raises the correcting-side min depth from quote_size_min_per_side "
+                "using portfolio imbalance; never lowers the other side below baseline"
             ),
             "quote_spread_max": "venue maximum allowed sum of first bid/ask spread centers",
             "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",
