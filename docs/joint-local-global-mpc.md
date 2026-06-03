@@ -39,12 +39,14 @@ model parameters for the current decision.
 
 The current controller has four first-class models:
 
-| Model | Config key | Used for |
-| --- | --- | --- |
-| Local market flow | `controller.local_market_flow_model` | Simulated local buy/sell market-order volume |
-| Local price | `controller.local_price_model` | Simulated local VWAP residuals |
+
+| Model              | Config key                            | Used for                                      |
+| ------------------ | ------------------------------------- | --------------------------------------------- |
+| Local market flow  | `controller.local_market_flow_model`  | Simulated local buy/sell market-order volume  |
+| Local price        | `controller.local_price_model`        | Simulated local VWAP residuals                |
 | Global market flow | `controller.global_market_flow_model` | Simulated global buy/sell market-order volume |
-| Global price | `controller.global_price_model` | Simulated global VWAP residuals or deltas |
+| Global price       | `controller.global_price_model`       | Simulated global VWAP residuals or deltas     |
+
 
 The local and global market-flow models are independent instances. The global
 fill probability is not derived from local flow anymore.
@@ -80,7 +82,7 @@ The first optimized step is converted into:
 
 - local target orders from the local sigmoid action
 - global target orders from the global sigmoid action, only when global is
-  active and a global frame/constraints are available
+active and a global frame/constraints are available
 
 The local and global curves use the same sigmoid-mixture parameterization, but
 their quote-size, spread-shaping, soft-fill, and objective parameters are
@@ -121,14 +123,16 @@ Local and global use the same simulation mechanics:
 
 The important differences are the inputs and the mask:
 
-| Aspect | Local | Global |
-| --- | --- | --- |
-| Book | `state.ob_rel` | `state.global_ob_rel` |
-| Flow model | `local_market_flow_model` | `global_market_flow_model` |
-| Price model | `local_price_model` | `global_price_model` |
-| Cash/inventory | `state.cash`, `state.inventory` | `state.global_cash`, `state.global_inventory` |
-| Soft-fill depth scale | `1.0` | `1.0` if active, else `0.0` |
-| Inventory penalty | Always included | Included only if active |
+
+| Aspect                | Local                           | Global                                        |
+| --------------------- | ------------------------------- | --------------------------------------------- |
+| Book                  | `state.ob_rel`                  | `state.global_ob_rel`                         |
+| Flow model            | `local_market_flow_model`       | `global_market_flow_model`                    |
+| Price model           | `local_price_model`             | `global_price_model`                          |
+| Cash/inventory        | `state.cash`, `state.inventory` | `state.global_cash`, `state.global_inventory` |
+| Soft-fill depth scale | `1.0`                           | `1.0` if active, else `0.0`                   |
+| Inventory penalty     | Always included                 | Included only if active                       |
+
 
 `soft_fill_batched()` is not an exchange queue-position simulator. It is a
 differentiable liquidity-share model:
@@ -137,7 +141,7 @@ differentiable liquidity-share model:
 - market buys consume ask-side liquidity, including our ask quotes
 - own fills produce cash and inventory deltas
 - unfilled own quote remainder is not carried as own resting liquidity into the
-  next simulated horizon step
+next simulated horizon step
 
 So the global side is not special because of an exchange API. It is special
 because it uses its own global book, global flow model, global price model, and
@@ -156,9 +160,9 @@ W = local_cash + global_cash
 The reference path is selected by `controller.reference_price_source`:
 
 - `global`: mark inventory and objective returns with the simulated global
-  sell-side VWAP path, falling back to local if no global VWAP is available.
+sell-side VWAP path, falling back to local if no global VWAP is available.
 - `local`: mark inventory and objective returns with the simulated local
-  sell-side VWAP path.
+sell-side VWAP path.
 
 Local and global future VWAP paths are still simulated separately from their own
 books and price models. Only the selected path is used as the valuation
@@ -202,14 +206,16 @@ loss = -J
 
 Objective components reported in diagnostics:
 
-| Component | Meaning |
-| --- | --- |
-| `risk_adjusted_return` | Sum of local and active global weighted return terms |
-| `local_risk_adjusted_return` | Local weighted entropic return term |
-| `global_risk_adjusted_return` | Global weighted entropic return term, masked when inactive |
-| `threshold_shortfall_penalty` | Combined weighted one-sided cash/inventory threshold shortfall penalty |
-| `local_threshold_shortfall_penalty` | Local weighted threshold contribution |
-| `global_threshold_shortfall_penalty` | Global weighted threshold contribution, masked when inactive |
+
+| Component                            | Meaning                                                                |
+| ------------------------------------ | ---------------------------------------------------------------------- |
+| `risk_adjusted_return`               | Sum of local and active global weighted return terms                   |
+| `local_risk_adjusted_return`         | Local weighted entropic return term                                    |
+| `global_risk_adjusted_return`        | Global weighted entropic return term, masked when inactive             |
+| `threshold_shortfall_penalty`        | Combined weighted one-sided cash/inventory threshold shortfall penalty |
+| `local_threshold_shortfall_penalty`  | Local weighted threshold contribution                                  |
+| `global_threshold_shortfall_penalty` | Global weighted threshold contribution, masked when inactive           |
+
 
 ## What "Mixed Objective" Means Here
 
@@ -269,13 +275,15 @@ These current joint objective parameters are configured under
 
 Meaning:
 
-| Parameter | Current effect in joint mode |
-| --- | --- |
-| `objective_weight` | Venue return-term multiplier |
-| `return_risk_aversion_beta` | Venue risk aversion for entropic return |
-| `inventory_threshold_penalty_weight` | Venue one-sided threshold penalty weight |
-| `cash_threshold` | Venue quote-cash floor; no penalty above it |
-| `inventory_threshold` | Venue base-inventory floor; no penalty above it |
+
+| Parameter                            | Current effect in joint mode                    |
+| ------------------------------------ | ----------------------------------------------- |
+| `objective_weight`                   | Venue return-term multiplier                    |
+| `return_risk_aversion_beta`          | Venue risk aversion for entropic return         |
+| `inventory_threshold_penalty_weight` | Venue one-sided threshold penalty weight        |
+| `cash_threshold`                     | Venue quote-cash floor; no penalty above it     |
+| `inventory_threshold`                | Venue base-inventory floor; no penalty above it |
+
 
 The threshold term is linear and normalized:
 
@@ -330,35 +338,39 @@ These optimizer parameters are separate for local and global:
 
 Current behavior:
 
-| Parameter | Venue-scoped? | Notes |
-| --- | --- | --- |
-| `objective_weight` | Yes | Venue multiplier in mixed objective |
-| `return_risk_aversion_beta` | Yes | Venue entropic-return risk aversion |
-| `inventory_threshold_penalty_weight` | Yes | Venue threshold shortfall penalty weight |
-| `cash_threshold` | Yes | Venue quote-cash floor |
-| `inventory_threshold` | Yes | Venue base-inventory floor |
-| `quote_size_min_per_side` | Yes | Venue sigmoid depth lower range |
-| `quote_size_max_per_side` | Yes | Venue sigmoid depth upper range |
-| `quote_capacity_ratio` | Yes | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory, both floored at `quote_size_min_per_side` |
-| `quote_spread_max` | Yes | Venue structured spread cap |
-| `quote_spread_min_depth` | Yes | Venue structured minimum depth |
-| `quote_spread_k_epsilon` | Yes | Venue spread-parameter numerical guard |
-| `soft_fill_temp` | Yes | Venue fill softness |
-| `soft_fill_activation` | Yes | Venue fill activation |
-| `soft_fill_queue_model` | Yes | Venue queue model: `pro_rata` or `back_of_queue` |
+
+| Parameter                            | Venue-scoped? | Notes                                                                                                              |
+| ------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `objective_weight`                   | Yes           | Venue multiplier in mixed objective                                                                                |
+| `return_risk_aversion_beta`          | Yes           | Venue entropic-return risk aversion                                                                                |
+| `inventory_threshold_penalty_weight` | Yes           | Venue threshold shortfall penalty weight                                                                           |
+| `cash_threshold`                     | Yes           | Venue quote-cash floor                                                                                             |
+| `inventory_threshold`                | Yes           | Venue base-inventory floor                                                                                         |
+| `quote_size_min_per_side`            | Yes           | Venue sigmoid depth lower range                                                                                    |
+| `quote_size_max_per_side`            | Yes           | Venue sigmoid depth upper range                                                                                    |
+| `quote_capacity_ratio`               | Yes           | Venue side max ratio: bid max uses `cash / mid`, ask max uses inventory, both floored at `quote_size_min_per_side` |
+| `quote_spread_max`                   | Yes           | Venue structured spread cap                                                                                        |
+| `quote_spread_min_depth`             | Yes           | Venue structured minimum depth                                                                                     |
+| `quote_spread_k_epsilon`             | Yes           | Venue spread-parameter numerical guard                                                                             |
+| `soft_fill_temp`                     | Yes           | Venue fill softness                                                                                                |
+| `soft_fill_activation`               | Yes           | Venue fill activation                                                                                              |
+| `soft_fill_queue_model`              | Yes           | Venue queue model: `pro_rata` or `back_of_queue`                                                                   |
+
 
 Separate today:
 
-| Surface | Local | Global |
-| --- | --- | --- |
-| Market-flow model | `local_market_flow_model` | `global_market_flow_model` |
-| Price model | `local_price_model` | `global_price_model` |
-| Market book | local event | global event |
-| Ledger balances/orders | local ledger | global ledger |
-| Instrument constraints | local symbol spec | global symbol spec |
-| Execution planner | `execution.local` | `execution.global` |
-| Hard risk limits | `controller.risk.local` | `controller.risk.global` |
-| Live placement switch | normal local live gate | `liquidity_sourcing.global_live_orders` |
+
+| Surface                | Local                     | Global                                  |
+| ---------------------- | ------------------------- | --------------------------------------- |
+| Market-flow model      | `local_market_flow_model` | `global_market_flow_model`              |
+| Price model            | `local_price_model`       | `global_price_model`                    |
+| Market book            | local event               | global event                            |
+| Ledger balances/orders | local ledger              | global ledger                           |
+| Instrument constraints | local symbol spec         | global symbol spec                      |
+| Execution planner      | `execution.local`         | `execution.global`                      |
+| Hard risk limits       | `controller.risk.local`   | `controller.risk.global`                |
+| Live placement switch  | normal local live gate    | `liquidity_sourcing.global_live_orders` |
+
 
 ## Implementation Notes
 
@@ -385,24 +397,24 @@ For the joint optimizer:
 - `optimizer.config.global_active` tells whether the global action participated.
 - `optimizer.config.reference_price` is the initial marking price.
 - `optimizer.config.reference_price_source` tells which VWAP path marked
-  objective returns.
+objective returns.
 - `optimizer.config.vwap_depth` is the initial inventory-derived VWAP depth.
 - `optimizer.config.wealth_0` is the normalization base for returns.
 - `optimizer.config.local_optimizer` and `optimizer.config.global_optimizer`
-  show the resolved venue-scoped optimizer parameters.
+show the resolved venue-scoped optimizer parameters.
 - `optimizer.objective.*.components.risk_adjusted_return` is the return term.
 - `optimizer.objective.*.components.local_risk_adjusted_return` is the local
-  return contribution.
+return contribution.
 - `optimizer.objective.*.components.global_risk_adjusted_return` is the global
-  return contribution.
+return contribution.
 - `optimizer.objective.*.components.local_threshold_shortfall_penalty` is the
-  local threshold term.
+local threshold term.
 - `optimizer.objective.*.components.global_threshold_shortfall_penalty` is the
-  global threshold term.
+global threshold term.
 - `optimizer.rollout.local_fill_*_mean` and `global_fill_*_mean` show expected
-  first-step simulated fills.
+first-step simulated fills.
 - `optimizer.rollout.global_action_flat` is the optimized global first-step raw
-  vector when joint mode runs.
+vector when joint mode runs.
 
 If `global_threshold_shortfall_penalty` is zero and global fill means are zero, check
 `global_active`, frame readiness, global staleness, and global model outputs.

@@ -14,6 +14,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Execution, ledger, and observability](execution-ledger-observability.md) | Detailed live execution, ledger, private state, fills, and dashboard debugging |
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
+| [Price and orderflow models](price-and-orderflow-models.md) | Detailed stochastic model inventory, data, parameter learning, runtime updates, optimizer usage |
 | [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |
 | [Codebase upgrade plan](codebase-upgrade-plan.md) | Phased cleanup plan for diagnostics, optimizer refactors, risk config, hedging, and Grafana dashboards |
 | [Joint local/global MPC](joint-local-global-mpc.md) | Current local/global models, joint rollout, global simulation, objective weights, and shared optimizer parameters |
