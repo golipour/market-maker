@@ -125,6 +125,10 @@ class PrivateRuntimeConfig:
             from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
 
             return NobitexApiKeyAuth(api_key, api_private_key)
+        if exchange_key == "tabdeal" and api_key and api_private_key:
+            from mm.exchanges.tabdeal.private_rest import TabdealApiKeyAuth
+
+            return TabdealApiKeyAuth(api_key, api_private_key)
         return self.resolved_api_token(exchange_key or None)
 
 

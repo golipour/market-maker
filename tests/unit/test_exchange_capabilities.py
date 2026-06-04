@@ -15,6 +15,8 @@ from mm.exchanges.capabilities import (
 from mm.exchanges.factory import select_public_market_data_adapter
 from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
 from mm.exchanges.nobitex.ws import NobitexWsMarketDataAdapter
+from mm.exchanges.tabdeal.rest import TabdealRestMarketDataAdapter
+from mm.exchanges.tabdeal.ws import TabdealWsMarketDataAdapter
 
 
 def test_rest_is_default_transport_semantics() -> None:
@@ -30,6 +32,12 @@ def test_factory_returns_selected_single_transport_adapter() -> None:
     assert isinstance(rest.adapter, NobitexRestMarketDataAdapter)
     assert websocket.transport == "websocket"
     assert isinstance(websocket.adapter, NobitexWsMarketDataAdapter)
+
+    tabdeal_rest = select_public_market_data_adapter("tabdeal", "USDT_IRT", mode="rest")
+    tabdeal_ws = select_public_market_data_adapter("tabdeal", "USDT_IRT", mode="websocket")
+
+    assert isinstance(tabdeal_rest.adapter, TabdealRestMarketDataAdapter)
+    assert isinstance(tabdeal_ws.adapter, TabdealWsMarketDataAdapter)
 
 
 def test_websocket_request_falls_back_to_rest_for_unsupported_parts(monkeypatch: pytest.MonkeyPatch) -> None:

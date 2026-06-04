@@ -140,6 +140,26 @@ EXCHANGE_CAPABILITIES: dict[str, ExchangeCapabilities] = {
             place_rest=True, cancel_rest=True, market_order_rest=True
         ),
     ),
+    "tabdeal": ExchangeCapabilities(
+        exchange="tabdeal",
+        public_market_data=PublicMarketDataCapabilities(
+            trades_rest=True,
+            trades_websocket=True,
+            orderbook_rest=True,
+            orderbook_websocket=True,
+            preferred_transport="rest",
+        ),
+        private_state=PrivateStateCapabilities(
+            balances_rest=True,
+            open_orders_rest=True,
+            order_updates_websocket=True,
+            fills_websocket=True,
+            preferred_mode="rest",
+        ),
+        order_commands=OrderCommandCapabilities(
+            place_rest=True, cancel_rest=True, market_order_rest=True
+        ),
+    ),
 }
 
 

@@ -17,6 +17,12 @@ from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.exchanges.nobitex.order_adapter import NobitexRestOrderCommandAdapter
 from mm.exchanges.shared.venue_limits_trade_stats import TradeStatsVenueOrderLimitSource
+from mm.exchanges.tabdeal import TabdealMarketDataAdapter
+from mm.exchanges.tabdeal.order_adapter import TabdealRestOrderCommandAdapter
+from mm.exchanges.tabdeal.private_state import (
+    TabdealRestPrivateStateAdapter,
+    TabdealWebSocketPrivateStateAdapter,
+)
 from mm.exchanges.wallex.order_adapter import WallexRestOrderCommandAdapter
 from mm.exchanges.shared.provider_adapter import TransportMode
 from mm.exchanges.wallex import WallexMarketDataAdapter
@@ -100,6 +106,14 @@ def select_public_market_data_adapter(
             trades_limit=trades_limit,
             poll_interval_ms=poll_interval_ms,
         )
+    elif exchange_key == "tabdeal":
+        adapter = TabdealMarketDataAdapter(
+            symbol,
+            mode=transport,
+            depth_limit=depth_limit,
+            trades_limit=trades_limit,
+            poll_interval_ms=poll_interval_ms,
+        )
     else:
         raise ValueError(f"unsupported exchange: {exchange}")
 
@@ -140,21 +154,35 @@ def select_private_state_adapter(
     exchange_key = exchange.lower().strip()
     requested_mode = str(mode).lower().strip()
     selected_mode = resolve_private_state_mode(exchange_key, requested_mode)
-    if selected_mode != "rest":
-        raise ValueError(f"{exchange_key} private state mode is not implemented yet: {selected_mode}")
-
     if exchange_key == "nobitex":
+        if selected_mode != "rest":
+            raise ValueError(f"{exchange_key} private state mode is not implemented yet: {selected_mode}")
         adapter = NobitexRestPrivateStateAdapter(
             symbol,
             api_token=api_token,
             poll_interval_ms=poll_interval_ms,
         )
     elif exchange_key == "wallex":
+        if selected_mode != "rest":
+            raise ValueError(f"{exchange_key} private state mode is not implemented yet: {selected_mode}")
         adapter = WallexRestPrivateStateAdapter(
             symbol,
             api_token=api_token,
             poll_interval_ms=poll_interval_ms,
         )
+    elif exchange_key == "tabdeal":
+        if selected_mode == "websocket":
+            adapter = TabdealWebSocketPrivateStateAdapter(
+                symbol,
+                api_token=api_token,
+                poll_interval_ms=poll_interval_ms,
+            )
+        else:
+            adapter = TabdealRestPrivateStateAdapter(
+                symbol,
+                api_token=api_token,
+                poll_interval_ms=poll_interval_ms,
+            )
     else:
         raise ValueError(f"unsupported exchange: {exchange}")
 
@@ -194,6 +222,12 @@ def select_order_command_adapter(
         )
     elif exchange_key == "wallex":
         adapter = WallexRestOrderCommandAdapter(
+            symbol,
+            api_token=api_token,
+            max_concurrency=max_concurrency,
+        )
+    elif exchange_key == "tabdeal":
+        adapter = TabdealRestOrderCommandAdapter(
             symbol,
             api_token=api_token,
             max_concurrency=max_concurrency,
