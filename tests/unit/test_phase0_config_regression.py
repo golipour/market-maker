@@ -81,33 +81,38 @@ def test_local_plus_global_config_loads() -> None:
 def test_example_runtime_config_loads() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.local.normalized_exchange() == "nobitex"
+    assert config.local.normalized_exchange() == "wallex"
     assert config.local.symbol == "USDT_IRT"
-    assert config.binding.local.exchange == "nobitex"
+    assert config.binding.local.exchange == "wallex"
     assert config.binding.local.symbol == "USDT_IRT"
     assert config.global_ is not None
-    assert config.global_.normalized_exchange() == "wallex"
+    assert config.global_.normalized_exchange() == "nobitex"
     assert config.binding.global_ is not None
-    assert config.binding.global_.exchange == "wallex"
+    assert config.binding.global_.exchange == "nobitex"
     assert config.binding.global_.symbol == "USDT_IRT"
     assert config.interval_ms == 10000
     assert config.controller is not None
     assert config.controller.enabled is True
     assert config.controller.actor_id == "mpc-controller"
     assert config.controller.action_start_after_steps == 10
-    assert config.liquidity_sourcing.enabled is True
+    assert config.controller.execution_model == {
+        "kind": "real",
+        "local_maker_fee": 0.0015,
+        "global_maker_fee": 0.0025,
+    }
+    assert config.liquidity_sourcing.enabled is False
     assert config.liquidity_sourcing.global_live_orders is False
     assert config.execution.local.planner == "replace"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
     assert config.persistence.topics == ()
     assert config.resolved_persistence_topics == ()
-    assert "market:events:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "market:events:wallex:USDT_IRT:10000" in config.effective_persistence_topics
-    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "market:events:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "strategy:joint:frames:wallex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "execution:errors" in config.effective_persistence_topics
-    assert "private:state:nobitex:errors" in config.effective_persistence_topics
     assert "private:state:wallex:errors" in config.effective_persistence_topics
+    assert "private:state:nobitex:errors" in config.effective_persistence_topics
 
 
 def test_single_venue_runtime_config_dataclass() -> None:

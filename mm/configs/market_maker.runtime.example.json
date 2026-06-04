@@ -1,39 +1,49 @@
 {
   "venues": {
     "global": {
-      "exchange": "nobitex",
-      "symbol": "USDT_IRT",
-      "mode": "rest",
-      "depth_limit": 100,
-      "trades_limit": 200,
-      "poll_interval_ms": 1000
+      "public": {
+        "exchange": "nobitex",
+        "symbol": "USDT_IRT",
+        "mode": "rest",
+        "depth_limit": 100,
+        "trades_limit": 200,
+        "poll_interval_ms": 1000
+      },
+      "private": {
+        "mode": "rest",
+        "api_token_env": "NOBITEX_API_TOKEN",
+        "poll_interval_ms": 10000,
+        "enable_execution": true,
+        "fill_event_source": "exchange_fill_history"
+      },
+      "fees": {
+        "maker_fee": 0.0025
+      }
     },
     "local": {
-      "exchange": "wallex",
-      "symbol": "USDT_IRT",
-      "mode": "rest",
-      "depth_limit": 100,
-      "trades_limit": 200,
-      "poll_interval_ms": 1000
+      "public": {
+        "exchange": "wallex",
+        "symbol": "USDT_IRT",
+        "mode": "rest",
+        "depth_limit": 100,
+        "trades_limit": 200,
+        "poll_interval_ms": 1000
+      },
+      "private": {
+        "mode": "rest",
+        "api_token_env": "WALLEX_API_TOKEN",
+        "poll_interval_ms": 10000,
+        "enable_execution": true,
+        "fill_event_source": "exchange_fill_history"
+      },
+      "fees": {
+        "maker_fee": 0.0015
+      }
     }
   },
   "interval_ms": 10000,
   "max_global_lag_ms": 2000,
   "global_grace_ms": 250,
-  "global_private": {
-    "mode": "rest",
-    "api_token_env": "NOBITEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true,
-    "fill_event_source": "exchange_fill_history"
-  },
-  "local_private": {
-    "mode": "rest",
-    "api_token_env": "WALLEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true,
-    "fill_event_source": "exchange_fill_history"
-  },
   "liquidity_sourcing": {
     "enabled": false,
     "mode": "liquidity_sourcing",
@@ -134,11 +144,6 @@
       "kind": "ewma_gaussian",
       "decay": 0.95,
       "sigma_min_quote": 1.0
-    },
-    "execution_model": {
-      "kind": "real",
-      "local_maker_fee": 0.0015,
-      "global_maker_fee": 0.0025
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",

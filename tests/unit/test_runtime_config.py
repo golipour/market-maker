@@ -93,6 +93,87 @@ def test_private_runtime_config_parses_fill_event_source() -> None:
     assert config.local_private.fill_event_source == "open_order_delta"
 
 
+def test_runtime_config_parses_private_config_nested_under_venues() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "venues": {
+                "local": {
+                    "public": {
+                        "exchange": "wallex",
+                        "symbol": "USDT_IRT",
+                        "poll_interval_ms": 750,
+                    },
+                    "private": {
+                        "api_token_env": "WALLEX_API_TOKEN",
+                        "fill_event_source": "open_order_delta",
+                    },
+                    "fees": {"maker_fee": 0.0015},
+                },
+                "global": {
+                    "public": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                    "private": {"api_key_env": "NOBITEX_API_KEY"},
+                    "fees": {"maker": 0.0025},
+                },
+            },
+            "controller": {"enabled": True},
+        }
+    )
+
+    assert config.local.normalized_exchange() == "wallex"
+    assert config.local.poll_interval_ms == 750
+    assert config.local_private is not None
+    assert config.local_private.api_token_env == "WALLEX_API_TOKEN"
+    assert config.local_private.fill_event_source == "open_order_delta"
+    assert config.global_private is not None
+    assert config.global_private.api_key_env == "NOBITEX_API_KEY"
+    assert config.controller is not None
+    assert config.controller.execution_model == {
+        "kind": "real",
+        "local_maker_fee": 0.0015,
+        "global_maker_fee": 0.0025,
+    }
+
+    contract = config.as_contract()
+    assert contract["venues"]["local"]["public"]["exchange"] == "wallex"
+    assert contract["venues"]["local"]["private"]["mode"] == "rest"
+    assert contract["venues"]["local"]["fees"]["maker_fee"] == 0.0015
+    assert contract["venues"]["global"]["fees"]["maker_fee"] == 0.0025
+    assert contract["venues"]["global"]["private"]["auth_type"] == "token"
+
+
+def test_runtime_config_parses_private_config_inside_venues_object() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "venues": {
+                "local": {"exchange": "wallex", "symbol": "USDT_IRT"},
+                "global": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                "local_private": {"api_token_env": "WALLEX_API_TOKEN"},
+                "global_private": {"api_token_env": "NOBITEX_API_TOKEN"},
+            },
+        }
+    )
+
+    assert config.local_private is not None
+    assert config.local_private.api_token_env == "WALLEX_API_TOKEN"
+    assert config.global_private is not None
+    assert config.global_private.api_token_env == "NOBITEX_API_TOKEN"
+
+
+def test_runtime_config_keeps_venues_execution_model_alias() -> None:
+    config = runtime_config_from_mapping(
+        {
+            "venues": {
+                "local": {"exchange": "wallex", "symbol": "USDT_IRT"},
+                "execution_model": {"kind": "real", "maker_fee": 0.001},
+            },
+            "controller": {"enabled": True},
+        }
+    )
+
+    assert config.controller is not None
+    assert config.controller.execution_model == {"kind": "real", "maker_fee": 0.001}
+
+
 def test_private_runtime_config_rejects_invalid_fill_event_source() -> None:
     with pytest.raises(ValueError, match="fill_event_source"):
         PrivateRuntimeConfig(fill_event_source="both")  # type: ignore[arg-type]

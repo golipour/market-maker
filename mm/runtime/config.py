@@ -559,10 +559,20 @@ class MarketMakerRuntimeConfig:
         return self.global_private
 
     def as_contract(self) -> dict[str, Any]:
+        local_venue = _source_contract(self.local, self.interval_ms)
+        global_venue = _source_contract(self.global_, self.interval_ms) if self.global_ else None
+        if local_venue is not None:
+            local_venue["public"] = _source_contract(self.local, self.interval_ms)
+            local_venue["private"] = _private_contract(self.local_private)
+            local_venue["fees"] = _venue_fee_contract(self.controller, "local")
+        if global_venue is not None:
+            global_venue["public"] = _source_contract(self.global_, self.interval_ms)
+            global_venue["private"] = _private_contract(self.global_private)
+            global_venue["fees"] = _venue_fee_contract(self.controller, "global")
         return {
             "venues": {
-                "local": _source_contract(self.local, self.interval_ms),
-                "global": _source_contract(self.global_, self.interval_ms) if self.global_ else None,
+                "local": local_venue,
+                "global": global_venue,
             },
             "local_private": _private_contract(self.local_private),
             "global_private": _private_contract(self.global_private),
@@ -638,6 +648,19 @@ def _source_contract(source: MarketDataSourceConfig | None, interval_ms: int) ->
     }
 
 
+def _venue_fee_contract(
+    controller: ControllerRuntimeConfig | None,
+    role: NeutralVenueRole,
+) -> dict[str, Any] | None:
+    if controller is None or not isinstance(controller.execution_model, dict):
+        return None
+    key = "local_maker_fee" if role == "local" else "global_maker_fee"
+    fee = controller.execution_model.get(key)
+    if fee is None:
+        fee = controller.execution_model.get("maker_fee")
+    return {"maker_fee": fee} if fee is not None else None
+
+
 def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
     """Load a full runtime config from JSON.
 
@@ -663,7 +686,7 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         global_grace_ms=int(payload.get("global_grace_ms", 250)),
         local_private=_private_from_mapping(local_private_payload),
         global_private=_private_from_mapping(global_private_payload),
-        controller=_controller_from_mapping(payload.get("controller")),
+        controller=_controller_from_mapping(_resolve_controller_payload(payload)),
         liquidity_sourcing=liquidity_sourcing,
         execution=_execution_from_mapping(payload.get("execution")),
         bus=_bus_from_mapping(payload.get("bus")),
@@ -676,19 +699,88 @@ def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, A
     venues = payload.get("venues")
     if not isinstance(venues, dict):
         raise ValueError("runtime config requires venues object with local venue")
-    local_payload = _venue_payload_from_mapping(venues.get("local"))
-    global_payload = _venue_payload_from_mapping(venues.get("global"))
+    local_payload = _public_payload_from_venue(venues.get("local"))
+    global_payload = _public_payload_from_venue(venues.get("global"))
     if local_payload is None:
         raise ValueError("runtime config requires venues.local")
     return local_payload, global_payload
 
 
 def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any]:
-    return payload.get("local_private"), payload.get("global_private")
+    venues = payload.get("venues")
+    if not isinstance(venues, dict):
+        return payload.get("local_private"), payload.get("global_private")
+    local_payload = _venue_payload_from_mapping(venues.get("local"))
+    global_payload = _venue_payload_from_mapping(venues.get("global"))
+    local_private = payload.get("local_private")
+    if local_private is None and local_payload is not None:
+        local_private = local_payload.get("private")
+    if local_private is None:
+        local_private = venues.get("local_private")
+    global_private = payload.get("global_private")
+    if global_private is None and global_payload is not None:
+        global_private = global_payload.get("private")
+    if global_private is None:
+        global_private = venues.get("global_private")
+    return local_private, global_private
+
+
+def _resolve_controller_payload(payload: dict[str, Any]) -> Any:
+    controller = payload.get("controller")
+    venues = payload.get("venues")
+    if not isinstance(venues, dict):
+        return controller
+    execution_model = _execution_model_from_venues(venues)
+    if execution_model is None:
+        return controller
+    if not isinstance(controller, dict):
+        return {"execution_model": execution_model}
+    if "execution_model" in controller:
+        return controller
+    merged = dict(controller)
+    merged["execution_model"] = execution_model
+    return merged
 
 
 def _venue_payload_from_mapping(payload: Any) -> dict[str, Any] | None:
     return dict(payload) if isinstance(payload, dict) else None
+
+
+def _public_payload_from_venue(payload: Any) -> dict[str, Any] | None:
+    venue = _venue_payload_from_mapping(payload)
+    if venue is None:
+        return None
+    public = venue.get("public")
+    return dict(public) if isinstance(public, dict) else venue
+
+
+def _execution_model_from_venues(venues: dict[str, Any]) -> dict[str, Any] | None:
+    execution_model = dict(venues.get("execution_model", {})) if isinstance(venues.get("execution_model"), dict) else {}
+    local_fee = _maker_fee_from_venue(venues.get("local"))
+    global_fee = _maker_fee_from_venue(venues.get("global"))
+    if local_fee is not None:
+        execution_model.setdefault("local_maker_fee", local_fee)
+    if global_fee is not None:
+        execution_model.setdefault("global_maker_fee", global_fee)
+    if not execution_model:
+        return None
+    execution_model.setdefault("kind", "real")
+    return execution_model
+
+
+def _maker_fee_from_venue(payload: Any) -> float | None:
+    venue = _venue_payload_from_mapping(payload)
+    if venue is None:
+        return None
+    fees = venue.get("fees")
+    if isinstance(fees, (int, float, str)):
+        return float(fees)
+    if not isinstance(fees, dict):
+        return None
+    for key in ("maker_fee", "maker"):
+        if fees.get(key) is not None:
+            return float(fees[key])
+    return None
 
 
 def _liquidity_sourcing_from_mapping(payload: Any) -> LiquiditySourcingRuntimeConfig:
