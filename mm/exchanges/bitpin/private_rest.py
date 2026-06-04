@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+import threading
+import time
 from typing import Any
 
 import requests
@@ -31,7 +34,21 @@ class BitpinWebSocketInfo:
 BitpinAuth = BitpinApiKeyAuth | BitpinTokenAuth | str
 
 _MARKET_ID_CACHE: dict[str, int] = {}
-_ACCESS_TOKEN_CACHE: dict[tuple[str, str], str] = {}
+_ACCESS_TOKEN_CACHE: dict[tuple[str, str], BitpinTokenAuth] = {}
+_AUTH_THROTTLE_UNTIL: dict[tuple[str, str], float] = {}
+_AUTH_LOCK = threading.Lock()
+
+
+class BitpinAuthError(RuntimeError):
+    def __init__(self, status_code: int, path: str, detail: Any):
+        self.status_code = int(status_code)
+        self.path = path
+        self.detail = detail
+        super().__init__(f"Bitpin HTTP {status_code} {path}: {detail}")
+
+
+class BitpinAuthCooldown(RuntimeError):
+    pass
 
 
 def api_symbol(symbol: str) -> str:
@@ -64,16 +81,48 @@ def resolve_market_id(symbol: str) -> int:
 
 def login(auth: BitpinApiKeyAuth) -> BitpinTokenAuth:
     key = (auth.api_key, auth.api_secret)
-    cached = _ACCESS_TOKEN_CACHE.get(key)
-    if cached:
-        return BitpinTokenAuth(cached)
-    payload = _post_public("usr/api/login/", {"api_key": auth.api_key, "api_secret": auth.api_secret})
-    access = str(payload.get("access") or payload.get("access_token") or "").strip()
-    refresh = str(payload.get("refresh") or payload.get("refresh_token") or "").strip() or None
-    if not access:
-        raise RuntimeError("Bitpin login failed: missing access token")
-    _ACCESS_TOKEN_CACHE[key] = access
-    return BitpinTokenAuth(access, refresh)
+    with _AUTH_LOCK:
+        cached = _ACCESS_TOKEN_CACHE.get(key)
+        if cached:
+            return cached
+        _raise_if_auth_throttled(key)
+        try:
+            payload = _post_public(
+                "usr/authenticate/",
+                {"api_key": auth.api_key, "secret_key": auth.api_secret},
+            )
+        except BitpinAuthError as exc:
+            _remember_auth_throttle(key, exc)
+            raise
+        access = str(payload.get("access") or payload.get("access_token") or "").strip()
+        refresh = str(payload.get("refresh") or payload.get("refresh_token") or "").strip() or None
+        if not access:
+            raise RuntimeError("Bitpin login failed: missing access token")
+        token = BitpinTokenAuth(access, refresh)
+        _ACCESS_TOKEN_CACHE[key] = token
+        _AUTH_THROTTLE_UNTIL.pop(key, None)
+        return token
+
+
+def refresh_access_token(auth: BitpinApiKeyAuth) -> BitpinTokenAuth:
+    key = (auth.api_key, auth.api_secret)
+    with _AUTH_LOCK:
+        cached = _ACCESS_TOKEN_CACHE.get(key)
+        if cached and cached.refresh_token:
+            try:
+                payload = _post_public("usr/refresh_token/", {"refresh": cached.refresh_token})
+            except BitpinAuthError as exc:
+                if exc.status_code != 401:
+                    _remember_auth_throttle(key, exc)
+                    raise
+            else:
+                access = str(payload.get("access") or payload.get("access_token") or "").strip()
+                if access:
+                    token = BitpinTokenAuth(access, cached.refresh_token)
+                    _ACCESS_TOKEN_CACHE[key] = token
+                    return token
+        _ACCESS_TOKEN_CACHE.pop(key, None)
+    return login(auth)
 
 
 def get_websocket_info(auth: BitpinAuth | None) -> BitpinWebSocketInfo | None:
@@ -87,10 +136,9 @@ def get_websocket_info(auth: BitpinAuth | None) -> BitpinWebSocketInfo | None:
 
 
 def get_balances(auth: BitpinAuth | None) -> dict[str, dict[str, float]]:
-    token = _access_token(auth)
-    if not token:
+    payload = _auth_get(auth, "wlt/wallets/")
+    if payload is None:
         return {}
-    payload = _get_auth("wlt/wallets/", token)
     result: dict[str, dict[str, float]] = {}
     for row in _result_rows(payload):
         if not isinstance(row, dict):
@@ -99,7 +147,7 @@ def get_balances(auth: BitpinAuth | None) -> dict[str, dict[str, float]]:
         if not asset:
             continue
         free = _safe_float(row.get("balance") or row.get("available") or row.get("free"))
-        locked = _safe_float(row.get("blocked") or row.get("locked") or row.get("freeze"))
+        locked = _safe_float(row.get("frozen") or row.get("blocked") or row.get("locked") or row.get("freeze"))
         total = _safe_float(row.get("total"), free + locked)
         result[asset] = {"free": free, "locked": locked, "total": total}
     from mm.exchanges.instrument_wire import merge_wallet_balances_raw
@@ -108,28 +156,28 @@ def get_balances(auth: BitpinAuth | None) -> dict[str, dict[str, float]]:
 
 
 def list_open_orders(symbol: str, auth: BitpinAuth | None) -> list[dict]:
-    token = _access_token(auth)
-    if not token:
-        return []
     market_id = resolve_market_id(symbol)
-    payload = _get_auth("odr/orders/", token, {"market_id": market_id, "state": "active"})
+    payload = _auth_get(auth, "odr/orders/", {"market_id": market_id, "state": "active"})
+    if payload is None:
+        return []
     return [row for row in _result_rows(payload) if isinstance(row, dict)]
 
 
 def list_filled_orders(symbol: str, auth: BitpinAuth | None) -> list[dict]:
-    token = _access_token(auth)
-    if not token:
-        return []
-    payload = _get_auth(
+    payload = _auth_get(
+        auth,
         "odr/fills/",
-        token,
         {"symbol": api_symbol(symbol), "limit": 100},
     )
+    if payload is None:
+        return []
     rows = [row for row in _result_rows(payload) if isinstance(row, dict)]
     if rows:
         return rows
     market_id = resolve_market_id(symbol)
-    payload = _get_auth("odr/orders/", token, {"market_id": market_id, "state": "closed"})
+    payload = _auth_get(auth, "odr/orders/", {"market_id": market_id, "state": "closed"})
+    if payload is None:
+        return []
     return [
         row
         for row in _result_rows(payload)
@@ -168,9 +216,6 @@ def place_order(
     price: str | float | int,
     client_order_id: str | None = None,
 ) -> dict[str, Any]:
-    token = _access_token(auth)
-    if not token:
-        return {"status": "failed", "message": "missing bitpin credentials"}
     payload: dict[str, Any] = {
         "market": str(resolve_market_id(symbol)),
         "amount1": str(amount),
@@ -181,15 +226,13 @@ def place_order(
     if client_order_id:
         payload["identifier"] = str(client_order_id)[:64]
     try:
-        return _post_auth("odr/orders/", token, payload)
+        out = _auth_post(auth, "odr/orders/", payload)
+        return out if isinstance(out, dict) else {"status": "failed", "message": "missing bitpin credentials"}
     except Exception as exc:
         return {"status": "failed", "message": str(exc)}
 
 
 def place_bulk_orders(orders: list[dict[str, Any]], auth: BitpinAuth | None) -> dict[str, Any]:
-    token = _access_token(auth)
-    if not token:
-        return {"status": "failed", "message": "missing bitpin credentials"}
     if not orders:
         return {"orders": []}
     if len(orders) > 10:
@@ -199,17 +242,16 @@ def place_bulk_orders(orders: list[dict[str, Any]], auth: BitpinAuth | None) -> 
         return {"status": "failed", "message": "bitpin bulk orders must share one market symbol"}
     payload = [_bulk_order_payload(order) for order in orders]
     try:
-        return _post_auth("odr/orders/bulk", token, payload)
+        out = _auth_post(auth, "odr/orders/bulk", payload)
+        return out if isinstance(out, dict) else {"status": "failed", "message": "missing bitpin credentials"}
     except Exception as exc:
         return {"status": "failed", "message": str(exc)}
 
 
 def cancel_order(order_id: str, auth: BitpinAuth | None) -> dict[str, Any]:
-    token = _access_token(auth)
-    if not token:
-        return {"status": "failed", "message": "missing bitpin credentials"}
     try:
-        return _delete_auth(f"odr/orders/{order_id}/", token)
+        out = _auth_delete(auth, f"odr/orders/{order_id}/")
+        return out if isinstance(out, dict) else {"status": "failed", "message": "missing bitpin credentials"}
     except Exception as exc:
         return {"status": "failed", "message": str(exc)}
 
@@ -220,9 +262,6 @@ def cancel_bulk_orders(
     *,
     identifiers: list[str] | None = None,
 ) -> dict[str, Any]:
-    token = _access_token(auth)
-    if not token:
-        return {"status": "failed", "message": "missing bitpin credentials"}
     ids = [str(order_id) for order_id in (order_ids or []) if str(order_id).strip()]
     idents = [str(identifier) for identifier in (identifiers or []) if str(identifier).strip()]
     if not ids and not idents:
@@ -233,7 +272,8 @@ def cancel_bulk_orders(
     else:
         payload = {"ids": ids}
     try:
-        return _delete_auth("odr/orders/bulk/", token, payload=payload)
+        out = _auth_delete(auth, "odr/orders/bulk/", payload=payload)
+        return out if isinstance(out, dict) else {"status": "failed", "message": "missing bitpin credentials"}
     except Exception as exc:
         return {"status": "failed", "message": str(exc)}
 
@@ -251,6 +291,79 @@ def _access_token(auth: BitpinAuth | None) -> str:
     return raw
 
 
+def _invalidate_access_token(auth: BitpinAuth | None) -> None:
+    if isinstance(auth, BitpinApiKeyAuth):
+        with _AUTH_LOCK:
+            _ACCESS_TOKEN_CACHE.pop((auth.api_key, auth.api_secret), None)
+
+
+def _raise_if_auth_throttled(key: tuple[str, str]) -> None:
+    wait_s = _AUTH_THROTTLE_UNTIL.get(key, 0.0) - time.monotonic()
+    if wait_s > 0.0:
+        raise BitpinAuthCooldown(
+            f"Bitpin authenticate throttled; retry after {int(wait_s) + 1} seconds"
+        )
+
+
+def _remember_auth_throttle(key: tuple[str, str], exc: BitpinAuthError) -> None:
+    wait_s = _throttle_wait_seconds(exc)
+    if wait_s is not None:
+        _AUTH_THROTTLE_UNTIL[key] = time.monotonic() + wait_s
+
+
+def _throttle_wait_seconds(exc: BitpinAuthError) -> float | None:
+    detail = str(exc.detail).lower()
+    if exc.status_code == 406 and "wrong ip" in detail:
+        return 300.0
+    if exc.status_code != 429:
+        return None
+    match = re.search(r"Expected available in\s+(\d+)\s+seconds", str(exc.detail))
+    if match:
+        return max(1.0, float(match.group(1)))
+    return 30.0
+
+
+def _auth_get(auth: BitpinAuth | None, path: str, params: dict[str, Any] | None = None) -> Any:
+    return _auth_request(auth, lambda token: _get_auth(path, token, params))
+
+
+def _auth_post(auth: BitpinAuth | None, path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    return _auth_request(auth, lambda token: _post_auth(path, token, payload))
+
+
+def _auth_delete(
+    auth: BitpinAuth | None,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    return _auth_request(auth, lambda token: _delete_auth(path, token, payload=payload))
+
+
+def _auth_request(auth: BitpinAuth | None, request: Any) -> Any:
+    token = _access_token(auth)
+    if not token:
+        return None
+    try:
+        return request(token)
+    except BitpinAuthError as exc:
+        if not isinstance(auth, BitpinApiKeyAuth) or not _is_token_not_valid(exc):
+            raise
+        token = refresh_access_token(auth).access_token
+        try:
+            return request(token)
+        except BitpinAuthError as retry_exc:
+            if _is_token_not_valid(retry_exc):
+                _invalidate_access_token(auth)
+            raise
+
+
+def _is_token_not_valid(exc: BitpinAuthError) -> bool:
+    if exc.status_code != 401:
+        return False
+    return "token_not_valid" in str(exc.detail) or "token is invalid or expired" in str(exc.detail).lower()
+
+
 def _get_public(path: str, params: dict[str, Any] | None = None) -> Any:
     response = requests.get(f"{BASE_URL}/v1/{path}", params=params or {}, timeout=15)
     response.raise_for_status()
@@ -260,7 +373,7 @@ def _get_public(path: str, params: dict[str, Any] | None = None) -> Any:
 def _post_public(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     response = requests.post(f"{BASE_URL}/api/v1/{path}", json=payload, timeout=15)
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
+        raise BitpinAuthError(response.status_code, f"/api/v1/{path}", _response_detail(response))
     out = response.json()
     return out if isinstance(out, dict) else {}
 
@@ -273,7 +386,7 @@ def _get_auth(path: str, access_token: str, params: dict[str, Any] | None = None
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
+        raise BitpinAuthError(response.status_code, f"/api/v1/{path}", _response_detail(response))
     return response.json()
 
 
@@ -285,7 +398,7 @@ def _post_auth(path: str, access_token: str, payload: dict[str, Any]) -> dict[st
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
+        raise BitpinAuthError(response.status_code, f"/api/v1/{path}", _response_detail(response))
     out = response.json()
     return out if isinstance(out, dict) else {}
 
@@ -298,7 +411,7 @@ def _delete_auth(path: str, access_token: str, payload: dict[str, Any] | None = 
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
+        raise BitpinAuthError(response.status_code, f"/api/v1/{path}", _response_detail(response))
     out = response.json() if response.content else {}
     return out if isinstance(out, dict) else {}
 

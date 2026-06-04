@@ -33,6 +33,11 @@ class BitpinRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
     async def fetch_fills(self) -> list[dict]:
         return await asyncio.to_thread(private_rest.list_filled_orders, self.symbol, self.api_token)
 
+    async def _publish_error(self, source: str, exc: Exception) -> None:
+        if isinstance(exc, private_rest.BitpinAuthCooldown):
+            return
+        await super()._publish_error(source, exc)
+
     def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
         normalized = _normalize_bitpin_order_row(row)
         return super().normalize_open_order(normalized, timestamp_ms=timestamp_ms)

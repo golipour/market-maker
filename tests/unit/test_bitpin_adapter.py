@@ -29,6 +29,18 @@ def test_bitpin_runtime_credentials_use_api_key_and_private_key_as_secret():
     assert auth.api_secret == "secret"
 
 
+def test_bitpin_runtime_credentials_allow_api_token_env_as_api_key(monkeypatch):
+    monkeypatch.setenv("BITPIN_API_TOKEN", "key")
+    monkeypatch.setenv("BITPIN_API_PRIVATE_KEY", "secret")
+    cfg = PrivateRuntimeConfig(api_token_env="BITPIN_API_TOKEN")
+
+    auth = cfg.resolved_api_credentials("bitpin")
+
+    assert isinstance(auth, private_rest.BitpinApiKeyAuth)
+    assert auth.api_key == "key"
+    assert auth.api_secret == "secret"
+
+
 def test_bitpin_factories_return_rest_adapters():
     auth = private_rest.BitpinTokenAuth("access")
 
@@ -80,6 +92,7 @@ async def test_bitpin_rest_market_data_uses_v2_orderbook_endpoint():
 
 def test_bitpin_login_and_authorized_request(monkeypatch):
     private_rest._ACCESS_TOKEN_CACHE.clear()
+    private_rest._AUTH_THROTTLE_UNTIL.clear()
     private_rest._MARKET_ID_CACHE.clear()
     captured: list[dict] = []
 
@@ -99,7 +112,7 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
 
     def fake_post(url, json=None, headers=None, timeout=None):
         captured.append({"method": "POST", "url": url, "json": json, "headers": headers, "timeout": timeout})
-        if url.endswith("/usr/api/login/"):
+        if url.endswith("/usr/authenticate/"):
             return FakeResponse({"access": "access-token", "refresh": "refresh-token"})
         if url.endswith("/odr/orders/bulk"):
             return FakeResponse({"orders": [{"id": 42, "state": "active"}]})
@@ -109,7 +122,7 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
         captured.append({"method": "GET", "url": url, "params": params, "headers": headers, "timeout": timeout})
         if url.endswith("/mkt/markets/"):
             return FakeResponse({"results": [{"id": 5, "code": "USDT_IRT"}], "next": None})
-        return FakeResponse({"results": [{"currency": {"code": "USDT"}, "balance": "1.5", "blocked": "0.2"}]})
+        return FakeResponse({"results": [{"currency": {"code": "USDT"}, "balance": "1.5", "frozen": "0.2", "total": "1.7"}]})
 
     monkeypatch.setattr(private_rest.requests, "post", fake_post)
     monkeypatch.setattr(private_rest.requests, "get", fake_get)
@@ -131,8 +144,10 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
     )
 
     assert balances["USDT"]["free"] == 1.5
+    assert balances["USDT"]["locked"] == 0.2
+    assert balances["USDT"]["total"] == 1.7
     assert order["orders"][0]["id"] == 42
-    assert captured[0]["json"] == {"api_key": "key", "api_secret": "secret"}
+    assert captured[0]["json"] == {"api_key": "key", "secret_key": "secret"}
     assert captured[1]["headers"]["Authorization"] == "Bearer access-token"
     assert captured[-1]["url"].endswith("/odr/orders/bulk")
     assert captured[-1]["json"] == [{
@@ -143,6 +158,125 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
         "type": "limit",
         "identifier": "cid",
     }]
+
+
+def test_bitpin_api_key_auth_refreshes_expired_access_token(monkeypatch):
+    private_rest._ACCESS_TOKEN_CACHE.clear()
+    private_rest._AUTH_THROTTLE_UNTIL.clear()
+    captured: list[dict] = []
+    login_tokens = iter(["expired-token", "fresh-token"])
+
+    class FakeResponse:
+        content = b"{}"
+        text = ""
+
+        def __init__(self, payload, *, ok=True, status_code=200):
+            self._payload = payload
+            self.ok = ok
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.append({"method": "POST", "url": url, "json": json, "headers": headers})
+        if url.endswith("/api/v1/usr/authenticate/"):
+            return FakeResponse({"access": next(login_tokens), "refresh": "refresh-token"})
+        assert url.endswith("/api/v1/usr/refresh_token/")
+        assert json == {"refresh": "refresh-token"}
+        return FakeResponse({"access": "fresh-token"})
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured.append({"method": "GET", "url": url, "params": params, "headers": headers})
+        token = headers["Authorization"].removeprefix("Bearer ")
+        if token == "expired-token":
+            return FakeResponse(
+                {
+                    "detail": "Given token not valid for any token type",
+                    "code": "token_not_valid",
+                    "messages": [{"message": "Token is invalid or expired"}],
+                },
+                ok=False,
+                status_code=401,
+            )
+        return FakeResponse({"results": [{"currency": {"code": "USDT"}, "balance": "1.5"}]})
+
+    monkeypatch.setattr(private_rest.requests, "post", fake_post)
+    monkeypatch.setattr(private_rest.requests, "get", fake_get)
+
+    balances = private_rest.get_balances(private_rest.BitpinApiKeyAuth("key", "secret"))
+
+    assert balances["USDT"]["free"] == 1.5
+    assert [call["method"] for call in captured] == ["POST", "GET", "POST", "GET"]
+    assert captured[1]["headers"]["Authorization"] == "Bearer expired-token"
+    assert captured[3]["headers"]["Authorization"] == "Bearer fresh-token"
+
+
+def test_bitpin_authenticate_throttle_sets_cooldown(monkeypatch):
+    private_rest._ACCESS_TOKEN_CACHE.clear()
+    private_rest._AUTH_THROTTLE_UNTIL.clear()
+    captured: list[dict] = []
+
+    class FakeResponse:
+        ok = False
+        status_code = 429
+        content = b"{}"
+        text = ""
+
+        def json(self):
+            return {"detail": "Request was throttled. Expected available in 19 seconds."}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.append({"url": url, "json": json})
+        return FakeResponse()
+
+    monkeypatch.setattr(private_rest.requests, "post", fake_post)
+
+    auth = private_rest.BitpinApiKeyAuth("key", "secret")
+    with pytest.raises(private_rest.BitpinAuthError, match="429"):
+        private_rest.login(auth)
+    with pytest.raises(private_rest.BitpinAuthCooldown, match="retry after"):
+        private_rest.login(auth)
+
+    assert len(captured) == 1
+
+
+def test_bitpin_authenticate_wrong_ip_sets_cooldown(monkeypatch):
+    private_rest._ACCESS_TOKEN_CACHE.clear()
+    private_rest._AUTH_THROTTLE_UNTIL.clear()
+    captured: list[dict] = []
+
+    class FakeResponse:
+        ok = False
+        status_code = 406
+        content = b"{}"
+        text = ""
+
+        def json(self):
+            return {"detail": "wrong ip 109.201.21.203"}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.append({"url": url, "json": json})
+        return FakeResponse()
+
+    monkeypatch.setattr(private_rest.requests, "post", fake_post)
+
+    auth = private_rest.BitpinApiKeyAuth("key", "secret")
+    with pytest.raises(private_rest.BitpinAuthError, match="wrong ip"):
+        private_rest.login(auth)
+    with pytest.raises(private_rest.BitpinAuthCooldown, match="retry after"):
+        private_rest.login(auth)
+
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_bitpin_private_adapter_suppresses_auth_cooldown_errors():
+    adapter = BitpinRestPrivateStateAdapter("USDT_IRT", api_token=private_rest.BitpinTokenAuth("access"))
+
+    await adapter._publish_error("fill_poll", private_rest.BitpinAuthCooldown("retry after 10 seconds"))
+
+    assert adapter._error_queue.empty()
 
 
 def test_bitpin_websocket_info(monkeypatch):
