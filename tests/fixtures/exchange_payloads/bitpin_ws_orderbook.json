@@ -1,0 +1,17 @@
+{
+  "push": {
+    "channel": "orderbook:USDT_IRT",
+    "pub": {
+      "data": {
+        "asks": [["100100", "0.4"], ["100200", "2.5"]],
+        "bids": [["100000", "1.5"], ["99900", "2.0"]],
+        "volume_ask": "2.9",
+        "volume_bid": "3.5",
+        "price": "100000",
+        "symbol": "USDT_IRT",
+        "event_time": "2024-08-14T14:37:54.487062Z",
+        "event": "market_data"
+      }
+    }
+  }
+}

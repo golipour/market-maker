@@ -12,6 +12,12 @@ from mm.exchanges.capabilities import (
     resolve_private_state_mode,
     resolve_public_market_transport,
 )
+from mm.exchanges.bitpin import BitpinMarketDataAdapter
+from mm.exchanges.bitpin.order_adapter import BitpinRestOrderCommandAdapter
+from mm.exchanges.bitpin.private_state import (
+    BitpinRestPrivateStateAdapter,
+    BitpinWebSocketPrivateStateAdapter,
+)
 from mm.exchanges.nobitex import NobitexMarketDataAdapter
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
@@ -114,6 +120,14 @@ def select_public_market_data_adapter(
             trades_limit=trades_limit,
             poll_interval_ms=poll_interval_ms,
         )
+    elif exchange_key == "bitpin":
+        adapter = BitpinMarketDataAdapter(
+            symbol,
+            mode=transport,
+            depth_limit=depth_limit,
+            trades_limit=trades_limit,
+            poll_interval_ms=poll_interval_ms,
+        )
     else:
         raise ValueError(f"unsupported exchange: {exchange}")
 
@@ -183,6 +197,19 @@ def select_private_state_adapter(
                 api_token=api_token,
                 poll_interval_ms=poll_interval_ms,
             )
+    elif exchange_key == "bitpin":
+        if selected_mode == "websocket":
+            adapter = BitpinWebSocketPrivateStateAdapter(
+                symbol,
+                api_token=api_token,
+                poll_interval_ms=poll_interval_ms,
+            )
+        else:
+            adapter = BitpinRestPrivateStateAdapter(
+                symbol,
+                api_token=api_token,
+                poll_interval_ms=poll_interval_ms,
+            )
     else:
         raise ValueError(f"unsupported exchange: {exchange}")
 
@@ -228,6 +255,12 @@ def select_order_command_adapter(
         )
     elif exchange_key == "tabdeal":
         adapter = TabdealRestOrderCommandAdapter(
+            symbol,
+            api_token=api_token,
+            max_concurrency=max_concurrency,
+        )
+    elif exchange_key == "bitpin":
+        adapter = BitpinRestOrderCommandAdapter(
             symbol,
             api_token=api_token,
             max_concurrency=max_concurrency,

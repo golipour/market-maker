@@ -35,9 +35,9 @@
     "fill_event_source": "exchange_fill_history"
   },
   "liquidity_sourcing": {
-    "enabled": true,
+    "enabled": false,
     "mode": "liquidity_sourcing",
-    "global_live_orders": true
+    "global_live_orders": false
   },
   "execution": {
     "local": {

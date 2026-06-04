@@ -1,0 +1,6 @@
+{
+  "results": [
+    {"id": 1, "price": "100000", "remain_amount": "1.5"},
+    {"id": 2, "price": "99900", "remain_amount": "2.0"}
+  ]
+}

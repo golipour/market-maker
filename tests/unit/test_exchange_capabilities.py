@@ -13,6 +13,8 @@ from mm.exchanges.capabilities import (
     validate_public_market_transport,
 )
 from mm.exchanges.factory import select_public_market_data_adapter
+from mm.exchanges.bitpin.rest import BitpinRestMarketDataAdapter
+from mm.exchanges.bitpin.ws import BitpinWsMarketDataAdapter
 from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
 from mm.exchanges.nobitex.ws import NobitexWsMarketDataAdapter
 from mm.exchanges.tabdeal.rest import TabdealRestMarketDataAdapter
@@ -38,6 +40,13 @@ def test_factory_returns_selected_single_transport_adapter() -> None:
 
     assert isinstance(tabdeal_rest.adapter, TabdealRestMarketDataAdapter)
     assert isinstance(tabdeal_ws.adapter, TabdealWsMarketDataAdapter)
+
+    bitpin_rest = select_public_market_data_adapter("bitpin", "USDT_IRT", mode="rest")
+    bitpin_ws = select_public_market_data_adapter("bitpin", "USDT_IRT", mode="websocket")
+
+    assert isinstance(bitpin_rest.adapter, BitpinRestMarketDataAdapter)
+    assert bitpin_ws.transport == "websocket"
+    assert isinstance(bitpin_ws.adapter, BitpinWsMarketDataAdapter)
 
 
 def test_websocket_request_falls_back_to_rest_for_unsupported_parts(monkeypatch: pytest.MonkeyPatch) -> None:

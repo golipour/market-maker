@@ -129,6 +129,10 @@ class PrivateRuntimeConfig:
             from mm.exchanges.tabdeal.private_rest import TabdealApiKeyAuth
 
             return TabdealApiKeyAuth(api_key, api_private_key)
+        if exchange_key == "bitpin" and api_key and api_private_key:
+            from mm.exchanges.bitpin.private_rest import BitpinApiKeyAuth
+
+            return BitpinApiKeyAuth(api_key, api_private_key)
         return self.resolved_api_token(exchange_key or None)
 
 

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from mm.exchanges.bitpin.rest import BitpinRestMarketDataAdapter
+from mm.exchanges.bitpin.ws import BitpinWsMarketDataAdapter
 from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
 from mm.exchanges.nobitex.ws import NobitexWsMarketDataAdapter
 from mm.exchanges.tabdeal.rest import TabdealRestMarketDataAdapter
@@ -96,6 +98,37 @@ async def test_tabdeal_rest_payloads_normalize_to_raw_events():
 
 
 @pytest.mark.asyncio
+async def test_bitpin_rest_payloads_normalize_to_raw_events():
+    adapter = BitpinRestMarketDataAdapter("USDT_IRT", depth_limit=2, trades_limit=2)
+    adapter._client = FakeRestClient(
+        {
+            "/v1/mkt/markets/": load_fixture("bitpin_markets.json"),
+            "/v1/mth/actives/5/": load_fixture("bitpin_rest_sell_orderbook.json"),
+            "/v1/mth/matches/5/": load_fixture("bitpin_rest_trades.json"),
+        }
+    )
+
+    async def fake_get_json(path: str, params: dict | None = None):
+        adapter._client.calls.append((path, params))
+        if path == "/v1/mth/actives/5/" and params == {"type": "buy"}:
+            return load_fixture("bitpin_rest_buy_orderbook.json")
+        return adapter._client.payloads[path]
+
+    adapter._client.get_json = fake_get_json
+
+    book = await adapter.fetch_orderbook()
+    trades = await adapter.fetch_trades()
+
+    assert book.exchange == "bitpin"
+    assert book.symbol == "USDT_IRT"
+    assert [level.price for level in book.bids] == [100000.0, 99900.0]
+    assert [level.qty for level in book.asks] == [0.4, 2.5]
+    assert [trade.trade_id for trade in trades] == ["10", "11"]
+    assert [trade.side for trade in trades] == ["sell", "buy"]
+    assert adapter._client.calls[0] == ("/v1/mkt/markets/", {"page": 1})
+
+
+@pytest.mark.asyncio
 async def test_nobitex_websocket_payloads_normalize_to_raw_events():
     adapter = NobitexWsMarketDataAdapter("BTC_IRT", depth_limit=2)
 
@@ -146,3 +179,21 @@ async def test_tabdeal_websocket_payloads_normalize_to_raw_events():
     assert trade.trade_id == "12"
     assert trade.timestamp_ms == 1710000003000
     assert trade.side == "buy"
+
+
+@pytest.mark.asyncio
+async def test_bitpin_websocket_payloads_normalize_to_raw_events():
+    adapter = BitpinWsMarketDataAdapter("USDT_IRT", depth_limit=2)
+
+    await adapter.handle_message(load_fixture("bitpin_ws_orderbook.json"))
+    await adapter.handle_message(load_fixture("bitpin_ws_trade.json"))
+
+    book = await adapter._book_queue.get()
+    trade = await adapter._trade_queue.get()
+
+    assert book.bids[0].price == 100000.0
+    assert book.asks[0].qty == 0.4
+    assert trade.trade_id == "73802972_73807087"
+    assert trade.price == 100000.0
+    assert trade.qty == 0.5
+    assert trade.side == "sell"
