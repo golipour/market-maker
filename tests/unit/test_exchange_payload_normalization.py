@@ -103,14 +103,14 @@ async def test_bitpin_rest_payloads_normalize_to_raw_events():
     adapter._client = FakeRestClient(
         {
             "/v1/mkt/markets/": load_fixture("bitpin_markets.json"),
-            "/v1/mth/actives/5/": load_fixture("bitpin_rest_sell_orderbook.json"),
+            "/v2/mth/actives/5/": load_fixture("bitpin_rest_sell_orderbook.json"),
             "/v1/mth/matches/5/": load_fixture("bitpin_rest_trades.json"),
         }
     )
 
     async def fake_get_json(path: str, params: dict | None = None):
         adapter._client.calls.append((path, params))
-        if path == "/v1/mth/actives/5/" and params == {"type": "buy"}:
+        if path == "/v2/mth/actives/5/" and params == {"type": "buy"}:
             return load_fixture("bitpin_rest_buy_orderbook.json")
         return adapter._client.payloads[path]
 

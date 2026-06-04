@@ -16,12 +16,12 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.0025
+        "maker_fee": 0.003
       }
     },
     "local": {
       "public": {
-        "exchange": "wallex",
+        "exchange": "bitpin",
         "symbol": "USDT_IRT",
         "mode": "rest",
         "depth_limit": 100,
@@ -30,12 +30,12 @@
       },
       "private": {
         "mode": "rest",
-        "api_token_env": "WALLEX_API_TOKEN",
+        "api_token_env": "BITPIN_API_TOKEN",
         "poll_interval_ms": 10000,
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.0015
+        "maker_fee": 0.003
       }
     }
   },

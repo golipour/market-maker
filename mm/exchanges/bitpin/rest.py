@@ -44,8 +44,8 @@ class BitpinRestMarketDataAdapter(RestPollingMarketDataAdapter):
 
     async def fetch_orderbook(self) -> RawOrderbook:
         market_id = await self._resolve_market_id()
-        bids_payload = await self._client.get_json(f"/v1/mth/actives/{market_id}/", {"type": "buy"})
-        asks_payload = await self._client.get_json(f"/v1/mth/actives/{market_id}/", {"type": "sell"})
+        bids_payload = await self._client.get_json(f"/v2/mth/actives/{market_id}/", {"type": "buy"})
+        asks_payload = await self._client.get_json(f"/v2/mth/actives/{market_id}/", {"type": "sell"})
         book = RawOrderbook(
             exchange=self.exchange,
             symbol=self.symbol,
@@ -89,7 +89,13 @@ class BitpinRestMarketDataAdapter(RestPollingMarketDataAdapter):
             else None,
             timestamp_ms=parse_timestamp_ms(item.get("created_at") or item.get("time") or item.get("timestamp")),
             price=_safe_float(item.get("price") or item.get("price_limit") or item.get("average_price")),
-            qty=_safe_float(item.get("amount1") or item.get("amount") or item.get("quantity") or item.get("exchanged1")),
+            qty=_safe_float(
+                item.get("match_amount")
+                or item.get("amount1")
+                or item.get("amount")
+                or item.get("quantity")
+                or item.get("exchanged1")
+            ),
             side="buy" if side == "buy" else "sell",
             exchange=self.exchange,
             symbol=self.symbol,
@@ -139,6 +145,7 @@ def _order_rows(payload: Any) -> list[list[str]]:
         price = item.get("price") or item.get("price_limit") or item.get("active_limit")
         qty = (
             item.get("remain_amount")
+            or item.get("remain")
             or item.get("amount1")
             or item.get("amount")
             or item.get("quantity")

@@ -120,11 +120,15 @@ def list_filled_orders(symbol: str, auth: BitpinAuth | None) -> list[dict]:
     token = _access_token(auth)
     if not token:
         return []
-    market_id = resolve_market_id(symbol)
-    payload = _get_auth("odr/matches/", token, {"market_id": market_id})
+    payload = _get_auth(
+        "odr/fills/",
+        token,
+        {"symbol": api_symbol(symbol), "limit": 100},
+    )
     rows = [row for row in _result_rows(payload) if isinstance(row, dict)]
     if rows:
         return rows
+    market_id = resolve_market_id(symbol)
     payload = _get_auth("odr/orders/", token, {"market_id": market_id, "state": "closed"})
     return [
         row
@@ -254,47 +258,47 @@ def _get_public(path: str, params: dict[str, Any] | None = None) -> Any:
 
 
 def _post_public(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    response = requests.post(f"{BASE_URL}/v1/{path}", json=payload, timeout=15)
+    response = requests.post(f"{BASE_URL}/api/v1/{path}", json=payload, timeout=15)
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /v1/{path}: {_response_detail(response)}")
+        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
     out = response.json()
     return out if isinstance(out, dict) else {}
 
 
 def _get_auth(path: str, access_token: str, params: dict[str, Any] | None = None) -> Any:
     response = requests.get(
-        f"{BASE_URL}/v1/{path}",
+        f"{BASE_URL}/api/v1/{path}",
         params=params or {},
         headers=_auth_headers(access_token),
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /v1/{path}: {_response_detail(response)}")
+        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
     return response.json()
 
 
 def _post_auth(path: str, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
     response = requests.post(
-        f"{BASE_URL}/v1/{path}",
+        f"{BASE_URL}/api/v1/{path}",
         json=payload,
         headers=_auth_headers(access_token),
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /v1/{path}: {_response_detail(response)}")
+        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
     out = response.json()
     return out if isinstance(out, dict) else {}
 
 
 def _delete_auth(path: str, access_token: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     response = requests.delete(
-        f"{BASE_URL}/v1/{path}",
+        f"{BASE_URL}/api/v1/{path}",
         json=payload,
         headers=_auth_headers(access_token),
         timeout=15,
     )
     if not response.ok:
-        raise RuntimeError(f"Bitpin HTTP {response.status_code} /v1/{path}: {_response_detail(response)}")
+        raise RuntimeError(f"Bitpin HTTP {response.status_code} /api/v1/{path}: {_response_detail(response)}")
     out = response.json() if response.content else {}
     return out if isinstance(out, dict) else {}
 

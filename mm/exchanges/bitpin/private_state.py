@@ -159,22 +159,26 @@ def _normalize_bitpin_order_row(row: dict) -> dict:
     if not isinstance(row, dict):
         return row
     out = dict(row)
-    if "orderId" not in out and out.get("id") is not None:
-        out["orderId"] = out.get("id")
+    if "orderId" not in out:
+        out["orderId"] = out.get("order_id") or out.get("id")
+    if "exchange_order_id" not in out and out.get("order_id") is not None:
+        out["exchange_order_id"] = out.get("order_id")
     if "side" not in out and out.get("type") is not None:
         out["side"] = out.get("type")
     if "quantity" not in out:
-        out["quantity"] = out.get("amount1") or out.get("amount") or out.get("resource")
+        out["quantity"] = out.get("base_amount") or out.get("amount1") or out.get("amount") or out.get("resource")
     if "executedQty" not in out:
-        out["executedQty"] = out.get("exchanged1") or out.get("matchedAmount")
+        out["executedQty"] = out.get("base_amount") or out.get("exchanged1") or out.get("matchedAmount")
     if "remaining" not in out:
-        out["remaining"] = out.get("remain_amount")
+        out["remaining"] = out.get("remain_amount") or out.get("remain")
     if "price" not in out:
         out["price"] = out.get("price_limit") or out.get("active_limit") or out.get("average_price")
     if "timestamp" not in out:
         out["timestamp"] = out.get("created_at") or out.get("activated_at") or out.get("closed_at")
     if "fee" not in out:
         out["fee"] = out.get("commission") or out.get("user_commission")
+    if "actor_id" not in out and out.get("identifier") is not None:
+        out["actor_id"] = out.get("identifier")
     return out
 
 
