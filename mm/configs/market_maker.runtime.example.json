@@ -13,7 +13,6 @@
         "mode": "rest",
         "api_token_env": "NOBITEX_API_TOKEN",
         "poll_interval_ms": 10000,
-        "enable_execution": true,
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
@@ -33,7 +32,6 @@
         "mode": "rest",
         "api_token_env": "WALLEX_API_TOKEN",
         "poll_interval_ms": 10000,
-        "enable_execution": true,
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
@@ -51,10 +49,12 @@
   },
   "execution": {
     "local": {
+      "enabled": true,
       "planner": "replace",
       "max_orders_per_side": 5
     },
     "global": {
+      "enabled": true,
       "planner": "replace",
       "max_orders_per_side": 2
     }

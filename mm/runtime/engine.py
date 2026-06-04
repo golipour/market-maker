@@ -201,7 +201,7 @@ async def build_runtime_components(
             bus=runtime_bus,
             fill_event_source=private_config.fill_event_source,
         )
-        if private_config.enable_execution:
+        if config.execution.for_role(source.role).enabled:
             placement_max_concurrency = 8
             if config.controller is not None:
                 placement_max_concurrency = config.controller.placement_max_concurrency

@@ -307,7 +307,6 @@ async def test_portfolio_ledger_service_publishes_consistency_diagnostic(
     config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         local_private=PrivateRuntimeConfig(
             api_token_env="NOBITEX_API_TOKEN",
-            enable_execution=True,
         ),
     )
     bus = InMemoryBus()

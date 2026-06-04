@@ -54,8 +54,8 @@ def test_local_plus_global_config_loads() -> None:
             "interval_ms": 10000,
             "max_global_lag_ms": 2000,
             "global_grace_ms": 250,
-            "local_private": {"api_token_env": "NOBITEX_API_TOKEN", "enable_execution": True},
-            "global_private": {"api_token_env": "WALLEX_API_TOKEN", "enable_execution": True},
+            "local_private": {"api_token_env": "NOBITEX_API_TOKEN"},
+            "global_private": {"api_token_env": "WALLEX_API_TOKEN"},
             "controller": {
                 "enabled": True,
                 "actor_id": "mpc-controller",
@@ -102,6 +102,8 @@ def test_example_runtime_config_loads() -> None:
     }
     assert config.liquidity_sourcing.enabled is False
     assert config.liquidity_sourcing.global_live_orders is False
+    assert config.execution.local.enabled is True
+    assert config.execution.global_.enabled is True
     assert config.execution.local.planner == "replace"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"

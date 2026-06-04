@@ -5,10 +5,12 @@ import os
 import pytest
 
 from mm.runtime.config import (
+    ExecutionRuntimeConfig,
     MarketDataSourceConfig,
     MarketMakerRuntimeConfig,
     PersistenceRuntimeConfig,
     PrivateRuntimeConfig,
+    VenueExecutionConfig,
     runtime_config_from_mapping,
 )
 from mm.env_loader import load_mm_env
@@ -157,6 +159,20 @@ def test_runtime_config_parses_private_config_inside_venues_object() -> None:
     assert config.local_private.api_token_env == "WALLEX_API_TOKEN"
     assert config.global_private is not None
     assert config.global_private.api_token_env == "NOBITEX_API_TOKEN"
+
+
+def test_runtime_config_rejects_private_enable_execution() -> None:
+    with pytest.raises(ValueError, match="execution.local.enabled"):
+        runtime_config_from_mapping(
+            {
+                "venues": {
+                    "local": {
+                        "public": {"exchange": "wallex", "symbol": "USDT_IRT"},
+                        "private": {"api_token_env": "WALLEX_API_TOKEN", "enable_execution": True},
+                    },
+                },
+            }
+        )
 
 
 def test_runtime_config_keeps_venues_execution_model_alias() -> None:
@@ -386,3 +402,21 @@ async def test_runtime_builder_wires_local_and_global_topics_without_starting_ne
     assert "market:raw:wallex:BTC_IRT:orderbook" in labels
     assert runtime.public_market_selections["local"].transport == "rest"
     assert runtime.public_market_selections["global"].transport == "websocket"
+
+
+@pytest.mark.asyncio
+async def test_runtime_builder_uses_execution_enabled_for_order_commands(monkeypatch) -> None:
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT", mode="rest"),
+        local_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
+        execution=ExecutionRuntimeConfig(
+            local=VenueExecutionConfig(enabled=False, planner="replace")
+        ),
+    )
+
+    runtime = await build_runtime_components(config)
+
+    assert "local" in runtime.private_state_selections
+    assert runtime.order_command_selections == {}
+    assert runtime.order_managers == {}

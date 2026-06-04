@@ -71,7 +71,6 @@ class PrivateRuntimeConfig:
     api_private_key: str | None = None
     api_private_key_env: str | None = None
     poll_interval_ms: int = 5000
-    enable_execution: bool = True
     fill_event_source: FillEventSource = "exchange_fill_history"
 
     def __post_init__(self) -> None:
@@ -268,6 +267,7 @@ ExecutionPlannerKind = Literal["reconcile", "replace"]
 class VenueExecutionConfig:
     """Per-venue execution policy and source-venue placement caps."""
 
+    enabled: bool = True
     planner: ExecutionPlannerKind = "reconcile"
     observe_only: bool = False
     max_orders_per_side: int | None = None
@@ -276,6 +276,7 @@ class VenueExecutionConfig:
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            "enabled": self.enabled,
             "planner": self.planner,
             "observe_only": self.observe_only,
         }
@@ -626,7 +627,6 @@ def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | 
     return {
         "mode": private.mode,
         "poll_interval_ms": private.poll_interval_ms,
-        "enable_execution": private.enable_execution,
         "fill_event_source": private.fill_event_source,
         "enabled": private.enabled,
         "auth_type": "api_key" if private.resolved_api_key() and private.resolved_api_private_key() else "token",
@@ -811,6 +811,7 @@ def _venue_execution_from_mapping(payload: Any, *, default_planner: ExecutionPla
     max_quote_distance = payload.get("max_quote_distance")
     max_orders_per_side = payload.get("max_orders_per_side")
     return VenueExecutionConfig(
+        enabled=bool(payload.get("enabled", True)),
         planner=planner,  # type: ignore[arg-type]
         observe_only=bool(payload.get("observe_only", False)),
         max_orders_per_side=(
@@ -862,6 +863,11 @@ def _source_from_mapping(payload: dict[str, Any], *, role: SourceRole) -> Market
 def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
     if not isinstance(payload, dict):
         return None
+    if "enable_execution" in payload:
+        raise ValueError(
+            "private.enable_execution was removed; use execution.local.enabled "
+            "or execution.global.enabled"
+        )
     return PrivateRuntimeConfig(
         mode=str(payload.get("mode", "rest")),
         api_token=payload.get("api_token"),
@@ -871,7 +877,6 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         api_private_key=payload.get("api_private_key"),
         api_private_key_env=payload.get("api_private_key_env"),
         poll_interval_ms=int(payload.get("poll_interval_ms", 5000)),
-        enable_execution=bool(payload.get("enable_execution", True)),
         fill_event_source=str(payload.get("fill_event_source", "exchange_fill_history")),
     )
 
