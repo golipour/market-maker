@@ -20,6 +20,10 @@ class TabdealApiKeyAuth:
     api_secret: str
 
 
+class TabdealTransientError(RuntimeError):
+    pass
+
+
 def api_symbol(symbol: str) -> str:
     from mm.exchanges.instrument_wire import build_instrument_wire
 
@@ -64,37 +68,86 @@ def _json_or_raise(response: requests.Response, path: str) -> Any:
             detail: Any = response.json()
         except Exception:
             detail = (response.text or "")[:4000]
-        raise RuntimeError(f"Tabdeal HTTP {response.status_code} {path}: {detail}")
+        message = f"Tabdeal HTTP {response.status_code} {path}: {detail}"
+        if response.status_code == 429 or response.status_code >= 500:
+            raise TabdealTransientError(message)
+        raise RuntimeError(message)
     return response.json() if response.content else {}
 
 
 def get_balances(auth: TabdealApiKeyAuth | None) -> dict[str, dict[str, float]]:
     auth = _require_auth(auth)
     if not auth:
-        return {}
+        raise RuntimeError("Tabdeal private credentials missing")
     rows: list[Any] = []
+    errors: list[str] = []
     try:
         out = _json_or_raise(_request_auth("GET", "/r/api/v1/account", auth), "/r/api/v1/account")
-        if isinstance(out, dict) and isinstance(out.get("balances"), list):
-            rows = list(out.get("balances") or [])
-    except Exception:
-        rows = []
+        rows = _balance_rows(out)
+        if not rows:
+            errors.append("/r/api/v1/account empty balance response")
+    except Exception as exc:
+        errors.append(f"/r/api/v1/account {type(exc).__name__}: {exc}")
     if not rows:
-        out = _json_or_raise(_request_auth("GET", "/r/api/v1/asset/get-funding-asset", auth), "/r/api/v1/asset/get-funding-asset")
-        rows = out if isinstance(out, list) else [out] if isinstance(out, dict) and out.get("asset") else []
+        try:
+            out = _json_or_raise(
+                _request_auth("GET", "/r/api/v1/asset/get-funding-asset", auth),
+                "/r/api/v1/asset/get-funding-asset",
+            )
+            rows = _balance_rows(out)
+            if not rows:
+                errors.append("/r/api/v1/asset/get-funding-asset empty balance response")
+        except Exception as exc:
+            errors.append(f"/r/api/v1/asset/get-funding-asset {type(exc).__name__}: {exc}")
     result: dict[str, dict[str, float]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
-        asset = str(row.get("asset") or row.get("currency") or "").upper()
+        asset = _asset_code(row)
         if not asset:
             continue
-        free = _safe_float(row.get("free", 0.0))
-        locked = _safe_float(row.get("freeze", row.get("locked", 0.0)))
-        result[asset] = {"free": free, "locked": locked, "total": free + locked}
+        free = _safe_float(row.get("free", row.get("available", row.get("balance", 0.0))))
+        locked = _safe_float(row.get("freeze", row.get("frozen", row.get("locked", 0.0))))
+        total = _safe_float(row.get("total", row.get("totalAsset", free + locked)), free + locked)
+        prev = result.get(asset)
+        if prev is None:
+            result[asset] = {"free": free, "locked": locked, "total": total}
+        else:
+            result[asset] = {
+                "free": prev["free"] + free,
+                "locked": prev["locked"] + locked,
+                "total": prev["total"] + total,
+            }
     from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 
-    return merge_wallet_balances_raw("tabdeal", result)
+    merged = merge_wallet_balances_raw("tabdeal", result)
+    if not merged:
+        detail = "; ".join(errors[-4:]) or "empty balance response"
+        raise RuntimeError(f"Tabdeal balance fetch failed: {detail}")
+    return merged
+
+
+def _balance_rows(payload: Any) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("balances", "assets", "rows", "data", "result"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = _balance_rows(value)
+            if nested:
+                return nested
+    return [payload] if payload.get("asset") or payload.get("currency") else []
+
+
+def _asset_code(row: dict[str, Any]) -> str:
+    value = row.get("asset") or row.get("currency")
+    if isinstance(value, dict):
+        value = value.get("asset") or value.get("code") or value.get("symbol")
+    return str(value or "").upper().strip()
 
 
 def list_open_orders(symbol: str, auth: TabdealApiKeyAuth | None) -> list[dict]:

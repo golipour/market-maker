@@ -1441,3 +1441,212 @@ The next modeling implication is:
 4. Treat the sell-side 2-second signed/total/spread-prev result as promising
    but not yet production-stable until more 2-second history exists.
 ```
+
+# Bitpin Data Comparison
+
+New Bitpin data was available for:
+
+```text
+exchange = bitpin
+symbol = USDT_IRT
+interval_ms = 10000
+rows = 1346
+time range = 2026-06-04 22:19:20 UTC to 2026-06-05 02:46:40 UTC
+```
+
+Wallex did not overlap this period, so the direct comparison in this run is:
+
+```text
+Bitpin vs Nobitex over the same late 2026-06-04 / early 2026-06-05 window.
+```
+
+## Bitpin Quote-Refresh Diagnostic
+
+Using the same definition:
+
+```text
+large_unmechanical =
+    abs(mechanical_delta_t) <= 1e-9
+    and abs(price_delta_t) > 2 * quiet_sigma
+
+strict_quote_refresh =
+    large_unmechanical
+    and total_flow_t == 0
+```
+
+Bitpin 24h lookback, which is effectively the full available Bitpin sample:
+
+| Target | Mechanically Quiet | Zero Flow | Large Unmechanical | Zero-Flow Large | Share Of Large |
+|---|---:|---:|---:|---:|---:|
+| mid | 92.0% | 72.9% | 12 / 1345 | 7 / 12 | 58.3% |
+| best bid | 96.2% | 72.9% | 32 / 1345 | 16 / 32 | 50.0% |
+| best ask | 95.7% | 72.9% | 14 / 1345 | 5 / 14 | 35.7% |
+| buy VWAP | 92.0% | 72.9% | 13 / 1345 | 4 / 13 | 30.8% |
+| sell VWAP | 94.4% | 72.9% | 23 / 1345 | 15 / 23 | 65.2% |
+
+Interpretation:
+
+```text
+Bitpin has many mechanically quiet intervals, like the other venues.
+But large unmechanical events are less frequent than Wallex 10s and Nobitex.
+The zero-flow share of large unmechanical events is mixed by side.
+```
+
+One data-quality warning appeared in the Bitpin quote-refresh diagnostic:
+
+```text
+Some best-ask / buy-VWAP refresh candidates had negative spread_before values.
+```
+
+This suggests crossed/stale book snapshots or timestamp alignment issues in
+some Bitpin intervals. Those intervals should be filtered or separately labeled
+before production modeling.
+
+## Bitpin Mechanical-Delta-Only VWAP
+
+Model:
+
+```text
+delta_vwap_t = beta0 + beta1 * mechanical_delta_t
+```
+
+Online decay:
+
+```text
+decay = 0.99
+VWAP depth = 100
+```
+
+Bitpin results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | beta1 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 3.715 | 4.179 | 3.627 | 3.935 | 3.950 | 0.837 |
+| 1h | sell VWAP | 5.380 | 3.287 | 3.234 | 3.926 | 3.897 | 1.065 |
+| 4h | buy VWAP | 29.018 | 28.190 | 29.483 | 4.679 | 4.688 | 0.787 |
+| 4h | sell VWAP | 6.078 | 6.110 | 6.084 | 3.782 | 3.788 | 1.045 |
+| full | buy VWAP | 28.544 | 27.732 | 29.002 | 4.728 | 4.733 | 0.787 |
+| full | sell VWAP | 6.047 | 6.040 | 6.014 | 3.971 | 3.977 | 1.045 |
+
+Interpretation:
+
+```text
+Bitpin buy VWAP has a strong short-window mechanical relationship.
+But over the full available sample, large jumps dominate RMSE and zero wins.
+
+Bitpin sell VWAP mechanical_delta is near useful, but not a stable RMSE win.
+```
+
+## Bitpin Signed/Total/Spread Feature Model
+
+Model:
+
+```text
+delta_vwap_t =
+    beta0
+  + beta1 * mechanical_delta_t
+  + beta2 * signed_flow_t
+  + beta3 * total_flow_t
+  + beta4 * spread_t-1
+```
+
+Bitpin results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL |
+|---|---|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 3.888 | 4.179 | 3.627 | 3.939 | 3.950 |
+| 1h | sell VWAP | 6.977 | 3.287 | 3.234 | 3.955 | 3.897 |
+| 4h | buy VWAP | 32.393 | 28.190 | 29.483 | 4.891 | 4.688 |
+| 4h | sell VWAP | 6.046 | 6.110 | 6.084 | 3.760 | 3.788 |
+| full | buy VWAP | 31.844 | 27.732 | 29.002 | 4.917 | 4.733 |
+| full | sell VWAP | 6.058 | 6.040 | 6.014 | 3.710 | 3.977 |
+
+The feature model is useful mainly for Bitpin sell-side variance/NLL and mildly
+for 4h sell RMSE. It is harmful for Bitpin buy VWAP over the longer sample.
+
+## Bitpin Decomposed Hard-Gated VWAP
+
+Model:
+
+```text
+mid / spread / shape decomposition
+hard-gated quiet regime
+default threshold gate
+```
+
+Bitpin results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | Active Fraction |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 3.657 | 4.192 | 3.638 | 4.270 | 3.954 | 0.285 |
+| 1h | sell VWAP | 3.221 | 3.294 | 3.241 | 4.270 | 3.901 | 0.285 |
+| 4h | buy VWAP | 12.255 | 8.840 | 12.509 | 4.324 | 4.134 | 0.259 |
+| 4h | sell VWAP | 6.085 | 6.131 | 6.111 | 3.657 | 3.757 | 0.259 |
+| full | buy VWAP | 12.066 | 8.720 | 12.321 | 4.479 | 4.169 | 0.263 |
+| full | sell VWAP | 6.017 | 6.064 | 6.043 | 3.679 | 3.933 | 0.263 |
+
+Interpretation:
+
+```text
+The decomposed model is the best Bitpin sell-side candidate so far.
+It improves sell VWAP RMSE and NLL over the full available sample.
+
+It improves buy VWAP in the latest 1h, but fails over the full sample because
+large buy-side jumps dominate.
+```
+
+## Bitpin Same-Step Nobitex Cross Dependence
+
+Model:
+
+```text
+Bitpin_delta_t = beta0 + beta1 * Nobitex_delta_t
+```
+
+Out-of-sample results were not useful. Full-sample lookback:
+
+| Target | Test RMSE | Zero RMSE | Test R2 | beta1 |
+|---|---:|---:|---:|---:|
+| mid | 2.465 | 2.412 | -0.046 | -0.0058 |
+| best bid | 2.884 | 2.863 | -0.016 | 0.0011 |
+| best ask | 3.764 | 3.756 | -0.0048 | 0.0045 |
+| buy VWAP | 3.868 | 3.869 | -0.0007 | 0.0075 |
+| sell VWAP | 3.150 | 3.131 | -0.013 | 0.0018 |
+
+Bitpin is not simply following Nobitex same-step deltas in this sample.
+
+## Cross-Venue Comparison
+
+Current evidence:
+
+```text
+Nobitex:
+    mechanical/orderbook impact is meaningful, especially buy-side.
+
+Wallex:
+    2-second data showed strong zero-flow quote-refresh behavior.
+    One promising model: sell VWAP with mechanical + signed/total/spread_prev.
+
+Bitpin:
+    sell-side decomposed hurdle model is promising.
+    buy-side mechanical signal exists in the latest 1h but is not stable over
+    the full available sample.
+    some crossed/stale spread states need filtering.
+```
+
+Practical implication:
+
+```text
+Do not use one universal venue profile.
+
+Nobitex:
+    keep mechanical/decomposed model as leading candidate.
+
+Wallex:
+    separate market-order impact from quote-refresh jumps.
+
+Bitpin:
+    start with decomposed hard-gated sell-side model,
+    filter crossed/stale books,
+    collect more data before trusting buy-side behavior.
+```

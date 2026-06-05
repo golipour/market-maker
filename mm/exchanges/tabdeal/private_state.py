@@ -34,6 +34,11 @@ class TabdealRestPrivateStateAdapter(RestPollingPrivateStateAdapter):
     async def fetch_fills(self) -> list[dict]:
         return await asyncio.to_thread(private_rest.list_filled_orders, self.symbol, self.api_token)
 
+    async def _publish_error(self, source: str, exc: Exception) -> None:
+        if source == "fill_poll" and isinstance(exc, private_rest.TabdealTransientError):
+            return
+        await super()._publish_error(source, exc)
+
 
 class TabdealWebSocketPrivateStateAdapter(TabdealRestPrivateStateAdapter):
     """Tabdeal listenKey websocket plus REST snapshots for balances/open-order baselines."""

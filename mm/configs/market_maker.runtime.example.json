@@ -21,7 +21,7 @@
     },
     "local": {
       "public": {
-        "exchange": "bitpin",
+        "exchange": "tabdeal",
         "symbol": "USDT_IRT",
         "mode": "rest",
         "depth_limit": 100,
@@ -30,8 +30,8 @@
       },
       "private": {
         "mode": "rest",
-        "api_key_env": "BITPIN_API_KEY",
-        "api_private_key_env": "BITPIN_API_PRIVATE_KEY",
+        "api_token_env": "TABDEAL_API_TOKEN",
+        "api_private_key_env": "TABDEAL_API_PRIVATE_KEY",
         "poll_interval_ms": 10000,
         "fill_event_source": "exchange_fill_history"
       },
