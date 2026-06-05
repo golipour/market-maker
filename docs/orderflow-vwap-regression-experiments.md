@@ -1650,3 +1650,218 @@ Bitpin:
     filter crossed/stale books,
     collect more data before trusting buy-side behavior.
 ```
+
+# Tabdeal Data Comparison
+
+New Tabdeal data was available for:
+
+```text
+exchange = tabdeal
+symbol = USDT_IRT
+interval_ms = 10000
+rows = 634
+time range = 2026-06-05 17:13:30 UTC to 2026-06-05 19:25:30 UTC
+```
+
+The useful Tabdeal sample is about 2.2 hours. It overlaps Nobitex, but not the
+current Wallex or Bitpin samples.
+
+## Tabdeal Quote-Refresh Diagnostic
+
+Using the same definition:
+
+```text
+large_unmechanical =
+    abs(mechanical_delta_t) <= 1e-9
+    and abs(price_delta_t) > 2 * quiet_sigma
+
+strict_quote_refresh =
+    large_unmechanical
+    and total_flow_t == 0
+```
+
+Full available Tabdeal sample:
+
+| Target | Mechanically Quiet | Zero Flow | Large Unmechanical | Zero-Flow Large | Share Of Large |
+|---|---:|---:|---:|---:|---:|
+| mid | 79.1% | 22.3% | 24 / 637 | 8 / 24 | 33.3% |
+| best bid | 88.2% | 22.3% | 23 / 637 | 6 / 23 | 26.1% |
+| best ask | 89.6% | 22.3% | 25 / 637 | 7 / 25 | 28.0% |
+| buy VWAP | 77.4% | 22.3% | 22 / 637 | 8 / 22 | 36.4% |
+| sell VWAP | 75.7% | 22.3% | 25 / 637 | 10 / 25 | 40.0% |
+
+Interpretation:
+
+```text
+Tabdeal is much more trade-active than Wallex 2s and Bitpin.
+Zero-flow intervals are only about 22%.
+Large unmechanical moves are mostly not zero-flow events.
+```
+
+So Tabdeal does not look like a pure quote-refresh venue. The displayed book
+still changes in ways not fully explained by mechanical consumption, but those
+changes happen mostly during active-flow intervals.
+
+## Tabdeal Mechanical-Delta-Only VWAP
+
+Model:
+
+```text
+delta_vwap_t = beta0 + beta1 * mechanical_delta_t
+```
+
+Online decay:
+
+```text
+decay = 0.99
+VWAP depth = 100
+```
+
+Tabdeal results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | beta1 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 24.403 | 26.033 | 24.702 | 4.730 | 4.775 | 0.539 |
+| 1h | sell VWAP | 25.361 | 27.436 | 25.267 | 5.275 | 4.808 | 0.650 |
+| full | buy VWAP | 59.809 | 63.223 | 59.547 | 5.393 | 5.450 | 0.549 |
+| full | sell VWAP | 43.269 | 47.590 | 43.427 | 5.123 | 5.214 | 0.660 |
+
+Interpretation:
+
+```text
+Tabdeal has a strong mechanical market-order impact signal.
+Both buy and sell VWAP beat zero-delta on RMSE over the available sample.
+```
+
+The raw mechanical prediction itself is already very strong, and the learned
+coefficient is stable around:
+
+```text
+buy beta1  ~= 0.55
+sell beta1 ~= 0.66
+```
+
+## Tabdeal Signed/Total/Spread Feature Model
+
+Model:
+
+```text
+delta_vwap_t =
+    beta0
+  + beta1 * mechanical_delta_t
+  + beta2 * signed_flow_t
+  + beta3 * total_flow_t
+  + beta4 * spread_t-1
+```
+
+Tabdeal results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL |
+|---|---|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 34.297 | 26.033 | 24.702 | 4.990 | 4.743 |
+| 1h | sell VWAP | 27.372 | 27.606 | 25.266 | 5.086 | 4.810 |
+| full | buy VWAP | 60.579 | 63.069 | 59.401 | 5.377 | 5.445 |
+| full | sell VWAP | 43.243 | 47.527 | 43.320 | 5.120 | 5.213 |
+
+This feature set does not improve Tabdeal buy and is not clearly better than
+mechanical-only. It is acceptable on sell, but the simpler mechanical model is
+cleaner.
+
+## Tabdeal Decomposed Hard-Gated VWAP
+
+Model:
+
+```text
+mid / spread / shape decomposition
+hard-gated quiet regime
+default threshold gate
+```
+
+Tabdeal results:
+
+| Window | Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | Active Fraction |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1h | buy VWAP | 23.630 | 26.262 | 24.906 | 4.734 | 4.749 | 0.825 |
+| 1h | sell VWAP | 24.296 | 27.701 | 25.266 | 4.761 | 4.809 | 0.825 |
+| full | buy VWAP | 58.171 | 63.018 | 59.351 | 5.429 | 5.444 | 0.777 |
+| full | sell VWAP | 42.110 | 47.479 | 43.250 | 5.119 | 5.211 | 0.777 |
+
+Interpretation:
+
+```text
+This is the best Tabdeal model so far.
+It beats both zero-delta and raw mechanical on both buy and sell VWAP.
+```
+
+The active fraction is high:
+
+```text
+latest 1h: 82.5%
+full sample: 77.7%
+```
+
+This matches the quote-refresh diagnostic: Tabdeal is trade-active, not mostly
+quiet/zero-flow.
+
+## Tabdeal Same-Step Nobitex Cross Dependence
+
+Model:
+
+```text
+Tabdeal_delta_t = beta0 + beta1 * Nobitex_delta_t
+```
+
+Latest 1h had a short-window signal:
+
+| Target | Test RMSE | Zero RMSE | Test R2 | beta1 |
+|---|---:|---:|---:|---:|
+| mid | 25.477 | 26.054 | 0.043 | 0.0798 |
+| sell VWAP | 26.410 | 28.010 | 0.111 | 0.0776 |
+
+But this signal did not survive over the full available sample:
+
+| Target | Test RMSE | Zero RMSE | Test R2 | beta1 |
+|---|---:|---:|---:|---:|
+| mid | 30.522 | 29.257 | -0.090 | -0.0053 |
+| sell VWAP | 30.634 | 29.116 | -0.108 | 0.0057 |
+
+Interpretation:
+
+```text
+Tabdeal may sometimes move with Nobitex inside the same 10-second bucket,
+but this is not stable enough to use as a primary model.
+```
+
+## Updated Cross-Venue Comparison
+
+Current evidence:
+
+```text
+Nobitex:
+    mechanical/decomposed model remains strong.
+
+Wallex:
+    quote-refresh dominated in 2-second data.
+    market-order impact model only has a tentative sell-side signal.
+
+Bitpin:
+    sell-side decomposed hurdle is promising.
+    buy-side mechanical signal appears only in short windows and needs more
+    data and crossed-book filtering.
+
+Tabdeal:
+    strongest new result.
+    mechanical market-order impact is clearly useful.
+    decomposed hard-gated VWAP is best on both buy and sell.
+```
+
+Practical venue profile implication:
+
+```text
+Tabdeal should be treated more like Nobitex than Wallex.
+
+For Tabdeal:
+    start from the decomposed hard-gated VWAP model,
+    keep mechanical_delta as a core feature,
+    do not add extra flow/spread features until more data confirms they help.
+```
