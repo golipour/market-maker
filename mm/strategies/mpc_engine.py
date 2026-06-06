@@ -112,7 +112,12 @@ def _inventory_vwap_depth(
 
 
 def _set_model_vwap_depth(model: Any, vwap_depth: float | None) -> None:
-    if model is None or vwap_depth is None or not hasattr(model, "_target_depth_lots"):
+    if (
+        model is None
+        or vwap_depth is None
+        or not hasattr(model, "_target_depth_lots")
+        or hasattr(model, "reference_vwap_depth")
+    ):
         return
     try:
         depth = float(vwap_depth)
@@ -566,15 +571,27 @@ def _build_price_model(
     market_flow_model: Any,
     config_name: str = "local_price_model",
 ) -> Any:
-    from mm.mpc.price_torch import TorchResidualPriceModel
+    from mm.mpc.price_torch import TorchConditionalMechanicalMixturePriceModel, TorchResidualPriceModel
 
     price_cfg = dict(cfg or {})
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
+    if price_kind in ("conditional_mechanical_mixture", "flow_gated_mixture"):
+        if "vwap_depth" in price_cfg and "reference_vwap_depth" not in price_cfg:
+            price_cfg["reference_vwap_depth"] = price_cfg.pop("vwap_depth")
+        # The conditional sigmoid gate uses the model decay for adaptation. Ignore
+        # older/experimental gate knobs if they appear in a config.
+        for key in ("gate_kind", "gate_bins", "gate_learning_rate"):
+            price_cfg.pop(key, None)
+        return TorchConditionalMechanicalMixturePriceModel(
+            market_flow_model=market_flow_model,
+            **price_cfg,
+        )
     if price_kind != "residual":
         raise ValueError(f"unsupported {config_name} kind: {price_kind}")
-    if "vwap_depth" in price_cfg:
+    if "vwap_depth" in price_cfg or "reference_vwap_depth" in price_cfg:
         raise ValueError(
-            f"{config_name}.vwap_depth was removed; VWAP depth is derived from inventory"
+            f"{config_name}.vwap_depth/reference_vwap_depth is only supported by "
+            "kind=conditional_mechanical_mixture; residual VWAP depth is derived from inventory"
         )
     return TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
 
@@ -591,7 +608,7 @@ def _build_sourcing_global_price_model(
     kind = str(cfg.get("kind", "ewma_gaussian")).lower().strip()
     if kind in ("none", "null", "disabled"):
         return None
-    if kind == "residual":
+    if kind in ("residual", "conditional_mechanical_mixture", "flow_gated_mixture"):
         return _build_price_model(
             cfg,
             market_flow_model=market_flow_model,

@@ -1320,6 +1320,15 @@ ORDER BY 1""",
     )
 
 _MODEL_SCORE_ROW_TITLE = "Model scores (ControllerDiagnostics)"
+_CONDITIONAL_PRICE_ROW_TITLE = "Conditional price model params"
+_CONDITIONAL_PRICE_PANEL_TITLES = frozenset(
+    {
+        "Local conditional price — gate",
+        "Local conditional price — components",
+        "Global conditional price — gate",
+        "Global conditional price — components",
+    }
+)
 _MODEL_SCORE_PANEL_TITLES = frozenset(
     {
         "Model NLL",
@@ -1337,6 +1346,90 @@ def _is_model_score_panel(panel: dict[str, Any]) -> bool:
     return title in _MODEL_SCORE_PANEL_TITLES
 
 
+def _is_conditional_price_panel(panel: dict[str, Any]) -> bool:
+    title = panel.get("title")
+    if panel.get("type") == "row" and title == _CONDITIONAL_PRICE_ROW_TITLE:
+        return True
+    return title in _CONDITIONAL_PRICE_PANEL_TITLES
+
+
+def _conditional_price_gate_sql(model_key: str) -> str:
+    return f"""WITH params AS (
+  SELECT e.ts,
+         '{model_key}'::text AS model_key,
+         COALESCE(e.payload->'{model_key}'->'params', '{{}}'::jsonb) AS p
+  FROM mm_events e
+  WHERE e.topic = '${{decisions_topic}}'
+    AND e.event_type = 'StrategyDecision'
+    AND e.exchange = '${{exchange}}'
+    AND e.symbol = '${{symbol}}'
+    AND $__timeFilter(e.ts)
+)
+SELECT ts AS "time",
+       model_key || '.market_prob' AS metric,
+       {_numeric_sql("p->>'market_prob'", default="NULL")} AS value
+FROM params
+WHERE p->>'market_prob' IS NOT NULL
+UNION ALL
+SELECT ts AS "time",
+       model_key || '.market_resp' AS metric,
+       {_numeric_sql("p->>'market_resp'", default="NULL")} AS value
+FROM params
+WHERE p->>'market_resp' IS NOT NULL
+UNION ALL
+SELECT params.ts AS "time",
+       params.model_key || '.gate_beta[' || (gb.idx - 1)::text || ']' AS metric,
+       (gb.value #>> '{{}}')::double precision AS value
+FROM params
+CROSS JOIN LATERAL jsonb_array_elements(COALESCE(params.p->'gate_beta', '[]'::jsonb))
+  WITH ORDINALITY AS gb(value, idx)
+WHERE jsonb_typeof(gb.value) = 'number'
+ORDER BY 1"""
+
+
+def _conditional_price_components_sql(model_key: str) -> str:
+    return f"""WITH params AS (
+  SELECT e.ts,
+         '{model_key}'::text AS model_key,
+         COALESCE(e.payload->'{model_key}'->'params', '{{}}'::jsonb) AS p
+  FROM mm_events e
+  WHERE e.topic = '${{decisions_topic}}'
+    AND e.event_type = 'StrategyDecision'
+    AND e.exchange = '${{exchange}}'
+    AND e.symbol = '${{symbol}}'
+    AND $__timeFilter(e.ts)
+)
+SELECT params.ts AS "time",
+       params.model_key || '.market_beta.' || mb.component || '.b' || (coef.idx - 1)::text AS metric,
+       (coef.value #>> '{{}}')::double precision AS value
+FROM params
+CROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_beta', '{{}}'::jsonb)) AS mb(component, beta)
+CROSS JOIN LATERAL jsonb_array_elements(mb.beta) WITH ORDINALITY AS coef(value, idx)
+WHERE jsonb_typeof(coef.value) = 'number'
+UNION ALL
+SELECT params.ts AS "time",
+       params.model_key || '.market_sigma.' || kv.key AS metric,
+       (kv.value #>> '{{}}')::double precision AS value
+FROM params
+CROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_sigma', '{{}}'::jsonb)) AS kv(key, value)
+WHERE jsonb_typeof(kv.value) = 'number'
+UNION ALL
+SELECT params.ts AS "time",
+       params.model_key || '.refresh_sigma.' || kv.key AS metric,
+       (kv.value #>> '{{}}')::double precision AS value
+FROM params
+CROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_sigma', '{{}}'::jsonb)) AS kv(key, value)
+WHERE jsonb_typeof(kv.value) = 'number'
+UNION ALL
+SELECT params.ts AS "time",
+       params.model_key || '.refresh_mean.' || kv.key AS metric,
+       (kv.value #>> '{{}}')::double precision AS value
+FROM params
+CROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_mean', '{{}}'::jsonb)) AS kv(key, value)
+WHERE jsonb_typeof(kv.value) = 'number'
+ORDER BY 1"""
+
+
 def _replace_template_var(templating: list[dict[str, Any]], name: str, value: dict[str, Any]) -> None:
     for idx, item in enumerate(templating):
         if item.get("name") == name:
@@ -1348,7 +1441,25 @@ def _replace_template_var(templating: list[dict[str, Any]], name: str, value: di
 def patch_model_params_dashboard() -> None:
     path = OUT / "mm_strategy_model_params_pg.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    panels = [p for p in data["panels"] if not _is_model_score_panel(p)]
+    for panel in data.get("panels", []):
+        if panel.get("title") == "Notes" and panel.get("type") == "text":
+            panel.setdefault("options", {})["content"] = (
+                "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n"
+                "**Layout:** For each of **local_price_model**, **local_market_flow_model**, "
+                "**global_market_flow_model**, and **global_price_model**, charts are split "
+                "into **mu** (keys matching `^mu_`), **sigma** (keys matching `^sigma_`), "
+                "and **other** top-level numeric params. Conditional mechanical-mixture price "
+                "models also get dedicated nested-param charts for the sigmoid flow gate "
+                "(`market_prob`, `market_resp`, `gate_beta[0/1]`) and component parameters "
+                "(`market_beta`, `market_sigma`, `refresh_sigma`, `refresh_mean`). Global "
+                "model **other** charts also include **`active_in_mpc`** (0/1).\n\n"
+                "Adjust **Exchange / Symbol / Decisions topic** to match persistence."
+            )
+    panels = [
+        p
+        for p in data["panels"]
+        if not _is_model_score_panel(p) and not _is_conditional_price_panel(p)
+    ]
     y = max(p["gridPos"]["y"] + p["gridPos"]["h"] for p in panels)
 
     diag_filter = """
@@ -1357,6 +1468,51 @@ def patch_model_params_dashboard() -> None:
   AND e.exchange = '${exchange}'
   AND e.symbol = '${symbol}'
   AND $__timeFilter(e.ts)"""
+
+    panels.append(_panel_row(80, y, _CONDITIONAL_PRICE_ROW_TITLE))
+    y += 1
+    panels.append(
+        _panel_sql_timeseries(
+            81,
+            y,
+            "Local conditional price — gate",
+            _conditional_price_gate_sql("local_price_model"),
+            w=12,
+            x=0,
+        )
+    )
+    panels.append(
+        _panel_sql_timeseries(
+            82,
+            y,
+            "Global conditional price — gate",
+            _conditional_price_gate_sql("global_price_model"),
+            w=12,
+            x=12,
+        )
+    )
+    y += 8
+    panels.append(
+        _panel_sql_timeseries(
+            83,
+            y,
+            "Local conditional price — components",
+            _conditional_price_components_sql("local_price_model"),
+            w=12,
+            x=0,
+        )
+    )
+    panels.append(
+        _panel_sql_timeseries(
+            84,
+            y,
+            "Global conditional price — components",
+            _conditional_price_components_sql("global_price_model"),
+            w=12,
+            x=12,
+        )
+    )
+    y += 8
 
     panels.append(_panel_row(100, y, _MODEL_SCORE_ROW_TITLE))
     y += 1

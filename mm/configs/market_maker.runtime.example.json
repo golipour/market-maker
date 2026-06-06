@@ -24,7 +24,7 @@
         "exchange": "tabdeal",
         "symbol": "USDT_IRT",
         "mode": "rest",
-        "depth_limit": 100,
+        "depth_limit": 1000,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
@@ -123,9 +123,14 @@
     },
     "reference_price_source": "global",
     "local_price_model": {
-      "kind": "residual",
-      "residual_decay": 0.95,
-      "residual_sigma": 1.0
+      "kind": "conditional_mechanical_mixture",
+      "reference_vwap_depth": 1000.0,
+      "shape_alpha": 0.5,
+      "decay": 0.99,
+      "initial_sigma": 50.0,
+      "initial_log_sigma": 0.25,
+      "student_df": 3.0,
+      "point_mode": "sample"
     },
     "local_market_flow_model": {
       "kind": "hurdle_lognormal",
@@ -142,9 +147,11 @@
       "init_sigma": 1.0
     },
     "global_price_model": {
-      "kind": "ewma_gaussian",
-      "decay": 0.95,
-      "sigma_min_quote": 1.0
+      "kind": "conditional_mechanical_mixture",
+      "reference_vwap_depth": 100.0,
+      "shape_alpha": 0.5,
+      "decay": 0.99,
+      "student_df": 3.0
     },
     "optimizer": {
       "kind": "monte_carlo_mpc_tensor_batched",

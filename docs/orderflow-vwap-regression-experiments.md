@@ -1865,3 +1865,1286 @@ For Tabdeal:
     keep mechanical_delta as a core feature,
     do not add extra flow/spread features until more data confirms they help.
 ```
+
+# Decomposed Two-Regime Mechanical-Feature Model
+
+After comparing the venue behavior, a simpler unified model was tested:
+
+```text
+decomposed components:
+    mid_delta
+    log_spread_delta
+    log_buy_shape_delta
+    log_sell_shape_delta
+
+market regime:
+    component_delta_j ~ Normal(beta_j0 + beta_j1 * mechanical_component_delta_j,
+                               sigma_market_j^2)
+
+refresh regime:
+    component_delta_j ~ Normal(mu_refresh_j, sigma_refresh_j^2)
+```
+
+The first implementation uses a hard refresh label:
+
+```text
+refresh_t =
+    total_flow_t == 0
+    and abs(mechanical_mid_delta_t) <= 1e-9
+
+otherwise:
+    market_t = true
+```
+
+Evaluation:
+
+```text
+online / prequential
+decay = 0.99
+VWAP depth = 100
+lookback = all available 10000ms rows per venue
+```
+
+This is different from the older decomposed hurdle model. The older model uses
+the full mechanical decomposed state as an anchor plus residual means. This new
+model uses each mechanical component delta as a linear feature.
+
+## Results
+
+| Venue | Scored N | Market Fraction | Side | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL |
+|---|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 21586 | 0.519 | buy | 83.827 | 83.623 | 103.711 | 6.641 | 6.934 |
+| Wallex | 21586 | 0.519 | sell | 75.895 | 75.622 | 85.237 | 8.271 | 6.474 |
+| Nobitex | 24497 | 0.449 | buy | 10415.2 | 10388.6 | 10388.5 | 5835.11 | 108.724 |
+| Nobitex | 24497 | 0.449 | sell | 10412.8 | 10385.9 | 10385.7 | 653.855 | 135.459 |
+| Bitpin | 1283 | 0.261 | buy | 11.063 | 8.720 | 12.321 | 4.440 | 4.169 |
+| Bitpin | 1283 | 0.261 | sell | 7.246 | 6.064 | 6.043 | 3.710 | 3.933 |
+| Tabdeal | 701 | 0.756 | buy | 56.910 | 59.592 | 56.568 | 5.391 | 5.340 |
+| Tabdeal | 701 | 0.756 | sell | 41.301 | 46.371 | 41.808 | 6.899 | 5.196 |
+
+## Interpretation
+
+The unified two-regime model is not yet a replacement for the best existing
+venue-specific models.
+
+What worked:
+
+```text
+Tabdeal:
+    improves RMSE on buy and sell versus zero.
+    sell also improves versus raw mechanical.
+
+Wallex buy:
+    improves NLL versus zero, but not RMSE.
+
+Bitpin sell:
+    improves NLL versus zero, but not RMSE.
+```
+
+What failed:
+
+```text
+Nobitex all-history:
+    unstable and not usable in this form.
+
+Wallex sell:
+    worse than zero on RMSE and NLL.
+
+Bitpin buy:
+    worse than zero.
+```
+
+The failure mode is important:
+
+```text
+The hard refresh gate is too crude.
+```
+
+`total_flow == 0 and mechanical_mid_delta == 0` does not capture the actual
+refresh/replacement regime consistently across venues. For Wallex 2-second
+data it was meaningful, but for 10-second data and for active venues like
+Tabdeal, refresh-like book replacement can happen inside nonzero-flow
+intervals.
+
+The second issue is numerical/statistical:
+
+```text
+The decomposed log component RLS can produce poor NLL on long jumpy samples.
+```
+
+This showed up most clearly on all-history Nobitex. The full Nobitex history
+contains enough level shifts / discontinuities / stale states that the simple
+online component model is not robust without additional filtering or robust
+variance updates.
+
+## Current Conclusion
+
+The form is still conceptually right:
+
+```text
+market-order component:
+    linear in mechanical_delta
+
+quote-refresh component:
+    separate adaptive jump/refresh distribution
+```
+
+But the implementation should not use the current hard refresh rule as the
+final gate.
+
+Next version should use either:
+
+```text
+1. a soft mixture probability q_t
+
+   delta_t ~
+       (1 - q_t) * Normal(beta0 + beta1 * mechanical_delta_t, sigma_market^2)
+     + q_t       * Normal(mu_refresh, sigma_refresh^2)
+
+2. or a safer hard gate based on multiple signals:
+
+   total_flow_t == 0
+   abs(mechanical_delta_t) small
+   abs(observed spread/depth replacement label) from offline training
+   stale/crossed book filter
+   venue-specific minimum active-flow condition
+```
+
+For now:
+
+```text
+Tabdeal:
+    keep decomposed hard-gated model as best.
+
+Nobitex:
+    keep previous decomposed/mechanical model on rolling windows, not this
+    all-history two-regime version.
+
+Wallex:
+    use the two-regime idea, but train a better quote-refresh gate.
+
+Bitpin:
+    use sell-side decomposed model; filter crossed/stale states before buy-side
+    modeling.
+```
+
+# Soft-Mixture Gate With Continuous Sections
+
+The next test replaced the hard refresh label with a learned soft mixture gate:
+
+```text
+q_refresh,t = sigmoid(
+    a0
+  + a1 * 1[total_flow_t == 0]
+  + a2 * abs(mechanical_mid_delta_t)
+  + a3 * spread_{t-1}
+)
+```
+
+For numerical stability in the online update, the implementation uses the same
+formula with scaled continuous inputs:
+
+```text
+x_t = [
+    1,
+    1[total_flow_t == 0],
+    clip(abs(mechanical_mid_delta_t) / 1000, 0, 10),
+    clip(spread_{t-1} / 1000, 0, 10)
+]
+
+q_refresh,t = sigmoid(a_t' x_t)
+q_market,t = 1 - q_refresh,t
+```
+
+The model remains decomposed:
+
+```text
+mid_delta
+log_spread_delta
+log_buy_shape_delta
+log_sell_shape_delta
+```
+
+with two components:
+
+```text
+market component:
+    component_delta_j ~ Normal(beta_j0 + beta_j1 * mechanical_component_delta_j,
+                               sigma_market_j^2)
+
+refresh component:
+    component_delta_j ~ Normal(mu_refresh_j, sigma_refresh_j^2)
+```
+
+The gate is updated online from posterior mixture responsibility. The market
+component is updated with weighted RLS, and the refresh component is updated
+with weighted EWMA.
+
+Evaluation settings:
+
+```text
+interval = 10000ms
+lookback = all available rows
+continuous sections = true
+section split gap > 1.5 * interval
+min raw rows per section = 100
+decay = 0.99
+gate learning rate = 0.02
+VWAP depth = 100 USDT
+```
+
+Important caveat:
+
+```text
+min raw rows per section = 100
+```
+
+does not guarantee 100 scored rows after warmup and validity filtering. Some
+short sections still have very small scored samples, so the section win counts
+are useful as diagnostics but not as final production evidence.
+
+## Aggregate Results Across Continuous Sections
+
+Here `mean_market_prob` is the average learned probability of the market-order
+component, i.e. `1 - q_refresh`.
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | Wins vs Zero | Wins vs Mechanical |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.727 | buy | 414.662 | 51.203 | 85.407 | 4.889 | 5.139 | 17/59 | 40/59 |
+| Wallex | 59 | 9564 | 0.727 | sell | 312.022 | 37.389 | 56.500 | 4.695 | 4.940 | 19/59 | 46/59 |
+| Nobitex | 63 | 11699 | 0.657 | buy | 779.465 | 41.135 | 39.837 | 4.755 | 5.060 | 33/63 | 26/63 |
+| Nobitex | 63 | 11699 | 0.657 | sell | 771.698 | 55.512 | 53.464 | 4.922 | 5.260 | 35/63 | 25/63 |
+| Bitpin | 1 | 1071 | 0.892 | buy | 13.210 | 9.273 | 13.338 | 2.436 | 3.942 | 0/1 | 1/1 |
+| Bitpin | 1 | 1071 | 0.892 | sell | 8.716 | 6.472 | 6.455 | 2.946 | 3.409 | 0/1 | 0/1 |
+| Tabdeal | 1 | 594 | 0.243 | buy | 1216.000 | 51.588 | 48.945 | 5.342 | 5.187 | 0/1 | 0/1 |
+| Tabdeal | 1 | 594 | 0.243 | sell | 218.133 | 40.997 | 38.479 | 5.230 | 5.091 | 0/1 | 0/1 |
+
+## Interpretation
+
+The soft gate does learn useful uncertainty/regime information:
+
+```text
+Wallex:
+    NLL improves versus zero on both buy and sell.
+    It beats mechanical RMSE in most sections.
+
+Nobitex:
+    NLL improves versus zero on both buy and sell.
+    It beats zero RMSE in a little over half the sections.
+
+Bitpin:
+    NLL improves strongly, especially buy-side.
+```
+
+But the model is not point-prediction safe:
+
+```text
+Wallex:
+    aggregate RMSE is much worse than zero because a few sections explode.
+
+Nobitex:
+    many sections work, but several extreme sections dominate aggregate RMSE.
+
+Tabdeal:
+    clear failure; both RMSE and NLL are worse than zero and mechanical.
+```
+
+The key lesson is that this sigmoid gate improves likelihood calibration but
+does not yet control the mean prediction well enough. The log-shape
+decomposition can still generate very large price-space errors when the gate
+assigns meaningful probability to the wrong component.
+
+Practical conclusion:
+
+```text
+Do not ship this soft-mixture model as the production point predictor.
+
+Potentially keep the idea for variance / scenario generation, because NLL
+improvement means the mixture is learning some distributional structure.
+
+Before another gate experiment, add robust guards:
+    minimum scored rows per section,
+    stale/crossed book filters,
+    caps on price-space component deltas,
+    robust or bounded log-shape updates,
+    and separate evaluation of point prediction vs rollout uncertainty.
+```
+
+# Soft-Mixture Failure Diagnostic And Guarded Point Mean
+
+The bad RMSE sections were inspected with per-row diagnostics. The important
+pattern was consistent across Wallex, Nobitex, and Tabdeal:
+
+```text
+posterior market responsibility ~= 0
+but prior q_market often remained 0.3 to 0.7
+and the market component sometimes predicted huge deltas.
+```
+
+Example from Wallex before the guard:
+
+```text
+observed buy delta      ~= 3.9
+predicted buy delta     ~= 20941.6
+mechanical buy delta    ~= 996
+market buy delta        ~= 32010
+refresh buy delta       ~= 3.7
+q_market                ~= 0.654
+posterior market_resp   ~= 0.000
+```
+
+So the likelihood/NLL was good because the mixture likelihood could assign the
+observation to the refresh component after seeing the outcome. The RMSE was bad
+because the point forecast used the prior mixture mean:
+
+```text
+point_mean = q_market * market_mean + q_refresh * refresh_mean
+```
+
+That lets an unstable market component contaminate the pre-observation point
+prediction even when the likelihood later gives that component zero posterior
+responsibility.
+
+## Guard Tested
+
+A robust point-mean guard was added. It does not change the mixture likelihood
+or the online responsibility update. It only changes the point prediction used
+for RMSE:
+
+```text
+if abs(market_delta_side - mechanical_delta_side)
+   > cap_mult * max(spread_{t-1}, 1):
+
+    drop the market component from the point mean
+
+else:
+    use the original soft mixture point mean
+```
+
+In shorthand:
+
+```text
+if market component looks implausible relative to mechanical:
+    point_mean = refresh_mean
+else:
+    point_mean = q_market * market_mean + q_refresh * refresh_mean
+```
+
+This is different from changing the probabilistic model. The NLL remains the
+same because the mixture likelihood is still evaluated with both components.
+
+## Guarded Results
+
+Settings:
+
+```text
+guard mode = drop
+cap_mult = 1.0
+all other settings unchanged
+```
+
+| Venue | Sections | Scored N | Side | Guarded RMSE | Unguarded RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | buy | 51.310 | 414.662 | 51.203 | 85.407 | 4.889 | 5.139 |
+| Wallex | 59 | 9564 | sell | 37.344 | 312.022 | 37.389 | 56.500 | 4.695 | 4.940 |
+| Nobitex | 63 | 11699 | buy | 40.716 | 779.465 | 41.135 | 39.837 | 4.755 | 5.060 |
+| Nobitex | 63 | 11699 | sell | 54.922 | 771.698 | 55.512 | 53.464 | 4.922 | 5.260 |
+| Bitpin | 1 | 1071 | buy | 9.185 | 13.210 | 9.273 | 13.338 | 2.436 | 3.942 |
+| Bitpin | 1 | 1071 | sell | 6.369 | 8.716 | 6.472 | 6.455 | 2.946 | 3.409 |
+| Tabdeal | 1 | 594 | buy | 51.704 | 1216.000 | 51.588 | 48.945 | 5.342 | 5.187 |
+| Tabdeal | 1 | 594 | sell | 41.117 | 218.133 | 40.997 | 38.479 | 5.230 | 5.091 |
+
+Threshold sensitivity:
+
+| Venue | cap_mult | Side | Guarded RMSE | Zero RMSE |
+|---|---:|---|---:|---:|
+| Wallex | 0.5 | buy | 51.296 | 51.203 |
+| Wallex | 0.5 | sell | 37.306 | 37.389 |
+| Wallex | 2.0 | buy | 51.553 | 51.203 |
+| Wallex | 2.0 | sell | 37.434 | 37.389 |
+| Nobitex | 0.5 | buy | 40.820 | 41.135 |
+| Nobitex | 0.5 | sell | 55.051 | 55.512 |
+| Nobitex | 2.0 | buy | 40.439 | 41.135 |
+| Nobitex | 2.0 | sell | 54.979 | 55.512 |
+
+## Interpretation
+
+The RMSE explosion had two separate causes:
+
+```text
+1. Artificial explosion:
+   unstable market component contaminates the mixture mean.
+   The drop guard largely fixes this.
+
+2. Real jump error:
+   observed quote-refresh jumps happen while both market and refresh means are
+   near zero.
+   The guard does not solve this, because there is no predictive signal in the
+   current feature set for the jump arrival.
+```
+
+After the guard, the worst Wallex errors are no longer artificial 20k+ IRT
+predictions. They are real observed jumps, for example:
+
+```text
+observed buy delta ~= 1118.7
+predicted buy delta ~= 12.2
+```
+
+This means the next modeling problem is not "fix the mean regression"; it is
+"model jump arrival risk." The current soft mixture already helps NLL because
+it can carry fatter distributional uncertainty, but it cannot reliably predict
+the exact direction and timing of quote-refresh jumps.
+
+## Updated Recommendation
+
+Use the model in two layers:
+
+```text
+1. Point / drift prediction:
+   use the guarded point mean with market_guard_mode = drop.
+   cap_mult around 0.5-1.0 is safer for Wallex.
+   cap_mult around 1.0-2.0 is slightly better for Nobitex.
+
+2. Rollout uncertainty:
+   keep the soft mixture likelihood / variances.
+   Use the refresh component as the jump-risk distribution.
+```
+
+For a single shared setting across venues:
+
+```text
+market_guard_mode = drop
+cap_mult = 1.0
+```
+
+This setting is not always better than zero on every side, but it removes the
+catastrophic RMSE failure while preserving most of the NLL benefit.
+
+# Independent EM Mixture Without Spread Component
+
+To simplify the previous model, another version was tested:
+
+```text
+No conditional sigmoid gate.
+No spread component in the decomposition.
+```
+
+The state becomes:
+
+```text
+mid_t = (best_bid_t + best_ask_t) / 2
+
+buy_shape_t = buy_vwap_t - mid_t
+sell_shape_t = mid_t - sell_vwap_t
+```
+
+The modeled component deltas are:
+
+```text
+mid_delta_t
+log_buy_shape_delta_t
+log_sell_shape_delta_t
+```
+
+Spread is still used only as a sanity filter to avoid crossed/invalid books,
+but it is not modeled and is not used as a gate feature.
+
+The regime probability is a single learned parameter:
+
+```text
+pi_market,t = P(market regime)
+```
+
+The likelihood is:
+
+```text
+p(y_t) =
+    pi_market,t       * Normal(y_t | beta0 + beta1 * mechanical_delta_t,
+                               sigma_market^2)
+  + (1 - pi_market,t) * Normal(y_t | mu_refresh,
+                               sigma_refresh^2)
+```
+
+Online EM update:
+
+```text
+gamma_t = P(market | observed y_t)
+
+pi_market,t+1 =
+    decay * pi_market,t
+  + (1 - decay) * gamma_t
+
+market beta:
+    weighted RLS with weight gamma_t
+
+refresh mean:
+    weighted EWMA with weight 1 - gamma_t
+```
+
+Settings:
+
+```text
+interval = 10000ms
+continuous sections = true
+decay = 0.99
+initial sigma = 50
+VWAP depth = 100 USDT
+min raw rows per section = 100
+```
+
+Two point-prediction modes were tested:
+
+```text
+mean:
+    point_delta = pi_market * market_delta
+                + (1 - pi_market) * refresh_delta
+
+map:
+    point_delta = market_delta  if pi_market >= 0.5
+                = refresh_delta otherwise
+```
+
+The NLL is identical for both point modes because the same mixture likelihood
+is used.
+
+## Results: Mixture Mean Point Prediction
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.409 | buy | 245.753 | 51.203 | 85.407 | 4.955 | 5.139 |
+| Wallex | 59 | 9564 | 0.409 | sell | 158.610 | 37.389 | 56.500 | 4.770 | 4.940 |
+| Nobitex | 63 | 11699 | 0.380 | buy | 296.051 | 41.135 | 39.837 | 4.771 | 5.060 |
+| Nobitex | 63 | 11699 | 0.380 | sell | 418.051 | 55.512 | 53.464 | 4.975 | 5.260 |
+| Bitpin | 1 | 1071 | 0.745 | buy | 10.476 | 9.273 | 13.338 | 3.091 | 3.942 |
+| Bitpin | 1 | 1071 | 0.745 | sell | 7.382 | 6.472 | 6.455 | 3.310 | 3.409 |
+| Tabdeal | 1 | 594 | 0.077 | buy | 301.567 | 51.588 | 48.945 | 5.207 | 5.187 |
+| Tabdeal | 1 | 594 | 0.077 | sell | 97.475 | 40.997 | 38.479 | 5.117 | 5.091 |
+
+The mean point predictor still has RMSE explosions. Therefore learning a
+single independent `pi_market` does not by itself solve the point-prediction
+problem if the point estimate averages in a bad component.
+
+## Results: MAP / Hurdle-Style Point Prediction
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.409 | buy | 51.086 | 51.203 | 85.407 | 4.955 | 5.139 |
+| Wallex | 59 | 9564 | 0.409 | sell | 37.492 | 37.389 | 56.500 | 4.770 | 4.940 |
+| Nobitex | 63 | 11699 | 0.380 | buy | 40.944 | 41.135 | 39.837 | 4.771 | 5.060 |
+| Nobitex | 63 | 11699 | 0.380 | sell | 55.317 | 55.512 | 53.464 | 4.975 | 5.260 |
+| Bitpin | 1 | 1071 | 0.745 | buy | 14.528 | 9.273 | 13.338 | 3.091 | 3.942 |
+| Bitpin | 1 | 1071 | 0.745 | sell | 9.373 | 6.472 | 6.455 | 3.310 | 3.409 |
+| Tabdeal | 1 | 594 | 0.077 | buy | 51.743 | 51.588 | 48.945 | 5.207 | 5.187 |
+| Tabdeal | 1 | 594 | 0.077 | sell | 41.149 | 40.997 | 38.479 | 5.117 | 5.091 |
+
+## Interpretation
+
+This version is much cleaner:
+
+```text
+No hand-built sigmoid gate.
+No spread component.
+No deviation threshold.
+```
+
+MAP point prediction solves the artificial RMSE explosion in a statistically
+cleaner way than the previous deviation guard. It behaves like a true hurdle
+model: use one component for the expected path, but keep the full mixture for
+likelihood and simulation.
+
+However, removing spread is not clearly free:
+
+```text
+Wallex:
+    NLL still improves versus zero, but less than the spread/sigmoid version.
+
+Nobitex:
+    NLL still improves versus zero, but is slightly worse than the previous
+    soft-mixture model.
+
+Bitpin:
+    NLL remains better than zero, but much worse than the previous soft-mixture
+    with spread.
+
+Tabdeal:
+    still not useful; NLL and RMSE are both slightly worse than zero.
+```
+
+So the cleanest candidate so far is:
+
+```text
+Independent EM mixture probability.
+No conditional sigmoid gate.
+Use MAP/hurdle point prediction, not mixture mean.
+But consider keeping spread in the decomposed state or at least as a
+distributional feature, because removing it weakened NLL on several venues.
+```
+
+## Why Tabdeal NLL Got Worse
+
+This result looks surprising because earlier Tabdeal experiments showed strong
+mechanical dependence.
+
+Earlier mechanical-only Tabdeal model:
+
+```text
+delta_vwap_t = beta0 + beta1 * mechanical_delta_t
+```
+
+Full-sample results:
+
+| Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | beta1 |
+|---|---:|---:|---:|---:|---:|---:|
+| buy VWAP | 59.809 | 63.223 | 59.547 | 5.393 | 5.450 | 0.549 |
+| sell VWAP | 43.269 | 47.590 | 43.427 | 5.123 | 5.214 | 0.660 |
+
+Earlier decomposed hard-gated Tabdeal model:
+
+| Target | Model RMSE | Zero RMSE | Mechanical RMSE | Model NLL | Zero NLL | Active Fraction |
+|---|---:|---:|---:|---:|---:|---:|
+| buy VWAP | 58.171 | 63.018 | 59.351 | 5.429 | 5.444 | 0.777 |
+| sell VWAP | 42.110 | 47.479 | 43.250 | 5.119 | 5.211 | 0.777 |
+
+So the mechanical signal is real. The new independent EM/no-spread model failed
+for a different reason:
+
+```text
+mean_market_prob = 0.077
+```
+
+The model learned that Tabdeal was mostly refresh regime, even though the
+earlier hard-gated model found an active fraction around:
+
+```text
+0.777
+```
+
+This is likely a self-starvation failure:
+
+```text
+1. market component starts weak / untrained
+2. early posterior market responsibility gamma_market becomes small
+3. market RLS receives almost no update weight
+4. market component stays weak
+5. pi_market keeps decaying toward refresh
+```
+
+In other words, the EM mixture can collapse into the refresh component before
+the market component has learned the strong Tabdeal mechanical relationship.
+
+A second issue is that the no-spread version removed an important part of the
+Tabdeal book geometry. The best Tabdeal result came from:
+
+```text
+mid / spread / shape decomposition
+```
+
+not from:
+
+```text
+mid / shape only
+```
+
+So spread was probably not redundant for Tabdeal. It helped explain how the
+book geometry changed when market orders interacted with displayed liquidity.
+
+A third issue is that the EM likelihood used a joint buy/sell regime. If
+mechanical explains one side well but the other side poorly in a step, the
+joint market likelihood can lose and push responsibility to refresh. The
+earlier mechanical-only model evaluated buy and sell separately, so it did not
+penalize the market signal this way.
+
+Updated Tabdeal interpretation:
+
+```text
+Tabdeal should not be treated as refresh-dominated.
+It is one of the most mechanically active venues in the sample.
+The independent EM/no-spread model underfit it because pi_market collapsed.
+```
+
+Potential fixes for the next EM version:
+
+```text
+1. initialize pi_market high, e.g. 0.75
+2. enforce a pi_market floor, e.g. 0.25 or 0.40
+3. use a Beta prior / pseudo-count update for pi_market
+4. update market beta with a minimum responsibility weight,
+   e.g. max(gamma_market, 0.05)
+5. restore spread as a modeled component
+6. consider separate regime responsibilities for buy and sell sides
+```
+
+# Flow-Gated Mixture With Heavy-Tailed Refresh
+
+Another version tested a conditional `pi_market`, but kept the training
+MLE/EM-based.
+
+Instead of an independent constant:
+
+```text
+pi_market,t = constant EWMA parameter
+```
+
+the model used:
+
+```text
+pi_market,t = sigmoid(a0 + a1 * log1p(total_flow_t))
+```
+
+where:
+
+```text
+total_flow_t = buy_volume_t + sell_volume_t
+```
+
+The sigmoid parameters are trained online from the posterior market
+responsibility:
+
+```text
+gamma_t = P(market | observed y_t)
+
+a_t+1 = a_t + learning_rate * (gamma_t - pi_market,t) * x_t
+```
+
+This is an online MLE/EM-style update: the latent regime posterior `gamma_t`
+acts as the soft label for the logistic gate.
+
+The decomposed state remained the no-spread version:
+
+```text
+mid_delta_t
+log_buy_shape_delta_t
+log_sell_shape_delta_t
+```
+
+The market component stayed Gaussian:
+
+```text
+market:
+    Normal(beta0 + beta1 * mechanical_delta_t, sigma_market^2)
+```
+
+The quote-refresh component was tested as either Gaussian or Student-t:
+
+```text
+refresh Gaussian:
+    Normal(mu_refresh, sigma_refresh^2)
+
+refresh Student-t:
+    StudentT(df=3, loc=mu_refresh, scale derived from sigma_refresh)
+```
+
+Point prediction used MAP/hurdle mode:
+
+```text
+if pi_market >= 0.5:
+    point_delta = market_delta
+else:
+    point_delta = refresh_delta
+```
+
+Settings:
+
+```text
+interval = 10000ms
+continuous sections = true
+decay = 0.99
+gate learning rate = 0.02
+initial sigma = 50
+VWAP depth = 100 USDT
+min raw rows per section = 100
+```
+
+## Results: Student-t Refresh, df=3
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.239 | buy | 51.944 | 51.203 | 85.407 | 4.686 | 5.139 |
+| Wallex | 59 | 9564 | 0.239 | sell | 37.773 | 37.389 | 56.500 | 4.485 | 4.940 |
+| Nobitex | 63 | 11699 | 0.263 | buy | 41.407 | 41.135 | 39.837 | 4.563 | 5.060 |
+| Nobitex | 63 | 11699 | 0.263 | sell | 55.585 | 55.512 | 53.464 | 4.805 | 5.260 |
+| Bitpin | 1 | 1071 | 0.142 | buy | 9.256 | 9.273 | 13.338 | 2.839 | 3.942 |
+| Bitpin | 1 | 1071 | 0.142 | sell | 6.520 | 6.472 | 6.455 | 2.832 | 3.409 |
+| Tabdeal | 1 | 594 | 0.107 | buy | 51.806 | 51.588 | 48.945 | 4.824 | 5.187 |
+| Tabdeal | 1 | 594 | 0.107 | sell | 41.181 | 40.997 | 38.479 | 4.831 | 5.091 |
+
+## Results: Gaussian Refresh
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.371 | buy | 50.961 | 51.203 | 85.407 | 5.001 | 5.139 |
+| Wallex | 59 | 9564 | 0.371 | sell | 38.167 | 37.389 | 56.500 | 4.802 | 4.940 |
+| Nobitex | 63 | 11699 | 0.387 | buy | 40.734 | 41.135 | 39.837 | 4.791 | 5.060 |
+| Nobitex | 63 | 11699 | 0.387 | sell | 55.105 | 55.512 | 53.464 | 5.000 | 5.260 |
+| Bitpin | 1 | 1071 | 0.694 | buy | 14.498 | 9.273 | 13.338 | 3.125 | 3.942 |
+| Bitpin | 1 | 1071 | 0.694 | sell | 9.222 | 6.472 | 6.455 | 3.338 | 3.409 |
+| Tabdeal | 1 | 594 | 0.109 | buy | 51.761 | 51.588 | 48.945 | 5.271 | 5.187 |
+| Tabdeal | 1 | 594 | 0.109 | sell | 41.157 | 40.997 | 38.479 | 5.177 | 5.091 |
+
+Student-t with `df=5` was also checked on Wallex/Nobitex. It was weaker than
+`df=3` on NLL:
+
+| Venue | df | Side | RMSE | Zero RMSE | NLL | Zero NLL |
+|---|---:|---|---:|---:|---:|---:|
+| Wallex | 5 | buy | 52.129 | 51.203 | 4.840 | 5.139 |
+| Wallex | 5 | sell | 38.128 | 37.389 | 4.647 | 4.940 |
+| Nobitex | 5 | buy | 44.853 | 41.135 | 4.673 | 5.060 |
+| Nobitex | 5 | sell | 57.586 | 55.512 | 4.867 | 5.260 |
+
+## Interpretation
+
+The heavy-tailed refresh distribution worked for NLL:
+
+```text
+Student-t refresh improves NLL versus zero on every tested venue and side.
+It is especially useful for Tabdeal, where Gaussian refresh was worse than
+zero NLL but Student-t became better than zero NLL.
+```
+
+However, the flow-gated `pi_market` remained too conservative:
+
+```text
+mean_market_prob:
+    Wallex  ~= 0.239
+    Nobitex ~= 0.263
+    Bitpin  ~= 0.142
+    Tabdeal ~= 0.107
+```
+
+So the model learned a useful distributional jump/refresh component but still
+under-used the mechanical market component for point prediction. This is why
+RMSE mostly stayed close to zero-delta and did not recover Tabdeal's strong
+mechanical dependence.
+
+The important improvement is conceptual:
+
+```text
+The quote-refresh component should be heavy-tailed.
+Gaussian refresh under-prices jump risk.
+```
+
+But for point/drift prediction:
+
+```text
+flow alone is not enough to identify the market regime.
+```
+
+Next likely improvement:
+
+```text
+Keep Student-t refresh.
+Restore spread in the decomposition.
+Use a stronger prior/floor for pi_market so active venues like Tabdeal do not
+collapse into refresh.
+Possibly use side-specific market responsibilities.
+```
+
+# Two-Gaussian Refresh Approximation
+
+Because Student-t sampling can be more expensive inside batched MPC rollouts,
+a cheaper heavy-tail approximation was tested:
+
+```text
+refresh:
+    (1 - p_jump) * Normal(mu_refresh, sigma_quiet^2)
+  + p_jump       * Normal(mu_refresh, sigma_jump^2)
+```
+
+This keeps the same outer market/refresh model:
+
+```text
+pi_market,t = sigmoid(a0 + a1 * log1p(total_flow_t))
+
+market:
+    Normal(beta0 + beta1 * mechanical_delta_t, sigma_market^2)
+
+refresh:
+    two-Gaussian mixture
+```
+
+Training remains online MLE/EM:
+
+```text
+gamma_market = P(market | y_t)
+gamma_jump   = P(refresh_jump | y_t, refresh)
+
+gate parameters:
+    logistic online MLE update using gamma_market
+
+market beta:
+    weighted RLS using gamma_market
+
+refresh p_jump:
+    EWMA update using gamma_jump
+
+refresh variances:
+    weighted EWMA for quiet and jump components
+```
+
+Settings:
+
+```text
+interval = 10000ms
+continuous sections = true
+decay = 0.99
+gate learning rate = 0.02
+initial sigma = 50
+VWAP depth = 100 USDT
+point mode = MAP/hurdle
+```
+
+Two initial jump-width multipliers were tested:
+
+```text
+sigma_jump / sigma_quiet = 8
+sigma_jump / sigma_quiet = 5
+```
+
+## Two-Gaussian Results, jump_mult = 8
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.394 | buy | 51.893 | 51.203 | 85.407 | 4.829 | 5.139 |
+| Wallex | 59 | 9564 | 0.394 | sell | 37.858 | 37.389 | 56.500 | 4.680 | 4.940 |
+| Nobitex | 63 | 11699 | 0.391 | buy | 41.123 | 41.135 | 39.837 | 4.649 | 5.060 |
+| Nobitex | 63 | 11699 | 0.391 | sell | 55.472 | 55.512 | 53.464 | 4.853 | 5.260 |
+| Bitpin | 1 | 1071 | 0.765 | buy | 14.642 | 9.273 | 13.338 | 2.736 | 3.942 |
+| Bitpin | 1 | 1071 | 0.765 | sell | 9.402 | 6.472 | 6.455 | 3.173 | 3.409 |
+| Tabdeal | 1 | 594 | 0.106 | buy | 51.819 | 51.588 | 48.945 | 4.339 | 5.187 |
+| Tabdeal | 1 | 594 | 0.106 | sell | 41.187 | 40.997 | 38.479 | 4.920 | 5.091 |
+
+## Two-Gaussian Results, jump_mult = 5
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.384 | buy | 51.938 | 51.203 | 85.407 | 4.817 | 5.139 |
+| Wallex | 59 | 9564 | 0.384 | sell | 37.872 | 37.389 | 56.500 | 4.670 | 4.940 |
+| Nobitex | 63 | 11699 | 0.383 | buy | 41.140 | 41.135 | 39.837 | 4.630 | 5.060 |
+| Nobitex | 63 | 11699 | 0.383 | sell | 55.582 | 55.512 | 53.464 | 4.833 | 5.260 |
+| Bitpin | 1 | 1071 | 0.764 | buy | 14.644 | 9.273 | 13.338 | 2.741 | 3.942 |
+| Bitpin | 1 | 1071 | 0.764 | sell | 9.400 | 6.472 | 6.455 | 3.175 | 3.409 |
+| Tabdeal | 1 | 594 | 0.106 | buy | 51.819 | 51.588 | 48.945 | 4.306 | 5.187 |
+| Tabdeal | 1 | 594 | 0.106 | sell | 41.187 | 40.997 | 38.479 | 4.878 | 5.091 |
+
+## Student-t vs Two-Gaussian
+
+Best Student-t result used:
+
+```text
+df = 3
+```
+
+Comparison by NLL:
+
+| Venue | Side | Student-t NLL | Two-Gauss NLL, mult=8 | Two-Gauss NLL, mult=5 | Zero NLL |
+|---|---|---:|---:|---:|---:|
+| Wallex | buy | 4.686 | 4.829 | 4.817 | 5.139 |
+| Wallex | sell | 4.485 | 4.680 | 4.670 | 4.940 |
+| Nobitex | buy | 4.563 | 4.649 | 4.630 | 5.060 |
+| Nobitex | sell | 4.805 | 4.853 | 4.833 | 5.260 |
+| Bitpin | buy | 2.839 | 2.736 | 2.741 | 3.942 |
+| Bitpin | sell | 2.832 | 3.173 | 3.175 | 3.409 |
+| Tabdeal | buy | 4.824 | 4.339 | 4.306 | 5.187 |
+| Tabdeal | sell | 4.831 | 4.920 | 4.878 | 5.091 |
+
+Comparison by RMSE:
+
+| Venue | Side | Student-t RMSE | Two-Gauss RMSE, mult=8 | Two-Gauss RMSE, mult=5 | Zero RMSE |
+|---|---|---:|---:|---:|---:|
+| Wallex | buy | 51.944 | 51.893 | 51.938 | 51.203 |
+| Wallex | sell | 37.773 | 37.858 | 37.872 | 37.389 |
+| Nobitex | buy | 41.407 | 41.123 | 41.140 | 41.135 |
+| Nobitex | sell | 55.585 | 55.472 | 55.582 | 55.512 |
+| Bitpin | buy | 9.256 | 14.642 | 14.644 | 9.273 |
+| Bitpin | sell | 6.520 | 9.402 | 9.400 | 6.472 |
+| Tabdeal | buy | 51.806 | 51.819 | 51.819 | 51.588 |
+| Tabdeal | sell | 41.181 | 41.187 | 41.187 | 40.997 |
+
+## Interpretation
+
+The two-Gaussian refresh is a viable cheaper approximation:
+
+```text
+It improves NLL versus zero on every venue and side.
+It avoids Student-t sampling cost.
+It is simple to sample in batched Torch:
+    Bernoulli mask + one Normal draw + sigma selection.
+```
+
+But Student-t remains the stronger general distributional model:
+
+```text
+Student-t wins NLL on Wallex buy/sell, Nobitex buy/sell, Bitpin sell,
+and Tabdeal sell.
+```
+
+Two-Gaussian wins some one-sided cases:
+
+```text
+Bitpin buy
+Tabdeal buy
+```
+
+The point RMSE story is mostly unchanged. The flow-gated model still underuses
+the mechanical market component, so RMSE remains near zero-delta and does not
+recover the known Tabdeal mechanical advantage.
+
+Practical production tradeoff:
+
+```text
+If rollout speed is the priority:
+    use two-Gaussian refresh, jump_mult around 5.
+
+If distributional fit / NLL is the priority:
+    use Student-t refresh with df around 3.
+
+Either way:
+    improve the market gate / pi_market prior before expecting better RMSE.
+```
+
+# Flow-Gated Mixture With Spread Gate Features
+
+The previous flow-gated Student-t model used:
+
+```text
+pi_market,t = sigmoid(a0 + a1 * log1p(total_flow_t))
+```
+
+Two spread-feature variants were tested:
+
+```text
+prev:
+    pi_market,t =
+        sigmoid(a0
+              + a1 * log1p(total_flow_t)
+              + a2 * log1p(spread_{t-1}))
+
+both:
+    pi_market,t =
+        sigmoid(a0
+              + a1 * log1p(total_flow_t)
+              + a2 * log1p(spread_{t-1})
+              + a3 * abs(mechanical_log_spread_delta_t))
+```
+
+where:
+
+```text
+mechanical_log_spread_delta_t =
+    log(mechanical_spread_t) - log(spread_{t-1})
+```
+
+The refresh distribution remained:
+
+```text
+Student-t, df = 3
+```
+
+and point prediction remained:
+
+```text
+MAP / hurdle mode
+```
+
+## Results Compared With No Spread Gate Feature
+
+| Venue | Spread Features | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL |
+|---|---|---:|---|---:|---:|---:|---:|---:|
+| Wallex | none | 0.239 | buy | 51.944 | 51.203 | 85.407 | 4.686 | 5.139 |
+| Wallex | none | 0.239 | sell | 37.773 | 37.389 | 56.500 | 4.485 | 4.940 |
+| Wallex | prev | 0.111 | buy | 51.467 | 51.203 | 85.407 | 4.629 | 5.139 |
+| Wallex | prev | 0.111 | sell | 37.593 | 37.389 | 56.500 | 4.417 | 4.940 |
+| Wallex | both | 0.111 | buy | 51.466 | 51.203 | 85.407 | 4.629 | 5.139 |
+| Wallex | both | 0.111 | sell | 37.598 | 37.389 | 56.500 | 4.417 | 4.940 |
+| Nobitex | none | 0.263 | buy | 41.407 | 41.135 | 39.837 | 4.563 | 5.060 |
+| Nobitex | none | 0.263 | sell | 55.585 | 55.512 | 53.464 | 4.805 | 5.260 |
+| Nobitex | prev | 0.109 | buy | 42.853 | 41.135 | 39.837 | 4.506 | 5.060 |
+| Nobitex | prev | 0.109 | sell | 56.940 | 55.512 | 53.464 | 4.768 | 5.260 |
+| Nobitex | both | 0.110 | buy | 42.710 | 41.135 | 39.837 | 4.506 | 5.060 |
+| Nobitex | both | 0.110 | sell | 56.861 | 55.512 | 53.464 | 4.767 | 5.260 |
+| Bitpin | none | 0.142 | buy | 9.256 | 9.273 | 13.338 | 2.839 | 3.942 |
+| Bitpin | none | 0.142 | sell | 6.520 | 6.472 | 6.455 | 2.832 | 3.409 |
+| Bitpin | prev | 0.056 | buy | 9.267 | 9.273 | 13.338 | 2.757 | 3.942 |
+| Bitpin | prev | 0.056 | sell | 6.524 | 6.472 | 6.455 | 2.797 | 3.409 |
+| Bitpin | both | 0.056 | buy | 9.267 | 9.273 | 13.338 | 2.757 | 3.942 |
+| Bitpin | both | 0.056 | sell | 6.524 | 6.472 | 6.455 | 2.797 | 3.409 |
+| Tabdeal | none | 0.107 | buy | 51.806 | 51.588 | 48.945 | 4.824 | 5.187 |
+| Tabdeal | none | 0.107 | sell | 41.181 | 40.997 | 38.479 | 4.831 | 5.091 |
+| Tabdeal | prev | 0.038 | buy | 51.798 | 51.588 | 48.945 | 4.752 | 5.187 |
+| Tabdeal | prev | 0.038 | sell | 41.177 | 40.997 | 38.479 | 4.765 | 5.091 |
+| Tabdeal | both | 0.038 | buy | 51.798 | 51.588 | 48.945 | 4.752 | 5.187 |
+| Tabdeal | both | 0.038 | sell | 41.177 | 40.997 | 38.479 | 4.764 | 5.091 |
+
+## Interpretation
+
+Adding previous spread to the gate improves NLL almost everywhere:
+
+```text
+Wallex:
+    buy NLL  4.686 -> 4.629
+    sell NLL 4.485 -> 4.417
+
+Nobitex:
+    buy NLL  4.563 -> 4.506
+    sell NLL 4.805 -> 4.768
+
+Bitpin:
+    buy NLL  2.839 -> 2.757
+    sell NLL 2.832 -> 2.797
+
+Tabdeal:
+    buy NLL  4.824 -> 4.752
+    sell NLL 4.831 -> 4.765
+```
+
+But it also lowers the learned market probability:
+
+```text
+Wallex:  0.239 -> 0.111
+Nobitex: 0.263 -> 0.109
+Bitpin:  0.142 -> 0.056
+Tabdeal: 0.107 -> 0.038
+```
+
+That means spread helps the distributional model identify jump/refresh risk,
+but it makes the gate even more conservative about using the market-mechanical
+component. RMSE therefore remains near zero-delta and does not recover the
+mechanical dependence, especially on Tabdeal.
+
+The mechanical spread-delta feature adds almost nothing beyond previous spread:
+
+```text
+prev ~= both
+```
+
+So the useful spread signal is mainly the existing book state:
+
+```text
+spread_{t-1}
+```
+
+# Decay-Only Binned Flow Gate
+
+To remove the extra `gate_learning_rate` hyperparameter, a decay-only gate was
+tested.
+
+Instead of:
+
+```text
+pi_market,t = sigmoid(a0 + a1 * log1p(total_flow_t))
+```
+
+with a separate logistic learning rate, the gate uses bins of
+`log1p(total_flow_t)`:
+
+```text
+bin_t = bucket(log1p(total_flow_t), edges=[0, 2, 4, 6, 8])
+pi_market,t = pi_market[bin_t]
+```
+
+After observing the interval, the mixture likelihood gives the posterior market
+responsibility:
+
+```text
+gamma_market,t = P(market | observed buy/sell VWAP deltas)
+```
+
+Only the selected bin is updated, using the same decay as the rest of the
+online model:
+
+```text
+pi_market[bin_t] =
+    decay * pi_market[bin_t]
+  + (1 - decay) * gamma_market,t
+```
+
+Settings:
+
+```text
+interval = 10000ms
+continuous sections = true
+decay = 0.99
+initial sigma = 50
+VWAP depth = 100 USDT
+point mode = MAP/hurdle
+refresh distribution = Student-t(df=3)
+spread gate features = none
+```
+
+## Results
+
+| Venue | Sections | Scored N | Mean Market Prob | Side | RMSE | Zero RMSE | Mechanical RMSE | NLL | Zero NLL | Wins vs Zero | Wins vs Mechanical |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| Wallex | 59 | 9564 | 0.368 | buy | 52.383 | 51.203 | 85.407 | 4.684 | 5.139 | 13/59 | 46/59 |
+| Wallex | 59 | 9564 | 0.368 | sell | 38.538 | 37.389 | 56.500 | 4.479 | 4.940 | 19/59 | 50/59 |
+| Nobitex | 63 | 11699 | 0.349 | buy | 58.324 | 41.135 | 39.837 | 4.555 | 5.060 | 19/63 | 17/63 |
+| Nobitex | 63 | 11699 | 0.349 | sell | 56.155 | 55.512 | 53.464 | 4.808 | 5.260 | 14/63 | 17/63 |
+| Bitpin | 1 | 1071 | 0.137 | buy | 17.722 | 9.273 | 13.338 | 2.811 | 3.942 | 0/1 | 0/1 |
+| Bitpin | 1 | 1071 | 0.137 | sell | 11.232 | 6.472 | 6.455 | 2.840 | 3.409 | 0/1 | 0/1 |
+| Tabdeal | 1 | 594 | 0.222 | buy | 108.067 | 51.588 | 48.945 | 4.935 | 5.187 | 0/1 | 0/1 |
+| Tabdeal | 1 | 594 | 0.222 | sell | 42.875 | 40.997 | 38.479 | 4.949 | 5.091 | 0/1 | 0/1 |
+
+## Interpretation
+
+The binned EWMA gate achieves the goal of removing the separate gate learning
+rate, and it keeps NLL better than zero on every venue and side.
+
+However, it does not solve the point-prediction problem:
+
+```text
+Wallex:
+    NLL is slightly better than the sigmoid Student-t gate.
+    RMSE is worse than zero on both sides.
+    The model still beats the raw mechanical baseline in most sections because
+    Wallex mechanical deltas are often toxic.
+
+Nobitex:
+    NLL is slightly better than the sigmoid Student-t gate.
+    Buy-side RMSE becomes much worse, suggesting the binned gate over-uses the
+    market component in some jumpy sections.
+
+Bitpin:
+    NLL remains strong, but RMSE deteriorates badly.
+
+Tabdeal:
+    NLL remains better than zero, but RMSE fails badly on buy.
+    This is another sign that the current market/refresh point selection is not
+    recovering Tabdeal's mechanical dependence.
+```
+
+Compared with the sigmoid Student-t gate, mean market probability rose:
+
+```text
+Wallex:  0.239 -> 0.368
+Nobitex: 0.263 -> 0.349
+Bitpin:  0.142 -> 0.137
+Tabdeal: 0.107 -> 0.222
+```
+
+This is useful diagnostically: simply increasing market probability does not
+guarantee better RMSE. The larger issue is the MAP point rule and the fact that
+the market and refresh components can imply very different point moves even
+when the likelihood remains well calibrated.
+
+Practical conclusion:
+
+```text
+The binned gate is attractive for runtime simplicity because it uses only the
+main decay parameter.
+
+But as tested here, it should not replace the sigmoid gate for point prediction.
+It is acceptable as a simpler probability/NLL model, not yet as a better
+portfolio-valuation point model.
+```
+
+not the simulated mechanical spread change.
+
+Updated conclusion:
+
+```text
+Use spread_{t-1} as a distributional / regime-risk feature.
+Do not expect it alone to improve point RMSE.
+To recover mechanical alpha, combine spread features with a pi_market prior,
+floor, or side-specific mechanical responsibility.
+```

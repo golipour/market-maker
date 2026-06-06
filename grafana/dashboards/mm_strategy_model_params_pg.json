@@ -19,7 +19,7 @@
       },
       "id": 1,
       "options": {
-        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **local_price_model**, **local_market_flow_model**, **global_market_flow_model**, and **global_price_model**, charts are split into **μ** (keys matching `^mu_`), **σ** (keys matching `^sigma_`), and **other** (remaining numeric params: e.g. hurdle `p0_*`, Gamma `shape_*` / `scale_*`, Weibull `wb_*`, GPD `xi_*` / `beta_*` / `u_*`, `logt_df`, `decay`, …). Global model **other** charts also include **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
+        "content": "**Source:** `mm_events` (`StrategyDecision` on **Decisions topic**).\n\n**Layout:** For each of **local_price_model**, **local_market_flow_model**, **global_market_flow_model**, and **global_price_model**, charts are split into **mu** (keys matching `^mu_`), **sigma** (keys matching `^sigma_`), and **other** top-level numeric params. Conditional mechanical-mixture price models also get dedicated nested-param charts for the sigmoid flow gate (`market_prob`, `market_resp`, `gate_beta[0/1]`) and component parameters (`market_beta`, `market_sigma`, `refresh_sigma`, `refresh_mean`). Global model **other** charts also include **`active_in_mpc`** (0/1).\n\nAdjust **Exchange / Symbol / Decisions topic** to match persistence.",
         "mode": "markdown"
       },
       "title": "Notes",
@@ -630,6 +630,203 @@
         "x": 0,
         "y": 106
       },
+      "id": 80,
+      "panels": [],
+      "title": "Conditional price model params",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 107
+      },
+      "id": 81,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH params AS (\n  SELECT e.ts,\n         'local_price_model'::text AS model_key,\n         COALESCE(e.payload->'local_price_model'->'params', '{}'::jsonb) AS p\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n)\nSELECT ts AS \"time\",\n       model_key || '.market_prob' AS metric,\n       CASE\n  WHEN trim(COALESCE(p->>'market_prob', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(p->>'market_prob', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM params\nWHERE p->>'market_prob' IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\",\n       model_key || '.market_resp' AS metric,\n       CASE\n  WHEN trim(COALESCE(p->>'market_resp', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(p->>'market_resp', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM params\nWHERE p->>'market_resp' IS NOT NULL\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.gate_beta[' || (gb.idx - 1)::text || ']' AS metric,\n       (gb.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(params.p->'gate_beta', '[]'::jsonb))\n  WITH ORDINALITY AS gb(value, idx)\nWHERE jsonb_typeof(gb.value) = 'number'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local conditional price — gate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 107
+      },
+      "id": 82,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH params AS (\n  SELECT e.ts,\n         'global_price_model'::text AS model_key,\n         COALESCE(e.payload->'global_price_model'->'params', '{}'::jsonb) AS p\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n)\nSELECT ts AS \"time\",\n       model_key || '.market_prob' AS metric,\n       CASE\n  WHEN trim(COALESCE(p->>'market_prob', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(p->>'market_prob', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM params\nWHERE p->>'market_prob' IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\",\n       model_key || '.market_resp' AS metric,\n       CASE\n  WHEN trim(COALESCE(p->>'market_resp', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(p->>'market_resp', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM params\nWHERE p->>'market_resp' IS NOT NULL\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.gate_beta[' || (gb.idx - 1)::text || ']' AS metric,\n       (gb.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_array_elements(COALESCE(params.p->'gate_beta', '[]'::jsonb))\n  WITH ORDINALITY AS gb(value, idx)\nWHERE jsonb_typeof(gb.value) = 'number'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global conditional price — gate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 83,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH params AS (\n  SELECT e.ts,\n         'local_price_model'::text AS model_key,\n         COALESCE(e.payload->'local_price_model'->'params', '{}'::jsonb) AS p\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n)\nSELECT params.ts AS \"time\",\n       params.model_key || '.market_beta.' || mb.component || '.b' || (coef.idx - 1)::text AS metric,\n       (coef.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_beta', '{}'::jsonb)) AS mb(component, beta)\nCROSS JOIN LATERAL jsonb_array_elements(mb.beta) WITH ORDINALITY AS coef(value, idx)\nWHERE jsonb_typeof(coef.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.market_sigma.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_sigma', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.refresh_sigma.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_sigma', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.refresh_mean.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_mean', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Local conditional price — components",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 84,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH params AS (\n  SELECT e.ts,\n         'global_price_model'::text AS model_key,\n         COALESCE(e.payload->'global_price_model'->'params', '{}'::jsonb) AS p\n  FROM mm_events e\n  WHERE e.topic = '${decisions_topic}'\n    AND e.event_type = 'StrategyDecision'\n    AND e.exchange = '${exchange}'\n    AND e.symbol = '${symbol}'\n    AND $__timeFilter(e.ts)\n)\nSELECT params.ts AS \"time\",\n       params.model_key || '.market_beta.' || mb.component || '.b' || (coef.idx - 1)::text AS metric,\n       (coef.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_beta', '{}'::jsonb)) AS mb(component, beta)\nCROSS JOIN LATERAL jsonb_array_elements(mb.beta) WITH ORDINALITY AS coef(value, idx)\nWHERE jsonb_typeof(coef.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.market_sigma.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'market_sigma', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.refresh_sigma.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_sigma', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nUNION ALL\nSELECT params.ts AS \"time\",\n       params.model_key || '.refresh_mean.' || kv.key AS metric,\n       (kv.value #>> '{}')::double precision AS value\nFROM params\nCROSS JOIN LATERAL jsonb_each(COALESCE(params.p->'refresh_mean', '{}'::jsonb)) AS kv(key, value)\nWHERE jsonb_typeof(kv.value) = 'number'\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Global conditional price — components",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 123
+      },
       "id": 100,
       "panels": [],
       "title": "Model scores (ControllerDiagnostics)",
@@ -651,7 +848,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 107
+        "y": 124
       },
       "id": 101,
       "options": {
@@ -698,7 +895,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 132
       },
       "id": 104,
       "options": {
@@ -812,6 +1009,6 @@
   "timezone": "browser",
   "title": "MM strategy model params (PostgreSQL)",
   "uid": "mm-strategy-model-params-pg",
-  "version": 32,
+  "version": 33,
   "weekStart": ""
 }

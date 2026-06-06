@@ -392,6 +392,49 @@ def _mid_from_book_best_levels_batched(
     return 0.5 * (best_bid + best_ask)
 
 
+def _best_spread_from_book_batched(
+    ob_bids: torch.Tensor,
+    ob_asks: torch.Tensor,
+    spread_grid: torch.Tensor,
+) -> torch.Tensor:
+    """Best bid/ask spread width from grid-aligned book levels."""
+    big = float(spread_grid.max().item()) + 1000.0
+    dtype = ob_bids.dtype
+    device = ob_bids.device
+    mask_b = (ob_bids > 0).to(dtype)
+    mask_a = (ob_asks > 0).to(dtype)
+    big_t = torch.tensor(big, dtype=dtype, device=device)
+    spread_b = spread_grid.unsqueeze(0) * mask_b + (1.0 - mask_b) * big_t
+    spread_a = spread_grid.unsqueeze(0) * mask_a + (1.0 - mask_a) * big_t
+    best_bid_spread = spread_b.min(dim=1, keepdim=True)[0]
+    best_ask_spread = spread_a.min(dim=1, keepdim=True)[0]
+    spread = best_bid_spread + best_ask_spread
+    return torch.where(spread >= 2.0 * big_t, torch.zeros_like(spread), spread)
+
+
+def _fixed_depth_shape_features_batched(
+    ob_bids: torch.Tensor,
+    ob_asks: torch.Tensor,
+    mid: torch.Tensor,
+    spread_grid: torch.Tensor,
+    *,
+    target_depth: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return spread and extra fixed-depth buy/sell shape beyond half-spread."""
+    spread = _best_spread_from_book_batched(ob_bids, ob_asks, spread_grid)
+    buy_ref, sell_ref = vwap_prices_batched(
+        ob_bids,
+        ob_asks,
+        mid,
+        spread_grid,
+        target_depth=max(0.0, float(target_depth)),
+    )
+    half_spread = 0.5 * torch.clamp(spread, min=1e-9)
+    buy_shape = torch.clamp(buy_ref - mid - half_spread, min=1e-9)
+    sell_shape = torch.clamp(mid - sell_ref - half_spread, min=1e-9)
+    return torch.clamp(spread, min=1e-9), buy_shape, sell_shape
+
+
 _SOFT_FILL_ACTIVATIONS = frozenset({"sigmoid", "hardsigmoid"})
 _SOFT_FILL_QUEUE_MODELS = frozenset({"pro_rata", "back_of_queue"})
 
@@ -1009,7 +1052,7 @@ class MonteCarloMPCTensorBatched:
         )
         vwap_depth = max(0.0, float(getattr(state, "vwap_depth", 0.0)))
 
-        # Pre-draw MC samples: (n_samples, horizon) for MOF and price residuals.
+        # Pre-draw MC samples: (n_samples, horizon) for MOF and price shocks.
         def draw_samples():
             sample_shape = (self.n_samples, self.horizon)
             if hasattr(self.local_market_flow_model, "sample"):
@@ -1024,14 +1067,21 @@ class MonteCarloMPCTensorBatched:
                         bv, sv = self.local_market_flow_model.sample((1,), device=_device, dtype=dtype)
                         buy_vol[s, h] = bv.squeeze()
                         sell_vol[s, h] = sv.squeeze()
-            if hasattr(self.local_price_model, "sample_residual"):
+            price_innov = None
+            if hasattr(self.local_price_model, "sample_innovations"):
+                price_innov = self.local_price_model.sample_innovations(
+                    sample_shape, device=_device, dtype=dtype
+                )
+                eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+                eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+            elif hasattr(self.local_price_model, "sample_residual"):
                 eps_buy, eps_sell = self.local_price_model.sample_residual(
                     sample_shape, device=_device, dtype=dtype
                 )
             else:
                 eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
                 eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-            return buy_vol, sell_vol, eps_buy, eps_sell
+            return buy_vol, sell_vol, eps_buy, eps_sell, price_innov
 
         batch_time_sec = 0.0
         if self.fixed_mc_samples:
@@ -1041,6 +1091,7 @@ class MonteCarloMPCTensorBatched:
                 fixed_sell_vol,
                 fixed_eps_buy,
                 fixed_eps_sell,
+                fixed_price_innov,
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
 
@@ -1091,15 +1142,16 @@ class MonteCarloMPCTensorBatched:
                     last_eval_x = x_torch.detach().clone()
 
                 if self.fixed_mc_samples:
-                    buy_vol, sell_vol, eps_buy, eps_sell = (
+                    buy_vol, sell_vol, eps_buy, eps_sell, price_innov = (
                         fixed_buy_vol,
                         fixed_sell_vol,
                         fixed_eps_buy,
                         fixed_eps_sell,
+                        fixed_price_innov,
                     )
                 else:
                     t_batch = time.perf_counter()
-                    buy_vol, sell_vol, eps_buy, eps_sell = draw_samples()
+                    buy_vol, sell_vol, eps_buy, eps_sell, price_innov = draw_samples()
                     batch_time_sec += time.perf_counter() - t_batch
 
                 inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
@@ -1116,6 +1168,9 @@ class MonteCarloMPCTensorBatched:
                 cash_path = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
                 inv_path = torch_mod.zeros(self.n_samples, self.horizon, dtype=dtype, device=_device)
                 step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
+                conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
+                conditional_buy_vwap_t = None
+                conditional_sell_vwap_t = None
 
                 for h in range(self.horizon):
                     if h == 0:
@@ -1154,7 +1209,8 @@ class MonteCarloMPCTensorBatched:
                         mid_price=mid_t,
                         optimizer=self.local_optimizer,
                     )
-                    vwap_depth_t = torch_mod.abs(inv_t)
+                    sell_vwap_depth_t = torch_mod.abs(inv_t)
+                    buy_vwap_depth_t = torch_mod.clamp(cash_t / torch_mod.clamp(mid_t, min=1e-9), min=0.0)
                     if h == 0:
                         # Use upstream VWAPs computed from the initial inventory depth,
                         # instead of recomputing from the book arrays.
@@ -1171,15 +1227,23 @@ class MonteCarloMPCTensorBatched:
                             device=_device,
                         )
                     else:
-                        buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
-                            ob_bids,
-                            ob_asks,
-                            mid_t,
-                            spread_grid,
-                            target_depth=vwap_depth_t,
-                        )
-                    buy_vwap_t = buy_vwap_book_t + eps_buy_h
-                    sell_vwap_t = sell_vwap_book_t + eps_sell_h
+                        if conditional_price_model and conditional_buy_vwap_t is not None:
+                            buy_vwap_book_t = conditional_buy_vwap_t
+                            sell_vwap_book_t = conditional_sell_vwap_t
+                        else:
+                            buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
+                                ob_bids,
+                                ob_asks,
+                                mid_t,
+                                spread_grid,
+                                target_depth=sell_vwap_depth_t,
+                            )
+                    if conditional_price_model:
+                        buy_vwap_t = buy_vwap_book_t
+                        sell_vwap_t = sell_vwap_book_t
+                    else:
+                        buy_vwap_t = buy_vwap_book_t + eps_buy_h
+                        sell_vwap_t = sell_vwap_book_t + eps_sell_h
 
                     ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
                         action_h,
@@ -1210,15 +1274,65 @@ class MonteCarloMPCTensorBatched:
                         mid_t,
                         spread_grid,
                     )
-                    buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
-                        ob_bids_next,
-                        ob_asks_next,
-                        mid_next,
-                        spread_grid,
-                        target_depth=torch_mod.abs(inv_next),
-                    )
-                    buy_vwap_next = buy_vwap_book_next + eps_buy_next
-                    sell_vwap_next = sell_vwap_book_next + eps_sell_next
+                    if conditional_price_model:
+                        ref_depth = float(getattr(self.local_price_model, "reference_vwap_depth", 100.0))
+                        prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = (
+                            _fixed_depth_shape_features_batched(
+                                ob_bids,
+                                ob_asks,
+                                mid_t,
+                                spread_grid,
+                                target_depth=ref_depth,
+                            )
+                        )
+                        mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = (
+                            _fixed_depth_shape_features_batched(
+                                ob_bids_next,
+                                ob_asks_next,
+                                mid_next,
+                                spread_grid,
+                                target_depth=ref_depth,
+                            )
+                        )
+                        innov_h = None
+                        if price_innov is not None:
+                            innov_h = {
+                                "u_market": price_innov["u_market"][:, h : h + 1],
+                                "z_market": {
+                                    name: value[:, h : h + 1]
+                                    for name, value in price_innov["z_market"].items()
+                                },
+                                "t_refresh": {
+                                    name: value[:, h : h + 1]
+                                    for name, value in price_innov["t_refresh"].items()
+                                },
+                            }
+                        buy_vwap_next, sell_vwap_next = self.local_price_model.sample_dynamic_vwap(
+                            prev_mid=mid_t,
+                            prev_spread=prev_spread_ref,
+                            prev_buy_shape=prev_buy_shape_ref,
+                            prev_sell_shape=prev_sell_shape_ref,
+                            mech_mid=mid_next,
+                            mech_spread=mech_spread_ref,
+                            mech_buy_shape=mech_buy_shape_ref,
+                            mech_sell_shape=mech_sell_shape_ref,
+                            total_flow=buy_h + sell_h,
+                            buy_depth=torch_mod.clamp(cash_next / torch_mod.clamp(mid_next, min=1e-9), min=0.0),
+                            sell_depth=torch_mod.abs(inv_next),
+                            innovations=innov_h,
+                        )
+                        conditional_buy_vwap_t = buy_vwap_next
+                        conditional_sell_vwap_t = sell_vwap_next
+                    else:
+                        buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
+                            ob_bids_next,
+                            ob_asks_next,
+                            mid_next,
+                            spread_grid,
+                            target_depth=torch_mod.abs(inv_next),
+                        )
+                        buy_vwap_next = buy_vwap_book_next + eps_buy_next
+                        sell_vwap_next = sell_vwap_book_next + eps_sell_next
 
                     ob_bids, ob_asks = ob_bids_next, ob_asks_next
 

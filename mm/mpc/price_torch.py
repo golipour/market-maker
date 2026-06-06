@@ -5,6 +5,7 @@ noise around MOF-only VWAPs (TorchResidualPriceModel).
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -354,6 +355,419 @@ class TorchResidualPriceModel:
             torch.tensor(sigma, dtype=_dtype, device=_device),
         )
         return d.sample(sample_shape)
+
+
+class TorchConditionalMechanicalMixturePriceModel:
+    """
+    Conditional book-state price model for MPC rollouts.
+
+    The model learns fixed-depth mid/spread/shape deltas from observed transitions,
+    using market-order-flow-only mechanical deltas as features. Runtime valuation
+    converts the predicted fixed-depth shape to dynamic-depth VWAP analytically.
+    """
+
+    _component_names = ("mid", "log_spread", "log_buy_shape", "log_sell_shape")
+
+    def __init__(
+        self,
+        market_flow_model: object | None = None,
+        *,
+        reference_vwap_depth: float = 100.0,
+        shape_alpha: float = 0.5,
+        decay: float = 0.99,
+        initial_sigma: float = 50.0,
+        initial_log_sigma: float = 0.25,
+        sigma_min: float = 1e-6,
+        student_df: float = 3.0,
+        point_mode: str = "sample",
+        rls_p0: float = 1_000_000.0,
+        param_eps: float = 1e-9,
+        device: str | None = None,
+    ):
+        self.market_flow_model = market_flow_model
+        self._reference_vwap_depth = max(1e-12, float(reference_vwap_depth))
+        self._target_depth_lots = self._reference_vwap_depth
+        self._shape_alpha = max(0.0, float(shape_alpha))
+        self._gamma = max(1e-6, min(0.9999, float(decay)))
+        self._alpha = 1.0 - self._gamma
+        self._sigma_min = max(1e-12, float(sigma_min))
+        self._student_df = max(2.1, float(student_df))
+        self._point_mode = str(point_mode or "sample").lower().strip()
+        self._param_eps = max(1e-12, float(param_eps))
+        self._device = device
+        sigma0 = max(self._sigma_min, float(initial_sigma))
+        log_sigma0 = max(self._sigma_min, float(initial_log_sigma))
+        self._gate_beta = np.zeros(2, dtype=np.float64)
+        self._market_beta = {
+            name: np.zeros(2, dtype=np.float64) for name in self._component_names
+        }
+        self._market_p = {
+            name: np.eye(2, dtype=np.float64) * float(rls_p0)
+            for name in self._component_names
+        }
+        self._refresh_mean = {name: 0.0 for name in self._component_names}
+        self._market_var = {
+            name: (sigma0 * sigma0 if name == "mid" else log_sigma0 * log_sigma0)
+            for name in self._component_names
+        }
+        self._refresh_var = {
+            name: (sigma0 * sigma0 if name == "mid" else log_sigma0 * log_sigma0)
+            for name in self._component_names
+        }
+        self.market_prob_hist: list[float] = []
+        self.market_resp_hist: list[float] = []
+        self.refresh_sigma_hist: list[float] = []
+        self.market_sigma_hist: list[float] = []
+
+    @property
+    def reference_vwap_depth(self) -> float:
+        return self._reference_vwap_depth
+
+    @property
+    def shape_alpha(self) -> float:
+        return self._shape_alpha
+
+    def _spread_from_ob(self, ob: Any) -> float:
+        try:
+            bid = float(ob.bids[0].price)
+            ask = float(ob.asks[0].price)
+            return max(self._param_eps, ask - bid)
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return self._param_eps
+
+    def _transition_mechanical_best(self, prev_ob: Any, buy_vol: float, sell_vol: float) -> tuple[float, float]:
+        from mm.pricing.reference_prices_ticks import _consume_depth, _depth_by_price
+
+        bid_prev = _depth_by_price(prev_ob, "bid")
+        ask_prev = _depth_by_price(prev_ob, "ask")
+        bid_after = _consume_depth(bid_prev, float(sell_vol), best_first_asc=False)
+        ask_after = _consume_depth(ask_prev, float(buy_vol), best_first_asc=True)
+        mid = float(prev_ob.mid)
+        mech_bid = float(max(bid_after.keys())) if bid_after else mid
+        mech_ask = float(min(ask_after.keys())) if ask_after else mid
+        return mech_bid, mech_ask
+
+    def _features_from_prices(
+        self,
+        *,
+        mid: float,
+        spread: float,
+        buy_vwap: float,
+        sell_vwap: float,
+    ) -> dict[str, float]:
+        half_spread = 0.5 * max(self._param_eps, float(spread))
+        return {
+            "mid": float(mid),
+            "spread": max(self._param_eps, float(spread)),
+            "buy_shape": max(self._param_eps, float(buy_vwap) - float(mid) - half_spread),
+            "sell_shape": max(self._param_eps, float(mid) - float(sell_vwap) - half_spread),
+        }
+
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
+        if prev_step is None:
+            return
+        from mm.pricing.reference_prices_ticks import (
+            reference_prices_from_transition_ticks,
+            reference_prices_ticks_from_orderbook,
+        )
+
+        _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
+        _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
+        try:
+            prev_buy, prev_sell = reference_prices_ticks_from_orderbook(
+                prev_ob, self._reference_vwap_depth
+            )
+            obs_buy, obs_sell, mech_buy, mech_sell = reference_prices_from_transition_ticks(
+                prev_ob,
+                cur_ob,
+                float(buy_vol),
+                float(sell_vol),
+                self._reference_vwap_depth,
+            )
+            prev_mid = float(prev_ob.mid)
+            obs_mid = float(cur_ob.mid)
+            mech_bid, mech_ask = self._transition_mechanical_best(prev_ob, buy_vol, sell_vol)
+        except (ValueError, ZeroDivisionError, TypeError, AttributeError):
+            return
+
+        prev_spread = self._spread_from_ob(prev_ob)
+        obs_spread = self._spread_from_ob(cur_ob)
+        mech_spread = max(self._param_eps, mech_ask - mech_bid)
+        mech_mid = 0.5 * (mech_bid + mech_ask)
+        prev = self._features_from_prices(
+            mid=prev_mid,
+            spread=prev_spread,
+            buy_vwap=prev_buy,
+            sell_vwap=prev_sell,
+        )
+        obs = self._features_from_prices(
+            mid=obs_mid,
+            spread=obs_spread,
+            buy_vwap=obs_buy,
+            sell_vwap=obs_sell,
+        )
+        mech = self._features_from_prices(
+            mid=mech_mid,
+            spread=mech_spread,
+            buy_vwap=mech_buy,
+            sell_vwap=mech_sell,
+        )
+        obs_components = {
+            "mid": obs["mid"] - prev["mid"],
+            "log_spread": math.log(obs["spread"]) - math.log(prev["spread"]),
+            "log_buy_shape": math.log(obs["buy_shape"]) - math.log(prev["buy_shape"]),
+            "log_sell_shape": math.log(obs["sell_shape"]) - math.log(prev["sell_shape"]),
+        }
+        mech_components = {
+            "mid": mech["mid"] - prev["mid"],
+            "log_spread": math.log(mech["spread"]) - math.log(prev["spread"]),
+            "log_buy_shape": math.log(mech["buy_shape"]) - math.log(prev["buy_shape"]),
+            "log_sell_shape": math.log(mech["sell_shape"]) - math.log(prev["sell_shape"]),
+        }
+        if not all(
+            math.isfinite(v) for v in (*obs_components.values(), *mech_components.values())
+        ):
+            return
+
+        total_flow = max(0.0, float(buy_vol) + float(sell_vol))
+        gate_log_flow = min(math.log1p(total_flow), 12.0)
+        gate_x = np.array([1.0, gate_log_flow], dtype=np.float64)
+        q_market = self._market_probability_np(gate_log_flow)
+        q_refresh = 1.0 - q_market
+        market_log = math.log(q_market)
+        refresh_log = math.log(q_refresh)
+        market_err: dict[str, float] = {}
+        refresh_err: dict[str, float] = {}
+        for name in self._component_names:
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_mean = float(x @ self._market_beta[name])
+            refresh_mean = float(self._refresh_mean[name])
+            market_err[name] = obs_components[name] - market_mean
+            refresh_err[name] = obs_components[name] - refresh_mean
+            market_log += self._normal_logpdf(market_err[name], self._market_var[name])
+            refresh_log += self._student_t_logpdf(refresh_err[name], self._refresh_var[name])
+        log_norm = self._logaddexp(market_log, refresh_log)
+        market_resp = math.exp(market_log - log_norm)
+        refresh_resp = 1.0 - market_resp
+
+        self._gate_beta = self._gate_beta + self._alpha * (market_resp - q_market) * gate_x
+        self._gate_beta = np.clip(self._gate_beta, -20.0, 20.0)
+        for name in self._component_names:
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            self._market_beta[name], self._market_p[name] = self._weighted_rls_update(
+                self._market_beta[name],
+                self._market_p[name],
+                x,
+                obs_components[name],
+                weight=market_resp,
+            )
+            self._refresh_mean[name] = (
+                self._refresh_mean[name]
+                + self._alpha * refresh_resp * (obs_components[name] - self._refresh_mean[name])
+            )
+            self._market_var[name] = (
+                (1.0 - self._alpha * market_resp) * self._market_var[name]
+                + self._alpha * market_resp * market_err[name] * market_err[name]
+            )
+            self._refresh_var[name] = (
+                (1.0 - self._alpha * refresh_resp) * self._refresh_var[name]
+                + self._alpha * refresh_resp * refresh_err[name] * refresh_err[name]
+            )
+            self._market_var[name] = max(self._sigma_min * self._sigma_min, self._market_var[name])
+            self._refresh_var[name] = max(self._sigma_min * self._sigma_min, self._refresh_var[name])
+        self.market_prob_hist.append(float(q_market))
+        self.market_resp_hist.append(float(market_resp))
+        self.market_sigma_hist.append(
+            float(np.sqrt(np.mean([self._market_var[name] for name in self._component_names])))
+        )
+        self.refresh_sigma_hist.append(
+            float(np.sqrt(np.mean([self._refresh_var[name] for name in self._component_names])))
+        )
+
+    def get_params(self) -> dict[str, Any]:
+        return {
+            "kind": "conditional_mechanical_mixture",
+            "reference_vwap_depth": self._reference_vwap_depth,
+            "shape_alpha": self._shape_alpha,
+            "student_df": self._student_df,
+            "gate_beta": self._gate_beta.tolist(),
+            "market_beta": {name: self._market_beta[name].tolist() for name in self._component_names},
+            "refresh_mean": dict(self._refresh_mean),
+            "market_sigma": {
+                name: float(np.sqrt(max(self._sigma_min * self._sigma_min, self._market_var[name])))
+                for name in self._component_names
+            },
+            "refresh_sigma": {
+                name: float(np.sqrt(max(self._sigma_min * self._sigma_min, self._refresh_var[name])))
+                for name in self._component_names
+            },
+            "market_prob": self.market_prob_hist[-1] if self.market_prob_hist else 0.5,
+            "market_resp": self.market_resp_hist[-1] if self.market_resp_hist else None,
+        }
+
+    def sample_innovations(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        device: str | None = None,
+        dtype: "np.dtype | None" = None,
+    ) -> dict[str, Any]:
+        import torch
+        import torch.distributions as dist
+
+        _device = resolve_torch_device(device or self._device)
+        _dtype = dtype if dtype is not None else torch.float64
+        shape = tuple(sample_shape)
+        return {
+            "u_market": torch.rand(shape, dtype=_dtype, device=_device),
+            "z_market": {
+                name: torch.randn(shape, dtype=_dtype, device=_device)
+                for name in self._component_names
+            },
+            "t_refresh": {
+                name: dist.StudentT(
+                    torch.tensor(self._student_df, dtype=_dtype, device=_device)
+                ).sample(shape)
+                for name in self._component_names
+            },
+        }
+
+    def sample_dynamic_vwap(
+        self,
+        *,
+        prev_mid: Any,
+        prev_spread: Any,
+        prev_buy_shape: Any,
+        prev_sell_shape: Any,
+        mech_mid: Any,
+        mech_spread: Any,
+        mech_buy_shape: Any,
+        mech_sell_shape: Any,
+        total_flow: Any,
+        buy_depth: Any,
+        sell_depth: Any,
+        innovations: dict[str, Any] | None = None,
+    ) -> tuple[Any, Any]:
+        import torch
+
+        dtype = prev_mid.dtype
+        device = prev_mid.device
+        eps = torch.tensor(self._param_eps, dtype=dtype, device=device)
+        prev_spread = torch.clamp(prev_spread, min=self._param_eps)
+        prev_buy_shape = torch.clamp(prev_buy_shape, min=self._param_eps)
+        prev_sell_shape = torch.clamp(prev_sell_shape, min=self._param_eps)
+        mech_spread = torch.clamp(mech_spread, min=self._param_eps)
+        mech_buy_shape = torch.clamp(mech_buy_shape, min=self._param_eps)
+        mech_sell_shape = torch.clamp(mech_sell_shape, min=self._param_eps)
+        mech_components = {
+            "mid": mech_mid - prev_mid,
+            "log_spread": torch.log(mech_spread) - torch.log(prev_spread),
+            "log_buy_shape": torch.log(mech_buy_shape) - torch.log(prev_buy_shape),
+            "log_sell_shape": torch.log(mech_sell_shape) - torch.log(prev_sell_shape),
+        }
+        q_market = self._market_probability_torch(total_flow, dtype=dtype, device=device)
+        if innovations is None:
+            innovations = self.sample_innovations(tuple(prev_mid.shape), device=str(device), dtype=dtype)
+        u_market = innovations["u_market"]
+        if u_market.ndim == 2 and u_market.shape != prev_mid.shape:
+            u_market = u_market.view_as(prev_mid)
+        use_market = u_market < q_market
+        pred_components: dict[str, Any] = {}
+        for name in self._component_names:
+            beta = torch.tensor(self._market_beta[name], dtype=dtype, device=device)
+            market_mean = beta[0] + beta[1] * mech_components[name]
+            refresh_mean = torch.tensor(float(self._refresh_mean[name]), dtype=dtype, device=device)
+            sigma_market = torch.tensor(
+                max(self._sigma_min, math.sqrt(max(self._market_var[name], 0.0))),
+                dtype=dtype,
+                device=device,
+            )
+            sigma_refresh = torch.tensor(
+                max(self._sigma_min, math.sqrt(max(self._refresh_var[name], 0.0))),
+                dtype=dtype,
+                device=device,
+            )
+            z = innovations["z_market"][name].view_as(prev_mid)
+            t = innovations["t_refresh"][name].view_as(prev_mid)
+            refresh_scale = sigma_refresh * math.sqrt((self._student_df - 2.0) / self._student_df)
+            market_sample = market_mean + z * sigma_market
+            refresh_sample = refresh_mean + t * refresh_scale
+            if self._point_mode == "map":
+                pred_components[name] = torch.where(q_market >= 0.5, market_mean, refresh_mean)
+            elif self._point_mode == "mean":
+                pred_components[name] = q_market * market_mean + (1.0 - q_market) * refresh_mean
+            else:
+                pred_components[name] = torch.where(use_market, market_sample, refresh_sample)
+        pred_mid = prev_mid + pred_components["mid"]
+        pred_spread = prev_spread * torch.exp(torch.clamp(pred_components["log_spread"], min=-5.0, max=5.0))
+        pred_buy_shape = prev_buy_shape * torch.exp(
+            torch.clamp(pred_components["log_buy_shape"], min=-5.0, max=5.0)
+        )
+        pred_sell_shape = prev_sell_shape * torch.exp(
+            torch.clamp(pred_components["log_sell_shape"], min=-5.0, max=5.0)
+        )
+        ref_depth = torch.tensor(self._reference_vwap_depth, dtype=dtype, device=device)
+        alpha = torch.tensor(self._shape_alpha, dtype=dtype, device=device)
+        buy_ratio = torch.pow(torch.clamp(buy_depth, min=0.0) / ref_depth, alpha)
+        sell_ratio = torch.pow(torch.clamp(sell_depth, min=0.0) / ref_depth, alpha)
+        buy_vwap = pred_mid + 0.5 * pred_spread + pred_buy_shape * buy_ratio
+        sell_vwap = pred_mid - 0.5 * pred_spread - pred_sell_shape * sell_ratio
+        return torch.nan_to_num(buy_vwap, nan=0.0), torch.nan_to_num(sell_vwap, nan=0.0)
+
+    def _normal_logpdf(self, error: float, variance: float) -> float:
+        var = max(self._sigma_min * self._sigma_min, float(variance))
+        return -0.5 * (math.log(2.0 * math.pi * var) + (error * error) / var)
+
+    def _market_probability_np(self, log_flow: float) -> float:
+        x = np.array([1.0, float(log_flow)], dtype=np.float64)
+        score = float(x @ self._gate_beta)
+        return min(0.999, max(0.001, float(1.0 / (1.0 + math.exp(-score)))))
+
+    def _market_probability_torch(self, total_flow: Any, *, dtype: Any, device: Any) -> Any:
+        import torch
+
+        log_flow = torch.clamp(torch.log1p(torch.clamp(total_flow, min=0.0)), max=12.0)
+        gate_beta = torch.tensor(self._gate_beta, dtype=dtype, device=device)
+        q_market = torch.sigmoid(gate_beta[0] + gate_beta[1] * log_flow)
+        return torch.clamp(q_market, min=0.001, max=0.999)
+
+    def _student_t_logpdf(self, error: float, variance: float) -> float:
+        nu = self._student_df
+        var = max(self._sigma_min * self._sigma_min, float(variance))
+        scale2 = max(self._sigma_min * self._sigma_min, var * (nu - 2.0) / nu)
+        return (
+            math.lgamma((nu + 1.0) / 2.0)
+            - math.lgamma(nu / 2.0)
+            - 0.5 * math.log(nu * math.pi * scale2)
+            - ((nu + 1.0) / 2.0) * math.log1p((error * error) / (nu * scale2))
+        )
+
+    def _logaddexp(self, a: float, b: float) -> float:
+        high = max(a, b)
+        low = min(a, b)
+        return high + math.log1p(math.exp(low - high))
+
+    def _weighted_rls_update(
+        self,
+        beta: np.ndarray,
+        p: np.ndarray,
+        x: np.ndarray,
+        target: float,
+        *,
+        weight: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        w = max(0.0, min(1.0, float(weight)))
+        if w <= 1e-6:
+            return beta, p
+        scale = math.sqrt(w)
+        xw = x * scale
+        yw = target * scale
+        px = p @ xw
+        denom = self._gamma + float(xw @ px)
+        gain = px / denom
+        beta = beta + gain * (yw - float(xw @ beta))
+        p = (p - np.outer(gain, xw) @ p) / self._gamma
+        p = 0.5 * (p + p.T)
+        return beta, p
 
 
 def score_mid_delta(delta_mid: float, params: dict) -> "ScoreResult":

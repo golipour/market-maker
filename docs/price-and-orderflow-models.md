@@ -51,6 +51,52 @@ it is `abs(local_inventory)`. In liquidity-sourcing mode it is
 `abs(local_inventory + global_inventory)`. This keeps the learned and simulated
 VWAP reference tied to the size of inventory the optimizer is actually marking.
 
+For the conditional mechanical-mixture price model, learning uses a separate
+fixed reference depth:
+
+```json
+"local_price_model": {
+  "kind": "conditional_mechanical_mixture",
+  "reference_vwap_depth": 100.0,
+  "shape_alpha": 0.5,
+  "decay": 0.99,
+  "initial_sigma": 50.0,
+  "initial_log_sigma": 0.25,
+  "student_df": 3.0,
+  "point_mode": "sample"
+},
+"global_price_model": {
+  "kind": "conditional_mechanical_mixture",
+  "reference_vwap_depth": 100.0,
+  "shape_alpha": 0.5,
+  "decay": 0.99,
+  "initial_sigma": 50.0,
+  "initial_log_sigma": 0.25,
+  "student_df": 3.0,
+  "point_mode": "sample"
+}
+```
+
+`reference_vwap_depth` is not the portfolio valuation depth. It is the fixed
+depth used to learn portfolio-independent book state. During MPC rollouts, the
+model predicts fixed-depth `mid/spread/shape` and converts that state to the
+dynamic valuation depth implied by simulated inventory/cash.
+
+The market-regime probability is a conditional sigmoid of market-order flow:
+
+```text
+pi_market,t = sigmoid(beta0 + beta1 * log1p(total_flow_t))
+```
+
+There is no separate gate learning rate. The sigmoid parameters use the same
+adaptation speed as the rest of the price model:
+
+```text
+beta_gate,t+1 =
+    beta_gate,t
+  + (1 - decay) * (P(market | observed transition) - pi_market,t) * x_t
+```
+
 ## Market Orderflow Models
 
 Market orderflow models represent random next-step aggressive buy and sell

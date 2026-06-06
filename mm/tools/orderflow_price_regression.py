@@ -242,6 +242,128 @@ def parse_args() -> argparse.Namespace:
         help="Online decomposed mid/spread/shape VWAP model with quiet/active hurdle residual regimes.",
     )
     parser.add_argument(
+        "--online-decomposed-two-regime-vwap",
+        action="store_true",
+        help="Online decomposed two-regime VWAP model: market impact is linear in mechanical_delta; refresh is adaptive Gaussian.",
+    )
+    parser.add_argument(
+        "--online-decomposed-soft-mixture-vwap",
+        action="store_true",
+        help="Online decomposed soft-mixture VWAP model with learned sigmoid refresh probability.",
+    )
+    parser.add_argument(
+        "--online-decomposed-em-mixture-vwap",
+        action="store_true",
+        help="Online decomposed EM mixture VWAP model with learned constant market probability and no spread component.",
+    )
+    parser.add_argument(
+        "--online-decomposed-flow-gated-mixture-vwap",
+        action="store_true",
+        help="Online decomposed mixture VWAP model with pi_market sigmoid in total market flow and optional heavy-tailed refresh.",
+    )
+    parser.add_argument(
+        "--continuous-sections",
+        action="store_true",
+        help="Evaluate selected online model separately on continuous timestamp sections.",
+    )
+    parser.add_argument(
+        "--max-gap-factor",
+        type=float,
+        default=1.5,
+        help="For --continuous-sections, split when timestamp gap exceeds this multiple of interval_ms.",
+    )
+    parser.add_argument(
+        "--gate-learning-rate",
+        type=float,
+        default=0.02,
+        help="Learning rate for the sigmoid gate in --online-decomposed-soft-mixture-vwap.",
+    )
+    parser.add_argument(
+        "--soft-mixture-diagnostics",
+        type=int,
+        default=0,
+        help="Print this many worst point errors for --online-decomposed-soft-mixture-vwap.",
+    )
+    parser.add_argument(
+        "--soft-mixture-market-deviation-cap-mult",
+        type=float,
+        default=0.0,
+        help=(
+            "For soft-mixture point RMSE only, cap market side-delta deviation "
+            "from mechanical side-delta to this multiple of previous spread. "
+            "Use 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--soft-mixture-market-guard-mode",
+        choices=("cap", "drop"),
+        default="cap",
+        help=(
+            "When --soft-mixture-market-deviation-cap-mult is positive, either cap "
+            "invalid market point deltas around mechanical or drop the market "
+            "component from the point mean."
+        ),
+    )
+    parser.add_argument(
+        "--em-mixture-point-mode",
+        choices=("mean", "map"),
+        default="mean",
+        help="Point prediction for --online-decomposed-em-mixture-vwap: mixture mean or dominant/MAP component.",
+    )
+    parser.add_argument(
+        "--flow-gate-learning-rate",
+        type=float,
+        default=0.02,
+        help="Learning rate for the flow-gated mixture sigmoid pi_market update.",
+    )
+    parser.add_argument(
+        "--flow-gate-kind",
+        choices=("sigmoid", "binned"),
+        default="sigmoid",
+        help=(
+            "Gate form for --online-decomposed-flow-gated-mixture-vwap. "
+            "sigmoid learns pi_market by SGD; binned learns EWMA pi_market per log1p(total_flow) bin."
+        ),
+    )
+    parser.add_argument(
+        "--flow-gate-bins",
+        default="0,2,4,6,8",
+        help="Comma-separated log1p(total_flow) bin edges for --flow-gate-kind binned.",
+    )
+    parser.add_argument(
+        "--flow-mixture-point-mode",
+        choices=("mean", "map"),
+        default="map",
+        help="Point prediction for --online-decomposed-flow-gated-mixture-vwap.",
+    )
+    parser.add_argument(
+        "--refresh-distribution",
+        choices=("gaussian", "student_t", "two_gaussian"),
+        default="student_t",
+        help="Refresh component likelihood for --online-decomposed-flow-gated-mixture-vwap.",
+    )
+    parser.add_argument(
+        "--refresh-student-df",
+        type=float,
+        default=3.0,
+        help="Degrees of freedom for Student-t refresh likelihood.",
+    )
+    parser.add_argument(
+        "--refresh-jump-sigma-mult",
+        type=float,
+        default=8.0,
+        help="Initial sigma_jump/sigma_quiet multiplier for two-Gaussian refresh.",
+    )
+    parser.add_argument(
+        "--flow-gate-spread-features",
+        choices=("none", "prev", "both"),
+        default="none",
+        help=(
+            "Additional spread features for --online-decomposed-flow-gated-mixture-vwap: "
+            "prev adds log1p(spread_t-1), both also adds abs(mechanical log-spread delta)."
+        ),
+    )
+    parser.add_argument(
         "--online-cross-venue-wallex-from-nobitex",
         action="store_true",
         help="Predict Wallex current deltas online from aligned Nobitex mechanical/orderflow features.",
@@ -609,7 +731,65 @@ def main() -> None:
                     since=since,
                     until=until,
                 )
-                if args.online_decomposed_hurdle_vwap:
+                if args.online_decomposed_flow_gated_mixture_vwap:
+                    print_online_decomposed_flow_gated_mixture_vwap_results(
+                        window.label,
+                        rows,
+                        min_rows=args.min_rows,
+                        decay=args.online_decay,
+                        initial_sigma=args.online_initial_sigma,
+                        vwap_depth=args.vwap_depth,
+                        interval_ms=args.interval_ms,
+                        continuous_sections=args.continuous_sections,
+                        max_gap_factor=args.max_gap_factor,
+                        gate_learning_rate=args.flow_gate_learning_rate,
+                        gate_kind=args.flow_gate_kind,
+                        gate_bins=parse_float_list(args.flow_gate_bins),
+                        point_mode=args.flow_mixture_point_mode,
+                        refresh_distribution=args.refresh_distribution,
+                        refresh_student_df=args.refresh_student_df,
+                        refresh_jump_sigma_mult=args.refresh_jump_sigma_mult,
+                        spread_features=args.flow_gate_spread_features,
+                    )
+                elif args.online_decomposed_em_mixture_vwap:
+                    print_online_decomposed_em_mixture_vwap_results(
+                        window.label,
+                        rows,
+                        min_rows=args.min_rows,
+                        decay=args.online_decay,
+                        initial_sigma=args.online_initial_sigma,
+                        vwap_depth=args.vwap_depth,
+                        interval_ms=args.interval_ms,
+                        continuous_sections=args.continuous_sections,
+                        max_gap_factor=args.max_gap_factor,
+                        point_mode=args.em_mixture_point_mode,
+                    )
+                elif args.online_decomposed_soft_mixture_vwap:
+                    print_online_decomposed_soft_mixture_vwap_results(
+                        window.label,
+                        rows,
+                        min_rows=args.min_rows,
+                        decay=args.online_decay,
+                        initial_sigma=args.online_initial_sigma,
+                        vwap_depth=args.vwap_depth,
+                        interval_ms=args.interval_ms,
+                        continuous_sections=args.continuous_sections,
+                        max_gap_factor=args.max_gap_factor,
+                        gate_learning_rate=args.gate_learning_rate,
+                        diagnostic_count=args.soft_mixture_diagnostics,
+                        market_deviation_cap_mult=args.soft_mixture_market_deviation_cap_mult,
+                        market_guard_mode=args.soft_mixture_market_guard_mode,
+                    )
+                elif args.online_decomposed_two_regime_vwap:
+                    print_online_decomposed_two_regime_vwap_results(
+                        window.label,
+                        rows,
+                        min_rows=args.min_rows,
+                        decay=args.online_decay,
+                        initial_sigma=args.online_initial_sigma,
+                        vwap_depth=args.vwap_depth,
+                    )
+                elif args.online_decomposed_hurdle_vwap:
                     print_online_decomposed_hurdle_vwap_results(
                         window.label,
                         rows,
@@ -775,6 +955,10 @@ def parse_float_list(raw: str) -> list[float]:
     return values
 
 
+def flow_bin_index(value: float, edges: Sequence[float]) -> int:
+    return int(np.searchsorted(np.asarray(edges, dtype=np.float64), value, side="right"))
+
+
 def parse_duration(item: str) -> timedelta | None:
     item = item.strip().lower()
     if item == "all":
@@ -803,6 +987,30 @@ def format_duration(delta: timedelta) -> str:
         if seconds % scale == 0:
             return f"{seconds // scale}{suffix}"
     return f"{seconds}s"
+
+
+def split_continuous_sections(
+    rows: Sequence[MarketRow],
+    *,
+    interval_ms: int,
+    max_gap_factor: float,
+    min_rows: int,
+) -> list[list[MarketRow]]:
+    if not rows:
+        return []
+    max_gap = timedelta(milliseconds=max(1, int(interval_ms)) * max(1.0, float(max_gap_factor)))
+    sections: list[list[MarketRow]] = []
+    current: list[MarketRow] = [rows[0]]
+    for prev, row in zip(rows, rows[1:], strict=False):
+        if row.ts - prev.ts > max_gap:
+            if len(current) >= min_rows:
+                sections.append(current)
+            current = [row]
+        else:
+            current.append(row)
+    if len(current) >= min_rows:
+        sections.append(current)
+    return sections
 
 
 def fetch_latest_ts(conn, topic: str, exchange: str, symbol: str) -> datetime | None:
@@ -1500,6 +1708,1122 @@ def online_decomposed_hurdle_vwap_model(
     return DecomposedHurdleEvaluation(
         n_scored=len(buy_sq),
         active_fraction=active_seen / max(1, seen),
+        buy_rmse=math.sqrt(float(np.mean(buy_sq))),
+        buy_nll=float(np.mean(buy_nll)),
+        buy_zero_rmse=math.sqrt(float(np.mean(buy_zero_sq))),
+        buy_zero_nll=float(np.mean(buy_zero_nll)),
+        buy_mechanical_rmse=math.sqrt(float(np.mean(buy_mech_sq))),
+        sell_rmse=math.sqrt(float(np.mean(sell_sq))),
+        sell_nll=float(np.mean(sell_nll)),
+        sell_zero_rmse=math.sqrt(float(np.mean(sell_zero_sq))),
+        sell_zero_nll=float(np.mean(sell_zero_nll)),
+        sell_mechanical_rmse=math.sqrt(float(np.mean(sell_mech_sq))),
+    )
+
+
+def online_decomposed_two_regime_vwap_model(
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+) -> DecomposedHurdleEvaluation | None:
+    if len(rows) < max(min_rows, 3):
+        return None
+    depth = max(0.0, float(vwap_depth))
+    if depth <= 1e-12:
+        return None
+
+    lam = min(0.9999, max(0.50, float(decay)))
+    alpha = 1.0 - lam
+    eps = 1e-9
+    init_var = max(float(initial_sigma) ** 2, eps)
+    component_names = ("mid", "log_spread", "log_buy_shape", "log_sell_shape")
+
+    market_beta = {name: np.zeros(2, dtype=np.float64) for name in component_names}
+    market_p = {name: np.eye(2, dtype=np.float64) * 1_000_000.0 for name in component_names}
+    refresh_mean = {name: 0.0 for name in component_names}
+    buy_var = {False: init_var, True: init_var}
+    sell_var = {False: init_var, True: init_var}
+    zero_buy_var = init_var
+    zero_sell_var = init_var
+
+    seen = 0
+    refresh_seen = 0
+    buy_sq: list[float] = []
+    sell_sq: list[float] = []
+    buy_zero_sq: list[float] = []
+    sell_zero_sq: list[float] = []
+    buy_mech_sq: list[float] = []
+    sell_mech_sq: list[float] = []
+    buy_nll: list[float] = []
+    sell_nll: list[float] = []
+    buy_zero_nll: list[float] = []
+    sell_zero_nll: list[float] = []
+
+    for idx in range(1, len(rows)):
+        prev = rows[idx - 1]
+        curr = rows[idx]
+
+        prev_buy = vwap_to_depth(prev.asks, depth, ask_side=True)
+        prev_sell = vwap_to_depth(prev.bids, depth, ask_side=False)
+        curr_buy = vwap_to_depth(curr.asks, depth, ask_side=True)
+        curr_sell = vwap_to_depth(curr.bids, depth, ask_side=False)
+        ask_after = consume_levels(prev.asks, curr.buy_volume, ask_side=True)
+        bid_after = consume_levels(prev.bids, curr.sell_volume, ask_side=False)
+        mech_buy = vwap_to_depth(ask_after, depth, ask_side=True)
+        mech_sell = vwap_to_depth(bid_after, depth, ask_side=False)
+        mech_bid = consume_best_price(prev.bids, curr.sell_volume, side="bid")
+        mech_ask = consume_best_price(prev.asks, curr.buy_volume, side="ask")
+
+        values = [prev_buy, prev_sell, curr_buy, curr_sell, mech_buy, mech_sell, mech_bid, mech_ask]
+        if not all(math.isfinite(value) for value in values):
+            continue
+
+        prev_mid = prev.mid
+        obs_mid = curr.mid
+        mech_mid = 0.5 * (mech_bid + mech_ask)
+        prev_spread = prev.spread
+        obs_spread = curr.spread
+        mech_spread = mech_ask - mech_bid
+        prev_buy_shape = prev_buy - prev_mid
+        prev_sell_shape = prev_mid - prev_sell
+        obs_buy_shape = curr_buy - obs_mid
+        obs_sell_shape = obs_mid - curr_sell
+        mech_buy_shape = mech_buy - mech_mid
+        mech_sell_shape = mech_mid - mech_sell
+        if min(
+            prev_spread,
+            obs_spread,
+            mech_spread,
+            prev_buy_shape,
+            prev_sell_shape,
+            obs_buy_shape,
+            obs_sell_shape,
+            mech_buy_shape,
+            mech_sell_shape,
+        ) <= eps:
+            continue
+
+        obs_components = {
+            "mid": obs_mid - prev_mid,
+            "log_spread": math.log(obs_spread) - math.log(prev_spread),
+            "log_buy_shape": math.log(obs_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(obs_sell_shape) - math.log(prev_sell_shape),
+        }
+        mech_components = {
+            "mid": mech_mid - prev_mid,
+            "log_spread": math.log(mech_spread) - math.log(prev_spread),
+            "log_buy_shape": math.log(mech_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(mech_sell_shape) - math.log(prev_sell_shape),
+        }
+        if not all(math.isfinite(value) for value in (*obs_components.values(), *mech_components.values())):
+            continue
+
+        total_flow = curr.buy_volume + curr.sell_volume
+        refresh = total_flow <= eps and abs(mech_components["mid"]) <= eps
+        refresh_seen += int(refresh)
+
+        pred_components: dict[str, float] = {}
+        for name in component_names:
+            if refresh:
+                pred_components[name] = refresh_mean[name]
+            else:
+                x = np.array([1.0, mech_components[name]], dtype=np.float64)
+                pred_components[name] = float(x @ market_beta[name])
+
+        pred_mid = prev_mid + pred_components["mid"]
+        pred_buy_shape = prev_buy_shape * math.exp(pred_components["log_buy_shape"])
+        pred_sell_shape = prev_sell_shape * math.exp(pred_components["log_sell_shape"])
+        pred_buy = pred_mid + pred_buy_shape
+        pred_sell = pred_mid - pred_sell_shape
+
+        obs_buy_delta = curr_buy - prev_buy
+        obs_sell_delta = curr_sell - prev_sell
+        pred_buy_delta = pred_buy - prev_buy
+        pred_sell_delta = pred_sell - prev_sell
+        mech_buy_delta = mech_buy - prev_buy
+        mech_sell_delta = mech_sell - prev_sell
+        buy_err = obs_buy_delta - pred_buy_delta
+        sell_err = obs_sell_delta - pred_sell_delta
+
+        if seen >= min_rows:
+            buy_sq.append(buy_err * buy_err)
+            sell_sq.append(sell_err * sell_err)
+            buy_zero_sq.append(obs_buy_delta * obs_buy_delta)
+            sell_zero_sq.append(obs_sell_delta * obs_sell_delta)
+            buy_mech_sq.append((obs_buy_delta - mech_buy_delta) ** 2)
+            sell_mech_sq.append((obs_sell_delta - mech_sell_delta) ** 2)
+            buy_nll.append(gaussian_nll(buy_err, max(buy_var[refresh], eps)))
+            sell_nll.append(gaussian_nll(sell_err, max(sell_var[refresh], eps)))
+            buy_zero_nll.append(gaussian_nll(obs_buy_delta, max(zero_buy_var, eps)))
+            sell_zero_nll.append(gaussian_nll(obs_sell_delta, max(zero_sell_var, eps)))
+
+        for name in component_names:
+            target = obs_components[name]
+            if refresh:
+                refresh_mean[name] = lam * refresh_mean[name] + alpha * target
+            else:
+                x = np.array([1.0, mech_components[name]], dtype=np.float64)
+                comp_err = target - float(x @ market_beta[name])
+                px = market_p[name] @ x
+                denom = lam + float(x @ px)
+                gain = px / denom
+                market_beta[name] = market_beta[name] + gain * comp_err
+                market_p[name] = (market_p[name] - np.outer(gain, x) @ market_p[name]) / lam
+                market_p[name] = 0.5 * (market_p[name] + market_p[name].T)
+
+        buy_var[refresh] = lam * buy_var[refresh] + alpha * (buy_err * buy_err)
+        sell_var[refresh] = lam * sell_var[refresh] + alpha * (sell_err * sell_err)
+        zero_buy_var = lam * zero_buy_var + alpha * (obs_buy_delta * obs_buy_delta)
+        zero_sell_var = lam * zero_sell_var + alpha * (obs_sell_delta * obs_sell_delta)
+        seen += 1
+
+    if not buy_sq:
+        return None
+    return DecomposedHurdleEvaluation(
+        n_scored=len(buy_sq),
+        active_fraction=1.0 - (refresh_seen / max(1, seen)),
+        buy_rmse=math.sqrt(float(np.mean(buy_sq))),
+        buy_nll=float(np.mean(buy_nll)),
+        buy_zero_rmse=math.sqrt(float(np.mean(buy_zero_sq))),
+        buy_zero_nll=float(np.mean(buy_zero_nll)),
+        buy_mechanical_rmse=math.sqrt(float(np.mean(buy_mech_sq))),
+        sell_rmse=math.sqrt(float(np.mean(sell_sq))),
+        sell_nll=float(np.mean(sell_nll)),
+        sell_zero_rmse=math.sqrt(float(np.mean(sell_zero_sq))),
+        sell_zero_nll=float(np.mean(sell_zero_nll)),
+        sell_mechanical_rmse=math.sqrt(float(np.mean(sell_mech_sq))),
+    )
+
+
+def sigmoid(value: float) -> float:
+    if value >= 0:
+        z = math.exp(-min(value, 60.0))
+        return 1.0 / (1.0 + z)
+    z = math.exp(max(value, -60.0))
+    return z / (1.0 + z)
+
+
+def normal_logpdf(error: float, variance: float) -> float:
+    var = max(variance, 1e-9)
+    return -0.5 * (math.log(2.0 * math.pi * var) + (error * error) / var)
+
+
+def student_t_logpdf(error: float, variance: float, df: float) -> float:
+    nu = max(2.1, float(df))
+    var = max(variance, 1e-9)
+    scale2 = var * (nu - 2.0) / nu
+    scale2 = max(scale2, 1e-9)
+    return (
+        math.lgamma((nu + 1.0) / 2.0)
+        - math.lgamma(nu / 2.0)
+        - 0.5 * math.log(nu * math.pi * scale2)
+        - ((nu + 1.0) / 2.0) * math.log1p((error * error) / (nu * scale2))
+    )
+
+
+def refresh_logpdf(error: float, variance: float, distribution: str, student_df: float) -> float:
+    if distribution == "student_t":
+        return student_t_logpdf(error, variance, student_df)
+    return normal_logpdf(error, variance)
+
+
+def two_gaussian_logpdf(error: float, quiet_var: float, jump_var: float, jump_prob: float) -> float:
+    p_jump = min(0.999, max(0.001, float(jump_prob)))
+    return logaddexp(
+        math.log1p(-p_jump) + normal_logpdf(error, quiet_var),
+        math.log(p_jump) + normal_logpdf(error, jump_var),
+    )
+
+
+def two_gaussian_jump_resp(error: float, quiet_var: float, jump_var: float, jump_prob: float) -> float:
+    p_jump = min(0.999, max(0.001, float(jump_prob)))
+    log_jump = math.log(p_jump) + normal_logpdf(error, jump_var)
+    log_mix = two_gaussian_logpdf(error, quiet_var, jump_var, p_jump)
+    return math.exp(log_jump - log_mix)
+
+
+def logaddexp(a: float, b: float) -> float:
+    high = max(a, b)
+    low = min(a, b)
+    return high + math.log1p(math.exp(low - high))
+
+
+def clamp_log_delta(value: float) -> float:
+    return min(5.0, max(-5.0, value))
+
+
+def cap_deviation(value: float, anchor: float, cap: float) -> float:
+    if cap <= 0 or not math.isfinite(value) or not math.isfinite(anchor):
+        return value
+    return anchor + min(cap, max(-cap, value - anchor))
+
+
+def weighted_rls_update(
+    beta: np.ndarray,
+    p: np.ndarray,
+    x: np.ndarray,
+    target: float,
+    *,
+    weight: float,
+    lam: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    w = max(0.0, min(1.0, float(weight)))
+    if w <= 1e-6:
+        return beta, p
+    scale = math.sqrt(w)
+    xw = x * scale
+    yw = target * scale
+    px = p @ xw
+    denom = lam + float(xw @ px)
+    gain = px / denom
+    beta = beta + gain * (yw - float(xw @ beta))
+    p = (p - np.outer(gain, xw) @ p) / lam
+    p = 0.5 * (p + p.T)
+    return beta, p
+
+
+def online_decomposed_soft_mixture_vwap_model(
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    gate_learning_rate: float,
+    market_deviation_cap_mult: float = 0.0,
+    market_guard_mode: str = "cap",
+    diagnostics: list[dict[str, object]] | None = None,
+    diagnostic_section: str = "",
+) -> DecomposedHurdleEvaluation | None:
+    if len(rows) < max(min_rows, 3):
+        return None
+    depth = max(0.0, float(vwap_depth))
+    if depth <= 1e-12:
+        return None
+
+    lam = min(0.9999, max(0.50, float(decay)))
+    alpha = 1.0 - lam
+    eps = 1e-9
+    init_var = max(float(initial_sigma) ** 2, eps)
+    component_names = ("mid", "log_spread", "log_buy_shape", "log_sell_shape")
+
+    market_beta = {name: np.zeros(2, dtype=np.float64) for name in component_names}
+    market_p = {name: np.eye(2, dtype=np.float64) * 1_000_000.0 for name in component_names}
+    refresh_mean = {name: 0.0 for name in component_names}
+    gate_beta = np.zeros(4, dtype=np.float64)
+    gate_beta[0] = -1.0
+    market_buy_var = init_var
+    market_sell_var = init_var
+    refresh_buy_var = init_var
+    refresh_sell_var = init_var
+    zero_buy_var = init_var
+    zero_sell_var = init_var
+
+    seen = 0
+    market_prob_sum = 0.0
+    buy_sq: list[float] = []
+    sell_sq: list[float] = []
+    buy_zero_sq: list[float] = []
+    sell_zero_sq: list[float] = []
+    buy_mech_sq: list[float] = []
+    sell_mech_sq: list[float] = []
+    buy_nll: list[float] = []
+    sell_nll: list[float] = []
+    buy_zero_nll: list[float] = []
+    sell_zero_nll: list[float] = []
+
+    for idx in range(1, len(rows)):
+        prev = rows[idx - 1]
+        curr = rows[idx]
+
+        prev_buy = vwap_to_depth(prev.asks, depth, ask_side=True)
+        prev_sell = vwap_to_depth(prev.bids, depth, ask_side=False)
+        curr_buy = vwap_to_depth(curr.asks, depth, ask_side=True)
+        curr_sell = vwap_to_depth(curr.bids, depth, ask_side=False)
+        ask_after = consume_levels(prev.asks, curr.buy_volume, ask_side=True)
+        bid_after = consume_levels(prev.bids, curr.sell_volume, ask_side=False)
+        mech_buy = vwap_to_depth(ask_after, depth, ask_side=True)
+        mech_sell = vwap_to_depth(bid_after, depth, ask_side=False)
+        mech_bid = consume_best_price(prev.bids, curr.sell_volume, side="bid")
+        mech_ask = consume_best_price(prev.asks, curr.buy_volume, side="ask")
+
+        values = [prev_buy, prev_sell, curr_buy, curr_sell, mech_buy, mech_sell, mech_bid, mech_ask]
+        if not all(math.isfinite(value) for value in values):
+            continue
+
+        prev_mid = prev.mid
+        obs_mid = curr.mid
+        mech_mid = 0.5 * (mech_bid + mech_ask)
+        prev_spread = prev.spread
+        obs_spread = curr.spread
+        mech_spread = mech_ask - mech_bid
+        prev_buy_shape = prev_buy - prev_mid
+        prev_sell_shape = prev_mid - prev_sell
+        obs_buy_shape = curr_buy - obs_mid
+        obs_sell_shape = obs_mid - curr_sell
+        mech_buy_shape = mech_buy - mech_mid
+        mech_sell_shape = mech_mid - mech_sell
+        if min(
+            prev_spread,
+            obs_spread,
+            mech_spread,
+            prev_buy_shape,
+            prev_sell_shape,
+            obs_buy_shape,
+            obs_sell_shape,
+            mech_buy_shape,
+            mech_sell_shape,
+        ) <= eps:
+            continue
+
+        obs_components = {
+            "mid": obs_mid - prev_mid,
+            "log_spread": math.log(obs_spread) - math.log(prev_spread),
+            "log_buy_shape": math.log(obs_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(obs_sell_shape) - math.log(prev_sell_shape),
+        }
+        mech_components = {
+            "mid": mech_mid - prev_mid,
+            "log_spread": math.log(mech_spread) - math.log(prev_spread),
+            "log_buy_shape": math.log(mech_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(mech_sell_shape) - math.log(prev_sell_shape),
+        }
+        if not all(math.isfinite(value) for value in (*obs_components.values(), *mech_components.values())):
+            continue
+
+        total_flow = curr.buy_volume + curr.sell_volume
+        gate_x = np.array(
+            [
+                1.0,
+                1.0 if total_flow <= eps else 0.0,
+                min(abs(mech_components["mid"]) / 1_000.0, 10.0),
+                min(max(prev_spread, 0.0) / 1_000.0, 10.0),
+            ],
+            dtype=np.float64,
+        )
+        q_refresh = sigmoid(float(gate_x @ gate_beta))
+        q_refresh = min(0.999, max(0.001, q_refresh))
+        q_market = 1.0 - q_refresh
+        market_prob_sum += q_market
+
+        market_components: dict[str, float] = {}
+        refresh_components: dict[str, float] = {}
+        for name in component_names:
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_components[name] = float(x @ market_beta[name])
+            refresh_components[name] = refresh_mean[name]
+
+        market_mid = prev_mid + market_components["mid"]
+        market_buy = market_mid + prev_buy_shape * math.exp(clamp_log_delta(market_components["log_buy_shape"]))
+        market_sell = market_mid - prev_sell_shape * math.exp(clamp_log_delta(market_components["log_sell_shape"]))
+        refresh_mid = prev_mid + refresh_components["mid"]
+        refresh_buy = refresh_mid + prev_buy_shape * math.exp(clamp_log_delta(refresh_components["log_buy_shape"]))
+        refresh_sell = refresh_mid - prev_sell_shape * math.exp(clamp_log_delta(refresh_components["log_sell_shape"]))
+
+        market_buy_delta = market_buy - prev_buy
+        market_sell_delta = market_sell - prev_sell
+        refresh_buy_delta = refresh_buy - prev_buy
+        refresh_sell_delta = refresh_sell - prev_sell
+        obs_buy_delta = curr_buy - prev_buy
+        obs_sell_delta = curr_sell - prev_sell
+        mech_buy_delta = mech_buy - prev_buy
+        mech_sell_delta = mech_sell - prev_sell
+        point_market_buy_delta = market_buy_delta
+        point_market_sell_delta = market_sell_delta
+        point_q_market = q_market
+        point_q_refresh = q_refresh
+        market_point_guarded = False
+        if market_deviation_cap_mult > 0:
+            point_cap = float(market_deviation_cap_mult) * max(prev_spread, 1.0)
+            market_point_guarded = (
+                abs(market_buy_delta - mech_buy_delta) > point_cap
+                or abs(market_sell_delta - mech_sell_delta) > point_cap
+            )
+            if market_guard_mode == "drop" and market_point_guarded:
+                point_q_market = 0.0
+                point_q_refresh = 1.0
+            else:
+                point_market_buy_delta = cap_deviation(market_buy_delta, mech_buy_delta, point_cap)
+                point_market_sell_delta = cap_deviation(market_sell_delta, mech_sell_delta, point_cap)
+        pred_buy_delta = point_q_market * point_market_buy_delta + point_q_refresh * refresh_buy_delta
+        pred_sell_delta = point_q_market * point_market_sell_delta + point_q_refresh * refresh_sell_delta
+
+        buy_err = obs_buy_delta - pred_buy_delta
+        sell_err = obs_sell_delta - pred_sell_delta
+        market_buy_err = obs_buy_delta - market_buy_delta
+        market_sell_err = obs_sell_delta - market_sell_delta
+        refresh_buy_err = obs_buy_delta - refresh_buy_delta
+        refresh_sell_err = obs_sell_delta - refresh_sell_delta
+
+        log_market = (
+            math.log(q_market)
+            + normal_logpdf(market_buy_err, market_buy_var)
+            + normal_logpdf(market_sell_err, market_sell_var)
+        )
+        log_refresh = (
+            math.log(q_refresh)
+            + normal_logpdf(refresh_buy_err, refresh_buy_var)
+            + normal_logpdf(refresh_sell_err, refresh_sell_var)
+        )
+        log_norm = logaddexp(log_market, log_refresh)
+        refresh_resp = math.exp(log_refresh - log_norm)
+        market_resp = 1.0 - refresh_resp
+
+        if seen >= min_rows:
+            buy_sq.append(buy_err * buy_err)
+            sell_sq.append(sell_err * sell_err)
+            buy_zero_sq.append(obs_buy_delta * obs_buy_delta)
+            sell_zero_sq.append(obs_sell_delta * obs_sell_delta)
+            buy_mech_sq.append((obs_buy_delta - mech_buy_delta) ** 2)
+            sell_mech_sq.append((obs_sell_delta - mech_sell_delta) ** 2)
+            buy_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_buy_err, market_buy_var),
+                math.log(q_refresh) + normal_logpdf(refresh_buy_err, refresh_buy_var),
+            )
+            sell_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_sell_err, market_sell_var),
+                math.log(q_refresh) + normal_logpdf(refresh_sell_err, refresh_sell_var),
+            )
+            buy_nll.append(-buy_mix_log)
+            sell_nll.append(-sell_mix_log)
+            buy_zero_nll.append(gaussian_nll(obs_buy_delta, max(zero_buy_var, eps)))
+            sell_zero_nll.append(gaussian_nll(obs_sell_delta, max(zero_sell_var, eps)))
+            if diagnostics is not None:
+                diagnostics.append(
+                    {
+                        "section": diagnostic_section,
+                        "ts": curr.ts,
+                        "score": max(abs(buy_err), abs(sell_err)),
+                        "buy_err": buy_err,
+                        "sell_err": sell_err,
+                        "obs_buy_delta": obs_buy_delta,
+                        "pred_buy_delta": pred_buy_delta,
+                        "mech_buy_delta": mech_buy_delta,
+                        "market_buy_delta": market_buy_delta,
+                        "point_market_buy_delta": point_market_buy_delta,
+                        "refresh_buy_delta": refresh_buy_delta,
+                        "obs_sell_delta": obs_sell_delta,
+                        "pred_sell_delta": pred_sell_delta,
+                        "mech_sell_delta": mech_sell_delta,
+                        "market_sell_delta": market_sell_delta,
+                        "point_market_sell_delta": point_market_sell_delta,
+                        "refresh_sell_delta": refresh_sell_delta,
+                        "q_market": q_market,
+                        "point_q_market": point_q_market,
+                        "market_point_guarded": market_point_guarded,
+                        "market_resp": market_resp,
+                        "total_flow": total_flow,
+                        "buy_volume": curr.buy_volume,
+                        "sell_volume": curr.sell_volume,
+                        "prev_spread": prev_spread,
+                        "obs_spread": obs_spread,
+                        "mech_mid_delta": mech_components["mid"],
+                        "prev_buy_shape": prev_buy_shape,
+                        "prev_sell_shape": prev_sell_shape,
+                        "market_log_buy_shape_delta": market_components["log_buy_shape"],
+                        "market_log_sell_shape_delta": market_components["log_sell_shape"],
+                        "refresh_log_buy_shape_delta": refresh_components["log_buy_shape"],
+                        "refresh_log_sell_shape_delta": refresh_components["log_sell_shape"],
+                    }
+                )
+
+        lr = max(0.0, float(gate_learning_rate))
+        gate_beta = gate_beta + lr * (refresh_resp - q_refresh) * gate_x
+        gate_beta = np.clip(gate_beta, -20.0, 20.0)
+
+        for name in component_names:
+            target = obs_components[name]
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_beta[name], market_p[name] = weighted_rls_update(
+                market_beta[name],
+                market_p[name],
+                x,
+                target,
+                weight=market_resp,
+                lam=lam,
+            )
+            refresh_mean[name] = refresh_mean[name] + alpha * refresh_resp * (target - refresh_mean[name])
+
+        market_buy_var = (1.0 - alpha * market_resp) * market_buy_var + alpha * market_resp * (market_buy_err * market_buy_err)
+        market_sell_var = (1.0 - alpha * market_resp) * market_sell_var + alpha * market_resp * (market_sell_err * market_sell_err)
+        refresh_buy_var = (1.0 - alpha * refresh_resp) * refresh_buy_var + alpha * refresh_resp * (refresh_buy_err * refresh_buy_err)
+        refresh_sell_var = (1.0 - alpha * refresh_resp) * refresh_sell_var + alpha * refresh_resp * (refresh_sell_err * refresh_sell_err)
+        zero_buy_var = lam * zero_buy_var + alpha * (obs_buy_delta * obs_buy_delta)
+        zero_sell_var = lam * zero_sell_var + alpha * (obs_sell_delta * obs_sell_delta)
+        seen += 1
+
+    if not buy_sq:
+        return None
+    return DecomposedHurdleEvaluation(
+        n_scored=len(buy_sq),
+        active_fraction=market_prob_sum / max(1, seen),
+        buy_rmse=math.sqrt(float(np.mean(buy_sq))),
+        buy_nll=float(np.mean(buy_nll)),
+        buy_zero_rmse=math.sqrt(float(np.mean(buy_zero_sq))),
+        buy_zero_nll=float(np.mean(buy_zero_nll)),
+        buy_mechanical_rmse=math.sqrt(float(np.mean(buy_mech_sq))),
+        sell_rmse=math.sqrt(float(np.mean(sell_sq))),
+        sell_nll=float(np.mean(sell_nll)),
+        sell_zero_rmse=math.sqrt(float(np.mean(sell_zero_sq))),
+        sell_zero_nll=float(np.mean(sell_zero_nll)),
+        sell_mechanical_rmse=math.sqrt(float(np.mean(sell_mech_sq))),
+    )
+
+
+def online_decomposed_em_mixture_vwap_model(
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    point_mode: str,
+) -> DecomposedHurdleEvaluation | None:
+    if len(rows) < max(min_rows, 3):
+        return None
+    depth = max(0.0, float(vwap_depth))
+    if depth <= 1e-12:
+        return None
+
+    lam = min(0.9999, max(0.50, float(decay)))
+    alpha = 1.0 - lam
+    eps = 1e-9
+    init_var = max(float(initial_sigma) ** 2, eps)
+    component_names = ("mid", "log_buy_shape", "log_sell_shape")
+
+    market_beta = {name: np.zeros(2, dtype=np.float64) for name in component_names}
+    market_p = {name: np.eye(2, dtype=np.float64) * 1_000_000.0 for name in component_names}
+    refresh_mean = {name: 0.0 for name in component_names}
+    pi_market = 0.5
+    market_buy_var = init_var
+    market_sell_var = init_var
+    refresh_buy_var = init_var
+    refresh_sell_var = init_var
+    zero_buy_var = init_var
+    zero_sell_var = init_var
+
+    seen = 0
+    market_prob_sum = 0.0
+    buy_sq: list[float] = []
+    sell_sq: list[float] = []
+    buy_zero_sq: list[float] = []
+    sell_zero_sq: list[float] = []
+    buy_mech_sq: list[float] = []
+    sell_mech_sq: list[float] = []
+    buy_nll: list[float] = []
+    sell_nll: list[float] = []
+    buy_zero_nll: list[float] = []
+    sell_zero_nll: list[float] = []
+
+    for idx in range(1, len(rows)):
+        prev = rows[idx - 1]
+        curr = rows[idx]
+
+        prev_buy = vwap_to_depth(prev.asks, depth, ask_side=True)
+        prev_sell = vwap_to_depth(prev.bids, depth, ask_side=False)
+        curr_buy = vwap_to_depth(curr.asks, depth, ask_side=True)
+        curr_sell = vwap_to_depth(curr.bids, depth, ask_side=False)
+        ask_after = consume_levels(prev.asks, curr.buy_volume, ask_side=True)
+        bid_after = consume_levels(prev.bids, curr.sell_volume, ask_side=False)
+        mech_buy = vwap_to_depth(ask_after, depth, ask_side=True)
+        mech_sell = vwap_to_depth(bid_after, depth, ask_side=False)
+        mech_bid = consume_best_price(prev.bids, curr.sell_volume, side="bid")
+        mech_ask = consume_best_price(prev.asks, curr.buy_volume, side="ask")
+
+        values = [prev_buy, prev_sell, curr_buy, curr_sell, mech_buy, mech_sell, mech_bid, mech_ask]
+        if not all(math.isfinite(value) for value in values):
+            continue
+
+        prev_mid = prev.mid
+        obs_mid = curr.mid
+        mech_mid = 0.5 * (mech_bid + mech_ask)
+        prev_spread = prev.spread
+        obs_spread = curr.spread
+        prev_buy_shape = prev_buy - prev_mid
+        prev_sell_shape = prev_mid - prev_sell
+        obs_buy_shape = curr_buy - obs_mid
+        obs_sell_shape = obs_mid - curr_sell
+        mech_buy_shape = mech_buy - mech_mid
+        mech_sell_shape = mech_mid - mech_sell
+        if min(
+            prev_spread,
+            obs_spread,
+            prev_buy_shape,
+            prev_sell_shape,
+            obs_buy_shape,
+            obs_sell_shape,
+            mech_buy_shape,
+            mech_sell_shape,
+        ) <= eps:
+            continue
+
+        obs_components = {
+            "mid": obs_mid - prev_mid,
+            "log_buy_shape": math.log(obs_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(obs_sell_shape) - math.log(prev_sell_shape),
+        }
+        mech_components = {
+            "mid": mech_mid - prev_mid,
+            "log_buy_shape": math.log(mech_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(mech_sell_shape) - math.log(prev_sell_shape),
+        }
+        if not all(math.isfinite(value) for value in (*obs_components.values(), *mech_components.values())):
+            continue
+
+        q_market = min(0.999, max(0.001, pi_market))
+        q_refresh = 1.0 - q_market
+        market_prob_sum += q_market
+
+        market_components: dict[str, float] = {}
+        refresh_components: dict[str, float] = {}
+        for name in component_names:
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_components[name] = float(x @ market_beta[name])
+            refresh_components[name] = refresh_mean[name]
+
+        market_mid = prev_mid + market_components["mid"]
+        market_buy = market_mid + prev_buy_shape * math.exp(clamp_log_delta(market_components["log_buy_shape"]))
+        market_sell = market_mid - prev_sell_shape * math.exp(clamp_log_delta(market_components["log_sell_shape"]))
+        refresh_mid = prev_mid + refresh_components["mid"]
+        refresh_buy = refresh_mid + prev_buy_shape * math.exp(clamp_log_delta(refresh_components["log_buy_shape"]))
+        refresh_sell = refresh_mid - prev_sell_shape * math.exp(clamp_log_delta(refresh_components["log_sell_shape"]))
+
+        market_buy_delta = market_buy - prev_buy
+        market_sell_delta = market_sell - prev_sell
+        refresh_buy_delta = refresh_buy - prev_buy
+        refresh_sell_delta = refresh_sell - prev_sell
+        obs_buy_delta = curr_buy - prev_buy
+        obs_sell_delta = curr_sell - prev_sell
+        mech_buy_delta = mech_buy - prev_buy
+        mech_sell_delta = mech_sell - prev_sell
+
+        if point_mode == "map":
+            pred_buy_delta = market_buy_delta if q_market >= q_refresh else refresh_buy_delta
+            pred_sell_delta = market_sell_delta if q_market >= q_refresh else refresh_sell_delta
+        else:
+            pred_buy_delta = q_market * market_buy_delta + q_refresh * refresh_buy_delta
+            pred_sell_delta = q_market * market_sell_delta + q_refresh * refresh_sell_delta
+
+        buy_err = obs_buy_delta - pred_buy_delta
+        sell_err = obs_sell_delta - pred_sell_delta
+        market_buy_err = obs_buy_delta - market_buy_delta
+        market_sell_err = obs_sell_delta - market_sell_delta
+        refresh_buy_err = obs_buy_delta - refresh_buy_delta
+        refresh_sell_err = obs_sell_delta - refresh_sell_delta
+
+        log_market = (
+            math.log(q_market)
+            + normal_logpdf(market_buy_err, market_buy_var)
+            + normal_logpdf(market_sell_err, market_sell_var)
+        )
+        log_refresh = (
+            math.log(q_refresh)
+            + normal_logpdf(refresh_buy_err, refresh_buy_var)
+            + normal_logpdf(refresh_sell_err, refresh_sell_var)
+        )
+        log_norm = logaddexp(log_market, log_refresh)
+        market_resp = math.exp(log_market - log_norm)
+        refresh_resp = 1.0 - market_resp
+
+        if seen >= min_rows:
+            buy_sq.append(buy_err * buy_err)
+            sell_sq.append(sell_err * sell_err)
+            buy_zero_sq.append(obs_buy_delta * obs_buy_delta)
+            sell_zero_sq.append(obs_sell_delta * obs_sell_delta)
+            buy_mech_sq.append((obs_buy_delta - mech_buy_delta) ** 2)
+            sell_mech_sq.append((obs_sell_delta - mech_sell_delta) ** 2)
+            buy_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_buy_err, market_buy_var),
+                math.log(q_refresh) + normal_logpdf(refresh_buy_err, refresh_buy_var),
+            )
+            sell_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_sell_err, market_sell_var),
+                math.log(q_refresh) + normal_logpdf(refresh_sell_err, refresh_sell_var),
+            )
+            buy_nll.append(-buy_mix_log)
+            sell_nll.append(-sell_mix_log)
+            buy_zero_nll.append(gaussian_nll(obs_buy_delta, max(zero_buy_var, eps)))
+            sell_zero_nll.append(gaussian_nll(obs_sell_delta, max(zero_sell_var, eps)))
+
+        pi_market = min(0.999, max(0.001, lam * pi_market + alpha * market_resp))
+
+        for name in component_names:
+            target = obs_components[name]
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_beta[name], market_p[name] = weighted_rls_update(
+                market_beta[name],
+                market_p[name],
+                x,
+                target,
+                weight=market_resp,
+                lam=lam,
+            )
+            refresh_mean[name] = refresh_mean[name] + alpha * refresh_resp * (target - refresh_mean[name])
+
+        market_buy_var = (1.0 - alpha * market_resp) * market_buy_var + alpha * market_resp * (market_buy_err * market_buy_err)
+        market_sell_var = (1.0 - alpha * market_resp) * market_sell_var + alpha * market_resp * (market_sell_err * market_sell_err)
+        refresh_buy_var = (1.0 - alpha * refresh_resp) * refresh_buy_var + alpha * refresh_resp * (refresh_buy_err * refresh_buy_err)
+        refresh_sell_var = (1.0 - alpha * refresh_resp) * refresh_sell_var + alpha * refresh_resp * (refresh_sell_err * refresh_sell_err)
+        zero_buy_var = lam * zero_buy_var + alpha * (obs_buy_delta * obs_buy_delta)
+        zero_sell_var = lam * zero_sell_var + alpha * (obs_sell_delta * obs_sell_delta)
+        seen += 1
+
+    if not buy_sq:
+        return None
+    return DecomposedHurdleEvaluation(
+        n_scored=len(buy_sq),
+        active_fraction=market_prob_sum / max(1, seen),
+        buy_rmse=math.sqrt(float(np.mean(buy_sq))),
+        buy_nll=float(np.mean(buy_nll)),
+        buy_zero_rmse=math.sqrt(float(np.mean(buy_zero_sq))),
+        buy_zero_nll=float(np.mean(buy_zero_nll)),
+        buy_mechanical_rmse=math.sqrt(float(np.mean(buy_mech_sq))),
+        sell_rmse=math.sqrt(float(np.mean(sell_sq))),
+        sell_nll=float(np.mean(sell_nll)),
+        sell_zero_rmse=math.sqrt(float(np.mean(sell_zero_sq))),
+        sell_zero_nll=float(np.mean(sell_zero_nll)),
+        sell_mechanical_rmse=math.sqrt(float(np.mean(sell_mech_sq))),
+    )
+
+
+def online_decomposed_flow_gated_mixture_vwap_model(
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    gate_learning_rate: float,
+    gate_kind: str,
+    gate_bins: Sequence[float],
+    point_mode: str,
+    refresh_distribution: str,
+    refresh_student_df: float,
+    refresh_jump_sigma_mult: float,
+    spread_features: str,
+) -> DecomposedHurdleEvaluation | None:
+    if len(rows) < max(min_rows, 3):
+        return None
+    depth = max(0.0, float(vwap_depth))
+    if depth <= 1e-12:
+        return None
+
+    lam = min(0.9999, max(0.50, float(decay)))
+    alpha = 1.0 - lam
+    eps = 1e-9
+    init_var = max(float(initial_sigma) ** 2, eps)
+    component_names = ("mid", "log_buy_shape", "log_sell_shape")
+
+    market_beta = {name: np.zeros(2, dtype=np.float64) for name in component_names}
+    market_p = {name: np.eye(2, dtype=np.float64) * 1_000_000.0 for name in component_names}
+    refresh_mean = {name: 0.0 for name in component_names}
+    gate_feature_count = 2
+    if spread_features == "prev":
+        gate_feature_count = 3
+    elif spread_features == "both":
+        gate_feature_count = 4
+    gate_beta = np.zeros(gate_feature_count, dtype=np.float64)
+    sorted_gate_bins = sorted(float(edge) for edge in gate_bins)
+    gate_bin_probs = np.full(len(sorted_gate_bins) + 1, 0.5, dtype=np.float64)
+    market_buy_var = init_var
+    market_sell_var = init_var
+    refresh_buy_var = init_var
+    refresh_sell_var = init_var
+    jump_mult = max(1.01, float(refresh_jump_sigma_mult))
+    refresh_jump_prob = 0.05
+    refresh_jump_buy_var = init_var * jump_mult * jump_mult
+    refresh_jump_sell_var = init_var * jump_mult * jump_mult
+    zero_buy_var = init_var
+    zero_sell_var = init_var
+
+    seen = 0
+    market_prob_sum = 0.0
+    buy_sq: list[float] = []
+    sell_sq: list[float] = []
+    buy_zero_sq: list[float] = []
+    sell_zero_sq: list[float] = []
+    buy_mech_sq: list[float] = []
+    sell_mech_sq: list[float] = []
+    buy_nll: list[float] = []
+    sell_nll: list[float] = []
+    buy_zero_nll: list[float] = []
+    sell_zero_nll: list[float] = []
+
+    for idx in range(1, len(rows)):
+        prev = rows[idx - 1]
+        curr = rows[idx]
+
+        prev_buy = vwap_to_depth(prev.asks, depth, ask_side=True)
+        prev_sell = vwap_to_depth(prev.bids, depth, ask_side=False)
+        curr_buy = vwap_to_depth(curr.asks, depth, ask_side=True)
+        curr_sell = vwap_to_depth(curr.bids, depth, ask_side=False)
+        ask_after = consume_levels(prev.asks, curr.buy_volume, ask_side=True)
+        bid_after = consume_levels(prev.bids, curr.sell_volume, ask_side=False)
+        mech_buy = vwap_to_depth(ask_after, depth, ask_side=True)
+        mech_sell = vwap_to_depth(bid_after, depth, ask_side=False)
+        mech_bid = consume_best_price(prev.bids, curr.sell_volume, side="bid")
+        mech_ask = consume_best_price(prev.asks, curr.buy_volume, side="ask")
+
+        values = [prev_buy, prev_sell, curr_buy, curr_sell, mech_buy, mech_sell, mech_bid, mech_ask]
+        if not all(math.isfinite(value) for value in values):
+            continue
+
+        prev_mid = prev.mid
+        obs_mid = curr.mid
+        mech_mid = 0.5 * (mech_bid + mech_ask)
+        prev_spread = prev.spread
+        obs_spread = curr.spread
+        mech_spread = mech_ask - mech_bid
+        prev_buy_shape = prev_buy - prev_mid
+        prev_sell_shape = prev_mid - prev_sell
+        obs_buy_shape = curr_buy - obs_mid
+        obs_sell_shape = obs_mid - curr_sell
+        mech_buy_shape = mech_buy - mech_mid
+        mech_sell_shape = mech_mid - mech_sell
+        if min(
+            prev_spread,
+            obs_spread,
+            mech_spread,
+            prev_buy_shape,
+            prev_sell_shape,
+            obs_buy_shape,
+            obs_sell_shape,
+            mech_buy_shape,
+            mech_sell_shape,
+        ) <= eps:
+            continue
+
+        obs_components = {
+            "mid": obs_mid - prev_mid,
+            "log_buy_shape": math.log(obs_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(obs_sell_shape) - math.log(prev_sell_shape),
+        }
+        mech_log_spread_delta = math.log(mech_spread) - math.log(prev_spread)
+        mech_components = {
+            "mid": mech_mid - prev_mid,
+            "log_buy_shape": math.log(mech_buy_shape) - math.log(prev_buy_shape),
+            "log_sell_shape": math.log(mech_sell_shape) - math.log(prev_sell_shape),
+        }
+        if not all(
+            math.isfinite(value)
+            for value in (*obs_components.values(), *mech_components.values(), mech_log_spread_delta)
+        ):
+            continue
+
+        total_flow = max(0.0, curr.buy_volume + curr.sell_volume)
+        gate_values = [
+            1.0,
+            min(math.log1p(total_flow), 12.0),
+        ]
+        if spread_features in {"prev", "both"}:
+            gate_values.append(min(math.log1p(max(prev_spread, 0.0)), 12.0))
+        if spread_features == "both":
+            gate_values.append(min(abs(mech_log_spread_delta), 5.0))
+        gate_x = np.array(gate_values, dtype=np.float64)
+        gate_bin_idx = flow_bin_index(gate_values[1], sorted_gate_bins)
+        if gate_kind == "binned":
+            q_market = float(gate_bin_probs[gate_bin_idx])
+        else:
+            q_market = sigmoid(float(gate_x @ gate_beta))
+        q_market = min(0.999, max(0.001, q_market))
+        q_refresh = 1.0 - q_market
+        market_prob_sum += q_market
+
+        market_components: dict[str, float] = {}
+        refresh_components: dict[str, float] = {}
+        for name in component_names:
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_components[name] = float(x @ market_beta[name])
+            refresh_components[name] = refresh_mean[name]
+
+        market_mid = prev_mid + market_components["mid"]
+        market_buy = market_mid + prev_buy_shape * math.exp(clamp_log_delta(market_components["log_buy_shape"]))
+        market_sell = market_mid - prev_sell_shape * math.exp(clamp_log_delta(market_components["log_sell_shape"]))
+        refresh_mid = prev_mid + refresh_components["mid"]
+        refresh_buy = refresh_mid + prev_buy_shape * math.exp(clamp_log_delta(refresh_components["log_buy_shape"]))
+        refresh_sell = refresh_mid - prev_sell_shape * math.exp(clamp_log_delta(refresh_components["log_sell_shape"]))
+
+        market_buy_delta = market_buy - prev_buy
+        market_sell_delta = market_sell - prev_sell
+        refresh_buy_delta = refresh_buy - prev_buy
+        refresh_sell_delta = refresh_sell - prev_sell
+        obs_buy_delta = curr_buy - prev_buy
+        obs_sell_delta = curr_sell - prev_sell
+        mech_buy_delta = mech_buy - prev_buy
+        mech_sell_delta = mech_sell - prev_sell
+
+        if point_mode == "map":
+            pred_buy_delta = market_buy_delta if q_market >= q_refresh else refresh_buy_delta
+            pred_sell_delta = market_sell_delta if q_market >= q_refresh else refresh_sell_delta
+        else:
+            pred_buy_delta = q_market * market_buy_delta + q_refresh * refresh_buy_delta
+            pred_sell_delta = q_market * market_sell_delta + q_refresh * refresh_sell_delta
+
+        buy_err = obs_buy_delta - pred_buy_delta
+        sell_err = obs_sell_delta - pred_sell_delta
+        market_buy_err = obs_buy_delta - market_buy_delta
+        market_sell_err = obs_sell_delta - market_sell_delta
+        refresh_buy_err = obs_buy_delta - refresh_buy_delta
+        refresh_sell_err = obs_sell_delta - refresh_sell_delta
+
+        log_market = (
+            math.log(q_market)
+            + normal_logpdf(market_buy_err, market_buy_var)
+            + normal_logpdf(market_sell_err, market_sell_var)
+        )
+        if refresh_distribution == "two_gaussian":
+            refresh_buy_log = two_gaussian_logpdf(
+                refresh_buy_err,
+                refresh_buy_var,
+                refresh_jump_buy_var,
+                refresh_jump_prob,
+            )
+            refresh_sell_log = two_gaussian_logpdf(
+                refresh_sell_err,
+                refresh_sell_var,
+                refresh_jump_sell_var,
+                refresh_jump_prob,
+            )
+        else:
+            refresh_buy_log = refresh_logpdf(
+                refresh_buy_err,
+                refresh_buy_var,
+                refresh_distribution,
+                refresh_student_df,
+            )
+            refresh_sell_log = refresh_logpdf(
+                refresh_sell_err,
+                refresh_sell_var,
+                refresh_distribution,
+                refresh_student_df,
+            )
+        log_refresh = math.log(q_refresh) + refresh_buy_log + refresh_sell_log
+        log_norm = logaddexp(log_market, log_refresh)
+        market_resp = math.exp(log_market - log_norm)
+        refresh_resp = 1.0 - market_resp
+
+        if seen >= min_rows:
+            buy_sq.append(buy_err * buy_err)
+            sell_sq.append(sell_err * sell_err)
+            buy_zero_sq.append(obs_buy_delta * obs_buy_delta)
+            sell_zero_sq.append(obs_sell_delta * obs_sell_delta)
+            buy_mech_sq.append((obs_buy_delta - mech_buy_delta) ** 2)
+            sell_mech_sq.append((obs_sell_delta - mech_sell_delta) ** 2)
+            if refresh_distribution == "two_gaussian":
+                buy_refresh_log = two_gaussian_logpdf(
+                    refresh_buy_err,
+                    refresh_buy_var,
+                    refresh_jump_buy_var,
+                    refresh_jump_prob,
+                )
+                sell_refresh_log = two_gaussian_logpdf(
+                    refresh_sell_err,
+                    refresh_sell_var,
+                    refresh_jump_sell_var,
+                    refresh_jump_prob,
+                )
+            else:
+                buy_refresh_log = refresh_logpdf(
+                    refresh_buy_err,
+                    refresh_buy_var,
+                    refresh_distribution,
+                    refresh_student_df,
+                )
+                sell_refresh_log = refresh_logpdf(
+                    refresh_sell_err,
+                    refresh_sell_var,
+                    refresh_distribution,
+                    refresh_student_df,
+                )
+            buy_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_buy_err, market_buy_var),
+                math.log(q_refresh) + buy_refresh_log,
+            )
+            sell_mix_log = logaddexp(
+                math.log(q_market) + normal_logpdf(market_sell_err, market_sell_var),
+                math.log(q_refresh) + sell_refresh_log,
+            )
+            buy_nll.append(-buy_mix_log)
+            sell_nll.append(-sell_mix_log)
+            buy_zero_nll.append(gaussian_nll(obs_buy_delta, max(zero_buy_var, eps)))
+            sell_zero_nll.append(gaussian_nll(obs_sell_delta, max(zero_sell_var, eps)))
+
+        if gate_kind == "binned":
+            gate_bin_probs[gate_bin_idx] = min(
+                0.999,
+                max(0.001, lam * gate_bin_probs[gate_bin_idx] + alpha * market_resp),
+            )
+        else:
+            lr = max(0.0, float(gate_learning_rate))
+            gate_beta = gate_beta + lr * (market_resp - q_market) * gate_x
+            gate_beta = np.clip(gate_beta, -20.0, 20.0)
+
+        for name in component_names:
+            target = obs_components[name]
+            x = np.array([1.0, mech_components[name]], dtype=np.float64)
+            market_beta[name], market_p[name] = weighted_rls_update(
+                market_beta[name],
+                market_p[name],
+                x,
+                target,
+                weight=market_resp,
+                lam=lam,
+            )
+            refresh_mean[name] = refresh_mean[name] + alpha * refresh_resp * (target - refresh_mean[name])
+
+        market_buy_var = (1.0 - alpha * market_resp) * market_buy_var + alpha * market_resp * (market_buy_err * market_buy_err)
+        market_sell_var = (1.0 - alpha * market_resp) * market_sell_var + alpha * market_resp * (market_sell_err * market_sell_err)
+        if refresh_distribution == "two_gaussian":
+            jump_buy_resp = two_gaussian_jump_resp(
+                refresh_buy_err,
+                refresh_buy_var,
+                refresh_jump_buy_var,
+                refresh_jump_prob,
+            )
+            jump_sell_resp = two_gaussian_jump_resp(
+                refresh_sell_err,
+                refresh_sell_var,
+                refresh_jump_sell_var,
+                refresh_jump_prob,
+            )
+            avg_jump_resp = 0.5 * (jump_buy_resp + jump_sell_resp)
+            refresh_jump_prob = min(
+                0.999,
+                max(0.001, refresh_jump_prob + alpha * refresh_resp * (avg_jump_resp - refresh_jump_prob)),
+            )
+            quiet_buy_weight = refresh_resp * (1.0 - jump_buy_resp)
+            quiet_sell_weight = refresh_resp * (1.0 - jump_sell_resp)
+            jump_buy_weight = refresh_resp * jump_buy_resp
+            jump_sell_weight = refresh_resp * jump_sell_resp
+            refresh_buy_var = (1.0 - alpha * quiet_buy_weight) * refresh_buy_var + alpha * quiet_buy_weight * (
+                refresh_buy_err * refresh_buy_err
+            )
+            refresh_sell_var = (1.0 - alpha * quiet_sell_weight) * refresh_sell_var + alpha * quiet_sell_weight * (
+                refresh_sell_err * refresh_sell_err
+            )
+            refresh_jump_buy_var = (
+                (1.0 - alpha * jump_buy_weight) * refresh_jump_buy_var
+                + alpha * jump_buy_weight * (refresh_buy_err * refresh_buy_err)
+            )
+            refresh_jump_sell_var = (
+                (1.0 - alpha * jump_sell_weight) * refresh_jump_sell_var
+                + alpha * jump_sell_weight * (refresh_sell_err * refresh_sell_err)
+            )
+        else:
+            refresh_buy_var = (1.0 - alpha * refresh_resp) * refresh_buy_var + alpha * refresh_resp * (refresh_buy_err * refresh_buy_err)
+            refresh_sell_var = (1.0 - alpha * refresh_resp) * refresh_sell_var + alpha * refresh_resp * (refresh_sell_err * refresh_sell_err)
+        zero_buy_var = lam * zero_buy_var + alpha * (obs_buy_delta * obs_buy_delta)
+        zero_sell_var = lam * zero_sell_var + alpha * (obs_sell_delta * obs_sell_delta)
+        seen += 1
+
+    if not buy_sq:
+        return None
+    return DecomposedHurdleEvaluation(
+        n_scored=len(buy_sq),
+        active_fraction=market_prob_sum / max(1, seen),
         buy_rmse=math.sqrt(float(np.mean(buy_sq))),
         buy_nll=float(np.mean(buy_nll)),
         buy_zero_rmse=math.sqrt(float(np.mean(buy_zero_sq))),
@@ -3581,6 +4905,478 @@ def print_online_decomposed_hurdle_vwap_results(
         f"zero_RMSE={result.sell_zero_rmse:.6g}  "
         f"zero_NLL={result.sell_zero_nll:.6g}  "
         f"mechanical_RMSE={result.sell_mechanical_rmse:.6g}"
+        )
+
+
+def print_online_decomposed_two_regime_vwap_results(
+    label: str,
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+) -> None:
+    if len(rows) < min_rows:
+        print(f"\n[{label}] rows={len(rows)}: not enough usable rows")
+        return
+    result = online_decomposed_two_regime_vwap_model(
+        rows,
+        min_rows=min_rows,
+        decay=decay,
+        initial_sigma=initial_sigma,
+        vwap_depth=vwap_depth,
+    )
+    if result is None:
+        print(f"\n[{label}] decomposed two-regime VWAP: not enough scored rows")
+        return
+    print(
+        f"\n[{label}] decomposed two-regime VWAP "
+        f"(market linear mechanical_delta, refresh adaptive Gaussian) "
+        f"depth={vwap_depth:g} decay={decay:g} scored_n={result.n_scored} "
+        f"market_fraction={result.active_fraction:.3f}"
+    )
+    print(
+        f"buy_vwap: model_RMSE={result.buy_rmse:.6g}  "
+        f"model_NLL={result.buy_nll:.6g}  "
+        f"zero_RMSE={result.buy_zero_rmse:.6g}  "
+        f"zero_NLL={result.buy_zero_nll:.6g}  "
+        f"mechanical_RMSE={result.buy_mechanical_rmse:.6g}"
+    )
+    print(
+        f"sell_vwap: model_RMSE={result.sell_rmse:.6g}  "
+        f"model_NLL={result.sell_nll:.6g}  "
+        f"zero_RMSE={result.sell_zero_rmse:.6g}  "
+        f"zero_NLL={result.sell_zero_nll:.6g}  "
+        f"mechanical_RMSE={result.sell_mechanical_rmse:.6g}"
+    )
+
+
+def print_online_decomposed_flow_gated_mixture_vwap_results(
+    label: str,
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    interval_ms: int,
+    continuous_sections: bool,
+    max_gap_factor: float,
+    gate_learning_rate: float,
+    gate_kind: str,
+    gate_bins: Sequence[float],
+    point_mode: str,
+    refresh_distribution: str,
+    refresh_student_df: float,
+    refresh_jump_sigma_mult: float,
+    spread_features: str,
+) -> None:
+    if len(rows) < min_rows:
+        print(f"\n[{label}] rows={len(rows)}: not enough usable rows")
+        return
+
+    sections = [list(rows)]
+    if continuous_sections:
+        sections = split_continuous_sections(
+            rows,
+            interval_ms=interval_ms,
+            max_gap_factor=max_gap_factor,
+            min_rows=min_rows,
+        )
+    if not sections:
+        print(f"\n[{label}] flow-gated mixture VWAP: no continuous section with enough rows")
+        return
+
+    scored_results: list[DecomposedHurdleEvaluation] = []
+    for section_idx, section in enumerate(sections, start=1):
+        result = online_decomposed_flow_gated_mixture_vwap_model(
+            section,
+            min_rows=min_rows,
+            decay=decay,
+            initial_sigma=initial_sigma,
+            vwap_depth=vwap_depth,
+            gate_learning_rate=gate_learning_rate,
+            gate_kind=gate_kind,
+            gate_bins=gate_bins,
+            point_mode=point_mode,
+            refresh_distribution=refresh_distribution,
+            refresh_student_df=refresh_student_df,
+            refresh_jump_sigma_mult=refresh_jump_sigma_mult,
+            spread_features=spread_features,
+        )
+        section_label = label
+        if continuous_sections:
+            section_label = (
+                f"{label} section={section_idx}/{len(sections)} "
+                f"{section[0].ts.isoformat()}..{section[-1].ts.isoformat()}"
+            )
+        if result is None:
+            print(f"\n[{section_label}] flow-gated mixture VWAP: not enough scored rows")
+            continue
+        scored_results.append(result)
+        gate_desc = "pi_market=sigmoid(a0+a1 log1p(total_flow))"
+        gate_update_desc = f"gate_lr={gate_learning_rate:g}"
+        if gate_kind == "binned":
+            formatted_bins = ",".join(f"{edge:g}" for edge in sorted(gate_bins))
+            gate_desc = f"pi_market=EWMA_bin(log1p(total_flow); edges={formatted_bins})"
+            gate_update_desc = "gate_update=ewma_decay"
+        print(
+            f"\n[{section_label}] flow-gated mixture VWAP "
+            f"{gate_desc} "
+            f"components=mid+buy_shape+sell_shape refresh={refresh_distribution} "
+            f"df={refresh_student_df:g} jump_mult={refresh_jump_sigma_mult:g} "
+            f"depth={vwap_depth:g} decay={decay:g} "
+            f"gate_kind={gate_kind} {gate_update_desc} point_mode={point_mode} "
+            f"spread_features={spread_features} "
+            f"scored_n={result.n_scored} mean_market_prob={result.active_fraction:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={result.buy_rmse:.6g}  "
+            f"model_NLL={result.buy_nll:.6g}  "
+            f"zero_RMSE={result.buy_zero_rmse:.6g}  "
+            f"zero_NLL={result.buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.buy_mechanical_rmse:.6g}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={result.sell_rmse:.6g}  "
+            f"model_NLL={result.sell_nll:.6g}  "
+            f"zero_RMSE={result.sell_zero_rmse:.6g}  "
+            f"zero_NLL={result.sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.sell_mechanical_rmse:.6g}"
+        )
+
+    if continuous_sections and scored_results:
+        total_n = sum(result.n_scored for result in scored_results)
+        buy_sse = sum(result.n_scored * result.buy_rmse**2 for result in scored_results)
+        sell_sse = sum(result.n_scored * result.sell_rmse**2 for result in scored_results)
+        buy_zero_sse = sum(result.n_scored * result.buy_zero_rmse**2 for result in scored_results)
+        sell_zero_sse = sum(result.n_scored * result.sell_zero_rmse**2 for result in scored_results)
+        buy_mech_sse = sum(result.n_scored * result.buy_mechanical_rmse**2 for result in scored_results)
+        sell_mech_sse = sum(result.n_scored * result.sell_mechanical_rmse**2 for result in scored_results)
+        buy_nll = sum(result.n_scored * result.buy_nll for result in scored_results) / total_n
+        sell_nll = sum(result.n_scored * result.sell_nll for result in scored_results) / total_n
+        buy_zero_nll = sum(result.n_scored * result.buy_zero_nll for result in scored_results) / total_n
+        sell_zero_nll = sum(result.n_scored * result.sell_zero_nll for result in scored_results) / total_n
+        mean_market_prob = sum(result.n_scored * result.active_fraction for result in scored_results) / total_n
+        buy_zero_wins = sum(result.buy_rmse < result.buy_zero_rmse for result in scored_results)
+        sell_zero_wins = sum(result.sell_rmse < result.sell_zero_rmse for result in scored_results)
+        buy_mech_wins = sum(result.buy_rmse < result.buy_mechanical_rmse for result in scored_results)
+        sell_mech_wins = sum(result.sell_rmse < result.sell_mechanical_rmse for result in scored_results)
+        section_count = len(scored_results)
+        print(
+            f"\n[{label} aggregate over {section_count} scored continuous sections] "
+            f"flow-gated mixture VWAP gate_kind={gate_kind} "
+            f"scored_n={total_n} mean_market_prob={mean_market_prob:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={math.sqrt(buy_sse / total_n):.6g}  "
+            f"model_NLL={buy_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(buy_zero_sse / total_n):.6g}  "
+            f"zero_NLL={buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(buy_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={buy_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={buy_mech_wins}/{section_count}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={math.sqrt(sell_sse / total_n):.6g}  "
+            f"model_NLL={sell_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(sell_zero_sse / total_n):.6g}  "
+            f"zero_NLL={sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(sell_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={sell_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={sell_mech_wins}/{section_count}"
+        )
+
+
+def print_online_decomposed_em_mixture_vwap_results(
+    label: str,
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    interval_ms: int,
+    continuous_sections: bool,
+    max_gap_factor: float,
+    point_mode: str,
+) -> None:
+    if len(rows) < min_rows:
+        print(f"\n[{label}] rows={len(rows)}: not enough usable rows")
+        return
+
+    sections = [list(rows)]
+    if continuous_sections:
+        sections = split_continuous_sections(
+            rows,
+            interval_ms=interval_ms,
+            max_gap_factor=max_gap_factor,
+            min_rows=min_rows,
+        )
+    if not sections:
+        print(f"\n[{label}] decomposed EM-mixture VWAP: no continuous section with enough rows")
+        return
+
+    scored_results: list[DecomposedHurdleEvaluation] = []
+    for section_idx, section in enumerate(sections, start=1):
+        result = online_decomposed_em_mixture_vwap_model(
+            section,
+            min_rows=min_rows,
+            decay=decay,
+            initial_sigma=initial_sigma,
+            vwap_depth=vwap_depth,
+            point_mode=point_mode,
+        )
+        section_label = label
+        if continuous_sections:
+            section_label = (
+                f"{label} section={section_idx}/{len(sections)} "
+                f"{section[0].ts.isoformat()}..{section[-1].ts.isoformat()}"
+            )
+        if result is None:
+            print(f"\n[{section_label}] decomposed EM-mixture VWAP: not enough scored rows")
+            continue
+        scored_results.append(result)
+        print(
+            f"\n[{section_label}] decomposed EM-mixture VWAP "
+            f"pi_market=EWMA posterior, components=mid+buy_shape+sell_shape "
+            f"depth={vwap_depth:g} decay={decay:g} point_mode={point_mode} "
+            f"scored_n={result.n_scored} mean_market_prob={result.active_fraction:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={result.buy_rmse:.6g}  "
+            f"model_NLL={result.buy_nll:.6g}  "
+            f"zero_RMSE={result.buy_zero_rmse:.6g}  "
+            f"zero_NLL={result.buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.buy_mechanical_rmse:.6g}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={result.sell_rmse:.6g}  "
+            f"model_NLL={result.sell_nll:.6g}  "
+            f"zero_RMSE={result.sell_zero_rmse:.6g}  "
+            f"zero_NLL={result.sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.sell_mechanical_rmse:.6g}"
+        )
+
+    if continuous_sections and scored_results:
+        total_n = sum(result.n_scored for result in scored_results)
+        buy_sse = sum(result.n_scored * result.buy_rmse**2 for result in scored_results)
+        sell_sse = sum(result.n_scored * result.sell_rmse**2 for result in scored_results)
+        buy_zero_sse = sum(result.n_scored * result.buy_zero_rmse**2 for result in scored_results)
+        sell_zero_sse = sum(result.n_scored * result.sell_zero_rmse**2 for result in scored_results)
+        buy_mech_sse = sum(result.n_scored * result.buy_mechanical_rmse**2 for result in scored_results)
+        sell_mech_sse = sum(result.n_scored * result.sell_mechanical_rmse**2 for result in scored_results)
+        buy_nll = sum(result.n_scored * result.buy_nll for result in scored_results) / total_n
+        sell_nll = sum(result.n_scored * result.sell_nll for result in scored_results) / total_n
+        buy_zero_nll = sum(result.n_scored * result.buy_zero_nll for result in scored_results) / total_n
+        sell_zero_nll = sum(result.n_scored * result.sell_zero_nll for result in scored_results) / total_n
+        mean_market_prob = sum(result.n_scored * result.active_fraction for result in scored_results) / total_n
+        buy_zero_wins = sum(result.buy_rmse < result.buy_zero_rmse for result in scored_results)
+        sell_zero_wins = sum(result.sell_rmse < result.sell_zero_rmse for result in scored_results)
+        buy_mech_wins = sum(result.buy_rmse < result.buy_mechanical_rmse for result in scored_results)
+        sell_mech_wins = sum(result.sell_rmse < result.sell_mechanical_rmse for result in scored_results)
+        section_count = len(scored_results)
+        print(
+            f"\n[{label} aggregate over {section_count} scored continuous sections] "
+            f"EM-mixture VWAP scored_n={total_n} mean_market_prob={mean_market_prob:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={math.sqrt(buy_sse / total_n):.6g}  "
+            f"model_NLL={buy_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(buy_zero_sse / total_n):.6g}  "
+            f"zero_NLL={buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(buy_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={buy_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={buy_mech_wins}/{section_count}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={math.sqrt(sell_sse / total_n):.6g}  "
+            f"model_NLL={sell_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(sell_zero_sse / total_n):.6g}  "
+            f"zero_NLL={sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(sell_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={sell_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={sell_mech_wins}/{section_count}"
+        )
+
+
+def print_online_decomposed_soft_mixture_vwap_results(
+    label: str,
+    rows: Sequence[MarketRow],
+    *,
+    min_rows: int,
+    decay: float,
+    initial_sigma: float,
+    vwap_depth: float,
+    interval_ms: int,
+    continuous_sections: bool,
+    max_gap_factor: float,
+    gate_learning_rate: float,
+    diagnostic_count: int,
+    market_deviation_cap_mult: float,
+    market_guard_mode: str,
+) -> None:
+    if len(rows) < min_rows:
+        print(f"\n[{label}] rows={len(rows)}: not enough usable rows")
+        return
+
+    sections = [list(rows)]
+    if continuous_sections:
+        sections = split_continuous_sections(
+            rows,
+            interval_ms=interval_ms,
+            max_gap_factor=max_gap_factor,
+            min_rows=min_rows,
+        )
+    if not sections:
+        print(f"\n[{label}] decomposed soft-mixture VWAP: no continuous section with enough rows")
+        return
+
+    scored_results: list[DecomposedHurdleEvaluation] = []
+    diagnostics: list[dict[str, object]] = []
+    for section_idx, section in enumerate(sections, start=1):
+        section_label = label
+        if continuous_sections:
+            section_label = (
+                f"{label} section={section_idx}/{len(sections)} "
+                f"{section[0].ts.isoformat()}..{section[-1].ts.isoformat()}"
+            )
+        result = online_decomposed_soft_mixture_vwap_model(
+            section,
+            min_rows=min_rows,
+            decay=decay,
+            initial_sigma=initial_sigma,
+            vwap_depth=vwap_depth,
+            gate_learning_rate=gate_learning_rate,
+            market_deviation_cap_mult=market_deviation_cap_mult,
+            market_guard_mode=market_guard_mode,
+            diagnostics=diagnostics if diagnostic_count > 0 else None,
+            diagnostic_section=section_label,
+        )
+        if result is None:
+            print(f"\n[{section_label}] decomposed soft-mixture VWAP: not enough scored rows")
+            continue
+        scored_results.append(result)
+        print(
+            f"\n[{section_label}] decomposed soft-mixture VWAP "
+            f"q=sigmoid(a0+a1 zero_flow+a2 abs_mech_mid+a3 spread_prev) "
+            f"depth={vwap_depth:g} decay={decay:g} gate_lr={gate_learning_rate:g} "
+            f"market_cap_mult={market_deviation_cap_mult:g} "
+            f"market_guard_mode={market_guard_mode} "
+            f"scored_n={result.n_scored} mean_market_prob={result.active_fraction:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={result.buy_rmse:.6g}  "
+            f"model_NLL={result.buy_nll:.6g}  "
+            f"zero_RMSE={result.buy_zero_rmse:.6g}  "
+            f"zero_NLL={result.buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.buy_mechanical_rmse:.6g}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={result.sell_rmse:.6g}  "
+            f"model_NLL={result.sell_nll:.6g}  "
+            f"zero_RMSE={result.sell_zero_rmse:.6g}  "
+            f"zero_NLL={result.sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={result.sell_mechanical_rmse:.6g}"
+        )
+
+    if continuous_sections and scored_results:
+        total_n = sum(result.n_scored for result in scored_results)
+        buy_sse = sum(result.n_scored * result.buy_rmse**2 for result in scored_results)
+        sell_sse = sum(result.n_scored * result.sell_rmse**2 for result in scored_results)
+        buy_zero_sse = sum(result.n_scored * result.buy_zero_rmse**2 for result in scored_results)
+        sell_zero_sse = sum(result.n_scored * result.sell_zero_rmse**2 for result in scored_results)
+        buy_mech_sse = sum(result.n_scored * result.buy_mechanical_rmse**2 for result in scored_results)
+        sell_mech_sse = sum(result.n_scored * result.sell_mechanical_rmse**2 for result in scored_results)
+        buy_nll = sum(result.n_scored * result.buy_nll for result in scored_results) / total_n
+        sell_nll = sum(result.n_scored * result.sell_nll for result in scored_results) / total_n
+        buy_zero_nll = sum(result.n_scored * result.buy_zero_nll for result in scored_results) / total_n
+        sell_zero_nll = sum(result.n_scored * result.sell_zero_nll for result in scored_results) / total_n
+        mean_market_prob = sum(result.n_scored * result.active_fraction for result in scored_results) / total_n
+        buy_zero_wins = sum(result.buy_rmse < result.buy_zero_rmse for result in scored_results)
+        sell_zero_wins = sum(result.sell_rmse < result.sell_zero_rmse for result in scored_results)
+        buy_mech_wins = sum(result.buy_rmse < result.buy_mechanical_rmse for result in scored_results)
+        sell_mech_wins = sum(result.sell_rmse < result.sell_mechanical_rmse for result in scored_results)
+        section_count = len(scored_results)
+        print(
+            f"\n[{label} aggregate over {section_count} scored continuous sections] "
+            f"soft-mixture VWAP scored_n={total_n} mean_market_prob={mean_market_prob:.3f}"
+        )
+        print(
+            f"buy_vwap: model_RMSE={math.sqrt(buy_sse / total_n):.6g}  "
+            f"model_NLL={buy_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(buy_zero_sse / total_n):.6g}  "
+            f"zero_NLL={buy_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(buy_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={buy_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={buy_mech_wins}/{section_count}"
+        )
+        print(
+            f"sell_vwap: model_RMSE={math.sqrt(sell_sse / total_n):.6g}  "
+            f"model_NLL={sell_nll:.6g}  "
+            f"zero_RMSE={math.sqrt(sell_zero_sse / total_n):.6g}  "
+            f"zero_NLL={sell_zero_nll:.6g}  "
+            f"mechanical_RMSE={math.sqrt(sell_mech_sse / total_n):.6g}  "
+            f"wins_vs_zero={sell_zero_wins}/{section_count}  "
+            f"wins_vs_mechanical={sell_mech_wins}/{section_count}"
+        )
+
+    if diagnostic_count > 0 and diagnostics:
+        print_soft_mixture_error_diagnostics(label, diagnostics, diagnostic_count)
+
+
+def as_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def print_soft_mixture_error_diagnostics(
+    label: str,
+    diagnostics: Sequence[dict[str, object]],
+    diagnostic_count: int,
+) -> None:
+    worst = sorted(diagnostics, key=lambda item: as_float(item.get("score")), reverse=True)[
+        : max(0, diagnostic_count)
+    ]
+    if not worst:
+        return
+    print(f"\n[{label} worst soft-mixture point errors]")
+    for idx, item in enumerate(worst, start=1):
+        print(
+            f"{idx}. ts={item.get('ts')} section={item.get('section')}\n"
+            f"   buy: obs={as_float(item.get('obs_buy_delta')):.6g} "
+            f"pred={as_float(item.get('pred_buy_delta')):.6g} "
+            f"err={as_float(item.get('buy_err')):.6g} "
+            f"mech={as_float(item.get('mech_buy_delta')):.6g} "
+            f"market={as_float(item.get('market_buy_delta')):.6g} "
+            f"point_market={as_float(item.get('point_market_buy_delta')):.6g} "
+            f"refresh={as_float(item.get('refresh_buy_delta')):.6g}\n"
+            f"   sell: obs={as_float(item.get('obs_sell_delta')):.6g} "
+            f"pred={as_float(item.get('pred_sell_delta')):.6g} "
+            f"err={as_float(item.get('sell_err')):.6g} "
+            f"mech={as_float(item.get('mech_sell_delta')):.6g} "
+            f"market={as_float(item.get('market_sell_delta')):.6g} "
+            f"point_market={as_float(item.get('point_market_sell_delta')):.6g} "
+            f"refresh={as_float(item.get('refresh_sell_delta')):.6g}\n"
+            f"   gate: q_market={as_float(item.get('q_market')):.3f} "
+            f"point_q_market={as_float(item.get('point_q_market')):.3f} "
+            f"market_resp={as_float(item.get('market_resp')):.3f} "
+            f"guarded={item.get('market_point_guarded')} "
+            f"flow={as_float(item.get('total_flow')):.6g} "
+            f"buy_flow={as_float(item.get('buy_volume')):.6g} "
+            f"sell_flow={as_float(item.get('sell_volume')):.6g} "
+            f"mech_mid_delta={as_float(item.get('mech_mid_delta')):.6g}\n"
+            f"   book: prev_spread={as_float(item.get('prev_spread')):.6g} "
+            f"obs_spread={as_float(item.get('obs_spread')):.6g} "
+            f"prev_buy_shape={as_float(item.get('prev_buy_shape')):.6g} "
+            f"prev_sell_shape={as_float(item.get('prev_sell_shape')):.6g}\n"
+            f"   log_shape: market_buy={as_float(item.get('market_log_buy_shape_delta')):.6g} "
+            f"market_sell={as_float(item.get('market_log_sell_shape_delta')):.6g} "
+            f"refresh_buy={as_float(item.get('refresh_log_buy_shape_delta')):.6g} "
+            f"refresh_sell={as_float(item.get('refresh_log_sell_shape_delta')):.6g}"
         )
 
 

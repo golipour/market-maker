@@ -24,6 +24,7 @@ from mm.mpc.mpc_tensor_batched import (
     _book_cumulative_from_ob_rel,
     _bounds_effective_to_raw,
     _format_action_verbose,
+    _fixed_depth_shape_features_batched,
     _get_torch,
     _grid_levels,
     _initial_action_uniform_marginal_qrange,
@@ -230,14 +231,28 @@ def optimize_joint_with_diagnostics(
         else:
             global_buy_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             global_sell_vol = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-        if hasattr(mpc.local_price_model, "sample_residual"):
+        price_innov = None
+        if hasattr(mpc.local_price_model, "sample_innovations"):
+            price_innov = mpc.local_price_model.sample_innovations(
+                sample_shape, device=_device, dtype=dtype
+            )
+            eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+            eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+        elif hasattr(mpc.local_price_model, "sample_residual"):
             eps_buy, eps_sell = mpc.local_price_model.sample_residual(
                 sample_shape, device=_device, dtype=dtype
             )
         else:
             eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
-        if hasattr(global_price_model, "sample_residual"):
+        global_price_innov = None
+        if hasattr(global_price_model, "sample_innovations"):
+            global_price_innov = global_price_model.sample_innovations(
+                sample_shape, device=_device, dtype=dtype
+            )
+            global_eps_buy = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+            global_eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
+        elif hasattr(global_price_model, "sample_residual"):
             global_eps_buy, global_eps_sell = global_price_model.sample_residual(
                 sample_shape, device=_device, dtype=dtype
             )
@@ -253,6 +268,8 @@ def optimize_joint_with_diagnostics(
             eps_sell,
             global_eps_buy,
             global_eps_sell,
+            price_innov,
+            global_price_innov,
         )
 
     batch_time_sec = 0.0
@@ -324,6 +341,8 @@ def optimize_joint_with_diagnostics(
                     eps_sell,
                     global_eps_buy,
                     global_eps_sell,
+                    price_innov,
+                    global_price_innov,
                 ) = fixed_samples
             else:
                 t_batch = time.perf_counter()
@@ -336,6 +355,8 @@ def optimize_joint_with_diagnostics(
                     eps_sell,
                     global_eps_buy,
                     global_eps_sell,
+                    price_innov,
+                    global_price_innov,
                 ) = draw_samples()
                 nonlocal batch_time_sec
                 batch_time_sec += time.perf_counter() - t_batch
@@ -375,6 +396,12 @@ def optimize_joint_with_diagnostics(
             local_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             global_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             global_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
+            local_conditional_price = hasattr(mpc.local_price_model, "sample_dynamic_vwap")
+            global_conditional_price = hasattr(global_price_model, "sample_dynamic_vwap")
+            conditional_buy_vwap_t = None
+            conditional_sell_vwap_t = None
+            conditional_global_buy_vwap_t = None
+            conditional_global_sell_vwap_t = None
 
             for h in range(mpc.horizon):
                 if h == 0:
@@ -456,20 +483,30 @@ def optimize_joint_with_diagnostics(
                         device=_device,
                     )
                 else:
-                    buy_vwap_t, sell_vwap_t = vwap_prices_batched(
-                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth_t
-                    )
-                    global_buy_vwap_t, global_sell_vwap_t = vwap_prices_batched(
-                        global_ob_bids,
-                        global_ob_asks,
-                        global_mid_t,
-                        spread_grid,
-                        target_depth=vwap_depth_t,
-                    )
-                buy_vwap_t = buy_vwap_t + eps_buy_h
-                sell_vwap_t = sell_vwap_t + eps_sell_h
-                global_buy_vwap_t = global_buy_vwap_t + global_eps_buy_h
-                global_sell_vwap_t = global_sell_vwap_t + global_eps_sell_h
+                    if local_conditional_price and conditional_buy_vwap_t is not None:
+                        buy_vwap_t = conditional_buy_vwap_t
+                        sell_vwap_t = conditional_sell_vwap_t
+                    else:
+                        buy_vwap_t, sell_vwap_t = vwap_prices_batched(
+                            ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth_t
+                        )
+                    if global_conditional_price and conditional_global_buy_vwap_t is not None:
+                        global_buy_vwap_t = conditional_global_buy_vwap_t
+                        global_sell_vwap_t = conditional_global_sell_vwap_t
+                    else:
+                        global_buy_vwap_t, global_sell_vwap_t = vwap_prices_batched(
+                            global_ob_bids,
+                            global_ob_asks,
+                            global_mid_t,
+                            spread_grid,
+                            target_depth=vwap_depth_t,
+                        )
+                if not local_conditional_price:
+                    buy_vwap_t = buy_vwap_t + eps_buy_h
+                    sell_vwap_t = sell_vwap_t + eps_sell_h
+                if not global_conditional_price:
+                    global_buy_vwap_t = global_buy_vwap_t + global_eps_buy_h
+                    global_sell_vwap_t = global_sell_vwap_t + global_eps_sell_h
 
                 ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = soft_fill_batched(
                     local_h,
@@ -525,6 +562,117 @@ def optimize_joint_with_diagnostics(
                 local_inv_path[:, h] = inv_next.squeeze(1)
                 global_cash_path[:, h] = global_cash_next.squeeze(1)
                 global_inv_path[:, h] = global_inv_next.squeeze(1)
+
+                if local_conditional_price:
+                    local_mid_next = _mid_from_book_best_levels_batched(
+                        ob_bids_next, ob_asks_next, mid_t, spread_grid
+                    )
+                    ref_depth = float(getattr(mpc.local_price_model, "reference_vwap_depth", 100.0))
+                    prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
+                        ob_bids,
+                        ob_asks,
+                        mid_t,
+                        spread_grid,
+                        target_depth=ref_depth,
+                    )
+                    mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = _fixed_depth_shape_features_batched(
+                        ob_bids_next,
+                        ob_asks_next,
+                        local_mid_next,
+                        spread_grid,
+                        target_depth=ref_depth,
+                    )
+                    innov_h = None
+                    if price_innov is not None:
+                        innov_h = {
+                            "u_market": price_innov["u_market"][:, h : h + 1],
+                            "z_market": {
+                                name: value[:, h : h + 1]
+                                for name, value in price_innov["z_market"].items()
+                            },
+                            "t_refresh": {
+                                name: value[:, h : h + 1]
+                                for name, value in price_innov["t_refresh"].items()
+                            },
+                        }
+                    conditional_buy_vwap_t, conditional_sell_vwap_t = (
+                        mpc.local_price_model.sample_dynamic_vwap(
+                            prev_mid=mid_t,
+                            prev_spread=prev_spread_ref,
+                            prev_buy_shape=prev_buy_shape_ref,
+                            prev_sell_shape=prev_sell_shape_ref,
+                            mech_mid=local_mid_next,
+                            mech_spread=mech_spread_ref,
+                            mech_buy_shape=mech_buy_shape_ref,
+                            mech_sell_shape=mech_sell_shape_ref,
+                            total_flow=buy_h + sell_h,
+                            buy_depth=torch_mod.clamp(
+                                cash_next / torch_mod.clamp(local_mid_next, min=1e-9),
+                                min=0.0,
+                            ),
+                            sell_depth=torch_mod.abs(inv_next),
+                            innovations=innov_h,
+                        )
+                    )
+                    buy_vwap_t = conditional_buy_vwap_t
+                    sell_vwap_t = conditional_sell_vwap_t
+
+                if global_conditional_price:
+                    global_mid_next = _mid_from_book_best_levels_batched(
+                        global_ob_bids_next,
+                        global_ob_asks_next,
+                        global_mid_t,
+                        spread_grid,
+                    )
+                    ref_depth = float(getattr(global_price_model, "reference_vwap_depth", 100.0))
+                    prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
+                        global_ob_bids,
+                        global_ob_asks,
+                        global_mid_t,
+                        spread_grid,
+                        target_depth=ref_depth,
+                    )
+                    mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = _fixed_depth_shape_features_batched(
+                        global_ob_bids_next,
+                        global_ob_asks_next,
+                        global_mid_next,
+                        spread_grid,
+                        target_depth=ref_depth,
+                    )
+                    innov_h = None
+                    if global_price_innov is not None:
+                        innov_h = {
+                            "u_market": global_price_innov["u_market"][:, h : h + 1],
+                            "z_market": {
+                                name: value[:, h : h + 1]
+                                for name, value in global_price_innov["z_market"].items()
+                            },
+                            "t_refresh": {
+                                name: value[:, h : h + 1]
+                                for name, value in global_price_innov["t_refresh"].items()
+                            },
+                        }
+                    conditional_global_buy_vwap_t, conditional_global_sell_vwap_t = (
+                        global_price_model.sample_dynamic_vwap(
+                            prev_mid=global_mid_t,
+                            prev_spread=prev_spread_ref,
+                            prev_buy_shape=prev_buy_shape_ref,
+                            prev_sell_shape=prev_sell_shape_ref,
+                            mech_mid=global_mid_next,
+                            mech_spread=mech_spread_ref,
+                            mech_buy_shape=mech_buy_shape_ref,
+                            mech_sell_shape=mech_sell_shape_ref,
+                            total_flow=global_buy_h + global_sell_h,
+                            buy_depth=torch_mod.clamp(
+                                global_cash_next / torch_mod.clamp(global_mid_next, min=1e-9),
+                                min=0.0,
+                            ),
+                            sell_depth=torch_mod.abs(global_inv_next),
+                            innovations=innov_h,
+                        )
+                    )
+                    global_buy_vwap_t = conditional_global_buy_vwap_t
+                    global_sell_vwap_t = conditional_global_sell_vwap_t
 
                 ref_next = global_sell_vwap_t if use_global_reference else sell_vwap_t
                 local_step_reward = (

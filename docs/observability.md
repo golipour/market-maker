@@ -529,7 +529,7 @@ These dashboards already exist and should be kept source-controlled:
 | `mm_portfolio_pg.json` / `mm-portfolio-pg` | Inventory, cash, wallets, limits, collateral exposure |
 | `mm_orderbook_depth_pg.json` / `mm-orderbook-depth-pg` | Latest book, cleared book, MPC continuous depth, executable orders |
 | `mm_reference_vwaps_pg.json` / `mm-reference-vwaps-pg` | Local/global reference VWAPs from decisions |
-| `mm_strategy_model_params_pg.json` / `mm-strategy-model-params-pg` | Model params, NLL, skip reasons |
+| `mm_strategy_model_params_pg.json` / `mm-strategy-model-params-pg` | Model params, conditional price gate/component params, NLL, skip reasons |
 | `private_state_postgres.json` / `private_state_postgres` | Private snapshots, balances, fills, recent private events |
 
 The proposed 00-10 dashboard structure below can be implemented by reorganizing

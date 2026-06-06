@@ -1171,7 +1171,9 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "vwap_depth_note": (
             "derived each frame from abs(local_inventory), or from "
             "abs(local_inventory + global_inventory) when liquidity sourcing is enabled; "
-            "VWAP helpers cap to visible book depth when requested depth is larger"
+            "VWAP helpers cap to visible book depth when requested depth is larger; "
+            "conditional_mechanical_mixture price models use their own fixed "
+            "reference_vwap_depth for learning and convert to this dynamic depth in MPC"
         ),
         "reference_price_source": config.reference_price_source,
         "reference_price_source_note": (
