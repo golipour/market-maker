@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -103,8 +104,12 @@ def decode_envelope(raw: str | bytes | dict[str, Any]) -> EventEnvelope:
 def to_jsonable(value: Any) -> Any:
     """Convert msgspec/dataclass/runtime objects to JSON-compatible data."""
 
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if value is None or isinstance(value, (str, bool)):
         return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     as_payload = getattr(value, "as_payload", None)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import math
+
 import pytest
 
 from mm.bus.factory import build_event_bus
-from mm.core.events import decode_envelope, encode_envelope, envelope_event
+from mm.core.events import decode_envelope, encode_envelope, envelope_event, to_jsonable
 from mm.core.models.execution import Action
 from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
@@ -51,6 +54,42 @@ def test_event_envelope_round_trips_market_event() -> None:
     assert decoded.exchange == "nobitex"
     assert decoded.symbol == "BTC_IRT"
     assert decoded.payload["t_end_ms"] == 1001
+
+
+def test_event_payload_sanitizes_non_finite_numbers_for_strict_json() -> None:
+    payload = {
+        "optimizer": {
+            "action_final": {
+                "raw_params": {
+                    "flat": [math.nan, math.inf, -math.inf, 1.25],
+                },
+            },
+        },
+    }
+
+    jsonable = to_jsonable(payload)
+    encoded = json.dumps(jsonable, allow_nan=False)
+    decoded = json.loads(encoded)
+
+    assert decoded["optimizer"]["action_final"]["raw_params"]["flat"] == [
+        None,
+        None,
+        None,
+        1.25,
+    ]
+
+
+def test_event_envelope_encoding_sanitizes_non_finite_numbers() -> None:
+    envelope = envelope_event(
+        "strategy:diagnostics:test",
+        {"type": "ControllerDiagnostics", "raw_params": {"flat": [float("nan")]}},
+        run_id="run-1",
+    )
+
+    encoded = json.dumps(envelope.as_dict(), allow_nan=False)
+    decoded = json.loads(encoded)
+
+    assert decoded["payload"]["raw_params"]["flat"] == [None]
 
 
 def test_joint_frame_envelope_omits_embedded_private_frame_snapshot() -> None:

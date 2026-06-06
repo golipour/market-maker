@@ -1,6 +1,6 @@
 {
   "venues": {
-    "global": {
+    "local": {
       "public": {
         "exchange": "nobitex",
         "symbol": "USDT_IRT",
@@ -12,6 +12,7 @@
       "private": {
         "mode": "rest",
         "api_token_env": "NOBITEX_API_TOKEN",
+        "api_private_key_env": "NOBITEX_API_PRIVATE_KEY",
         "poll_interval_ms": 10000,
         "fill_event_source": "exchange_fill_history"
       },
@@ -19,7 +20,7 @@
         "maker_fee": 0.003
       }
     },
-    "local": {
+    "global": {
       "public": {
         "exchange": "tabdeal",
         "symbol": "USDT_IRT",

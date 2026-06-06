@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -54,6 +55,10 @@ CREATE TABLE IF NOT EXISTS admin_audit_log (
     payload JSONB NOT NULL
 );
 """
+
+
+def _strict_json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
 
 class PostgresEventWriter:
@@ -183,8 +188,8 @@ class PostgresEventWriter:
                                 envelope.event_id,
                                 envelope.run_id,
                                 _ts(envelope.timestamp_ms),
-                                psycopg2.extras.Json(to_jsonable(envelope.payload)),
-                                psycopg2.extras.Json(envelope.as_dict()),
+                                psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
+                                psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
                             )
                             for envelope in batch
                             if _is_latest_state(envelope)
@@ -304,8 +309,8 @@ def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
         envelope.actor_id,
         envelope.timestamp_ms,
         _ts(envelope.timestamp_ms),
-        psycopg2.extras.Json(to_jsonable(envelope.payload)),
-        psycopg2.extras.Json(envelope.as_dict()),
+        psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
+        psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
     )
 
 
