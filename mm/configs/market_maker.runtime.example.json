@@ -122,7 +122,7 @@
         "max_private_state_age_ms": 120000
       }
     },
-    "reference_price_source": "global",
+    "reference_price_source": "local",
     "local_price_model": {
       "kind": "conditional_mechanical_mixture",
       "reference_vwap_depth": 1000.0,

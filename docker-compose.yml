@@ -103,21 +103,21 @@ services:
     depends_on:
       - redis
 
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: pgadmin
-    restart: "no"
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local.dev
-      PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
-      PGADMIN_CONFIG_LOGIN_BANNER: "'Market maker local pgAdmin'"
-    ports:
-      - "5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - db
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: pgadmin
+  #   restart: "no"
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@local.dev
+  #     PGADMIN_DEFAULT_PASSWORD: admin
+  #     PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "False"
+  #     PGADMIN_CONFIG_LOGIN_BANNER: "'Market maker local pgAdmin'"
+  #   ports:
+  #     - "5050:80"
+  #   volumes:
+  #     - pgadmin_data:/var/lib/pgadmin
+  #   depends_on:
+  #     - db
 
   grafana:
     image: grafana/grafana:latest
@@ -154,7 +154,7 @@ volumes:
   grafana_data:
   loki_data:
   tempo_data:
-  pgadmin_data:
+  # pgadmin_data:
   # Optional: mount as MM_PARQUET_ROOT when running the engine in Docker, e.g.
   #   volumes:
   #     - parquet_data:/data/parquet
