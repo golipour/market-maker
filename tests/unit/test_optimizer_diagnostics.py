@@ -133,6 +133,34 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
     assert sum(float(v) for v in fracs.values()) == pytest.approx(1.0, rel=1e-5)
     assert payload["action"]["best"]["effective_depth"]["bid"]
     assert payload["action"]["initial"]["effective_depth"]["bid"]
+
+
+def test_optimizer_ignores_nonfinite_warm_start_action() -> None:
+    mpc = MonteCarloMPCTensorBatched(
+        _FixedPriceModel(),
+        _FixedFlowModel(),
+        _FixedExecutionModel(),
+        n_components=1,
+        n_samples=4,
+        horizon=1,
+        spread_max=20.0,
+        spread_step=5.0,
+        adam_epochs=2,
+        adam_lr=0.1,
+        fixed_mc_samples=True,
+        warm_start=True,
+        device="cpu",
+        inventory_threshold_penalty_weight=0.0,
+        quote_size_min_per_side=1.0,
+        quote_size_max_per_side=10.0,
+    )
+    mpc._last_raw_flat = torch.full((6,), float("nan"), dtype=torch.float64).numpy()
+
+    action, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
+    best_flat = diagnostics.to_payload()["action"]["best"]["raw_params"]["flat"]
+
+    assert all(math.isfinite(float(x)) for x in action.to_flat())
+    assert all(math.isfinite(float(x)) for x in best_flat)
     assert diagnostics.best_epoch is not None
     assert action.n_components == 1
 

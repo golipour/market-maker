@@ -88,3 +88,42 @@ def test_conditional_price_model_updates_sigmoid_gate_with_decay() -> None:
     assert "gate_bins" not in fast_params
     assert "gate_bin_probs" not in fast_params
     assert np.linalg.norm(after_fast - before_fast) > np.linalg.norm(after_slow - before_slow)
+
+
+def test_conditional_price_model_zero_depth_has_finite_gradient() -> None:
+    torch = pytest.importorskip("torch")
+
+    model = TorchConditionalMechanicalMixturePriceModel(
+        reference_vwap_depth=100.0,
+        shape_alpha=0.5,
+        point_mode="mean",
+    )
+    prev_mid = torch.tensor([[100.0]], dtype=torch.float64)
+    prev_spread = torch.full_like(prev_mid, 2.0)
+    prev_shape = torch.full_like(prev_mid, 3.0)
+    buy_depth = torch.tensor([[0.0]], dtype=torch.float64, requires_grad=True)
+    sell_depth = torch.tensor([[0.0]], dtype=torch.float64, requires_grad=True)
+
+    buy_vwap, sell_vwap = model.sample_dynamic_vwap(
+        prev_mid=prev_mid,
+        prev_spread=prev_spread,
+        prev_buy_shape=prev_shape,
+        prev_sell_shape=prev_shape,
+        mech_mid=prev_mid,
+        mech_spread=prev_spread,
+        mech_buy_shape=prev_shape,
+        mech_sell_shape=prev_shape,
+        total_flow=torch.zeros_like(prev_mid),
+        buy_depth=buy_depth,
+        sell_depth=sell_depth,
+        innovations={
+            "u_market": torch.zeros_like(prev_mid),
+            "z_market": {name: torch.zeros_like(prev_mid) for name in model._component_names},
+            "t_refresh": {name: torch.zeros_like(prev_mid) for name in model._component_names},
+        },
+    )
+    loss = buy_vwap.sum() - sell_vwap.sum()
+    loss.backward()
+
+    assert torch.isfinite(buy_depth.grad).all()
+    assert torch.isfinite(sell_depth.grad).all()

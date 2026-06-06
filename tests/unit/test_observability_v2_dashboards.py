@@ -137,6 +137,9 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
         sql = panel["targets"][0]["rawSql"]
         assert expected_sql in sql
         assert role_sql in sql
+        if "action ladder depth" in title:
+            assert "jsonb_typeof" in sql
+            assert "ELSE '[]'::jsonb" in sql
 
     expected = {
         "Local marginal ladder": (0, 27, "ladder", "WHERE role = 'local'"),
@@ -158,6 +161,8 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
         assert role_sql in sql
         assert "'${target_frame_mode}' = 'latest'" in sql
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
+        assert "jsonb_typeof" in sql
+        assert "ELSE '[]'::jsonb" in sql
 
     vars_by_name = {var["name"]: var for var in dashboard["templating"]["list"]}
     assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"

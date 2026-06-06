@@ -229,6 +229,36 @@ def _inv_softplus_np(y: float) -> float:
     return float(np.log(np.expm1(y_f)))
 
 
+def _finite_action_flat_or_none(flat: Any, expected_len: int) -> np.ndarray | None:
+    try:
+        arr = np.array(flat, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if arr.size < expected_len:
+        return None
+    arr = arr[:expected_len]
+    if not np.isfinite(arr).all():
+        return None
+    return arr
+
+
+def _torch_optimizer_state_is_finite(optimizer: Any, torch_mod: Any) -> bool:
+    if optimizer is None:
+        return False
+    try:
+        states = optimizer.state.values()
+    except AttributeError:
+        return False
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        for value in state.values():
+            if hasattr(value, "is_floating_point") and value.is_floating_point():
+                if not bool(torch_mod.isfinite(value).all().item()):
+                    return False
+    return True
+
+
 def _initial_action_uniform_marginal_qrange(
     n_components: int,
     spread_max: float,
@@ -1012,15 +1042,12 @@ class MonteCarloMPCTensorBatched:
         single_len = action_param_len(n)
         param_len = self.horizon * single_len
 
+        one_action = None
         if self.warm_start and self._last_raw_flat is not None:
-            one_action = np.array(self._last_raw_flat[:single_len], dtype=np.float64)
-        elif self.warm_start and self._last_action is not None:
-            one_action = np.array(self._last_action.to_flat(), dtype=np.float64)
-            if one_action.size < single_len:
-                one_action = np.concatenate(
-                    [one_action, np.zeros(single_len - one_action.size, dtype=np.float64)]
-                )
-        else:
+            one_action = _finite_action_flat_or_none(self._last_raw_flat, single_len)
+        if one_action is None and self.warm_start and self._last_action is not None:
+            one_action = _finite_action_flat_or_none(self._last_action.to_flat(), single_len)
+        if one_action is None:
             one_action = _initial_action_uniform_marginal_qrange(
                 n_components=n,
                 spread_max=self.spread_max,
@@ -1045,6 +1072,9 @@ class MonteCarloMPCTensorBatched:
                 self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
         x_torch = self._x_torch
         optimizer = self._optimizer
+        if not _torch_optimizer_state_is_finite(optimizer, torch_mod):
+            self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+            optimizer = self._optimizer
         maker_fee = getattr(
             self.execution_model,
             "local_maker_fee",
@@ -1412,7 +1442,9 @@ class MonteCarloMPCTensorBatched:
                     if x_torch.grad is not None:
                         if not torch_mod.isfinite(x_torch.grad).all():
                             nonfinite_grad_count += 1
-                        torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
+                            x_torch.grad.detach().zero_()
+                        else:
+                            torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
                 return loss
 
             loss = optimizer.step(closure)
@@ -1434,7 +1466,15 @@ class MonteCarloMPCTensorBatched:
             train_time_sec = loop_elapsed - batch_time_sec
             total_sec = loop_elapsed
         best_flat = best_x.cpu().numpy()
-        best_flat_slice = best_flat[:single_len]
+        best_flat_slice = _finite_action_flat_or_none(best_flat, single_len)
+        if best_flat_slice is None:
+            best_flat_slice = _finite_action_flat_or_none(x0_arr, single_len)
+        if best_flat_slice is None:
+            best_flat_slice = _initial_action_uniform_marginal_qrange(
+                n_components=n,
+                spread_max=self.spread_max,
+                l_param=self._l_param_config(),
+            )
         best_action = self._flat_to_effective_action(
             best_flat_slice,
             bid_quote_size_min=bid_quote_size_min_0,
@@ -1442,7 +1482,9 @@ class MonteCarloMPCTensorBatched:
             ask_quote_size_min=ask_quote_size_min_0,
             ask_quote_size_max=ask_quote_size_max_0,
         )
-        final_flat_slice = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
+        final_flat_slice = _finite_action_flat_or_none(x_torch.detach().cpu().numpy(), single_len)
+        if final_flat_slice is None:
+            final_flat_slice = best_flat_slice
         final_action = self._flat_to_effective_action(
             final_flat_slice,
             bid_quote_size_min=bid_quote_size_min_0,

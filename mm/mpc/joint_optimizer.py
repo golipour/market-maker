@@ -23,6 +23,7 @@ from mm.mpc.mpc_tensor_batched import (
     _book_cumulative_from_arrays,
     _book_cumulative_from_ob_rel,
     _bounds_effective_to_raw,
+    _finite_action_flat_or_none,
     _format_action_verbose,
     _fixed_depth_shape_features_batched,
     _get_torch,
@@ -33,6 +34,7 @@ from mm.mpc.mpc_tensor_batched import (
     _quote_capacity_bounds_scalar,
     _spread_bucket_index,
     _spread_grid_tensor,
+    _torch_optimizer_state_is_finite,
     soft_fill_batched,
 )
 from mm.mpc.optimizer_diagnostics import (
@@ -175,9 +177,10 @@ def optimize_joint_with_diagnostics(
         optimizer=mpc.global_optimizer,
     )
 
-    if mpc.warm_start and mpc._last_raw_flat is not None and mpc._last_raw_flat.size >= joint_step_len:
-        one_action = np.array(mpc._last_raw_flat[:joint_step_len], dtype=np.float64)
-    else:
+    one_action = None
+    if mpc.warm_start and mpc._last_raw_flat is not None:
+        one_action = _finite_action_flat_or_none(mpc._last_raw_flat, joint_step_len)
+    if one_action is None:
         local_action = _initial_action_uniform_marginal_qrange(
             n_components=local_n,
             spread_max=mpc.spread_max,
@@ -208,6 +211,9 @@ def optimize_joint_with_diagnostics(
             mpc._optimizer = torch_mod.optim.Adam([mpc._x_torch], lr=mpc.adam_lr)
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
+    if not _torch_optimizer_state_is_finite(optimizer, torch_mod):
+        mpc._optimizer = torch_mod.optim.Adam([x_torch], lr=mpc.adam_lr)
+        optimizer = mpc._optimizer
     maker_fee = getattr(mpc.execution_model, "maker_fee", 0.0)
     local_maker_fee = getattr(mpc.execution_model, "local_maker_fee", maker_fee)
     global_maker_fee = getattr(mpc.execution_model, "global_maker_fee", maker_fee)
@@ -778,7 +784,9 @@ def optimize_joint_with_diagnostics(
                 if x_torch.grad is not None:
                     if not torch_mod.isfinite(x_torch.grad).all():
                         nonfinite_grad_count += 1
-                    torch_mod.nn.utils.clip_grad_norm_([x_torch], mpc.adam_grad_clip)
+                        x_torch.grad.detach().zero_()
+                    else:
+                        torch_mod.nn.utils.clip_grad_norm_([x_torch], mpc.adam_grad_clip)
             return loss
 
         loss = optimizer.step(closure)
@@ -798,7 +806,21 @@ def optimize_joint_with_diagnostics(
         total_sec = loop_elapsed
 
     best_flat = best_x.cpu().numpy()
-    best_joint_flat = best_flat[:joint_step_len]
+    best_joint_flat = _finite_action_flat_or_none(best_flat, joint_step_len)
+    if best_joint_flat is None:
+        best_joint_flat = _finite_action_flat_or_none(x0_arr, joint_step_len)
+    if best_joint_flat is None:
+        local_action = _initial_action_uniform_marginal_qrange(
+            n_components=local_n,
+            spread_max=mpc.spread_max,
+            l_param=local_l_param,
+        )
+        global_action = _initial_action_uniform_marginal_qrange(
+            n_components=global_n,
+            spread_max=mpc.spread_max,
+            l_param=global_l_param,
+        )
+        best_joint_flat = np.concatenate([local_action, global_action])
     local_flat, global_flat = split_venue_action_flat(best_joint_flat, local_n, global_n)
     best_local = sigmoid_action_from_flat_raw(
         local_flat,
@@ -828,11 +850,10 @@ def optimize_joint_with_diagnostics(
         mpc._last_action = best_local
         mpc._last_raw_flat = np.array(best_joint_flat, dtype=np.float64)
 
-    final_local_flat, _ = split_venue_action_flat(
-        np.array(x_torch.detach().cpu().numpy()[:joint_step_len], dtype=np.float64),
-        local_n,
-        global_n,
-    )
+    final_joint_flat = _finite_action_flat_or_none(x_torch.detach().cpu().numpy(), joint_step_len)
+    if final_joint_flat is None:
+        final_joint_flat = best_joint_flat
+    final_local_flat, _ = split_venue_action_flat(final_joint_flat, local_n, global_n)
     final_action = sigmoid_action_from_flat_raw(
         final_local_flat,
         local_n,

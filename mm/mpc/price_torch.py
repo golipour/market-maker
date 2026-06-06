@@ -664,6 +664,11 @@ class TorchConditionalMechanicalMixturePriceModel:
             "log_buy_shape": torch.log(mech_buy_shape) - torch.log(prev_buy_shape),
             "log_sell_shape": torch.log(mech_sell_shape) - torch.log(prev_sell_shape),
         }
+        mech_components = {
+            name: torch.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
+            for name, value in mech_components.items()
+        }
+        total_flow = torch.nan_to_num(torch.clamp(total_flow, min=0.0), nan=0.0, posinf=1e12, neginf=0.0)
         q_market = self._market_probability_torch(total_flow, dtype=dtype, device=device)
         if innovations is None:
             innovations = self.sample_innovations(tuple(prev_mid.shape), device=str(device), dtype=dtype)
@@ -673,9 +678,16 @@ class TorchConditionalMechanicalMixturePriceModel:
         use_market = u_market < q_market
         pred_components: dict[str, Any] = {}
         for name in self._component_names:
-            beta = torch.tensor(self._market_beta[name], dtype=dtype, device=device)
+            beta = torch.tensor(
+                np.nan_to_num(self._market_beta[name], nan=0.0, posinf=0.0, neginf=0.0),
+                dtype=dtype,
+                device=device,
+            )
             market_mean = beta[0] + beta[1] * mech_components[name]
-            refresh_mean = torch.tensor(float(self._refresh_mean[name]), dtype=dtype, device=device)
+            refresh_mean_value = float(self._refresh_mean[name])
+            if not math.isfinite(refresh_mean_value):
+                refresh_mean_value = 0.0
+            refresh_mean = torch.tensor(refresh_mean_value, dtype=dtype, device=device)
             sigma_market = torch.tensor(
                 max(self._sigma_min, math.sqrt(max(self._market_var[name], 0.0))),
                 dtype=dtype,
@@ -707,27 +719,52 @@ class TorchConditionalMechanicalMixturePriceModel:
         )
         ref_depth = torch.tensor(self._reference_vwap_depth, dtype=dtype, device=device)
         alpha = torch.tensor(self._shape_alpha, dtype=dtype, device=device)
-        buy_ratio = torch.pow(torch.clamp(buy_depth, min=0.0) / ref_depth, alpha)
-        sell_ratio = torch.pow(torch.clamp(sell_depth, min=0.0) / ref_depth, alpha)
+        buy_ratio = self._depth_shape_ratio_torch(buy_depth, ref_depth, alpha)
+        sell_ratio = self._depth_shape_ratio_torch(sell_depth, ref_depth, alpha)
         buy_vwap = pred_mid + 0.5 * pred_spread + pred_buy_shape * buy_ratio
         sell_vwap = pred_mid - 0.5 * pred_spread - pred_sell_shape * sell_ratio
-        return torch.nan_to_num(buy_vwap, nan=0.0), torch.nan_to_num(sell_vwap, nan=0.0)
+        prev_buy_vwap = prev_mid + 0.5 * prev_spread + prev_buy_shape * buy_ratio
+        prev_sell_vwap = prev_mid - 0.5 * prev_spread - prev_sell_shape * sell_ratio
+        buy_vwap = torch.where(torch.isfinite(buy_vwap), buy_vwap, prev_buy_vwap)
+        sell_vwap = torch.where(torch.isfinite(sell_vwap), sell_vwap, prev_sell_vwap)
+        return buy_vwap, sell_vwap
+
+    def _depth_shape_ratio_torch(self, depth: Any, ref_depth: Any, alpha: Any) -> Any:
+        import torch
+
+        depth = torch.nan_to_num(torch.clamp(depth, min=0.0), nan=0.0, posinf=1e12, neginf=0.0)
+        if self._shape_alpha == 0.0:
+            return torch.where(depth > 0.0, torch.ones_like(depth), torch.zeros_like(depth))
+        # For sub-linear alpha, depth**alpha has an infinite derivative at depth=0.
+        # Inventory can be exactly zero, so use a shifted power curve that remains
+        # zero at zero depth but has finite slope for autograd.
+        floor = torch.clamp(ref_depth * 1e-6, min=1e-9)
+        shifted = torch.pow((depth + floor) / ref_depth, alpha)
+        base = torch.pow(floor / ref_depth, alpha)
+        top = torch.pow((ref_depth + floor) / ref_depth, alpha)
+        return torch.clamp((shifted - base) / torch.clamp(top - base, min=1e-12), min=0.0)
 
     def _normal_logpdf(self, error: float, variance: float) -> float:
         var = max(self._sigma_min * self._sigma_min, float(variance))
         return -0.5 * (math.log(2.0 * math.pi * var) + (error * error) / var)
 
     def _market_probability_np(self, log_flow: float) -> float:
-        x = np.array([1.0, float(log_flow)], dtype=np.float64)
-        score = float(x @ self._gate_beta)
+        x = np.array([1.0, float(log_flow) if math.isfinite(float(log_flow)) else 0.0], dtype=np.float64)
+        gate_beta = np.nan_to_num(self._gate_beta, nan=0.0, posinf=20.0, neginf=-20.0)
+        score = float(x @ gate_beta)
         return min(0.999, max(0.001, float(1.0 / (1.0 + math.exp(-score)))))
 
     def _market_probability_torch(self, total_flow: Any, *, dtype: Any, device: Any) -> Any:
         import torch
 
         log_flow = torch.clamp(torch.log1p(torch.clamp(total_flow, min=0.0)), max=12.0)
-        gate_beta = torch.tensor(self._gate_beta, dtype=dtype, device=device)
+        gate_beta = torch.tensor(
+            np.nan_to_num(self._gate_beta, nan=0.0, posinf=20.0, neginf=-20.0),
+            dtype=dtype,
+            device=device,
+        )
         q_market = torch.sigmoid(gate_beta[0] + gate_beta[1] * log_flow)
+        q_market = torch.nan_to_num(q_market, nan=0.5, posinf=0.999, neginf=0.001)
         return torch.clamp(q_market, min=0.001, max=0.999)
 
     def _student_t_logpdf(self, error: float, variance: float) -> float:

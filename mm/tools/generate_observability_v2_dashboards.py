@@ -599,6 +599,20 @@ def _numeric_sql(expr: str, default: str = "0.0") -> str:
 END"""
 
 
+def _jsonb_array_or_empty_sql(expr: str) -> str:
+    return f"""CASE
+  WHEN jsonb_typeof({expr}) = 'array' THEN {expr}
+  ELSE '[]'::jsonb
+END"""
+
+
+def _jsonb_object_or_empty_sql(expr: str) -> str:
+    return f"""CASE
+  WHEN jsonb_typeof({expr}) = 'object' THEN {expr}
+  ELSE '{{}}'::jsonb
+END"""
+
+
 def _step_time_sql(t_end_expr: str) -> str:
     return f"to_timestamp(({_numeric_sql(t_end_expr, default='NULL')}) / 1000.0)"
 
@@ -2027,6 +2041,9 @@ def _latest_action_pipeline_stage_orders_sql(
     qty = _numeric_sql("o.value->>'qty'")
     axis_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
     axis_qty = _numeric_sql("axis_o.value->>'qty'")
+    orders_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', '{field}']"
+    axis_orders_expr = "l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']"
+    venue_gates_expr = "l.payload #> ARRAY['execution_gates', 'venue_gates']"
     reason_filter = ""
     if reason is not None:
         reason_filter = f"\n    AND COALESCE(o.value->>'reason', '') = '{reason}'"
@@ -2068,7 +2085,7 @@ role_exchanges AS (
          gates.key AS exchange
   FROM latest l
   CROSS JOIN LATERAL jsonb_each(
-    COALESCE(l.payload #> ARRAY['execution_gates', 'venue_gates'], '{{}}'::jsonb)
+    {_jsonb_object_or_empty_sql(venue_gates_expr)}
   ) AS gates(key, value)
   WHERE gates.value->>'role' IN ('local', 'global')
 ),
@@ -2078,7 +2095,7 @@ orders AS (
          {qty} AS value
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', '{field}'], '[]'::jsonb)
+    {_jsonb_array_or_empty_sql(orders_expr)}
   ) AS o(value)
   WHERE {side} IN ('bid', 'ask')
     AND {price} IS NOT NULL{reason_filter}{role_filter}
@@ -2088,7 +2105,7 @@ axis_points AS (
          {axis_qty} AS value
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    COALESCE(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders'], '[]'::jsonb)
+    {_jsonb_array_or_empty_sql(axis_orders_expr)}
   ) AS axis_o(value)
   WHERE {axis_price} IS NOT NULL{axis_role_filter}
 ),
@@ -2136,6 +2153,8 @@ def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str) -> str:
     side = _side_sql("o.value->>'side'")
     price = _numeric_sql("o.value->>'price'", default="NULL")
     qty = _numeric_sql("o.value->>'qty'")
+    orders_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', 'orders']"
+    venue_gates_expr = "l.payload #> ARRAY['execution_gates', 'venue_gates']"
     clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
     state_mid_path = "global_mid" if role == "global" else "mid"
     clean_bid = _numeric_sql(
@@ -2173,7 +2192,7 @@ role_exchanges AS (
          gates.key AS exchange
   FROM latest l
   CROSS JOIN LATERAL jsonb_each(
-    COALESCE(l.payload #> ARRAY['execution_gates', 'venue_gates'], '{{}}'::jsonb)
+    {_jsonb_object_or_empty_sql(venue_gates_expr)}
   ) AS gates(key, value)
   WHERE gates.value->>'role' IN ('local', 'global')
 ),
@@ -2191,7 +2210,7 @@ bid_levels AS (
          {qty} AS qty
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', 'orders'], '[]'::jsonb)
+    {_jsonb_array_or_empty_sql(orders_expr)}
   ) AS o(value)
   WHERE {side} = 'bid'
     AND {price} IS NOT NULL
@@ -2204,7 +2223,7 @@ ask_levels AS (
          {qty} AS qty
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    COALESCE(l.payload #> ARRAY['action_pipeline', '{stage}', 'orders'], '[]'::jsonb)
+    {_jsonb_array_or_empty_sql(orders_expr)}
   ) AS o(value)
   WHERE {side} = 'ask'
     AND {price} IS NOT NULL
