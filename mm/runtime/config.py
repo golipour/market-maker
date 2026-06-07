@@ -264,6 +264,40 @@ class LiquiditySourcingRuntimeConfig:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class BotRuntimeConfig:
+    """User-facing bot role assignment resolved from ``bots`` config."""
+
+    bot_id: str
+    preset: str
+    symbol: str
+    quoting_exchange: str
+    liquidity_source_exchange: str
+    reference_exchanges: tuple[str, ...] = ()
+
+    @property
+    def normalized_quoting_exchange(self) -> str:
+        return self.quoting_exchange.lower().strip()
+
+    @property
+    def normalized_liquidity_source_exchange(self) -> str:
+        return self.liquidity_source_exchange.lower().strip()
+
+    @property
+    def normalized_reference_exchanges(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(exchange.lower().strip() for exchange in self.reference_exchanges if str(exchange).strip()))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "bot_id": self.bot_id,
+            "preset": self.preset,
+            "symbol": self.symbol,
+            "quoting_exchange": self.normalized_quoting_exchange,
+            "liquidity_source_exchange": self.normalized_liquidity_source_exchange,
+            "reference_exchanges": self.normalized_reference_exchanges,
+        }
+
+
 ExecutionPlannerKind = Literal["reconcile", "replace"]
 
 
@@ -432,6 +466,7 @@ class MarketMakerRuntimeConfig:
     bus: BusRuntimeConfig = field(default_factory=BusRuntimeConfig)
     persistence: PersistenceRuntimeConfig = field(default_factory=PersistenceRuntimeConfig)
     observability: ObservabilityRuntimeConfig = field(default_factory=ObservabilityRuntimeConfig)
+    bot: BotRuntimeConfig | None = None
 
     def __post_init__(self) -> None:
         if self.local.role != "local":
@@ -575,6 +610,7 @@ class MarketMakerRuntimeConfig:
             global_venue["private"] = _private_contract(self.global_private)
             global_venue["fees"] = _venue_fee_contract(self.controller, "global")
         return {
+            "bot": self.bot.as_dict() if self.bot is not None else None,
             "venues": {
                 "local": local_venue,
                 "global": global_venue,
@@ -679,104 +715,220 @@ def load_runtime_config(path: str | Path) -> MarketMakerRuntimeConfig:
 
 
 def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeConfig:
-    local_payload, global_payload = _resolve_public_venue_payloads(payload)
-    local_private_payload, global_private_payload = _resolve_private_venue_payloads(payload)
-    liquidity_sourcing = _liquidity_sourcing_from_mapping(payload.get("liquidity_sourcing"))
+    bot, preset, local_payload, global_payload = _resolve_bot_runtime(payload)
+    local_private_payload = _exchange_private_payload(payload, bot.normalized_quoting_exchange)
+    global_private_payload = (
+        _exchange_private_payload(payload, str(global_payload["exchange"]))
+        if isinstance(global_payload, dict)
+        else None
+    )
+    liquidity_sourcing = _liquidity_sourcing_from_preset(
+        preset.get("liquidity_sourcing"),
+        has_distinct_source=(
+            bot.normalized_liquidity_source_exchange != bot.normalized_quoting_exchange
+        ),
+    )
+    controller_payload = _controller_payload_from_preset(
+        preset,
+        bot=bot,
+        local_exchange=bot.normalized_quoting_exchange,
+        global_exchange=(
+            str(global_payload["exchange"]).lower().strip()
+            if isinstance(global_payload, dict)
+            else None
+        ),
+        reference_price_source=_reference_price_source_from_bot(bot),
+        exchanges=payload.get("exchanges"),
+    )
     return MarketMakerRuntimeConfig(
         local=_source_from_mapping(local_payload, role="local"),
         global_=_source_from_mapping(global_payload, role="global") if isinstance(global_payload, dict) else None,
-        interval_ms=int(payload.get("interval_ms", 5000)),
-        max_global_lag_ms=int(payload.get("max_global_lag_ms", 2000)),
-        global_grace_ms=int(payload.get("global_grace_ms", 250)),
+        interval_ms=int(preset.get("interval_ms", payload.get("interval_ms", 5000))),
+        max_global_lag_ms=int(preset.get("max_global_lag_ms", payload.get("max_global_lag_ms", 2000))),
+        global_grace_ms=int(preset.get("global_grace_ms", payload.get("global_grace_ms", 250))),
         local_private=_private_from_mapping(local_private_payload),
         global_private=_private_from_mapping(global_private_payload),
-        controller=_controller_from_mapping(_resolve_controller_payload(payload)),
+        controller=_controller_from_mapping(controller_payload),
         liquidity_sourcing=liquidity_sourcing,
-        execution=_execution_from_mapping(payload.get("execution")),
+        execution=_execution_from_preset(preset.get("execution")),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
+        bot=bot,
     )
 
 
-def _resolve_public_venue_payloads(payload: dict[str, Any]) -> tuple[dict[str, Any], Any]:
-    venues = payload.get("venues")
-    if not isinstance(venues, dict):
-        raise ValueError("runtime config requires venues object with local venue")
-    local_payload = _public_payload_from_venue(venues.get("local"))
-    global_payload = _public_payload_from_venue(venues.get("global"))
-    if local_payload is None:
-        raise ValueError("runtime config requires venues.local")
-    return local_payload, global_payload
+def _resolve_bot_runtime(
+    payload: dict[str, Any],
+) -> tuple[BotRuntimeConfig, dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    bot_id, bot_payload = _single_bot_payload(payload.get("bots"))
+    if not isinstance(bot_payload, dict):
+        raise ValueError("bots entries must be objects")
+    preset_name = str(bot_payload.get("preset", "")).strip()
+    if not preset_name:
+        raise ValueError(f"bots.{bot_id}.preset is required")
+    presets = payload.get("strategy_presets")
+    if not isinstance(presets, dict):
+        raise ValueError("runtime config requires strategy_presets object")
+    preset = presets.get(preset_name)
+    if not isinstance(preset, dict):
+        raise ValueError(f"strategy_presets.{preset_name} is required")
+    symbol = str(bot_payload.get("symbol", "")).strip()
+    if not symbol:
+        raise ValueError(f"bots.{bot_id}.symbol is required")
+    quoting_exchange = str(bot_payload.get("quoting_exchange", "")).lower().strip()
+    if not quoting_exchange:
+        raise ValueError(f"bots.{bot_id}.quoting_exchange is required")
+    liquidity_source_exchange = str(
+        bot_payload.get("liquidity_source_exchange", quoting_exchange)
+    ).lower().strip()
+    references = bot_payload.get("reference_exchanges", ())
+    if isinstance(references, str):
+        reference_exchanges = (references,)
+    elif isinstance(references, (list, tuple)):
+        reference_exchanges = tuple(str(exchange) for exchange in references)
+    else:
+        reference_exchanges = ()
+    bot = BotRuntimeConfig(
+        bot_id=bot_id,
+        preset=preset_name,
+        symbol=symbol,
+        quoting_exchange=quoting_exchange,
+        liquidity_source_exchange=liquidity_source_exchange,
+        reference_exchanges=reference_exchanges,
+    )
+    local_payload = _exchange_market_payload(
+        payload,
+        exchange=bot.normalized_quoting_exchange,
+        symbol=bot.symbol,
+    )
+    global_exchange = _secondary_exchange_for_bot(bot)
+    global_payload = (
+        _exchange_market_payload(payload, exchange=global_exchange, symbol=bot.symbol)
+        if global_exchange is not None
+        else None
+    )
+    return bot, dict(preset), local_payload, global_payload
 
 
-def _resolve_private_venue_payloads(payload: dict[str, Any]) -> tuple[Any, Any]:
-    venues = payload.get("venues")
-    if not isinstance(venues, dict):
-        return payload.get("local_private"), payload.get("global_private")
-    local_payload = _venue_payload_from_mapping(venues.get("local"))
-    global_payload = _venue_payload_from_mapping(venues.get("global"))
-    local_private = payload.get("local_private")
-    if local_private is None and local_payload is not None:
-        local_private = local_payload.get("private")
-    if local_private is None:
-        local_private = venues.get("local_private")
-    global_private = payload.get("global_private")
-    if global_private is None and global_payload is not None:
-        global_private = global_payload.get("private")
-    if global_private is None:
-        global_private = venues.get("global_private")
-    return local_private, global_private
+def _single_bot_payload(payload: Any) -> tuple[str, dict[str, Any]]:
+    if isinstance(payload, dict):
+        if not payload:
+            raise ValueError("runtime config requires at least one bot")
+        if len(payload) != 1:
+            raise ValueError("this runtime starts one bot; use one bots entry per config file")
+        bot_id, bot_payload = next(iter(payload.items()))
+        return str(bot_id), bot_payload
+    raise ValueError("runtime config requires bots object")
 
 
-def _resolve_controller_payload(payload: dict[str, Any]) -> Any:
-    controller = payload.get("controller")
-    venues = payload.get("venues")
-    if not isinstance(venues, dict):
-        return controller
-    execution_model = _execution_model_from_venues(venues)
-    if execution_model is None:
-        return controller
+def _secondary_exchange_for_bot(bot: BotRuntimeConfig) -> str | None:
+    quoting = bot.normalized_quoting_exchange
+    source = bot.normalized_liquidity_source_exchange
+    if source and source != quoting:
+        return source
+    for exchange in bot.normalized_reference_exchanges:
+        if exchange != quoting:
+            return exchange
+    return None
+
+
+def _reference_price_source_from_bot(bot: BotRuntimeConfig) -> ReferenceVenueRole:
+    quoting = bot.normalized_quoting_exchange
+    references = bot.normalized_reference_exchanges
+    if not references or references == (quoting,):
+        return "local"
+    return "global"
+
+
+def _exchange_config(payload: dict[str, Any], exchange: str) -> dict[str, Any]:
+    exchanges = payload.get("exchanges")
+    if not isinstance(exchanges, dict):
+        raise ValueError("runtime config requires exchanges object")
+    config = exchanges.get(exchange)
+    if not isinstance(config, dict):
+        raise ValueError(f"exchanges.{exchange} is required")
+    return dict(config)
+
+
+def _exchange_market_payload(
+    payload: dict[str, Any],
+    *,
+    exchange: str,
+    symbol: str,
+) -> dict[str, Any]:
+    config = _exchange_config(payload, exchange)
+    market_data = config.get("market_data")
+    if market_data is None:
+        market_data = {}
+    if not isinstance(market_data, dict):
+        raise ValueError(f"exchanges.{exchange}.market_data must be an object")
+    out = dict(market_data)
+    out["exchange"] = exchange
+    out["symbol"] = symbol
+    instruments = config.get("instruments")
+    if isinstance(instruments, dict):
+        instrument = instruments.get(symbol)
+        if isinstance(instrument, dict):
+            out["instrument"] = instrument
+    return out
+
+
+def _exchange_private_payload(payload: dict[str, Any], exchange: str) -> Any:
+    config = _exchange_config(payload, exchange.lower().strip())
+    return config.get("private")
+
+
+def _controller_payload_from_preset(
+    preset: dict[str, Any],
+    *,
+    bot: BotRuntimeConfig,
+    local_exchange: str,
+    global_exchange: str | None,
+    reference_price_source: ReferenceVenueRole,
+    exchanges: Any,
+) -> Any:
+    controller = preset.get("controller")
     if not isinstance(controller, dict):
-        return {"execution_model": execution_model}
-    if "execution_model" in controller:
-        return controller
+        return None
     merged = dict(controller)
-    merged["execution_model"] = execution_model
+    merged.setdefault("actor_id", bot.bot_id)
+    merged["reference_price_source"] = reference_price_source
+    execution_model = _execution_model_from_exchanges(
+        exchanges,
+        local_exchange=local_exchange,
+        global_exchange=global_exchange,
+    )
+    if execution_model:
+        existing = dict(merged.get("execution_model", {})) if isinstance(merged.get("execution_model"), dict) else {}
+        existing.update(execution_model)
+        merged["execution_model"] = existing
     return merged
 
 
-def _venue_payload_from_mapping(payload: Any) -> dict[str, Any] | None:
-    return dict(payload) if isinstance(payload, dict) else None
-
-
-def _public_payload_from_venue(payload: Any) -> dict[str, Any] | None:
-    venue = _venue_payload_from_mapping(payload)
-    if venue is None:
-        return None
-    public = venue.get("public")
-    return dict(public) if isinstance(public, dict) else venue
-
-
-def _execution_model_from_venues(venues: dict[str, Any]) -> dict[str, Any] | None:
-    execution_model = dict(venues.get("execution_model", {})) if isinstance(venues.get("execution_model"), dict) else {}
-    local_fee = _maker_fee_from_venue(venues.get("local"))
-    global_fee = _maker_fee_from_venue(venues.get("global"))
+def _execution_model_from_exchanges(
+    exchanges: Any,
+    *,
+    local_exchange: str,
+    global_exchange: str | None,
+) -> dict[str, Any]:
+    if not isinstance(exchanges, dict):
+        return {}
+    out: dict[str, Any] = {"kind": "real"}
+    local_fee = _maker_fee_from_exchange(exchanges.get(local_exchange))
     if local_fee is not None:
-        execution_model.setdefault("local_maker_fee", local_fee)
-    if global_fee is not None:
-        execution_model.setdefault("global_maker_fee", global_fee)
-    if not execution_model:
-        return None
-    execution_model.setdefault("kind", "real")
-    return execution_model
+        out["local_maker_fee"] = local_fee
+    if global_exchange is not None:
+        global_fee = _maker_fee_from_exchange(exchanges.get(global_exchange))
+        if global_fee is not None:
+            out["global_maker_fee"] = global_fee
+    return out if len(out) > 1 else {}
 
 
-def _maker_fee_from_venue(payload: Any) -> float | None:
-    venue = _venue_payload_from_mapping(payload)
-    if venue is None:
+def _maker_fee_from_exchange(payload: Any) -> float | None:
+    if not isinstance(payload, dict):
         return None
-    fees = venue.get("fees")
+    fees = payload.get("fees")
     if isinstance(fees, (int, float, str)):
         return float(fees)
     if not isinstance(fees, dict):
@@ -787,21 +939,33 @@ def _maker_fee_from_venue(payload: Any) -> float | None:
     return None
 
 
-def _liquidity_sourcing_from_mapping(payload: Any) -> LiquiditySourcingRuntimeConfig:
+def _liquidity_sourcing_from_preset(
+    payload: Any,
+    *,
+    has_distinct_source: bool,
+) -> LiquiditySourcingRuntimeConfig:
     if not isinstance(payload, dict):
         return LiquiditySourcingRuntimeConfig()
-    mode = str(payload.get("mode", "single_venue"))
-    if mode not in ("single_venue", "liquidity_sourcing"):
-        raise ValueError("liquidity_sourcing.mode must be 'single_venue' or 'liquidity_sourcing'")
-    reference_venue = str(payload.get("reference_venue", "global"))
-    if reference_venue not in ("global", "local"):
-        raise ValueError("liquidity_sourcing.reference_venue must be 'global' or 'local'")
+    mode = str(payload.get("mode", "off")).strip().lower()
+    if mode not in ("off", "simulate", "live"):
+        raise ValueError("strategy preset liquidity_sourcing.mode must be 'off', 'simulate', or 'live'")
+    if mode == "off" or not has_distinct_source:
+        return LiquiditySourcingRuntimeConfig()
     return LiquiditySourcingRuntimeConfig(
-        enabled=bool(payload.get("enabled", False)),
-        mode=mode,  # type: ignore[arg-type]
-        reference_venue=reference_venue,  # type: ignore[arg-type]
-        require_global_private=bool(payload.get("require_global_private", False)),
-        global_live_orders=bool(payload.get("global_live_orders", False)),
+        enabled=True,
+        mode="liquidity_sourcing",
+        reference_venue="global",
+        require_global_private=bool(payload.get("require_source_private", False)),
+        global_live_orders=(mode == "live"),
+    )
+
+
+def _execution_from_preset(payload: Any) -> ExecutionRuntimeConfig:
+    if not isinstance(payload, dict):
+        return ExecutionRuntimeConfig()
+    return ExecutionRuntimeConfig(
+        local=_venue_execution_from_mapping(payload.get("quoting"), default_planner="reconcile"),
+        global_=_venue_execution_from_mapping(payload.get("liquidity_source"), default_planner="replace"),
     )
 
 
@@ -824,17 +988,6 @@ def _venue_execution_from_mapping(payload: Any, *, default_planner: ExecutionPla
         max_order_qty=float(max_order_qty) if max_order_qty is not None else None,
         max_quote_distance=float(max_quote_distance) if max_quote_distance is not None else None,
     )
-
-
-def _execution_from_mapping(payload: Any) -> ExecutionRuntimeConfig:
-    if not isinstance(payload, dict):
-        return ExecutionRuntimeConfig()
-    return ExecutionRuntimeConfig(
-        local=_venue_execution_from_mapping(payload.get("local"), default_planner="reconcile"),
-        global_=_venue_execution_from_mapping(payload.get("global"), default_planner="replace"),
-    )
-
-
 
 def _instrument_spec_for_source(source: MarketDataSourceConfig):
     from mm.exchanges.shared.instrument_spec_trade_stats import instrument_spec_from_trade_stats

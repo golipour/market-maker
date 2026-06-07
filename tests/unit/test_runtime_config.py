@@ -20,6 +20,16 @@ from mm.tools.print_events import build_print_queues
 from tests.unit.conftest import venues_payload
 
 
+def _with_preset(payload: dict, **updates):
+    preset = payload["strategy_presets"]["test_preset"]
+    preset.update(updates)
+    return payload
+
+
+def _with_controller(payload: dict, controller: dict):
+    return _with_preset(payload, controller=controller)
+
+
 def test_runtime_config_global_is_optional_secondary_source() -> None:
     config = MarketMakerRuntimeConfig(
         local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
@@ -81,43 +91,45 @@ def test_private_runtime_config_prefers_nobitex_api_key_auth_over_token(monkeypa
 
 
 def test_private_runtime_config_parses_fill_event_source() -> None:
-    config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "local_private": {
-                "api_token_env": "NOBITEX_API_TOKEN",
-                "fill_event_source": "open_order_delta",
-            },
-        }
-    )
+    payload = venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"})
+    payload["exchanges"]["nobitex"]["private"] = {
+        "api_token_env": "NOBITEX_API_TOKEN",
+        "fill_event_source": "open_order_delta",
+    }
+    config = runtime_config_from_mapping(payload)
 
     assert config.local_private is not None
     assert config.local_private.fill_event_source == "open_order_delta"
 
 
-def test_runtime_config_parses_private_config_nested_under_venues() -> None:
+def test_runtime_config_parses_exchange_configs_for_bot_roles() -> None:
     config = runtime_config_from_mapping(
         {
-            "venues": {
-                "local": {
-                    "public": {
-                        "exchange": "wallex",
-                        "symbol": "USDT_IRT",
-                        "poll_interval_ms": 750,
-                    },
+            "exchanges": {
+                "wallex": {
+                    "market_data": {"poll_interval_ms": 750},
                     "private": {
                         "api_token_env": "WALLEX_API_TOKEN",
                         "fill_event_source": "open_order_delta",
                     },
                     "fees": {"maker_fee": 0.0015},
                 },
-                "global": {
-                    "public": {"exchange": "nobitex", "symbol": "USDT_IRT"},
+                "nobitex": {
+                    "market_data": {},
                     "private": {"api_key_env": "NOBITEX_API_KEY"},
                     "fees": {"maker": 0.0025},
                 },
             },
-            "controller": {"enabled": True},
+            "strategy_presets": {"arb": {"controller": {"enabled": True}}},
+            "bots": {
+                "bot-1": {
+                    "preset": "arb",
+                    "symbol": "USDT_IRT",
+                    "quoting_exchange": "wallex",
+                    "liquidity_source_exchange": "nobitex",
+                    "reference_exchanges": ["nobitex"],
+                }
+            },
         }
     )
 
@@ -143,51 +155,28 @@ def test_runtime_config_parses_private_config_nested_under_venues() -> None:
     assert contract["venues"]["global"]["private"]["auth_type"] == "token"
 
 
-def test_runtime_config_parses_private_config_inside_venues_object() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "venues": {
-                "local": {"exchange": "wallex", "symbol": "USDT_IRT"},
-                "global": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-                "local_private": {"api_token_env": "WALLEX_API_TOKEN"},
-                "global_private": {"api_token_env": "NOBITEX_API_TOKEN"},
-            },
-        }
-    )
-
-    assert config.local_private is not None
-    assert config.local_private.api_token_env == "WALLEX_API_TOKEN"
-    assert config.global_private is not None
-    assert config.global_private.api_token_env == "NOBITEX_API_TOKEN"
-
-
 def test_runtime_config_rejects_private_enable_execution() -> None:
+    payload = venues_payload(local={"exchange": "wallex", "symbol": "USDT_IRT"}, global_=False)
+    payload["exchanges"]["wallex"]["private"] = {
+        "api_token_env": "WALLEX_API_TOKEN",
+        "enable_execution": True,
+    }
     with pytest.raises(ValueError, match="execution.local.enabled"):
         runtime_config_from_mapping(
-            {
-                "venues": {
-                    "local": {
-                        "public": {"exchange": "wallex", "symbol": "USDT_IRT"},
-                        "private": {"api_token_env": "WALLEX_API_TOKEN", "enable_execution": True},
-                    },
-                },
-            }
+            payload
         )
 
 
-def test_runtime_config_keeps_venues_execution_model_alias() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "venues": {
-                "local": {"exchange": "wallex", "symbol": "USDT_IRT"},
-                "execution_model": {"kind": "real", "maker_fee": 0.001},
-            },
-            "controller": {"enabled": True},
-        }
+def test_runtime_config_uses_exchange_fees_for_execution_model() -> None:
+    payload = _with_controller(
+        venues_payload(local={"exchange": "wallex", "symbol": "USDT_IRT"}, global_=False),
+        {"enabled": True},
     )
+    payload["exchanges"]["wallex"]["fees"] = {"maker_fee": 0.001}
+    config = runtime_config_from_mapping(payload)
 
     assert config.controller is not None
-    assert config.controller.execution_model == {"kind": "real", "maker_fee": 0.001}
+    assert config.controller.execution_model == {"kind": "real", "local_maker_fee": 0.001}
 
 
 def test_private_runtime_config_rejects_invalid_fill_event_source() -> None:
@@ -227,14 +216,14 @@ async def test_persistence_enabled_with_database_url_builds_postgres_writer(monk
 
 def test_controller_placement_settings_from_mapping() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "controller": {
+        _with_controller(
+            venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+            {
                 "enabled": True,
                 "placement_timeout_ms": 2500,
                 "placement_max_concurrency": 4,
             },
-        }
+        )
     )
     assert config.controller is not None
     assert config.controller.placement_timeout_ms == 2500
@@ -243,41 +232,44 @@ def test_controller_placement_settings_from_mapping() -> None:
 
 def test_controller_action_start_after_steps_from_mapping() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "interval_ms": 1000,
-            "controller": {"enabled": True, "action_start_after_steps": 15},
-        }
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {"enabled": True, "action_start_after_steps": 15},
+        )
     )
     assert config.controller is not None
     assert config.controller.action_start_after_steps == 15
 
 
 def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
+    payload = _with_preset(
+        venues_payload(
+            local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+            global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+        ),
+        interval_ms=2500,
+    )
+    payload["persistence"] = {
+        "enabled": True,
+        "topics": [
+            "{local_market_event_topic}",
+            "{global_market_event_topic}",
+            "{joint_frame_topic}",
+            "{local_execution_orders_topic}",
+            "{global_execution_state_topic}",
+            "{local_private_snapshot_topic}",
+            "{local_private_errors_topic}",
+            "{global_private_snapshot_topic}",
+            "{global_private_errors_topic}",
+            "{execution_errors_topic}",
+            "{ledger_topic}",
+        ],
+    }
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(
-                local={"exchange": "nobitex", "symbol": "USDT_IRT"},
-                global_={"exchange": "wallex", "symbol": "USDT_IRT"},
-            ),
-            "interval_ms": 2500,
-            "persistence": {
-                "enabled": True,
-                "topics": [
-                    "{local_market_event_topic}",
-                    "{global_market_event_topic}",
-                    "{joint_frame_topic}",
-                    "{local_execution_orders_topic}",
-                    "{global_execution_state_topic}",
-                    "{local_private_snapshot_topic}",
-                    "{local_private_errors_topic}",
-                    "{global_private_snapshot_topic}",
-                    "{global_private_errors_topic}",
-                    "{execution_errors_topic}",
-                    "{ledger_topic}",
-                ],
-            },
-        }
+        payload
     )
 
     assert config.resolved_persistence_topics == (
@@ -297,16 +289,19 @@ def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
 
 
 def test_persistence_topics_default_when_unset() -> None:
-    config = runtime_config_from_mapping(
-        {
-            **venues_payload(
+    payload = _with_controller(
+        _with_preset(
+            venues_payload(
                 local={"exchange": "nobitex", "symbol": "USDT_IRT"},
                 global_={"exchange": "wallex", "symbol": "USDT_IRT"},
             ),
-            "interval_ms": 2500,
-            "controller": {"enabled": True, "actor_id": "mpc-controller"},
-            "persistence": {"enabled": True},
-        }
+            interval_ms=2500,
+        ),
+        {"enabled": True, "actor_id": "mpc-controller"},
+    )
+    payload["persistence"] = {"enabled": True}
+    config = runtime_config_from_mapping(
+        payload
     )
 
     assert config.persistence.topics == ()
@@ -335,14 +330,16 @@ def test_persistence_topic_template_rejects_unknown_placeholder() -> None:
 
 def test_controller_reconcile_from_mapping() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "interval_ms": 1000,
-            "controller": {
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {
                 "enabled": True,
                 "reconcile": {"price_tol_bps": 5.0, "qty_tol_rel": 0.01},
             },
-        }
+        )
     )
     assert config.controller is not None
     assert config.controller.reconcile.price_tol_bps == 5.0
@@ -351,11 +348,13 @@ def test_controller_reconcile_from_mapping() -> None:
 
 def test_controller_reconcile_defaults_when_missing() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "interval_ms": 1000,
-            "controller": {"enabled": True},
-        }
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {"enabled": True},
+        )
     )
     assert config.controller is not None
     assert config.controller.reconcile.price_tol_bps == 0.0
@@ -364,11 +363,13 @@ def test_controller_reconcile_defaults_when_missing() -> None:
 
 def test_controller_action_start_after_steps_clamps_negative() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"role": "local", "exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "interval_ms": 1000,
-            "controller": {"enabled": True, "action_start_after_steps": -3},
-        }
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {"enabled": True, "action_start_after_steps": -3},
+        )
     )
     assert config.controller is not None
     assert config.controller.action_start_after_steps == 0

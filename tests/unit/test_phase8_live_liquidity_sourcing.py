@@ -94,19 +94,17 @@ def _runtime_binding() -> MarketMakerRuntimeConfig:
 
 
 def test_execution_config_parses_per_venue_policies() -> None:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+        global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+    )
+    payload["strategy_presets"]["test_preset"]["execution"] = {
+        "quoting": {"planner": "reconcile"},
+        "liquidity_source": {"planner": "replace", "max_order_qty": 0.25, "max_quote_distance": 5.0},
+    }
+    payload["strategy_presets"]["test_preset"]["liquidity_sourcing"] = {"mode": "simulate"}
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
-            "execution": {
-                "local": {"planner": "reconcile"},
-                "global": {"planner": "replace", "max_order_qty": 0.25, "max_quote_distance": 5.0},
-            },
-            "liquidity_sourcing": {
-                "enabled": True,
-                "mode": "liquidity_sourcing",
-                "global_live_orders": False,
-            },
-        }
+        payload
     )
 
     assert config.execution.local.planner == "reconcile"

@@ -112,7 +112,17 @@ def _bus_config_from_env() -> BusRuntimeConfig:
     kind = os.environ.get("MM_BUS_KIND", "memory").strip() or "memory"
     return runtime_config_from_mapping(
         {
-            "venues": {"local": {"exchange": "admin", "symbol": "ADMIN"}},
+            "exchanges": {"admin": {"market_data": {}}},
+            "strategy_presets": {"admin": {"controller": {"enabled": False}}},
+            "bots": {
+                "admin": {
+                    "preset": "admin",
+                    "symbol": "ADMIN",
+                    "quoting_exchange": "admin",
+                    "liquidity_source_exchange": "admin",
+                    "reference_exchanges": ["admin"],
+                }
+            },
             "bus": {
                 "kind": kind,
                 "redis_url": os.environ.get("MM_BUS_REDIS_URL", "redis://localhost:6379/0"),

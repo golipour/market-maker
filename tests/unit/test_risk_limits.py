@@ -11,6 +11,11 @@ from tests.unit.conftest import venues_payload
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, RiskRuntimeConfig, runtime_config_from_mapping
 
 
+def _with_controller(payload: dict, controller: dict) -> dict:
+    payload["strategy_presets"]["test_preset"]["controller"] = controller
+    return payload
+
+
 def _event(t_end_ms: int = 1000) -> MarketEvent:
     return MarketEvent(
         exchange="nobitex",
@@ -34,9 +39,9 @@ def _private(ts: int = 1000) -> PrivateStateSnapshot:
 
 def test_risk_config_uses_nested_local_limits() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
-            "controller": {
+        _with_controller(
+            venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
+            {
                 "enabled": True,
                 "risk": {
                     "enabled": True,
@@ -47,7 +52,7 @@ def test_risk_config_uses_nested_local_limits() -> None:
                     },
                 },
             },
-        }
+        )
     )
     assert config.controller is not None
     assert config.controller.risk.local.max_inventory == 500.0
@@ -57,12 +62,12 @@ def test_risk_config_uses_nested_local_limits() -> None:
 
 def test_risk_config_uses_same_fields_for_global_limits() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(
+        _with_controller(
+            venues_payload(
                 local={"exchange": "nobitex", "symbol": "BTC_IRT"},
                 global_={"exchange": "wallex", "symbol": "BTC_IRT"},
             ),
-            "controller": {
+            {
                 "enabled": True,
                 "risk": {
                     "global": {
@@ -72,7 +77,7 @@ def test_risk_config_uses_same_fields_for_global_limits() -> None:
                     },
                 },
             },
-        }
+        )
     )
 
     assert config.controller.risk.global_.max_inventory == 600.0

@@ -30,6 +30,15 @@ from mm.runtime.config import (
 EXAMPLE_CONFIG = Path(__file__).resolve().parents[2] / "mm/configs/market_maker.runtime.example.json"
 
 
+def _with_preset(payload: dict, **updates):
+    payload["strategy_presets"]["test_preset"].update(updates)
+    return payload
+
+
+def _with_controller(payload: dict, controller: dict):
+    return _with_preset(payload, controller=controller)
+
+
 def _market_event(*, exchange: str = "nobitex", symbol: str = "USDT_IRT") -> MarketEvent:
     book = RawOrderbook(
         exchange=exchange,
@@ -55,29 +64,26 @@ def _market_event(*, exchange: str = "nobitex", symbol: str = "USDT_IRT") -> Mar
     )
 
 
-def test_venues_local_global_config_aliases() -> None:
-    config = runtime_config_from_mapping(
-        {
-            "venues": {
-                "local": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-                "global": {"exchange": "wallex", "symbol": "USDT_IRT"},
-            },
-            "local_private": {"api_token_env": "NOBITEX_API_TOKEN"},
-            "global_private": {"api_token_env": "WALLEX_API_TOKEN"},
-        }
+def test_bot_assigns_quoting_and_liquidity_source_exchanges() -> None:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+        global_={"exchange": "wallex", "symbol": "USDT_IRT"},
     )
+    payload["exchanges"]["nobitex"]["private"] = {"api_token_env": "NOBITEX_API_TOKEN"}
+    payload["exchanges"]["wallex"]["private"] = {"api_token_env": "WALLEX_API_TOKEN"}
+    config = runtime_config_from_mapping(payload)
 
     assert config.local.normalized_exchange() == "nobitex"
     assert config.global_ is not None
     assert config.global_.normalized_exchange() == "wallex"
-    assert config.local_private is config.local_private
-    assert config.global_private is config.global_private
+    assert config.local_private is not None
+    assert config.global_private is not None
 
 
 def test_top_level_venue_alias_keys_rejected() -> None:
     old_local_key = "pri" + "mary"
     old_global_key = "he" + "dge"
-    with pytest.raises(ValueError, match="venues object"):
+    with pytest.raises(ValueError, match="bots object"):
         runtime_config_from_mapping(
             {
                 old_local_key: {"exchange": "nobitex", "symbol": "USDT_IRT"},
@@ -98,16 +104,15 @@ def test_liquidity_sourcing_config_defaults() -> None:
 
 
 def test_liquidity_sourcing_config_from_mapping() -> None:
+    payload = _with_preset(
+        venues_payload(
+            local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+            global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+        ),
+        liquidity_sourcing={"mode": "simulate", "require_source_private": True},
+    )
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-            "liquidity_sourcing": {
-                "enabled": True,
-                "mode": "liquidity_sourcing",
-                "reference_venue": "global",
-                "require_global_private": True,
-            },
-        }
+        payload
     )
 
     assert config.liquidity_sourcing.enabled is True
@@ -118,65 +123,65 @@ def test_liquidity_sourcing_config_from_mapping() -> None:
 def test_liquidity_sourcing_invalid_mode_raises() -> None:
     with pytest.raises(ValueError, match="liquidity_sourcing.mode"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "liquidity_sourcing": {"mode": "invalid"},
-            }
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                liquidity_sourcing={"mode": "invalid"},
+            )
         )
 
 
 def test_controller_optimizer_n_components_must_be_venue_scoped() -> None:
     with pytest.raises(ValueError, match="optimizer.local/global"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {
                     "enabled": True,
                     "optimizer": {
                         "kind": "monte_carlo_mpc_tensor_batched",
                         "n_components": 4,
                     },
                 },
-            }
+            )
         )
 
 
 def test_removed_controller_model_config_names_are_rejected() -> None:
     with pytest.raises(ValueError, match="local_price_model"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {
                     "enabled": True,
                     "price_model": {"kind": "residual"},
                     "market_flow_model": {"kind": "hurdle_lognormal"},
                 },
-            }
+            )
         )
 
 
 def test_global_model_config_is_not_nested_under_optimizer() -> None:
     with pytest.raises(ValueError, match="directly under controller"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {
                     "enabled": True,
                     "optimizer": {
                         "kind": "monte_carlo_mpc_tensor_batched",
                         "global_market_flow_model": {"kind": "hurdle_lognormal"},
                     },
                 },
-            }
+            )
         )
 
 
 def test_flat_venue_optimizer_config_names_are_rejected() -> None:
     with pytest.raises(ValueError, match="optimizer.local/global"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {
                     "enabled": True,
                     "optimizer": {
                         "kind": "monte_carlo_mpc_tensor_batched",
@@ -184,16 +189,16 @@ def test_flat_venue_optimizer_config_names_are_rejected() -> None:
                         "quote_size_max_per_side": 10.0,
                     },
                 },
-            }
+            )
         )
 
 
 def test_removed_nested_venue_optimizer_aliases_are_rejected() -> None:
     with pytest.raises(ValueError, match="removed venue optimizer aliases"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {
                     "enabled": True,
                     "optimizer": {
                         "kind": "monte_carlo_mpc_tensor_batched",
@@ -204,36 +209,40 @@ def test_removed_nested_venue_optimizer_aliases_are_rejected() -> None:
                         },
                     },
                 },
-            }
+            )
         )
 
 
-def test_controller_reference_price_source_is_validated() -> None:
-    config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-            "controller": {"enabled": True, "reference_price_source": "local"},
-        }
+def test_controller_reference_price_source_is_derived_from_bot_references() -> None:
+    local = runtime_config_from_mapping(
+        _with_controller(
+            venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+            {"enabled": True},
+        )
     )
-    assert config.controller is not None
-    assert config.controller.reference_price_source == "local"
-
-    with pytest.raises(ValueError, match="reference_price_source"):
-        runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {"enabled": True, "reference_price_source": "mid"},
-            }
+    external = runtime_config_from_mapping(
+        _with_controller(
+            venues_payload(
+                local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+                global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+            ),
+            {"enabled": True},
         )
+    )
+
+    assert local.controller is not None
+    assert external.controller is not None
+    assert local.controller.reference_price_source == "local"
+    assert external.controller.reference_price_source == "global"
 
 
 def test_controller_fixed_vwap_depth_is_rejected() -> None:
     with pytest.raises(ValueError, match="vwap_depth"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
-                "controller": {"enabled": True, "vwap_depth": 100.0},
-            }
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "USDT_IRT"}, global_=False),
+                {"enabled": True, "vwap_depth": 100.0},
+            )
         )
 
 
@@ -255,7 +264,7 @@ def test_runtime_contract_includes_venues() -> None:
 def test_example_config_loads_liquidity_sourcing() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.liquidity_sourcing.enabled is False
+    assert config.liquidity_sourcing.enabled is True
     assert config.liquidity_sourcing.mode == "liquidity_sourcing"
     assert config.controller is not None
     assert config.controller.enabled is True

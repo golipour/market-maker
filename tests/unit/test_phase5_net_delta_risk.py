@@ -636,14 +636,13 @@ def test_replace_rejection_approves_empty_cancel_only_book() -> None:
 
 
 def test_risk_config_parses_engine_field() -> None:
+    payload = venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"})
+    payload["strategy_presets"]["test_preset"]["controller"] = {
+        "enabled": True,
+        "risk": {"enabled": True, "engine": "net_delta"},
+    }
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "controller": {
-                "enabled": True,
-                "risk": {"enabled": True, "engine": "net_delta"},
-            },
-        }
+        payload
     )
     assert config.controller is not None
     assert config.controller.risk.engine == "net_delta"

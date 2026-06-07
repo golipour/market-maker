@@ -6,7 +6,7 @@ Runtime behavior is driven by a **JSON config file** plus a **repository-root `.
 
 | File | Purpose |
 |------|---------|
-| `mm/configs/market_maker.runtime.example.json` | Reference runtime config (Nobitex local + Wallex global, live liquidity sourcing) |
+| `mm/configs/market_maker.runtime.example.json` | Reference bot/preset runtime config |
 | `.env.example` | Template for tokens and `MM_*` env vars |
 | `.env` | Local secrets (gitignored); loaded by `mm.env_loader.load_mm_env()` |
 
@@ -25,60 +25,38 @@ CLI flags on `print_events` can override exchange/symbol/interval when not using
 
 | Section | Type | Description |
 |---------|------|-------------|
-| `venues.local` | object | **Required.** Local distribution venue |
-| `venues.global` | object | Optional global liquidity source / reference venue |
-| `interval_ms` | int | Frame and market-event interval (e.g. `10000`) |
-| `max_global_lag_ms` | int | Max allowed global `t_end_ms` lag vs local |
-| `global_grace_ms` | int | Wait time for global event alignment |
-| `liquidity_sourcing` | object | Single-venue vs joint-venue mode |
-| `execution` | object | Per-venue planner policies and caps |
-| `local_private` | object | API token, poll, execution for local venue |
-| `global_private` | object | Same for global venue |
-| `controller` | object | MPC controller (optional) |
+| `exchanges` | object | Exchange-level market data, private credentials, and default fees |
+| `strategy_presets` | object | Reusable strategy definitions: timing, controller, optimizer, risk, execution, liquidity sourcing |
+| `bots` | object | One bot per runtime file: preset, symbol, quoting exchange, liquidity source exchange, reference exchanges |
 | `bus` | object | `memory` or `redis_streams` |
 | `persistence` | object | Postgres and/or Parquet |
 | `observability` | object | Metrics, logs, OTLP |
 
 Loader: `mm.runtime.config.load_runtime_config(path)`.
 
-Use `venues.local` and optional `venues.global`; top-level venue aliases are
-rejected.
+Current runtime starts one bot per config file. Multiple bot entries are rejected
+until the scheduler grows true multi-bot orchestration.
 
-### Venues and private credentials
+### Exchanges
 
 ```json
 {
-  "venues": {
-    "local": {
-      "exchange": "nobitex",
-      "symbol": "USDT_IRT",
-      "mode": "rest",
-      "depth_limit": 100,
-      "trades_limit": 200,
-      "poll_interval_ms": 1000
-    },
-    "global": {
-      "exchange": "wallex",
-      "symbol": "USDT_IRT",
-      "mode": "rest",
-      "depth_limit": 100,
-      "trades_limit": 200,
-      "poll_interval_ms": 1000
+  "exchanges": {
+    "nobitex": {
+      "market_data": {
+        "mode": "rest",
+        "depth_limit": 100,
+        "trades_limit": 200,
+        "poll_interval_ms": 1000
+      },
+      "private": {
+        "mode": "rest",
+        "api_token_env": "NOBITEX_API_TOKEN",
+        "poll_interval_ms": 10000,
+        "fill_event_source": "exchange_fill_history"
+      },
+      "fees": {"maker_fee": 0.0015}
     }
-  },
-  "local_private": {
-    "mode": "rest",
-    "api_token_env": "NOBITEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true,
-    "fill_event_source": "exchange_fill_history"
-  },
-  "global_private": {
-    "mode": "rest",
-    "api_token_env": "WALLEX_API_TOKEN",
-    "poll_interval_ms": 10000,
-    "enable_execution": true,
-    "fill_event_source": "exchange_fill_history"
   }
 }
 ```
@@ -90,52 +68,69 @@ private key is used locally to sign requests with Ed25519.
 | Field | Effect |
 |-------|--------|
 | `api_token` / `api_token_env` | Credentials for private REST |
-| `enable_execution` | If true and token present, creates `OrderManager` + execution reconciler |
 | `fill_event_source` | One of `exchange_fill_history` or `open_order_delta`; controls which source publishes `private:state:{exchange}:fills` |
 
 Without token, private reconciler is skipped and **no live orders** on that exchange.
 
-### Liquidity sourcing
+### Bots
 
 ```json
-"liquidity_sourcing": {
-  "enabled": true,
-  "mode": "liquidity_sourcing",
-  "reference_venue": "global",
-  "require_global_private": false,
-  "global_live_orders": false
+"bots": {
+  "mpc-controller": {
+    "preset": "thin_local_liquidity_weighted_mpc",
+    "symbol": "USDT_IRT",
+    "quoting_exchange": "nobitex",
+    "liquidity_source_exchange": "tabdeal",
+    "reference_exchanges": ["tabdeal", "wallex", "nobitex"]
+  }
 }
 ```
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `enabled` | `false` | Master switch for joint-venue architecture |
-| `mode` | `single_venue` | `liquidity_sourcing` enables joint MPC and dual target books |
-| `reference_venue` | `global` | Which venue supplies consolidated mark price |
-| `require_global_private` | `false` | Gate global wallet freshness when global orders are emitted |
-| `global_live_orders` | `false` | Allow live resting orders on the global venue |
+| `preset` | required | Name under `strategy_presets` |
+| `symbol` | required | Strategy symbol for every selected exchange |
+| `quoting_exchange` | required | Exchange where this bot builds the local/quoting target book |
+| `liquidity_source_exchange` | quoting exchange | Exchange used as current secondary/source venue |
+| `reference_exchanges` | quoting exchange | Ordered fair-value/reference candidates; current engine maps external references to the internal global slot |
 
-### Execution planners
+### Strategy Presets
 
 ```json
-"execution": {
-  "local": {"planner": "replace"},
-  "global": {
-    "planner": "replace",
-    "max_order_qty": 0.5,
-    "max_quote_distance": 10.0
+"strategy_presets": {
+  "thin_local_liquidity_weighted_mpc": {
+    "interval_ms": 10000,
+    "max_global_lag_ms": 2000,
+    "global_grace_ms": 250,
+    "liquidity_sourcing": {"mode": "simulate"},
+    "execution": {
+      "quoting": {"enabled": false, "planner": "replace"},
+      "liquidity_source": {"enabled": false, "planner": "replace"}
+    },
+    "controller": {
+      "enabled": true,
+      "optimizer": {"kind": "monte_carlo_mpc_tensor_batched"}
+    }
   }
 }
 ```
 
 | Field | Notes |
 |-------|--------|
+| `liquidity_sourcing.mode` | `off`, `simulate`, or `live`; `simulate/live` require a distinct liquidity source exchange |
+| `execution.quoting` | Planner/caps for the quoting exchange |
+| `execution.liquidity_source` | Planner/caps for the liquidity source exchange |
+| `controller` | MPC controller config, including risk/models/optimizer |
 | `planner` | `reconcile` (keep within tolerance) or `replace` (cancel-all then place) |
 | `observe_only` | Per-venue dry-run override |
 | `max_order_qty` | Source-venue size cap (global venue) |
 | `max_quote_distance` | Max quote spread from mid for global quotes |
 
 ## Controller (MPC)
+
+Controller config lives under a strategy preset, not at top level. The bot role
+assignment derives internal `reference_price_source`: all-local references map
+to `local`, while any external reference maps to `global`.
 
 ```json
 "controller": {
@@ -166,7 +161,6 @@ Without token, private reconciler is skipped and **no live orders** on that exch
       "max_private_state_age_ms": 120000
     }
   },
-  "reference_price_source": "global",
   "local_price_model": {"kind": "residual", "residual_decay": 0.95},
   "local_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},
   "global_market_flow_model": {"kind": "hurdle_lognormal", "decay": 0.95},

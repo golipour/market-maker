@@ -1,4 +1,4 @@
-"""Phase 0 regression tests: lock venues.local/global config loading."""
+"""Phase 0 regression tests: lock bot/preset runtime config loading."""
 
 from __future__ import annotations
 
@@ -12,28 +12,22 @@ from mm.runtime.config import (
     load_runtime_config,
     runtime_config_from_mapping,
 )
+from tests.unit.conftest import venues_payload
 
 EXAMPLE_CONFIG = Path(__file__).resolve().parents[2] / "mm/configs/market_maker.runtime.example.json"
 
 
-def _venues_config(*, global_: bool = True) -> dict:
-    payload = {
-        "venues": {
-            "local": {"exchange": "nobitex", "symbol": "USDT_IRT", "mode": "rest"},
-        },
-        "interval_ms": 5000,
-    }
-    if global_:
-        payload["venues"]["global"] = {
-            "exchange": "wallex",
-            "symbol": "USDT_IRT",
-            "mode": "rest",
-        }
+def _runtime_payload(*, global_: bool = True) -> dict:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "USDT_IRT", "mode": "rest"},
+        global_={"exchange": "wallex", "symbol": "USDT_IRT", "mode": "rest"} if global_ else False,
+    )
+    payload["strategy_presets"]["test_preset"]["interval_ms"] = 5000
     return payload
 
 
 def test_single_venue_config_loads_without_global() -> None:
-    config = runtime_config_from_mapping(_venues_config(global_=False))
+    config = runtime_config_from_mapping(_runtime_payload(global_=False))
 
     assert config.global_ is None
     assert config.local.normalized_exchange() == "nobitex"
@@ -50,20 +44,21 @@ def test_single_venue_config_loads_without_global() -> None:
 def test_local_plus_global_config_loads() -> None:
     config = runtime_config_from_mapping(
         {
-            **_venues_config(),
-            "interval_ms": 10000,
-            "max_global_lag_ms": 2000,
-            "global_grace_ms": 250,
-            "local_private": {"api_token_env": "NOBITEX_API_TOKEN"},
-            "global_private": {"api_token_env": "WALLEX_API_TOKEN"},
-            "controller": {
+            **_runtime_payload(),
+            "strategy_presets": {
+                "test_preset": {
+                    "interval_ms": 10000,
+                    "max_global_lag_ms": 2000,
+                    "global_grace_ms": 250,
+                    "controller": {
                 "enabled": True,
                 "actor_id": "mpc-controller",
                 "reconcile": {"price_tol_bps": 10.0, "qty_tol_rel": 0.01},
             },
+                }
+            },
         }
     )
-
     assert config.global_ is not None
     assert config.global_.role == "global"
     assert config.global_.normalized_exchange() == "wallex"
@@ -81,14 +76,14 @@ def test_local_plus_global_config_loads() -> None:
 def test_example_runtime_config_loads() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.local.normalized_exchange() == "wallex"
+    assert config.local.normalized_exchange() == "nobitex"
     assert config.local.symbol == "USDT_IRT"
-    assert config.binding.local.exchange == "wallex"
+    assert config.binding.local.exchange == "nobitex"
     assert config.binding.local.symbol == "USDT_IRT"
     assert config.global_ is not None
-    assert config.global_.normalized_exchange() == "nobitex"
+    assert config.global_.normalized_exchange() == "tabdeal"
     assert config.binding.global_ is not None
-    assert config.binding.global_.exchange == "nobitex"
+    assert config.binding.global_.exchange == "tabdeal"
     assert config.binding.global_.symbol == "USDT_IRT"
     assert config.interval_ms == 10000
     assert config.controller is not None
@@ -97,24 +92,24 @@ def test_example_runtime_config_loads() -> None:
     assert config.controller.action_start_after_steps == 10
     assert config.controller.execution_model == {
         "kind": "real",
-        "local_maker_fee": 0.0015,
-        "global_maker_fee": 0.0025,
+        "local_maker_fee": 0.000015,
+        "global_maker_fee": 0.003,
     }
-    assert config.liquidity_sourcing.enabled is False
+    assert config.liquidity_sourcing.enabled is True
     assert config.liquidity_sourcing.global_live_orders is False
-    assert config.execution.local.enabled is True
-    assert config.execution.global_.enabled is True
+    assert config.execution.local.enabled is False
+    assert config.execution.global_.enabled is False
     assert config.execution.local.planner == "replace"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
     assert config.persistence.topics == ()
     assert config.resolved_persistence_topics == ()
-    assert "market:events:wallex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "market:events:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
-    assert "strategy:joint:frames:wallex:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "market:events:tabdeal:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
     assert "execution:errors" in config.effective_persistence_topics
-    assert "private:state:wallex:errors" in config.effective_persistence_topics
     assert "private:state:nobitex:errors" in config.effective_persistence_topics
+    assert "private:state:tabdeal:errors" in config.effective_persistence_topics
 
 
 def test_single_venue_runtime_config_dataclass() -> None:
@@ -131,23 +126,19 @@ def test_single_venue_runtime_config_dataclass() -> None:
 @pytest.mark.parametrize(
     ("mapping", "expected_joint_topic"),
     [
-        (
-            {
-                "venues": {"local": {"exchange": "nobitex", "symbol": "BTC_IRT"}},
-                "interval_ms": 1000,
-            },
-            "strategy:joint:frames:nobitex:BTC_IRT:1000",
-        ),
-        (
-            {
-                "venues": {
-                    "local": {"exchange": "nobitex", "symbol": "USDT_IRT"},
-                    "global": {"exchange": "wallex", "symbol": "USDT_IRT"},
-                },
-                "interval_ms": 10000,
-            },
-            "strategy:joint:frames:nobitex:USDT_IRT:10000",
-        ),
+            (
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False)
+                | {"strategy_presets": {"test_preset": {"interval_ms": 1000}}},
+                "strategy:joint:frames:nobitex:BTC_IRT:1000",
+            ),
+            (
+                venues_payload(
+                    local={"exchange": "nobitex", "symbol": "USDT_IRT"},
+                    global_={"exchange": "wallex", "symbol": "USDT_IRT"},
+                )
+                | {"strategy_presets": {"test_preset": {"interval_ms": 10000}}},
+                "strategy:joint:frames:nobitex:USDT_IRT:10000",
+            ),
     ],
 )
 def test_config_joint_frame_topic_derived_from_local(mapping: dict, expected_joint_topic: str) -> None:

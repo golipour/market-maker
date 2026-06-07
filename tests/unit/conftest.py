@@ -1,4 +1,4 @@
-"""Shared helpers for unit tests (venues.local/global config shape)."""
+"""Shared helpers for unit tests."""
 
 from __future__ import annotations
 
@@ -22,12 +22,60 @@ def venues_payload(
     **extra: Any,
 ) -> dict[str, Any]:
     local_cfg = dict(local or {"exchange": "nobitex", "symbol": "BTC_IRT"})
-    venues: dict[str, Any] = {"local": local_cfg}
-    if global_ is False:
-        pass
-    elif global_ is not None:
-        venues["global"] = dict(global_)
-    return {"venues": venues, **extra}
+    local_exchange = str(local_cfg.get("exchange", "nobitex")).lower()
+    symbol = str(local_cfg.get("symbol", "BTC_IRT"))
+    global_cfg = None if global_ is False else dict(global_ or {})
+    global_exchange = str(global_cfg.get("exchange", "wallex")).lower() if global_cfg is not None else local_exchange
+    exchanges: dict[str, Any] = {
+        local_exchange: {
+            "market_data": {
+                key: value
+                for key, value in local_cfg.items()
+                if key
+                in {
+                    "mode",
+                    "depth_limit",
+                    "trades_limit",
+                    "poll_interval_ms",
+                    "instrument",
+                }
+            }
+        }
+    }
+    if global_cfg is not None:
+        exchanges[global_exchange] = {
+            "market_data": {
+                key: value
+                for key, value in global_cfg.items()
+                if key
+                in {
+                    "mode",
+                    "depth_limit",
+                    "trades_limit",
+                    "poll_interval_ms",
+                    "instrument",
+                }
+            }
+        }
+    return {
+        "exchanges": exchanges,
+        "strategy_presets": {
+            "test_preset": {
+                "controller": {"enabled": False},
+                "liquidity_sourcing": {"mode": "off"},
+            }
+        },
+        "bots": {
+            "test-bot": {
+                "preset": "test_preset",
+                "symbol": symbol,
+                "quoting_exchange": local_exchange,
+                "liquidity_source_exchange": global_exchange,
+                "reference_exchanges": [global_exchange] if global_exchange != local_exchange else [local_exchange],
+            }
+        },
+        **extra,
+    }
 
 
 def strategy_decision_with_joint(

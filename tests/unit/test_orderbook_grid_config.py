@@ -6,6 +6,11 @@ from mm.runtime.config import OrderbookGridConfig, runtime_config_from_mapping
 from tests.unit.conftest import venues_payload
 
 
+def _with_controller(payload: dict, controller: dict) -> dict:
+    payload["strategy_presets"]["test_preset"]["controller"] = controller
+    return payload
+
+
 def test_orderbook_grid_levels_and_ladder() -> None:
     grid = OrderbookGridConfig(spread_max=2000.0, spread_step=100.0)
     assert grid.levels == 20
@@ -29,13 +34,13 @@ def test_orderbook_grid_contract() -> None:
 
 def test_runtime_parses_orderbook_grid_spread_fields() -> None:
     config = runtime_config_from_mapping(
-        {
-            **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "controller": {
+        _with_controller(
+            venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+            {
                 "enabled": True,
                 "orderbook_grid": {"spread_max": 500.0, "spread_step": 50.0},
             },
-        }
+        )
     )
     assert config.controller is not None
     assert config.controller.orderbook_grid.spread_max == 500.0
@@ -46,10 +51,10 @@ def test_runtime_parses_orderbook_grid_spread_fields() -> None:
 def test_orderbook_grid_requires_spread_fields() -> None:
     with pytest.raises(ValueError, match="missing required keys"):
         runtime_config_from_mapping(
-            {
-                **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
-                "controller": {"enabled": True, "orderbook_grid": {"spread_max": 100.0}},
-            }
+            _with_controller(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}, global_=False),
+                {"enabled": True, "orderbook_grid": {"spread_max": 100.0}},
+            )
         )
 
 
