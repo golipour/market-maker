@@ -128,6 +128,8 @@ services:
     environment:
       # For SQL/datasource debugging in container logs, temporarily set: GF_LOG_LEVEL: debug
       GF_LOG_LEVEL: warn
+      # Quiet stale browser-session cookie rotation noise in local Grafana logs.
+      GF_LOG_FILTERS: authn.service:error
       # Quiet offline / restricted-network installs (no grafana.com calls for updates/plugins news).
       GF_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"

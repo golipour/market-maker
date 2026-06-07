@@ -1,6 +1,8 @@
 server:
   http_listen_port: 3200
   grpc_listen_port: 9095
+  # Local dev: hide idle backend-scheduler "no jobs found" warnings.
+  log_level: error
 
 usage_report:
   reporting_enabled: false
