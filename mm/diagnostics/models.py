@@ -74,7 +74,6 @@ class OptimizerDiagnostics:
 class ActionPipelineDiagnostics:
     continuous: dict[str, Any] = field(default_factory=dict)
     ladder: dict[str, Any] = field(default_factory=dict)
-    venue_quantized: dict[str, Any] = field(default_factory=dict)
     capped: dict[str, Any] = field(default_factory=dict)
     target_book: dict[str, Any] = field(default_factory=dict)
     risk_approved_target: dict[str, Any] = field(default_factory=dict)
@@ -241,7 +240,6 @@ def _action_pipeline_payload(pipeline: ActionPipelineDiagnostics) -> dict[str, A
     return {
         "continuous": dict(pipeline.continuous),
         "ladder": dict(pipeline.ladder),
-        "venue_quantized": dict(pipeline.venue_quantized),
         "capped": dict(pipeline.capped),
         "target_book": dict(pipeline.target_book),
         "risk_approved_target": dict(pipeline.risk_approved_target),

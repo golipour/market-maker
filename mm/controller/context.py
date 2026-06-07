@@ -385,7 +385,6 @@ class DecisionContext:
             return ActionPipelineDiagnostics(
                 continuous=dict(report.continuous),
                 ladder=report.ladder.as_dict(),
-                venue_quantized=report.venue_quantized.as_dict(),
                 capped=report.capped.as_dict(),
                 target_book=report.target_book.as_dict(),
                 risk_approved_target=report.risk_approved_target.as_dict(),
@@ -402,7 +401,6 @@ class DecisionContext:
         return ActionPipelineDiagnostics(
             continuous=dict(decision.diagnostics.continuous_action_depth),
             ladder=_order_stage_summary_from_dicts(tuple(decision.ladder_orders)),
-            venue_quantized={},
             capped=target_summary,
             target_book=target_summary,
             risk_approved_target=_order_stage_summary(approved_orders),

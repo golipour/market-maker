@@ -106,10 +106,6 @@ def build_joint_target_book_from_sigmoid(
         )
         action_ladder.extend(global_ladder)
         pipeline.ladder = merge_stage_reports(pipeline.ladder, global_pipeline.ladder)
-        pipeline.venue_quantized = merge_stage_reports(
-            pipeline.venue_quantized,
-            global_pipeline.venue_quantized,
-        )
         pipeline.capped = merge_stage_reports(pipeline.capped, global_pipeline.capped)
         global_book = build_venue_target_book_from_orders(
             actor_id=actor_id,

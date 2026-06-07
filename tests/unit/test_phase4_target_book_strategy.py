@@ -152,7 +152,7 @@ def test_build_joint_target_book_from_sigmoid_emits_local_book() -> None:
     assert len(ladder) >= 1
     assert pipeline.target_book.order_count == len(local_orders)
     assert pipeline.target_book.orders
-    assert pipeline.venue_quantized.order_count == 0
+    assert "venue_quantized" not in pipeline.as_dict()
 
 
 def test_build_joint_target_book_from_sigmoid_merges_global_action_diagnostics() -> None:
@@ -203,7 +203,7 @@ def test_target_book_builder_does_not_apply_venue_minimums() -> None:
     assert ladder
     assert local_orders
     assert joint_book.local.orders
-    assert pipeline.venue_quantized.order_count == 0
+    assert "venue_quantized" not in pipeline.as_dict()
     assert pipeline.target_book.order_count == len(local_orders)
 
 

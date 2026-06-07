@@ -40,7 +40,6 @@ class ActionPipelineReport:
 
     continuous: dict[str, Any] = field(default_factory=dict)
     ladder: ActionStageReport = field(default_factory=ActionStageReport)
-    venue_quantized: ActionStageReport = field(default_factory=ActionStageReport)
     capped: ActionStageReport = field(default_factory=ActionStageReport)
     target_book: ActionStageReport = field(default_factory=ActionStageReport)
     risk_approved_target: ActionStageReport = field(default_factory=ActionStageReport)
@@ -54,7 +53,6 @@ class ActionPipelineReport:
         return {
             "continuous": dict(self.continuous),
             "ladder": self.ladder.as_dict(),
-            "venue_quantized": self.venue_quantized.as_dict(),
             "capped": self.capped.as_dict(),
             "target_book": self.target_book.as_dict(),
             "risk_approved_target": self.risk_approved_target.as_dict(),

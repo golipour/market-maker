@@ -203,7 +203,6 @@ def build_orders_from_sigmoid_with_report(
     pipeline = ActionPipelineReport(
         continuous=dict(continuous or {}),
         ladder=ladder_report,
-        venue_quantized=ActionStageReport(),
         capped=capped_report,
     )
     return capped, pipeline, ladder

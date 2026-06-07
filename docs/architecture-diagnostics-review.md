@@ -330,7 +330,6 @@ Refactor action creation into named stages:
 ```text
 continuous_optimizer_depth
 ladder_orders
-venue_quantized_orders
 strategy_capped_orders
 risk_approved_orders
 execution_deduped_orders
@@ -351,7 +350,7 @@ Each stage should report:
 Current stage locations:
 
 - continuous and ladder: `mm/strategies/mpc_engine.py`
-- venue quantization and caps: `mm/core/order_constraints.py`
+- strategy caps: `mm/core/order_constraints.py`
 - risk: `mm/risk/engine.py`
 - execution dedupe and venue validation: `mm/execution/order_manager.py`
 

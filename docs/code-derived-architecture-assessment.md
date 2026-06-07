@@ -196,21 +196,7 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 8. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
-
-Severity: Low to Medium
-
-`apply_venue_constraints_with_report()` exists, but `build_orders_from_sigmoid_with_report()` currently builds ladder orders, caps them, and leaves `venue_quantized` empty. Actual rounding and validation happens later in `ExchangeRulesGateway`.
-
-Impact: The action pipeline has a `venue_quantized` stage that can mislead dashboard users. Operators may expect strategy-side min-size drops, while drops happen at execution rules stage.
-
-Recommendation:
-
-- Rename the diagnostics stage or remove it from the strategy pipeline.
-- If pre-execution quantization should be visible earlier, populate it consistently.
-- Keep final validation at the execution boundary regardless.
-
-### 9. Optimistic OrderManager State Can Diverge From Ledger Truth
+### 8. Optimistic OrderManager State Can Diverge From Ledger Truth
 
 Severity: Medium
 
@@ -225,7 +211,7 @@ Recommendation:
 - Add explicit pending order/cancel states with timeouts.
 - Route `LedgerOrderManagerMismatch` events into the chosen operator notification path when alerting infrastructure is prioritized.
 
-### 10. Alerting Is Not Provisioned
+### 9. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -255,7 +241,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 11. Observability Depends Too Heavily On JSONB Event Queries
+### 10. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -274,7 +260,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 12. Custom Metrics Registry Has Limited Production Features
+### 11. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -288,7 +274,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 13. Event Bus And Persistence Backpressure Are Underdeveloped
+### 12. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -303,7 +289,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 14. Runtime Scaling Is One Bot Per Process
+### 13. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -319,7 +305,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 15. Exchange Capability And Factory Code Is Centralized
+### 14. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -332,7 +318,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 16. No Clear Schema Versioning Beyond Envelope Version
+### 15. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -347,7 +333,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 17. Secrets And Local Compose Defaults Need Production Hardening
+### 16. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 

@@ -318,7 +318,6 @@ Recommended stage values:
 
 - `continuous`
 - `ladder`
-- `venue_quantized`
 - `capped`
 - `target_book`
 - `risk_approved_target`
@@ -952,7 +951,6 @@ SELECT e.ts AS "time",
 FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY[
   'ladder',
-  'venue_quantized',
   'capped',
   'target_book',
   'risk_approved_target',

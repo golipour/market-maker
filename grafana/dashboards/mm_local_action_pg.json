@@ -272,7 +272,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','venue_quantized','capped']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n  CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['action_pipeline', stage, 'order_count'], ''))::double precision\n  ELSE 0.0\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['ladder','capped']) AS stage\nWHERE \n  e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = '${exchange}'\n  AND e.symbol = '${symbol}'\n  AND e.actor_id = '${actor_id}'\n  AND $__timeFilter(e.ts)\nORDER BY 1",
           "refId": "A"
         }
       ],

@@ -138,10 +138,8 @@ quantity and keeps only the largest `max_orders_per_side` orders per side.
 | `capped_buy` | Extra buy orders were dropped. |
 | `capped_sell` | Extra sell orders were dropped. |
 
-The stage report is `action_pipeline.capped`.
-
-`action_pipeline.venue_quantized` is retained only for old dashboards and is
-empty in the simplified path.
+The stage report is `action_pipeline.capped`. Venue tick/lot rounding and
+minimum-size validation are reported later by the execution rules stage.
 
 ### Target book output
 

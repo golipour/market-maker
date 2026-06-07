@@ -121,7 +121,6 @@ Current pipeline (conceptual)
 Phase A — Quote construction (inside MPC controller)
 Optimizer outputs continuous bid/ask depth curve
 ladder — convert to discrete limit orders on a spread grid
-venue_quantized — round to tick/lot; drop below exchange min qty/notional
 capped — keep largest N orders per side
 Phase B — Safety
 5. risk_approved — frame gates (stale/missing primary or hedge private data, kill switch) then per-order checks (cash, inventory, notional limits)
@@ -129,7 +128,7 @@ Phase C — Exchange sync (order manager)
 6. target — desired order set after risk
 7. kept — existing live orders that “match” target within tolerance
 8. canceled — live orders marked for cancel (orphans / replacements)
-9. placed (misnamed) — orders passing another venue limit check (limit_valid), not “sent to exchange”
+9. placed (misnamed) — orders passing venue tick/lot/minimum checks (limit_valid), not “sent to exchange”
 10. venue_accepted — orders the adapter accepted (live mode only)
 Observe-only/warmup still runs preview for phase C but doesn’t send orders.
 Problems with the current design (for an expert review)

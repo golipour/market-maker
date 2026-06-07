@@ -281,7 +281,7 @@ ORDER BY 1""",
 
 _OPTIMIZER_OBJECTIVE_STAGES = "ARRAY['initial','final']"
 
-_DISCRETIZATION_STAGES = "ARRAY['ladder','venue_quantized','capped']"
+_DISCRETIZATION_STAGES = "ARRAY['ladder','capped']"
 _EXECUTION_PLAN_STAGES = "ARRAY['kept','planned_cancel','planned_place','rules_valid','router_accepted']"
 
 
@@ -733,22 +733,15 @@ def local_action_funnel_rejections_dashboard() -> dict[str, Any]:
             1,
             0,
             "**Source:** `ControllerDiagnostics` rejection counts and execution gate reasons.\n\n"
-            "**Discretization:** local curve → ladder → venue rules → capped.\n"
+            "**Discretization:** local curve → ladder → capped.\n"
             "**Target-book risk:** frame gates (stale data, warmup) and net-delta collateral limits.\n"
             "**Rules gateway:** tick size, min qty, min notional.\n"
             "**Live gates:** observe-only, venue paused, stale global market, etc.",
         ),
         _panel_row(2, 4, "Discretization rejections (local venue)"),
         _panel_action_pipeline_rejections(
-            20,
-            5,
-            stage="venue_quantized",
-            title="Venue quantization rejections",
-            diag_filter=diag_filter,
-        ),
-        _panel_action_pipeline_rejections(
             21,
-            11,
+            5,
             stage="capped",
             title="Per-side cap rejections",
             diag_filter=diag_filter,

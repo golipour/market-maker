@@ -127,7 +127,6 @@ optimizer:
 action_pipeline:
   continuous
   ladder
-  venue_quantized
   capped
   risk_approved
   execution_deduped
