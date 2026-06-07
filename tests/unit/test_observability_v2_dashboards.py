@@ -192,6 +192,7 @@ def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     expected = {
+        "Formula Reminder",
         "Latest model snapshot",
         "Model NLL / step",
         "Local price gate",
@@ -208,6 +209,11 @@ def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
     assert dashboard["uid"] == "mm-obs-v2-model-parameters"
     assert dashboard["title"] == "MM Observability v2 / 03B Model Parameters"
     assert expected.issubset(panels_by_title)
+    formula = panels_by_title["Formula Reminder"]["options"]["content"]
+    assert "q_market(t)" in formula
+    assert "market_beta.c[0]" in formula
+    assert "buy_vwap(depth)" in formula
+    assert "sell_vwap(depth)" in formula
 
     local_all_sql = panels_by_title["All local params"]["targets"][0]["rawSql"]
     global_gate_sql = panels_by_title["Global price gate"]["targets"][0]["rawSql"]

@@ -398,9 +398,9 @@ def _execution_command_panel(id_: int, title: str, expr: str, *, y: int) -> dict
     return panel
 
 
-def _text(id_: int, title: str, content: str, *, y: int) -> dict[str, Any]:
+def _text(id_: int, title: str, content: str, *, y: int, h: int = 3) -> dict[str, Any]:
     return {
-        "gridPos": {"h": 3, "w": 24, "x": 0, "y": y},
+        "gridPos": {"h": h, "w": 24, "x": 0, "y": y},
         "id": id_,
         "options": {"content": content, "mode": "markdown"},
         "title": title,
@@ -2998,6 +2998,29 @@ def model_quality() -> dict[str, Any]:
 
 
 def model_parameters() -> dict[str, Any]:
+    formula_note = (
+        "### Conditional mechanical-mixture price model\n\n"
+        "`q_market(t) = sigmoid(gate_beta[0] + gate_beta[1] * log1p(total_flow_t))`\n\n"
+        "For each component `c in {mid, log_spread, log_buy_shape, log_sell_shape}`:\n\n"
+        "`market_mean_c = market_beta.c[0] + market_beta.c[1] * mechanical_delta_c`\n\n"
+        "`refresh_mean_c = refresh_mean.c`\n\n"
+        "`component_delta_c ~ q_market * N(market_mean_c, market_sigma.c^2) + "
+        "(1 - q_market) * StudentT(refresh_mean_c, refresh_sigma.c, student_df)`\n\n"
+        "`mid_t = mid_{t-1} + delta_mid`\n\n"
+        "`spread_t = spread_{t-1} * exp(delta_log_spread)`\n\n"
+        "`buy_shape_t = buy_shape_{t-1} * exp(delta_log_buy_shape)`\n\n"
+        "`sell_shape_t = sell_shape_{t-1} * exp(delta_log_sell_shape)`\n\n"
+        "`buy_vwap(depth) = mid_t + spread_t / 2 + buy_shape_t * depth_ratio(depth, reference_vwap_depth, shape_alpha)`\n\n"
+        "`sell_vwap(depth) = mid_t - spread_t / 2 - sell_shape_t * depth_ratio(depth, reference_vwap_depth, shape_alpha)`\n\n"
+        "Shapes are defined from the fixed reference depth: "
+        "`buy_shape = buy_vwap_ref - mid - spread/2`, "
+        "`sell_shape = mid - sell_vwap_ref - spread/2`.\n\n"
+        "### Market-flow models\n\n"
+        "Market-flow params live under `local_market_flow_model.params` and "
+        "`global_market_flow_model.params`. For hurdle/lognormal-style models, read "
+        "`p_*`/gate parameters as event probability controls, `mu_*` as log-size means, "
+        "and `sigma_*` as log-size uncertainty."
+    )
     panels = [
         _text(
             1,
@@ -3005,33 +3028,34 @@ def model_parameters() -> dict[str, Any]:
             "Strategy model parameter time series from `StrategyDecision` snapshots. Nested JSON params are flattened recursively, so arrays and objects become stable metric names. Model NLL is included from `ControllerDiagnostics.models` for quick parameter-vs-score inspection.",
             y=0,
         ),
+        _text(2, "Formula Reminder", formula_note, y=3, h=13),
         _panel(
-            2,
+            3,
             "Latest model snapshot",
             "table",
             PG_DS,
             _latest_strategy_model_params_sql(),
             x=0,
-            y=3,
+            y=16,
             w=24,
             h=7,
             fmt="table",
         ),
         _panel(
-            3,
+            4,
             "Model NLL / step",
             "timeseries",
             PG_DS,
             _model_nll_step_sql(),
             x=0,
-            y=10,
+            y=23,
             w=24,
             h=8,
             decimals=4,
         ),
-        _row(4, "Conditional Price Models", y=18),
+        _row(5, "Conditional Price Models", y=31),
         _panel(
-            5,
+            6,
             "Local price gate",
             "timeseries",
             PG_DS,
@@ -3041,13 +3065,13 @@ def model_parameters() -> dict[str, Any]:
                 param_regex=r"\.(market_prob|market_resp)$|\.gate_beta\[",
             ),
             x=0,
-            y=19,
+            y=32,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            6,
+            7,
             "Global price gate",
             "timeseries",
             PG_DS,
@@ -3057,13 +3081,13 @@ def model_parameters() -> dict[str, Any]:
                 param_regex=r"\.(market_prob|market_resp)$|\.gate_beta\[",
             ),
             x=12,
-            y=19,
+            y=32,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            7,
+            8,
             "Local price coefficients and means",
             "timeseries",
             PG_DS,
@@ -3074,13 +3098,13 @@ def model_parameters() -> dict[str, Any]:
                 exclude_regex=r"\.(market_prob|market_resp)$",
             ),
             x=0,
-            y=27,
+            y=40,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            8,
+            9,
             "Global price coefficients and means",
             "timeseries",
             PG_DS,
@@ -3091,13 +3115,13 @@ def model_parameters() -> dict[str, Any]:
                 exclude_regex=r"\.(market_prob|market_resp)$",
             ),
             x=12,
-            y=27,
+            y=40,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            9,
+            10,
             "Local price uncertainty",
             "timeseries",
             PG_DS,
@@ -3107,13 +3131,13 @@ def model_parameters() -> dict[str, Any]:
                 param_regex=r"\.(market_sigma|refresh_sigma|sigma_|var|variance|std)",
             ),
             x=0,
-            y=35,
+            y=48,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            10,
+            11,
             "Global price uncertainty",
             "timeseries",
             PG_DS,
@@ -3123,57 +3147,57 @@ def model_parameters() -> dict[str, Any]:
                 param_regex=r"\.(market_sigma|refresh_sigma|sigma_|var|variance|std)",
             ),
             x=12,
-            y=35,
+            y=48,
             w=12,
             h=8,
             decimals=4,
         ),
-        _row(11, "Market Flow Models", y=43),
+        _row(12, "Market Flow Models", y=56),
         _panel(
-            12,
+            13,
             "Local market-flow params",
             "timeseries",
             PG_DS,
             _strategy_model_params_sql(scope="local", model_type="market_flow"),
             x=0,
-            y=44,
+            y=57,
             w=12,
             h=8,
             decimals=4,
         ),
         _panel(
-            13,
+            14,
             "Global market-flow params",
             "timeseries",
             PG_DS,
             _strategy_model_params_sql(scope="global", model_type="market_flow"),
             x=12,
-            y=44,
+            y=57,
             w=12,
             h=8,
             decimals=4,
         ),
-        _row(14, "All Flattened Params", y=52),
+        _row(15, "All Flattened Params", y=65),
         _panel(
-            15,
+            16,
             "All local params",
             "timeseries",
             PG_DS,
             _strategy_model_params_sql(scope="local"),
             x=0,
-            y=53,
+            y=66,
             w=12,
             h=10,
             decimals=4,
         ),
         _panel(
-            16,
+            17,
             "All global params",
             "timeseries",
             PG_DS,
             _strategy_model_params_sql(scope="global"),
             x=12,
-            y=53,
+            y=66,
             w=12,
             h=10,
             decimals=4,
