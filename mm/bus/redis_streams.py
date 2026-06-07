@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import Any
@@ -32,9 +33,10 @@ class RedisStreamsBus(AbstractEventBus):
         self.maxlen = maxlen
         self.read_block_ms = max(1, int(read_block_ms))
         self.run_id = run_id
+        self._instance_id = uuid.uuid4().hex
         self._redis: Any | None = None
         self._closed = False
-        self._forward_tasks: list[asyncio.Task] = []
+        self._forward_tasks: set[asyncio.Task] = set()
         self._subscribers: dict[str, list[asyncio.Queue[Any]]] = defaultdict(list)
 
     async def publish(self, topic: str, event: Any) -> None:
@@ -44,7 +46,7 @@ class RedisStreamsBus(AbstractEventBus):
         stream_event = _compact_stream_event(topic, event)
         if stream_event is None:
             return
-        envelope = envelope_event(topic, stream_event, run_id=self.run_id, source="redis-streams-bus")
+        envelope = envelope_event(topic, stream_event, run_id=self.run_id, source=self._source)
         kwargs: dict[str, Any] = {}
         if self.maxlen is not None and self.maxlen > 0:
             kwargs = {"maxlen": int(self.maxlen), "approximate": True}
@@ -59,12 +61,19 @@ class RedisStreamsBus(AbstractEventBus):
         return out
 
     def subscribe_queue(self, topic: str) -> asyncio.Queue[Any]:
+        queue = self._subscribe_local_queue(topic)
+        self._track_forward_task(asyncio.create_task(self._forward_remote_stream(topic, queue)))
+        return queue
+
+    def _subscribe_local_queue(self, topic: str) -> asyncio.Queue[Any]:
         queue: asyncio.Queue[Any] = asyncio.Queue()
         self._subscribers[topic].append(queue)
         return queue
 
     async def subscribe(self, topic: str) -> AsyncIterator[Any]:
-        queue = self.subscribe_queue(topic)
+        queue = self._subscribe_local_queue(topic)
+        task = asyncio.create_task(self._forward_remote_stream(topic, queue))
+        self._track_forward_task(task)
         try:
             while not self._closed:
                 yield await queue.get()
@@ -72,11 +81,15 @@ class RedisStreamsBus(AbstractEventBus):
             subscribers = self._subscribers.get(topic)
             if subscribers and queue in subscribers:
                 subscribers.remove(queue)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def subscribe_envelopes(self, topic: str, *, start_id: str = "0-0") -> AsyncIterator[Any]:
         """Read envelopes from a topic, useful for replay and persistence daemons."""
 
         r = await self._client()
+        if not hasattr(r, "xread"):
+            return
         stream = self._stream(topic)
         last_id = start_id
         while not self._closed:
@@ -90,7 +103,7 @@ class RedisStreamsBus(AbstractEventBus):
 
     async def close(self) -> None:
         self._closed = True
-        for task in self._forward_tasks:
+        for task in list(self._forward_tasks):
             task.cancel()
         if self._forward_tasks:
             await asyncio.gather(*self._forward_tasks, return_exceptions=True)
@@ -100,9 +113,22 @@ class RedisStreamsBus(AbstractEventBus):
             self._redis = None
         self._subscribers.clear()
 
-    async def _forward(self, topic: str, queue: asyncio.Queue[Any]) -> None:
-        async for event in self.subscribe(topic):
-            await queue.put(event)
+    @property
+    def _source(self) -> str:
+        return f"redis-streams-bus:{self._instance_id}"
+
+    def _track_forward_task(self, task: asyncio.Task) -> None:
+        self._forward_tasks.add(task)
+        task.add_done_callback(self._forward_tasks.discard)
+
+    async def _forward_remote_stream(self, topic: str, queue: asyncio.Queue[Any]) -> None:
+        try:
+            async for envelope in self.subscribe_envelopes(topic, start_id="$"):
+                if getattr(envelope, "source", "") == self._source:
+                    continue
+                await queue.put(envelope.payload)
+        except asyncio.CancelledError:
+            raise
 
     async def _client(self) -> Any:
         if self._redis is None:

@@ -22,7 +22,7 @@ The main runtime builder is `mm/runtime/engine.py`. The command-line entrypoint 
 The runtime is built around an `AbstractEventBus` interface:
 
 - `InMemoryBus` provides in-process fan-out through `asyncio.Queue`.
-- `RedisStreamsBus` writes compact event envelopes to Redis Streams and also fans out events to local subscribers.
+- `RedisStreamsBus` writes compact event envelopes to Redis Streams, fans out original typed objects to local subscribers, and forwards new stream messages from other bus instances into normal subscribers.
 
 Most runtime components communicate through topic names rather than direct calls. The one major exception is the strategy pipeline, which directly owns the `MpcStrategyEngine`, risk engine, and order-manager map.
 
@@ -485,7 +485,7 @@ event_date=<yyyy-mm-dd>/exchange=<exchange>/symbol=<symbol>/<hour>-<event_type>.
 
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 
-`RedisStreamsBus` writes compact envelopes to Redis streams named from topics. It compacts zero balances and private snapshots before stream writing.
+`RedisStreamsBus` writes compact envelopes to Redis streams named from topics. It compacts zero balances and private snapshots before stream writing. Local subscribers receive the original in-process object, while remote stream messages are decoded to envelope payloads and forwarded through `subscribe()`/`subscribe_queue()`. Each bus instance tags its own stream writes and skips them in its stream forwarder to avoid duplicate same-process delivery.
 
 ## 7. Observability
 
@@ -570,4 +570,3 @@ The repository contains 56 unit test files under `tests/unit`. The tests cover:
 - replay and parquet writing.
 
 The test suite is broad for unit-level behavior. The codebase does not show a dedicated end-to-end exchange simulator or load/stress test harness in the inspected files.
-

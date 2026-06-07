@@ -18,7 +18,6 @@ The system has a strong domain-oriented shape for a low-frequency market maker. 
 The main architectural risks are:
 
 - the runtime is still effectively a single in-process bot orchestration model,
-- the Redis bus persists streams but normal subscribers are local-process queues,
 - private state, ledger, execution, and persistence duplicate payloads heavily,
 - Postgres dashboards depend on expensive JSONB queries over large event payloads,
 - Parquet persistence stores JSON strings rather than typed columnar facts,
@@ -72,22 +71,7 @@ Recommendation: Convert the most important diagnostics into typed, versioned sch
 
 ## Significant Issues And Recommendations
 
-### 1. Redis Streams Bus Is Not A True Cross-Process Runtime Bus
-
-Severity: High
-
-`RedisStreamsBus.publish()` writes an envelope to Redis Streams and fans out to local subscribers, but `subscribe()` reads only from local in-process queues. Durable stream reading exists as `subscribe_envelopes()`, but the normal runtime subscriber path does not consume Redis stream data across processes.
-
-Impact: Multiple runtime processes, admin services, or UI daemons cannot rely on `bus.subscribe()` for cross-process live events. An admin API using its own Redis bus can publish commands to Redis Streams, but a runtime control plane subscribed through local queues will not receive those commands unless it is in the same process.
-
-Recommendation:
-
-- Implement Redis-backed `subscribe()` using streams or pub/sub semantics.
-- Decide whether runtime topics are ephemeral pub/sub, durable streams, or both.
-- Add consumer group support for durable workers.
-- Add tests proving that a separately constructed Redis bus can publish `admin:commands` and a runtime bus can receive them.
-
-### 2. Event Payload Duplication Will Grow Quickly
+### 1. Event Payload Duplication Will Grow Quickly
 
 Severity: High
 
@@ -117,7 +101,7 @@ Recommendation:
 - Add payload-size metrics per event type and topic.
 - Add retention policies per topic.
 
-### 3. Postgres Persistence Opens A New Connection Per Batch
+### 2. Postgres Persistence Opens A New Connection Per Batch
 
 Severity: Medium
 
@@ -131,7 +115,7 @@ Recommendation:
 - Track failed batch retry behavior explicitly.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 4. Parquet Writer Rewrites Existing Files
+### 3. Parquet Writer Rewrites Existing Files
 
 Severity: Medium
 
@@ -150,7 +134,7 @@ Recommendation:
 - Drop redundant `payload_json` if full envelopes are retained, or retain only metadata columns plus a typed payload table.
 - For high-value event types, write typed Parquet columns instead of opaque JSON strings.
 
-### 5. Strategy Frame Assembly Can Lose Or Delay Global Alignment
+### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment
 
 Severity: Medium
 
@@ -165,7 +149,7 @@ Recommendation:
 - Make history size and grace policy configurable.
 - Add backpressure or skip policies for slow global feeds.
 
-### 6. Scheduler Awaits Callbacks Sequentially
+### 5. Scheduler Awaits Callbacks Sequentially
 
 Severity: Medium
 
@@ -179,7 +163,7 @@ Recommendation:
 - Record callback execution time and missed-deadline count.
 - Consider one scheduler per symbol/venue or a timing wheel with independent tasks.
 
-### 7. Optimizer Runtime Cost Can Dominate The Decision Loop
+### 6. Optimizer Runtime Cost Can Dominate The Decision Loop
 
 Severity: High for larger configs, Medium for current defaults
 
@@ -197,7 +181,7 @@ Recommendation:
 - Cache or warm-start carefully, with diagnostics for stale warm starts.
 - Add load tests for representative `n_samples`, `horizon`, `adam_epochs`, and symbol counts.
 
-### 8. MPC And Controller Hot Path Are Tightly Coupled
+### 7. MPC And Controller Hot Path Are Tightly Coupled
 
 Severity: Medium
 
@@ -212,7 +196,7 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 9. Threshold Penalty Config Appears Ineffective In Single-Venue Optimizer Path
+### 8. Threshold Penalty Config Appears Ineffective In Single-Venue Optimizer Path
 
 Severity: Medium
 
@@ -226,7 +210,7 @@ Recommendation:
 - Add tests proving objective components change when the configured penalty changes.
 - Surface no-op config fields in runtime validation.
 
-### 10. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
+### 9. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
 
 Severity: Low to Medium
 
@@ -240,7 +224,7 @@ Recommendation:
 - If pre-execution quantization should be visible earlier, populate it consistently.
 - Keep final validation at the execution boundary regardless.
 
-### 11. Own-Order Subtraction Uses Exact Float Price Matching
+### 10. Own-Order Subtraction Uses Exact Float Price Matching
 
 Severity: Medium
 
@@ -254,7 +238,7 @@ Recommendation:
 - Use exchange-confirmed live order prices after adapter normalization.
 - Add tests for rounded prices and cross-venue unit scaling.
 
-### 12. Optimistic OrderManager State Can Diverge From Ledger Truth
+### 11. Optimistic OrderManager State Can Diverge From Ledger Truth
 
 Severity: Medium
 
@@ -269,7 +253,7 @@ Recommendation:
 - Add explicit pending order/cancel states with timeouts.
 - Alert on ledger/order-manager mismatch.
 
-### 13. Alerting Is Not Provisioned
+### 12. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -299,7 +283,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 14. Observability Depends Too Heavily On JSONB Event Queries
+### 13. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -318,7 +302,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 15. Custom Metrics Registry Has Limited Production Features
+### 14. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -332,7 +316,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 16. Event Bus And Persistence Backpressure Are Underdeveloped
+### 15. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -347,7 +331,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 17. Runtime Scaling Is One Bot Per Process
+### 16. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -363,7 +347,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 18. Exchange Capability And Factory Code Is Centralized
+### 17. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -376,7 +360,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 19. No Clear Schema Versioning Beyond Envelope Version
+### 18. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -391,7 +375,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 20. Secrets And Local Compose Defaults Need Production Hardening
+### 19. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -522,7 +506,6 @@ Priority recommendations:
 
 ### Priority 0: Safety And Correctness
 
-- Clarify or fix Redis Streams cross-process subscription semantics.
 - Add alert rules for stale data, stale private state, execution failures, persistence failures, and kill switch.
 - Add optimizer decision timeout and safe fallback behavior.
 - Add ledger/order-manager mismatch alerting.
