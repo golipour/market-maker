@@ -185,8 +185,8 @@
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
       "quoting_exchange": "nobitex",
-      "liquidity_source_exchange": "tabdeal",
-      "reference_exchanges": ["tabdeal", "wallex", "nobitex"]
+      "liquidity_source_exchange": "nobitex",
+      "reference_exchanges": ["tabdeal"]
     }
   },
   "bus": {
