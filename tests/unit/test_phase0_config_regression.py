@@ -95,7 +95,7 @@ def test_example_runtime_config_loads() -> None:
         "local_maker_fee": 0.000015,
         "global_maker_fee": 0.003,
     }
-    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.enabled is False
     assert config.liquidity_sourcing.global_live_orders is False
     assert config.execution.local.enabled is False
     assert config.execution.global_.enabled is False

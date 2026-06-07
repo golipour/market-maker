@@ -1,13 +1,35 @@
 {
+  "_comment": "JSON has no comments, so this example uses _comment/_options keys. The runtime ignores these helper keys.",
+  "_option_reference": {
+    "exchanges.*.market_data.mode": ["rest", "websocket"],
+    "exchanges.*.private.mode": ["rest"],
+    "exchanges.*.private.fill_event_source": ["exchange_fill_history", "open_order_delta"],
+    "strategy_presets.*.liquidity_sourcing.mode": ["off", "simulate", "live"],
+    "strategy_presets.*.execution.*.planner": ["reconcile", "replace"],
+    "strategy_presets.*.controller.local_price_model.kind": ["residual", "conditional_mechanical_mixture"],
+    "strategy_presets.*.controller.global_price_model.kind": ["ewma_gaussian", "conditional_mechanical_mixture"],
+    "strategy_presets.*.controller.*_market_flow_model.kind": ["hurdle_lognormal", "hurdle_gamma", "gamma", "weibull", "hurdle_weibull"],
+    "strategy_presets.*.controller.optimizer.kind": ["monte_carlo_mpc_tensor_batched"],
+    "strategy_presets.*.controller.optimizer.*.soft_fill_activation": ["sigmoid", "hardsigmoid"],
+    "strategy_presets.*.controller.optimizer.*.soft_fill_queue_model": ["back_of_queue", "pro_rata"],
+    "bus.kind": ["memory", "redis_streams"]
+  },
   "exchanges": {
     "nobitex": {
       "market_data": {
+        "_comment": "Public market-data transport and polling defaults for this exchange.",
+        "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
         "depth_limit": 100,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
       "private": {
+        "_comment": "Private state credentials. Execution is controlled by the strategy preset, not by this block.",
+        "_options": {
+          "mode": ["rest"],
+          "fill_event_source": ["exchange_fill_history", "open_order_delta"]
+        },
         "mode": "rest",
         "api_token_env": "NOBITEX_API_TOKEN",
         "api_private_key_env": "NOBITEX_API_PRIVATE_KEY",
@@ -15,17 +37,23 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.000015
+        "maker_fee": 0.0015
       }
     },
     "tabdeal": {
       "market_data": {
+        "_comment": "A market-data source can be used as a liquidity source or as a reference exchange by any bot.",
+        "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
         "depth_limit": 1000,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
       "private": {
+        "_options": {
+          "mode": ["rest"],
+          "fill_event_source": ["exchange_fill_history", "open_order_delta"]
+        },
         "mode": "rest",
         "api_token_env": "TABDEAL_API_TOKEN",
         "api_private_key_env": "TABDEAL_API_PRIVATE_KEY",
@@ -33,17 +61,22 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.003
+        "maker_fee": 0.0033
       }
     },
     "wallex": {
       "market_data": {
+        "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
         "depth_limit": 100,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
       "private": {
+        "_options": {
+          "mode": ["rest"],
+          "fill_event_source": ["exchange_fill_history", "open_order_delta"]
+        },
         "mode": "rest",
         "api_token_env": "WALLEX_API_TOKEN",
         "poll_interval_ms": 10000,
@@ -51,6 +84,29 @@
       },
       "fees": {
         "maker_fee": 0.002
+      }
+    },
+    "bitpin": {
+      "market_data": {
+        "_options": {"mode": ["rest", "websocket"]},
+        "mode": "rest",
+        "depth_limit": 100,
+        "trades_limit": 200,
+        "poll_interval_ms": 1000
+      },
+      "private": {
+        "_options": {
+          "mode": ["rest"],
+          "fill_event_source": ["exchange_fill_history", "open_order_delta"]
+        },
+        "mode": "rest",
+        "api_token_env": "BITPIN_API_TOKEN",
+        "api_private_key_env": "BITPIN_API_PRIVATE_KEY",
+        "poll_interval_ms": 10000,
+        "fill_event_source": "exchange_fill_history"
+      },
+      "fees": {
+        "maker_fee": 0.003
       }
     }
   },
@@ -60,21 +116,27 @@
       "max_global_lag_ms": 2000,
       "global_grace_ms": 250,
       "liquidity_sourcing": {
-        "mode": "simulate"
+        "_comment": "off = no liquidity-source venue; simulate = include source venue in model/objective but never route source orders; live = include source venue and allow source live orders. If liquidity_source_exchange equals quoting_exchange, this resolves to off internally.",
+        "_options": {"mode": ["off", "simulate", "live"]},
+        "mode": "live"
       },
       "execution": {
         "quoting": {
-          "enabled": false,
+          "_comment": "Execution policy for the quoting exchange selected by the bot.",
+          "_options": {"planner": ["reconcile", "replace"]},
+          "enabled": true,
           "planner": "replace",
-          "max_orders_per_side": 5
+          "max_orders_per_side": 10
         },
         "liquidity_source": {
-          "enabled": false,
+          "_comment": "Planner and caps for liquidity_source_exchange. Do not set enabled here; source live execution is controlled only by liquidity_sourcing.mode = live.",
+          "_options": {"planner": ["reconcile", "replace"]},
           "planner": "replace",
           "max_orders_per_side": 2
         }
       },
       "controller": {
+        "_comment": "MPC controller settings for any bot using this preset. Bot id becomes actor_id unless actor_id is set here.",
         "enabled": true,
         "observe_only": false,
         "action_start_after_steps": 10,
@@ -83,10 +145,12 @@
         "decisions_topic": "strategy:decisions",
         "action_topic": "strategy:actions",
         "orderbook_grid": {
+          "_comment": "Absolute quote-per-base spread grid used for both optimizer depth curves and target order ladder prices.",
           "spread_step": 40.0,
           "spread_max": 400.0
         },
         "risk": {
+          "_comment": "Hard pre-execution gates. local = quoting exchange, global = selected liquidity source/reference slot.",
           "enabled": true,
           "engine": "net_delta",
           "local": {
@@ -139,6 +203,13 @@
           "decay": 0.99,
           "student_df": 3.0
         },
+        "_optimizer_comment": "Do not add helper _comment keys inside optimizer.local or optimizer.global; those nested objects intentionally reject unknown keys.",
+        "_optimizer_options": {
+          "kind": ["monte_carlo_mpc_tensor_batched"],
+          "local/global.soft_fill_activation": ["sigmoid", "hardsigmoid"],
+          "local/global.soft_fill_queue_model": ["back_of_queue", "pro_rata"],
+          "device": ["cpu", "cuda"]
+        },
         "optimizer": {
           "kind": "monte_carlo_mpc_tensor_batched",
           "n_samples": 64,
@@ -182,6 +253,7 @@
   },
   "bots": {
     "mpc-controller": {
+      "_comment": "One runtime config currently starts one bot. quoting_exchange is where orders are quoted; liquidity_source_exchange may equal quoting_exchange; reference_exchanges are fair-value inputs.",
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
       "quoting_exchange": "nobitex",
@@ -190,6 +262,7 @@
     }
   },
   "bus": {
+    "_options": {"kind": ["memory", "redis_streams"]},
     "kind": "redis_streams",
     "redis_url": "redis://localhost:6379/0",
     "stream_prefix": "mm",

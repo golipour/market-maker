@@ -264,8 +264,8 @@ def test_runtime_contract_includes_venues() -> None:
 def test_example_config_loads_liquidity_sourcing() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.liquidity_sourcing.enabled is True
-    assert config.liquidity_sourcing.mode == "liquidity_sourcing"
+    assert config.liquidity_sourcing.enabled is False
+    assert config.liquidity_sourcing.mode == "single_venue"
     assert config.controller is not None
     assert config.controller.enabled is True
     assert config.controller.optimizer is not None

@@ -105,7 +105,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
     "liquidity_sourcing": {"mode": "simulate"},
     "execution": {
       "quoting": {"enabled": false, "planner": "replace"},
-      "liquidity_source": {"enabled": false, "planner": "replace"}
+      "liquidity_source": {"planner": "replace"}
     },
     "controller": {
       "enabled": true,
@@ -119,7 +119,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 |-------|--------|
 | `liquidity_sourcing.mode` | `off`, `simulate`, or `live`; `simulate/live` require a distinct liquidity source exchange |
 | `execution.quoting` | Planner/caps for the quoting exchange |
-| `execution.liquidity_source` | Planner/caps for the liquidity source exchange |
+| `execution.liquidity_source` | Planner/caps for the liquidity source exchange; live enablement is derived from `liquidity_sourcing.mode == "live"` |
 | `controller` | MPC controller config, including risk/models/optimizer |
 | `planner` | `reconcile` (keep within tolerance) or `replace` (cancel-all then place) |
 | `observe_only` | Per-venue dry-run override |

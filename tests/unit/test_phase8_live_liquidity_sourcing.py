@@ -111,6 +111,39 @@ def test_execution_config_parses_per_venue_policies() -> None:
     assert config.execution.global_.planner == "replace"
     assert config.execution.global_.max_order_qty == 0.25
     assert config.liquidity_sourcing.global_live_orders is False
+    assert config.execution.global_.enabled is False
+
+
+def test_liquidity_sourcing_live_mode_derives_source_execution_enabled() -> None:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+        global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+    )
+    payload["strategy_presets"]["test_preset"]["liquidity_sourcing"] = {"mode": "live"}
+    payload["strategy_presets"]["test_preset"]["execution"] = {
+        "quoting": {"enabled": False, "planner": "replace"},
+        "liquidity_source": {"planner": "replace", "max_order_qty": 0.25},
+    }
+
+    config = runtime_config_from_mapping(payload)
+
+    assert config.liquidity_sourcing.global_live_orders is True
+    assert config.execution.local.enabled is False
+    assert config.execution.global_.enabled is True
+    assert config.execution.global_.max_order_qty == 0.25
+
+
+def test_liquidity_source_execution_enabled_is_rejected() -> None:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+        global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+    )
+    payload["strategy_presets"]["test_preset"]["execution"] = {
+        "liquidity_source": {"enabled": True, "planner": "replace"},
+    }
+
+    with pytest.raises(ValueError, match="liquidity_source.enabled"):
+        runtime_config_from_mapping(payload)
 
 
 def test_global_live_orders_disabled_strips_global_from_execution_book() -> None:

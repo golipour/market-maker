@@ -750,7 +750,10 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         global_private=_private_from_mapping(global_private_payload),
         controller=_controller_from_mapping(controller_payload),
         liquidity_sourcing=liquidity_sourcing,
-        execution=_execution_from_preset(preset.get("execution")),
+        execution=_execution_from_preset(
+            preset.get("execution"),
+            liquidity_sourcing=liquidity_sourcing,
+        ),
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
@@ -960,12 +963,39 @@ def _liquidity_sourcing_from_preset(
     )
 
 
-def _execution_from_preset(payload: Any) -> ExecutionRuntimeConfig:
+def _execution_from_preset(
+    payload: Any,
+    *,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig,
+) -> ExecutionRuntimeConfig:
     if not isinstance(payload, dict):
-        return ExecutionRuntimeConfig()
+        return ExecutionRuntimeConfig(
+            global_=VenueExecutionConfig(
+                enabled=liquidity_sourcing.global_live_orders,
+                planner="replace",
+            )
+        )
+    source_payload = payload.get("liquidity_source")
+    if isinstance(source_payload, dict) and "enabled" in source_payload:
+        raise ValueError(
+            "execution.liquidity_source.enabled is derived from "
+            "liquidity_sourcing.mode; use mode='live' to allow source live orders"
+        )
+    source_execution = _venue_execution_from_mapping(
+        source_payload,
+        default_planner="replace",
+    )
+    source_execution = VenueExecutionConfig(
+        enabled=liquidity_sourcing.global_live_orders,
+        planner=source_execution.planner,
+        observe_only=source_execution.observe_only,
+        max_orders_per_side=source_execution.max_orders_per_side,
+        max_order_qty=source_execution.max_order_qty,
+        max_quote_distance=source_execution.max_quote_distance,
+    )
     return ExecutionRuntimeConfig(
         local=_venue_execution_from_mapping(payload.get("quoting"), default_planner="reconcile"),
-        global_=_venue_execution_from_mapping(payload.get("liquidity_source"), default_planner="replace"),
+        global_=source_execution,
     )
 
 
