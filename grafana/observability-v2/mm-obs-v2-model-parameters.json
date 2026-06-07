@@ -1,0 +1,781 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Strategy model parameter time series from `StrategyDecision` snapshots. Nested JSON params are flattened recursively, so arrays and objects become stable metric names. Model NLL is included from `ControllerDiagnostics.models` for quick parameter-vs-score inspection.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow'),\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nlatest AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         e.payload\n  FROM mm_events e\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n)\nSELECT l.ts,\n       l.actor_id,\n       l.exchange,\n       l.symbol,\n       d.venue_scope,\n       d.model_type,\n       d.model_key,\n       COALESCE(l.payload->d.model_key->>'kind', '') AS kind,\n       CASE\n         WHEN l.payload->d.model_key ? 'active_in_mpc'\n         THEN COALESCE(l.payload->d.model_key->>'active_in_mpc', '')\n         ELSE ''\n       END AS active_in_mpc,\n       l.payload->d.model_key->'params' AS params\nFROM latest l\nCROSS JOIN model_defs d\nWHERE l.payload ? d.model_key\nORDER BY d.venue_scope, d.model_type",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest model snapshot",
+      "type": "table",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  m.key AS metric,\n  CASE\n  WHEN trim(COALESCE(m.value->>'nll', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.value->>'nll', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'models', '{}'::jsonb)) AS m(key, value)\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND m.value->>'nll' IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Model NLL / step",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Conditional Price Models",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_prob|market_resp)$|\\.gate_beta\\['\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Local price gate",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_prob|market_resp)$|\\.gate_beta\\['\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Global price gate",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_beta|refresh_mean|mu_|beta|mean)'\n  AND metric !~ '\\.(market_prob|market_resp)$'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Local price coefficients and means",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_beta|refresh_mean|mu_|beta|mean)'\n  AND metric !~ '\\.(market_prob|market_resp)$'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Global price coefficients and means",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_sigma|refresh_sigma|sigma_|var|variance|std)'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Local price uncertainty",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'price'\n  AND metric ~ '\\.(market_sigma|refresh_sigma|sigma_|var|variance|std)'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Global price uncertainty",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 11,
+      "panels": [],
+      "title": "Market Flow Models",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "id": 12,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'market_flow'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Local market-flow params",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "id": 13,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nWHERE model_type = 'market_flow'\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Global market-flow params",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "id": 14,
+      "panels": [],
+      "title": "All Flattened Params",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "id": 15,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('local_price_model', 'local', 'price'),\n    ('local_market_flow_model', 'local', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "All local params",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "id": 16,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (\n  VALUES\n    ('global_price_model', 'global', 'price'),\n    ('global_market_flow_model', 'global', 'market_flow')\n),\nsource AS (\n  SELECT e.ts,\n         e.actor_id,\n         e.exchange,\n         e.symbol,\n         d.model_key,\n         d.venue_scope,\n         d.model_type,\n         e.payload->d.model_key AS model_payload,\n         CASE\n  WHEN jsonb_typeof(e.payload->d.model_key->'params') = 'object' THEN e.payload->d.model_key->'params'\n  ELSE '{}'::jsonb\nEND AS params\n  FROM mm_events e\n  CROSS JOIN model_defs d\n  WHERE e.event_type = 'StrategyDecision'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n    AND e.payload ? d.model_key\n),\nflat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         kv.key AS path,\n         kv.value AS value\n  FROM source s\n  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)\n  UNION ALL\n  SELECT f.ts,\n         f.actor_id,\n         f.exchange,\n         f.symbol,\n         f.model_key,\n         f.venue_scope,\n         f.model_type,\n         child.path AS path,\n         child.value AS value\n  FROM flat f\n  CROSS JOIN LATERAL (\n    SELECT f.path || '.' || kv.key AS path,\n           kv.value AS value\n    FROM jsonb_each(CASE\n  WHEN jsonb_typeof(f.value) = 'object' THEN f.value\n  ELSE '{}'::jsonb\nEND) AS kv(key, value)\n    WHERE jsonb_typeof(f.value) = 'object'\n    UNION ALL\n    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,\n           arr.value AS value\n    FROM jsonb_array_elements(CASE\n  WHEN jsonb_typeof(f.value) = 'array' THEN f.value\n  ELSE '[]'::jsonb\nEND) WITH ORDINALITY AS arr(value, idx)\n    WHERE jsonb_typeof(f.value) = 'array'\n  ) AS child\n),\nnumeric_params AS (\n  SELECT ts,\n         actor_id,\n         exchange,\n         symbol,\n         model_key,\n         venue_scope,\n         model_type,\n         path,\n         model_key || '.' || path AS metric,\n         (value #>> '{}')::double precision AS value\n  FROM flat\n  WHERE jsonb_typeof(value) = 'number'\n  UNION ALL\n  SELECT s.ts,\n         s.actor_id,\n         s.exchange,\n         s.symbol,\n         s.model_key,\n         s.venue_scope,\n         s.model_type,\n         'active_in_mpc' AS path,\n         s.model_key || '.active_in_mpc' AS metric,\n         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value\n  FROM source s\n  WHERE s.model_payload ? 'active_in_mpc'\n)\nSELECT ts AS \"time\",\n       metric,\n       value\nFROM numeric_params\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "All global params",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "models",
+    "parameters"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT exchange\nFROM (\n  SELECT exchange\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n) x\nWHERE exchange IS NOT NULL AND exchange <> ''\nORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT DISTINCT exchange\nFROM (\n  SELECT exchange\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n) x\nWHERE exchange IS NOT NULL AND exchange <> ''\nORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT symbol\nFROM (\n  SELECT symbol\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n) x\nWHERE symbol IS NOT NULL AND symbol <> ''\nORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT DISTINCT symbol\nFROM (\n  SELECT symbol\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n) x\nWHERE symbol IS NOT NULL AND symbol <> ''\nORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook') ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [],
+        "query": "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [],
+        "query": "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 03B Model Parameters",
+  "uid": "mm-obs-v2-model-parameters",
+  "version": 1,
+  "weekStart": ""
+}

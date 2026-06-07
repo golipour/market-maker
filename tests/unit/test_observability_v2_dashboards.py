@@ -8,6 +8,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     fill_spread_pnl,
     liquidity_sourcing,
     market_data_quality,
+    model_parameters,
     model_quality,
     orderbook_depth,
     portfolio_pnl,
@@ -184,6 +185,42 @@ def test_postgres_queries_use_empty_safe_multiselect_filters() -> None:
     assert "= ANY(ARRAY[${exchange:sqlstring}]::text[])" in combined_sql
     assert "= ANY(ARRAY[${symbol:sqlstring}]::text[])" in combined_sql
     assert "= ANY(ARRAY[${actor_id:sqlstring}]::text[])" in combined_sql
+
+
+def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
+    dashboard = model_parameters()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    expected = {
+        "Latest model snapshot",
+        "Model NLL / step",
+        "Local price gate",
+        "Global price gate",
+        "Local price coefficients and means",
+        "Global price coefficients and means",
+        "Local price uncertainty",
+        "Global price uncertainty",
+        "Local market-flow params",
+        "Global market-flow params",
+        "All local params",
+        "All global params",
+    }
+    assert dashboard["uid"] == "mm-obs-v2-model-parameters"
+    assert dashboard["title"] == "MM Observability v2 / 03B Model Parameters"
+    assert expected.issubset(panels_by_title)
+
+    local_all_sql = panels_by_title["All local params"]["targets"][0]["rawSql"]
+    global_gate_sql = panels_by_title["Global price gate"]["targets"][0]["rawSql"]
+
+    assert "WITH RECURSIVE" in local_all_sql
+    assert "local_price_model" in local_all_sql
+    assert "local_market_flow_model" in local_all_sql
+    assert "global_price_model" in global_gate_sql
+    assert "gate_beta" in global_gate_sql
+    assert "jsonb_array_elements" in local_all_sql
+    assert "jsonb_each" in local_all_sql
+    assert "active_in_mpc" in local_all_sql
+    assert "StrategyDecision" in local_all_sql
 
 
 def test_action_pipeline_exposes_order_flow_charts() -> None:

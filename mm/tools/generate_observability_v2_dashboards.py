@@ -1073,6 +1073,179 @@ WHERE {_diagnostics_filter()}
 ORDER BY 1"""
 
 
+def _strategy_decision_filter(alias: str = "e") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"""{prefix}event_type = 'StrategyDecision'
+  AND {prefix}exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND {prefix}symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND {prefix}actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+  AND $__timeFilter({prefix}ts)"""
+
+
+def _model_params_values_sql(scope: str = "all") -> str:
+    local = """('local_price_model', 'local', 'price'),
+    ('local_market_flow_model', 'local', 'market_flow')"""
+    global_ = """('global_price_model', 'global', 'price'),
+    ('global_market_flow_model', 'global', 'market_flow')"""
+    if scope == "local":
+        values = local
+    elif scope == "global":
+        values = global_
+    elif scope == "price":
+        values = """('local_price_model', 'local', 'price'),
+    ('global_price_model', 'global', 'price')"""
+    elif scope == "market_flow":
+        values = """('local_market_flow_model', 'local', 'market_flow'),
+    ('global_market_flow_model', 'global', 'market_flow')"""
+    else:
+        values = f"{local},\n    {global_}"
+    return f"""VALUES
+    {values}"""
+
+
+def _strategy_model_params_flat_cte(scope: str = "all") -> str:
+    return f"""WITH RECURSIVE model_defs(model_key, venue_scope, model_type) AS (
+  {_model_params_values_sql(scope)}
+),
+source AS (
+  SELECT e.ts,
+         e.actor_id,
+         e.exchange,
+         e.symbol,
+         d.model_key,
+         d.venue_scope,
+         d.model_type,
+         e.payload->d.model_key AS model_payload,
+         {_jsonb_object_or_empty_sql("e.payload->d.model_key->'params'")} AS params
+  FROM mm_events e
+  CROSS JOIN model_defs d
+  WHERE {_strategy_decision_filter("e")}
+    AND e.payload ? d.model_key
+),
+flat(ts, actor_id, exchange, symbol, model_key, venue_scope, model_type, path, value) AS (
+  SELECT s.ts,
+         s.actor_id,
+         s.exchange,
+         s.symbol,
+         s.model_key,
+         s.venue_scope,
+         s.model_type,
+         kv.key AS path,
+         kv.value AS value
+  FROM source s
+  CROSS JOIN LATERAL jsonb_each(s.params) AS kv(key, value)
+  UNION ALL
+  SELECT f.ts,
+         f.actor_id,
+         f.exchange,
+         f.symbol,
+         f.model_key,
+         f.venue_scope,
+         f.model_type,
+         child.path AS path,
+         child.value AS value
+  FROM flat f
+  CROSS JOIN LATERAL (
+    SELECT f.path || '.' || kv.key AS path,
+           kv.value AS value
+    FROM jsonb_each({_jsonb_object_or_empty_sql("f.value")}) AS kv(key, value)
+    WHERE jsonb_typeof(f.value) = 'object'
+    UNION ALL
+    SELECT f.path || '[' || (arr.idx - 1)::text || ']' AS path,
+           arr.value AS value
+    FROM jsonb_array_elements({_jsonb_array_or_empty_sql("f.value")}) WITH ORDINALITY AS arr(value, idx)
+    WHERE jsonb_typeof(f.value) = 'array'
+  ) AS child
+),
+numeric_params AS (
+  SELECT ts,
+         actor_id,
+         exchange,
+         symbol,
+         model_key,
+         venue_scope,
+         model_type,
+         path,
+         model_key || '.' || path AS metric,
+         (value #>> '{{}}')::double precision AS value
+  FROM flat
+  WHERE jsonb_typeof(value) = 'number'
+  UNION ALL
+  SELECT s.ts,
+         s.actor_id,
+         s.exchange,
+         s.symbol,
+         s.model_key,
+         s.venue_scope,
+         s.model_type,
+         'active_in_mpc' AS path,
+         s.model_key || '.active_in_mpc' AS metric,
+         CASE WHEN s.model_payload->'active_in_mpc' = 'true'::jsonb THEN 1.0 ELSE 0.0 END AS value
+  FROM source s
+  WHERE s.model_payload ? 'active_in_mpc'
+)"""
+
+
+def _strategy_model_params_sql(
+    *,
+    scope: str = "all",
+    model_type: str | None = None,
+    param_regex: str | None = None,
+    exclude_regex: str | None = None,
+) -> str:
+    filters = []
+    if model_type is not None:
+        filters.append(f"model_type = '{model_type}'")
+    if param_regex is not None:
+        filters.append(f"metric ~ '{param_regex}'")
+    if exclude_regex is not None:
+        filters.append(f"metric !~ '{exclude_regex}'")
+    where = ""
+    if filters:
+        where = "\nWHERE " + "\n  AND ".join(filters)
+    return f"""{_strategy_model_params_flat_cte(scope)}
+SELECT ts AS "time",
+       metric,
+       value
+FROM numeric_params{where}
+ORDER BY 1, 2"""
+
+
+def _latest_strategy_model_params_sql() -> str:
+    return f"""WITH model_defs(model_key, venue_scope, model_type) AS (
+  {_model_params_values_sql("all")}
+),
+latest AS (
+  SELECT e.ts,
+         e.actor_id,
+         e.exchange,
+         e.symbol,
+         e.payload
+  FROM mm_events e
+  WHERE {_strategy_decision_filter("e")}
+  ORDER BY e.ts DESC
+  LIMIT 1
+)
+SELECT l.ts,
+       l.actor_id,
+       l.exchange,
+       l.symbol,
+       d.venue_scope,
+       d.model_type,
+       d.model_key,
+       COALESCE(l.payload->d.model_key->>'kind', '') AS kind,
+       CASE
+         WHEN l.payload->d.model_key ? 'active_in_mpc'
+         THEN COALESCE(l.payload->d.model_key->>'active_in_mpc', '')
+         ELSE ''
+       END AS active_in_mpc,
+       l.payload->d.model_key->'params' AS params
+FROM latest l
+CROSS JOIN model_defs d
+WHERE l.payload ? d.model_key
+ORDER BY d.venue_scope, d.model_type"""
+
+
 def _risk_approved_step_sql() -> str:
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     return f"""SELECT
@@ -2824,6 +2997,196 @@ def model_quality() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-model-quality", "MM Observability v2 / 03 Strategy Model Quality", panels, tags=["models"])
 
 
+def model_parameters() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "Strategy model parameter time series from `StrategyDecision` snapshots. Nested JSON params are flattened recursively, so arrays and objects become stable metric names. Model NLL is included from `ControllerDiagnostics.models` for quick parameter-vs-score inspection.",
+            y=0,
+        ),
+        _panel(
+            2,
+            "Latest model snapshot",
+            "table",
+            PG_DS,
+            _latest_strategy_model_params_sql(),
+            x=0,
+            y=3,
+            w=24,
+            h=7,
+            fmt="table",
+        ),
+        _panel(
+            3,
+            "Model NLL / step",
+            "timeseries",
+            PG_DS,
+            _model_nll_step_sql(),
+            x=0,
+            y=10,
+            w=24,
+            h=8,
+            decimals=4,
+        ),
+        _row(4, "Conditional Price Models", y=18),
+        _panel(
+            5,
+            "Local price gate",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="local",
+                model_type="price",
+                param_regex=r"\.(market_prob|market_resp)$|\.gate_beta\[",
+            ),
+            x=0,
+            y=19,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            6,
+            "Global price gate",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="global",
+                model_type="price",
+                param_regex=r"\.(market_prob|market_resp)$|\.gate_beta\[",
+            ),
+            x=12,
+            y=19,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            7,
+            "Local price coefficients and means",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="local",
+                model_type="price",
+                param_regex=r"\.(market_beta|refresh_mean|mu_|beta|mean)",
+                exclude_regex=r"\.(market_prob|market_resp)$",
+            ),
+            x=0,
+            y=27,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            8,
+            "Global price coefficients and means",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="global",
+                model_type="price",
+                param_regex=r"\.(market_beta|refresh_mean|mu_|beta|mean)",
+                exclude_regex=r"\.(market_prob|market_resp)$",
+            ),
+            x=12,
+            y=27,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            9,
+            "Local price uncertainty",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="local",
+                model_type="price",
+                param_regex=r"\.(market_sigma|refresh_sigma|sigma_|var|variance|std)",
+            ),
+            x=0,
+            y=35,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            10,
+            "Global price uncertainty",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="global",
+                model_type="price",
+                param_regex=r"\.(market_sigma|refresh_sigma|sigma_|var|variance|std)",
+            ),
+            x=12,
+            y=35,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _row(11, "Market Flow Models", y=43),
+        _panel(
+            12,
+            "Local market-flow params",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(scope="local", model_type="market_flow"),
+            x=0,
+            y=44,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _panel(
+            13,
+            "Global market-flow params",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(scope="global", model_type="market_flow"),
+            x=12,
+            y=44,
+            w=12,
+            h=8,
+            decimals=4,
+        ),
+        _row(14, "All Flattened Params", y=52),
+        _panel(
+            15,
+            "All local params",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(scope="local"),
+            x=0,
+            y=53,
+            w=12,
+            h=10,
+            decimals=4,
+        ),
+        _panel(
+            16,
+            "All global params",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(scope="global"),
+            x=12,
+            y=53,
+            w=12,
+            h=10,
+            decimals=4,
+        ),
+    ]
+    return _dashboard(
+        "mm-obs-v2-model-parameters",
+        "MM Observability v2 / 03B Model Parameters",
+        panels,
+        tags=["models", "parameters"],
+    )
+
+
 def optimizer_diagnostics() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Optimizer objective, contribution fractions, and timing.", y=0),
@@ -4427,6 +4790,7 @@ def dashboards() -> list[dict[str, Any]]:
         orderbook_depth(),
         controller_health(),
         model_quality(),
+        model_parameters(),
         optimizer_diagnostics(),
         action_pipeline(),
         target_order_stems(),
