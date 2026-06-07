@@ -83,7 +83,7 @@ services:
     image: grafana/alloy:latest
     container_name: alloy
     restart: "no"
-    command: run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data
+    command: run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data --disable-reporting
     ports:
       - "12345:12345"
     volumes:

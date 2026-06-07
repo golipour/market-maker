@@ -3,6 +3,20 @@ auth_enabled: false
 server:
   http_listen_port: 3100
 
+ingester:
+  # Local-dev safeguard: Loki's default WAL disk throttle trips when the
+  # underlying Docker filesystem is above 90% full, even if the Loki volume is
+  # tiny. That leaves the ingester unready and rejects Alloy pushes.
+  wal:
+    disk_full_threshold: 0
+
+limits_config:
+  # Alloy may replay a backlog from Docker/runtime log files after restarts.
+  # Keep local observability permissive so that catch-up does not spam 429/500
+  # ingestion errors.
+  ingestion_rate_mb: 64
+  ingestion_burst_size_mb: 128
+
 common:
   path_prefix: /loki
   storage:
