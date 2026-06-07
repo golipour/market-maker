@@ -62,15 +62,24 @@ class ExecutionStateReconciler:
     async def _listen_cancel_all(self) -> None:
         topics = (f"execution:cancel_all:{self.exchange}", "execution:cancel_all:all")
         queues = [self.bus.subscribe_queue(topic) for topic in topics]
-        while True:
-            tasks = [asyncio.create_task(queue.get()) for queue in queues]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
+        tasks: list[asyncio.Task] = []
+        try:
+            while True:
+                tasks = [asyncio.create_task(queue.get()) for queue in queues]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                for task in done:
+                    event = task.result()
+                    if isinstance(event, dict):
+                        await self.manager.cancel_all(reason=str(event.get("reason", "")))
+                tasks = []
+        except asyncio.CancelledError:
+            for task in tasks:
                 task.cancel()
-            for task in done:
-                event = task.result()
-                if isinstance(event, dict):
-                    await self.manager.cancel_all(reason=str(event.get("reason", "")))
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     async def _listen_cancel_actor(self) -> None:
         queue = self.bus.subscribe_queue(f"execution:cancel_actor:{self.exchange}")

@@ -394,7 +394,8 @@ Execution is target-state reconciliation, not fire-and-forget order placement.
 - an execution planner,
 - an exchange rules gateway,
 - a stateless order router,
-- optimistic live-order state.
+- private-confirmed live-order state,
+- pending place/cancel changes accepted by the router but not yet confirmed by private state.
 
 For each venue target book:
 
@@ -404,10 +405,11 @@ For each venue target book:
 2. Normalize and validate place commands through venue limits.
 3. Execute cancels before places.
 4. Publish requested/accepted/failed lifecycle events.
-5. Optimistically update manager live-order state from router results.
-6. Publish execution snapshot.
+5. Record successful router responses as pending places/cancels without mutating confirmed live orders.
+6. Hold additional syncs for the same venue/symbol/actor while pending confirmations exist, avoiding duplicate replacement while private state catches up.
+7. Publish execution snapshot with confirmed live-order count, pending place/cancel count, and oldest pending age.
 
-The authoritative private-state path then reconciles exchange-confirmed state back into the order manager through `ExecutionStateReconciler` and into the ledger through `PortfolioLedgerService`.
+The authoritative private-state path then reconciles exchange-confirmed state back into the order manager through `ExecutionStateReconciler` and into the ledger through `PortfolioLedgerService`. A private open-order event confirms a pending place and moves it into live orders; terminal private updates or snapshots remove pending cancels once the order disappears or becomes terminal.
 
 ## 6. Event Model And Data Lifecycle
 

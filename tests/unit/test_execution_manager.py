@@ -61,11 +61,41 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
     assert accepted["orders"][0]["qty"] == 0.5
     assert completed["type"] == "ExecutionSyncCompleted"
     assert completed["accepted_count"] == 1
+    assert completed["pending_place_count"] == 1
     assert completed["target_count"] == 1
     assert isinstance(snapshot, ExecutionSnapshot)
     assert commands.placed[0].price == 100.0
-    assert snapshot.live_order_count == 1
-    assert snapshot.live_orders["ex-1"].remaining_qty == 0.5
+    assert snapshot.live_order_count == 0
+    assert snapshot.pending_place_count == 1
+    assert snapshot.pending_places["ex-1"].order is not None
+    assert snapshot.pending_places["ex-1"].order.qty == 0.5
+
+    await manager.sync(
+        [
+            Action(
+                actor_id="actor-1",
+                orders=(
+                    Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1"),
+                ),
+            )
+        ]
+    )
+    assert len(commands.placed) == 1
+
+    confirmed = manager.apply_open_order(
+        OpenOrder(
+            exchange_order_id="ex-1",
+            actor_id="actor-1",
+            order=Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1"),
+            remaining_qty=0.5,
+            filled_qty=0.0,
+            status="open",
+            timestamp_ms=1200,
+        )
+    )
+    assert confirmed.live_order_count == 1
+    assert confirmed.pending_place_count == 0
+    assert confirmed.live_orders["ex-1"].remaining_qty == 0.5
 
 
 @pytest.mark.asyncio
@@ -148,7 +178,8 @@ async def test_venue_target_sync_publishes_execution_snapshot() -> None:
     assert completed["type"] == "ExecutionSyncCompleted"
     assert report.accepted.order_count == 1
     assert isinstance(snapshot, ExecutionSnapshot)
-    assert snapshot.live_order_count == 1
+    assert snapshot.live_order_count == 0
+    assert snapshot.pending_place_count == 1
 
 
 @pytest.mark.asyncio
@@ -179,4 +210,21 @@ async def test_cancel_actor_orders_ignores_unattributed_open_orders() -> None:
     await manager.cancel_actor_orders("actor-1")
 
     assert commands.cancelled == ["own"]
-    assert set(manager.live_orders) == {"external"}
+    assert set(manager.live_orders) == {"external", "own"}
+    snapshot = manager.snapshot(timestamp_ms=1100)
+    assert snapshot.pending_cancel_count == 1
+    assert "own" in snapshot.pending_cancels
+
+    canceled = manager.apply_open_order(
+        OpenOrder(
+            exchange_order_id="own",
+            actor_id="actor-1",
+            order=Order("nobitex", "BTC_IRT", "sell", 101.0, 1.0),
+            remaining_qty=0.0,
+            filled_qty=0.0,
+            status="canceled",
+            timestamp_ms=1200,
+        )
+    )
+    assert set(canceled.live_orders) == {"external"}
+    assert canceled.pending_cancel_count == 0

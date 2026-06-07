@@ -23,7 +23,7 @@ The main architectural risks are:
 - Parquet persistence stores JSON strings rather than typed columnar facts,
 - the MPC path can become CPU/GPU expensive as optimizer settings scale,
 - controller diagnostics and execution state are gathered through a broad mutable context object,
-- execution has an unavoidable window between optimistic order-manager state and private exchange truth,
+- execution has a visible pending-confirmation window between router acceptance and private exchange truth,
 - alerting is not provisioned,
 - some state wiring has edge-case gaps.
 
@@ -196,22 +196,7 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 8. Optimistic OrderManager State Can Diverge From Ledger Truth
-
-Severity: Medium
-
-`OrderManager` updates `_live_orders` optimistically after router results. Private state reconciliation later applies exchange-confirmed state. The ledger also maintains its own state and emits consistency diagnostics. Persistent ledger/order-manager mismatches now produce `LedgerOrderManagerMismatch` events.
-
-Impact: During the gap, own-order subtraction, planning, and diagnostics can see inconsistent live orders. Partial failures in cancel/place calls can widen the gap.
-
-Recommendation:
-
-- Make the ledger the single authoritative live-order source for planning where feasible.
-- Track optimistic vs confirmed state separately.
-- Add explicit pending order/cancel states with timeouts.
-- Route `LedgerOrderManagerMismatch` events into the chosen operator notification path when alerting infrastructure is prioritized.
-
-### 9. Alerting Is Not Provisioned
+### 8. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -233,6 +218,7 @@ Add alert rules for:
 - execution sync failures,
 - router adapter failures,
 - order validation rejection spikes,
+- pending order confirmation age above threshold,
 - sustained `LedgerOrderManagerMismatch` events,
 - persistence write failures or queue growth,
 - Prometheus target down,
@@ -241,7 +227,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 10. Observability Depends Too Heavily On JSONB Event Queries
+### 9. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -260,7 +246,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 11. Custom Metrics Registry Has Limited Production Features
+### 10. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -274,7 +260,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 12. Event Bus And Persistence Backpressure Are Underdeveloped
+### 11. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -289,7 +275,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 13. Runtime Scaling Is One Bot Per Process
+### 12. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -305,7 +291,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 14. Exchange Capability And Factory Code Is Centralized
+### 13. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -318,7 +304,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 15. No Clear Schema Versioning Beyond Envelope Version
+### 14. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -333,7 +319,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 16. Secrets And Local Compose Defaults Need Production Hardening
+### 15. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -479,7 +465,6 @@ Priority recommendations:
 
 - Add an optimizer backend interface and fake backend tests.
 - Split `DecisionContext` into narrower diagnostic records.
-- Make execution state pending/confirmed rather than purely optimistic.
 - Add load tests for optimizer settings and multi-symbol runtime.
 - Improve global frame alignment metrics and policy.
 

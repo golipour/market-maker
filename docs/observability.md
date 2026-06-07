@@ -116,7 +116,9 @@ It currently emits metrics and logs for:
 | `mm_frame_to_exec_sync_latency_ms` | Frame creation to execution sync request |
 | `mm_market_window_end_to_exec_sync_latency_ms` | Market window end to execution sync request |
 | `mm_order_sync_latency_ms` | Completed order-manager sync latency; falls back to request-to-snapshot for legacy paths |
-| `mm_execution_live_orders` | Current live orders by exchange |
+| `mm_execution_live_orders` | Current private-confirmed live orders by exchange |
+| `mm_execution_pending_orders` | Router-accepted place/cancel changes awaiting private confirmation |
+| `mm_execution_pending_order_max_age_ms` | Oldest pending order confirmation age by exchange |
 | `mm_execution_events_total` | Execution events by type |
 | `mm_order_validation_rejected_total` | Venue limit rejections |
 | `mm_persistence_*` | Persistence write/error counters and batch gauges |
@@ -209,7 +211,7 @@ Events are the durable source of truth. They should answer:
 | `PlaceOrdersRequested` / `PlaceOrdersAccepted` / `PlaceOrdersFailed` | `execution:orders:{exchange}` | Placement lifecycle |
 | `CancelOrdersRequested` / `CancelOrdersAccepted` / `CancelOrdersFailed` | `execution:orders:{exchange}` | Cancel lifecycle |
 | `OrderValidationRejected` | `execution:orders:{exchange}` | Venue rules rejected an order before REST |
-| `ExecutionSnapshot` | `execution:state:{exchange}` | Current live orders |
+| `ExecutionSnapshot` | `execution:state:{exchange}` | Current private-confirmed live orders plus pending place/cancel counts |
 | private snapshots/fills/balances | `private:state:{exchange}:...` | Exchange-confirmed private state |
 | `JointLedgerSnapshot` | `ledger:snapshot` | Consolidated portfolio state |
 | `RuntimeControlState` | `admin:events` | Kill switch, observe-only, pause state |
@@ -222,7 +224,7 @@ Events are the durable source of truth. They should answer:
 | `ControllerStageTiming` | `strategy:diagnostics:{actor_id}` or embedded in `ControllerDiagnostics.optimizer.timing` | `StrategyRunner` / `DecisionContext` | `actor_id`, `exchange`, `symbol`, `frame_step`, `stage`, `latency_ms` | Persist exact stage timings for SQL dashboards |
 | `RiskDecision` | `risk:events` | risk engine | `actor_id`, `exchange`, `symbol`, `frame_step`, `approved`, `rejection_counts`, `exposure_before`, `exposure_after`, `limits` | Durable explanation of risk output |
 | `ExecutionGateDecision` | `strategy:diagnostics:{actor_id}` or `execution:gates` | `StrategyRunner` | `actor_id`, `frame_step`, `venue_gates`, `blocked_reasons`, `executed` | Explain why live sync did or did not run |
-| `ExecutionSyncCompleted` | `execution:orders:{exchange}` | `OrderManager` / router path | `exchange`, `actor_id`, `symbol`, `frame_step`, `target_count`, `keep_count`, `cancel_count`, `place_count`, `accepted_count`, `latency_ms` | Clear success boundary for sync rounds |
+| `ExecutionSyncCompleted` | `execution:orders:{exchange}` | `OrderManager` / router path | `exchange`, `actor_id`, `symbol`, `frame_step`, `target_count`, `keep_count`, `cancel_count`, `place_count`, `accepted_count`, `pending_place_count`, `pending_cancel_count`, `pending_max_age_ms`, `latency_ms` | Clear success boundary for sync rounds and confirmation backlog |
 | `ExecutionSyncFailed` | `execution:errors` | `StrategyRunner` / `OrderManager` | `exchange`, `actor_id`, `symbol`, `frame_step`, `error`, `message`, `timeout_ms`, `retryable` | Clear failure boundary for sync rounds |
 | `AdapterRequestFailed` | `execution:orders:{exchange}` and structured log | `OrderRouter` / private REST adapters | `exchange`, `operation`, `error`, `message`, `retryable`, `attempt` | Separate exchange/API failures from strategy errors |
 | `PersistenceBatchWritten` | structured log, optional `persistence:events` | `PostgresEventWriter`, `ParquetEventWriter` | `writer`, `batch_size`, `latency_ms`, `queue_depth` | Persistence health and capacity planning |

@@ -243,6 +243,9 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "exchange": event.exchange,
             "timestamp_ms": event.timestamp_ms,
             "live_order_count": event.live_order_count,
+            "pending_place_count": event.pending_place_count,
+            "pending_cancel_count": event.pending_cancel_count,
+            "pending_max_age_ms": event.pending_max_age_ms,
             "live_order_ids": [item.exchange_order_id for item in live_orders[:10]],
             "live_orders": [
                 {

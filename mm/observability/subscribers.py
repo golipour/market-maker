@@ -258,13 +258,20 @@ class RuntimeObservabilitySubscriber:
 
     def _observe_execution_snapshot(self, snap: ExecutionSnapshot) -> None:
         self._finish_sync_latency(str(snap.exchange), snap.timestamp_ms)
+        exchange = str(snap.exchange)
         gauge(
             obs_schema.MM_EXECUTION_LIVE_ORDERS,
             float(snap.live_order_count),
-            labels={"exchange": str(snap.exchange)},
-            help="Current live orders by exchange",
+            labels={"exchange": exchange},
+            help="Current private-confirmed live orders by exchange",
         )
-        self._observe_live_order_side_metrics(str(snap.exchange), snap.live_orders.values())
+        self._observe_pending_order_metrics(
+            exchange,
+            pending_place_count=snap.pending_place_count,
+            pending_cancel_count=snap.pending_cancel_count,
+            pending_max_age_ms=snap.pending_max_age_ms,
+        )
+        self._observe_live_order_side_metrics(exchange, snap.live_orders.values())
 
     def _observe_execution_snapshot_dict(self, payload: dict[str, Any]) -> None:
         ex = str(payload.get("exchange", ""))
@@ -277,11 +284,44 @@ class RuntimeObservabilitySubscriber:
                 obs_schema.MM_EXECUTION_LIVE_ORDERS,
                 float(lc),
                 labels={"exchange": ex},
-                help="Current live orders by exchange",
+                help="Current private-confirmed live orders by exchange",
             )
+        self._observe_pending_order_metrics(
+            ex,
+            pending_place_count=int(payload.get("pending_place_count") or 0),
+            pending_cancel_count=int(payload.get("pending_cancel_count") or 0),
+            pending_max_age_ms=int(payload.get("pending_max_age_ms") or 0),
+        )
         live_orders = _payload_orders(payload.get("live_orders"))
         if live_orders:
             self._observe_live_order_payload_side_metrics(ex, live_orders)
+
+    def _observe_pending_order_metrics(
+        self,
+        exchange: str,
+        *,
+        pending_place_count: int,
+        pending_cancel_count: int,
+        pending_max_age_ms: int,
+    ) -> None:
+        gauge(
+            obs_schema.MM_EXECUTION_PENDING_ORDERS,
+            float(pending_place_count),
+            labels={"exchange": exchange, "operation": "place"},
+            help="Router-accepted order changes awaiting private confirmation",
+        )
+        gauge(
+            obs_schema.MM_EXECUTION_PENDING_ORDERS,
+            float(pending_cancel_count),
+            labels={"exchange": exchange, "operation": "cancel"},
+            help="Router-accepted order changes awaiting private confirmation",
+        )
+        gauge(
+            obs_schema.MM_EXECUTION_PENDING_ORDER_MAX_AGE_MS,
+            float(pending_max_age_ms),
+            labels={"exchange": exchange},
+            help="Oldest router-accepted order change awaiting private confirmation",
+        )
 
     def _finish_sync_latency(self, exchange: str, snapshot_ts_ms: int) -> None:
         pending = self._sync_pending_ts_ms.pop(exchange.lower().strip(), None)

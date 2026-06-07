@@ -165,6 +165,9 @@ def test_observability_subscriber_emits_side_aware_execution_metrics() -> None:
             exchange="nobitex",
             timestamp_ms=1300,
             live_order_count=2,
+            pending_place_count=1,
+            pending_cancel_count=2,
+            pending_max_age_ms=300,
             live_orders={
                 "bid-1": OpenOrder(
                     exchange_order_id="bid-1",
@@ -195,6 +198,9 @@ def test_observability_subscriber_emits_side_aware_execution_metrics() -> None:
     assert 'mm_execution_filled_qty_total{exchange="nobitex",side="bid",symbol="USDT_IRT"} 0.1' in text
     assert 'mm_execution_live_orders_by_side{exchange="nobitex",side="bid",symbol="USDT_IRT"} 1.0' in text
     assert 'mm_execution_live_order_qty{exchange="nobitex",side="ask",symbol="USDT_IRT"} 0.25' in text
+    assert 'mm_execution_pending_orders{exchange="nobitex",operation="place"} 1.0' in text
+    assert 'mm_execution_pending_orders{exchange="nobitex",operation="cancel"} 2.0' in text
+    assert 'mm_execution_pending_order_max_age_ms{exchange="nobitex"} 300.0' in text
 
 
 def test_observability_subscriber_emits_raw_market_feed_metrics() -> None:

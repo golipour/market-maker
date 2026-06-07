@@ -37,7 +37,7 @@ class LedgerOrderMismatch:
 
 @dataclass(frozen=True, slots=True)
 class LedgerConsistencyDiagnostic:
-    """Compare ledger live orders to OrderManager optimistic state."""
+    """Compare ledger live orders to OrderManager confirmed state."""
 
     exchange: str
     timestamp_ms: int
