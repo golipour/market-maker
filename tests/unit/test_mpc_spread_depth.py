@@ -13,9 +13,25 @@ from mm.mpc.mpc_tensor_batched import (
     _soft_fill_fraction,
     soft_fill_batched,
 )
-from mm.mpc.mpc_state import SigmoidMixtureAction
+from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
 from mm.mpc.reward_tensor import terminal_objective
 from mm.mpc.state_tensor import depth_bid_tensor
+
+
+class _FixedFlowModel:
+    def sample(self, sample_shape, device=None, dtype=None):
+        mod = torch
+        return (
+            mod.full(sample_shape, 1.0, dtype=dtype or mod.float64, device=device),
+            mod.full(sample_shape, 1.0, dtype=dtype or mod.float64, device=device),
+        )
+
+
+class _FixedPriceModel:
+    def sample_residual(self, sample_shape, device=None, dtype=None):
+        mod = torch
+        z = mod.zeros(sample_shape, dtype=dtype or mod.float64, device=device)
+        return z, z
 
 
 def test_optimizer_stores_objective_params() -> None:
@@ -36,7 +52,7 @@ def test_optimizer_stores_objective_params() -> None:
         quote_imbalance_skew_strength=0.4,
     )
     assert mpc.return_risk_aversion_beta == 2.0
-    assert mpc.inventory_threshold_penalty_weight == 0.0
+    assert mpc.inventory_threshold_penalty_weight == 4.0
     assert mpc.cash_threshold == 500.0
     assert mpc.inventory_threshold == 5.0
     assert mpc.quote_size_min_per_side == 1.0
@@ -44,6 +60,62 @@ def test_optimizer_stores_objective_params() -> None:
     assert mpc.quote_capacity_ratio == 0.5
     assert mpc.quote_imbalance_skew_strength == 0.4
     assert mpc.soft_fill_queue_model == "back_of_queue"
+
+
+def test_optimizer_passes_threshold_penalty_weight_to_objective(monkeypatch) -> None:
+    seen: list[float] = []
+
+    def fake_terminal_objective(
+        returns,
+        cash_path,
+        inv_path,
+        *,
+        return_risk_aversion_beta,
+        inventory_threshold_penalty_weight,
+        cash_threshold,
+        inventory_threshold,
+    ):
+        del cash_path, inv_path, return_risk_aversion_beta, cash_threshold, inventory_threshold
+        seen.append(float(inventory_threshold_penalty_weight))
+        objective = returns.mean()
+        return objective, {
+            "risk_adjusted_return": objective,
+            "threshold_shortfall_penalty": objective.new_tensor(0.0),
+        }
+
+    monkeypatch.setattr("mm.mpc.mpc_tensor_batched.terminal_objective", fake_terminal_objective)
+    mpc = MonteCarloMPCTensorBatched(
+        _FixedPriceModel(),
+        _FixedFlowModel(),
+        object(),
+        n_components=1,
+        n_samples=1,
+        horizon=1,
+        spread_max=2.0,
+        spread_step=1.0,
+        adam_epochs=1,
+        fixed_mc_samples=True,
+        inventory_threshold_penalty_weight=7.5,
+        cash_threshold=500.0,
+        inventory_threshold=5.0,
+        quote_size_min_per_side=1.0,
+    )
+
+    mpc.optimize(
+        State(
+            mid=100.0,
+            ob_rel=OrderbookRelative(bids=((1.0, 2.0),), asks=((1.0, 2.0),)),
+            buy_vol=1.0,
+            sell_vol=1.0,
+            inventory=1.0,
+            cash=1000.0,
+            buy_vwap=99.0,
+            sell_vwap=101.0,
+        )
+    )
+
+    assert seen
+    assert all(value == pytest.approx(7.5) for value in seen)
 
 
 def test_terminal_objective_uses_clear_component_names() -> None:

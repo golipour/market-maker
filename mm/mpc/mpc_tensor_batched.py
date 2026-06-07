@@ -101,7 +101,15 @@ class VenueOptimizerParams:
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
-            inventory_threshold_penalty_weight=0.0,
+            inventory_threshold_penalty_weight=max(
+                0.0,
+                float(
+                    data.get(
+                        "inventory_threshold_penalty_weight",
+                        base.inventory_threshold_penalty_weight,
+                    )
+                ),
+            ),
             cash_threshold=float(data.get("cash_threshold", base.cash_threshold)),
             inventory_threshold=float(
                 data.get("inventory_threshold", base.inventory_threshold)
@@ -833,7 +841,11 @@ class MonteCarloMPCTensorBatched:
             n_components=self.n_components,
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
-            inventory_threshold_penalty_weight=0.0,
+            inventory_threshold_penalty_weight=(
+                max(0.0, float(inventory_threshold_penalty_weight))
+                if inventory_threshold_penalty_weight is not None
+                else 0.0
+            ),
             cash_threshold=float(cash_threshold) if cash_threshold is not None else 0.0,
             inventory_threshold=(
                 float(inventory_threshold) if inventory_threshold is not None else 0.0
@@ -1399,7 +1411,7 @@ class MonteCarloMPCTensorBatched:
                     inv_path,
                     return_risk_aversion_beta=self.return_risk_aversion_beta,
                     inventory_threshold_penalty_weight=(
-                        0.0
+                        self.inventory_threshold_penalty_weight
                     ),
                     cash_threshold=self.cash_threshold,
                     inventory_threshold=self.inventory_threshold,

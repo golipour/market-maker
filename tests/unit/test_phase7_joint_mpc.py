@@ -442,8 +442,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert runtime.execution.global_.max_orders_per_side == 2
     assert controller.local_optimizer.return_risk_aversion_beta == pytest.approx(0.2)
     assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
-    assert controller.local_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.0)
-    assert controller.global_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.0)
+    assert controller.local_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.01)
+    assert controller.global_optimizer.inventory_threshold_penalty_weight == pytest.approx(0.02)
     assert controller.local_optimizer.cash_threshold == pytest.approx(300.0)
     assert controller.global_optimizer.cash_threshold == pytest.approx(1200.0)
     assert controller.local_optimizer.inventory_threshold == pytest.approx(3.3)

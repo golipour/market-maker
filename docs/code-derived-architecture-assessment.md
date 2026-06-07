@@ -196,21 +196,7 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 8. Threshold Penalty Config Appears Ineffective In Single-Venue Optimizer Path
-
-Severity: Medium
-
-The optimizer parses `inventory_threshold_penalty_weight`, but `terminal_objective()` is called with `inventory_threshold_penalty_weight=0.0` in the inspected single-venue path.
-
-Impact: Operators may configure threshold penalties expecting optimizer behavior changes that do not occur. Hard risk still applies, but soft inventory/cash shaping may be absent.
-
-Recommendation:
-
-- Either wire the configured weight into `terminal_objective()` or remove/mark the config as no-op.
-- Add tests proving objective components change when the configured penalty changes.
-- Surface no-op config fields in runtime validation.
-
-### 9. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
+### 8. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
 
 Severity: Low to Medium
 
@@ -224,7 +210,7 @@ Recommendation:
 - If pre-execution quantization should be visible earlier, populate it consistently.
 - Keep final validation at the execution boundary regardless.
 
-### 10. Optimistic OrderManager State Can Diverge From Ledger Truth
+### 9. Optimistic OrderManager State Can Diverge From Ledger Truth
 
 Severity: Medium
 
@@ -239,7 +225,7 @@ Recommendation:
 - Add explicit pending order/cancel states with timeouts.
 - Route `LedgerOrderManagerMismatch` events into the chosen operator notification path when alerting infrastructure is prioritized.
 
-### 11. Alerting Is Not Provisioned
+### 10. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -269,7 +255,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 12. Observability Depends Too Heavily On JSONB Event Queries
+### 11. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -288,7 +274,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 13. Custom Metrics Registry Has Limited Production Features
+### 12. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -302,7 +288,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 14. Event Bus And Persistence Backpressure Are Underdeveloped
+### 13. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -317,7 +303,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 15. Runtime Scaling Is One Bot Per Process
+### 14. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -333,7 +319,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 16. Exchange Capability And Factory Code Is Centralized
+### 15. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -346,7 +332,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 17. No Clear Schema Versioning Beyond Envelope Version
+### 16. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -361,7 +347,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 18. Secrets And Local Compose Defaults Need Production Hardening
+### 17. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -505,7 +491,6 @@ Priority recommendations:
 
 ### Priority 2: Engine And Execution Quality
 
-- Wire or remove no-op optimizer threshold penalty config.
 - Add an optimizer backend interface and fake backend tests.
 - Split `DecisionContext` into narrower diagnostic records.
 - Make execution state pending/confirmed rather than purely optimistic.

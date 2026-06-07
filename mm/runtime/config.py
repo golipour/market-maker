@@ -1390,7 +1390,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "enabled": config.risk.enabled,
             "local": config.risk.local.as_dict(),
             "global": config.risk.global_.as_dict(),
-            "note": "hard gates only; optimizer threshold-shortfall keys are legacy/no-op",
+            "note": "hard gates; optimizer threshold-shortfall keys provide soft objective shaping",
         },
         "reconcile": {
             **config.reconcile.as_dict(),
@@ -1406,10 +1406,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
             "inventory_threshold_penalty_weight": (
-                "legacy/no-op; shortage penalties are not applied by the optimizer"
+                "soft objective penalty weight for cash/inventory shortfall below thresholds"
             ),
-            "cash_threshold": "legacy/no-op quote-cash threshold",
-            "inventory_threshold": "legacy/no-op base-inventory threshold",
+            "cash_threshold": "quote-cash threshold used by the soft shortfall penalty",
+            "inventory_threshold": "base-inventory threshold used by the soft shortfall penalty",
             "quote_size_min_per_side": "baseline venue cumulative quote depth floor per side at spread_max",
             "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
             "quote_capacity_ratio": (

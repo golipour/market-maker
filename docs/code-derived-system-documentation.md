@@ -324,7 +324,7 @@ Returns are normalized by current wealth:
 wealth = cash + inventory * sell_vwap
 ```
 
-The threshold penalty is a one-sided normalized shortfall on simulated cash and inventory paths. In the main single-venue optimizer call, `inventory_threshold_penalty_weight` is currently passed as `0.0`, so the threshold term is effectively disabled there even though related config fields are parsed.
+The threshold penalty is a one-sided normalized shortfall on simulated cash and inventory paths. `inventory_threshold_penalty_weight`, `cash_threshold`, and `inventory_threshold` are parsed into venue optimizer params and passed into the single-venue and joint terminal objectives.
 
 ### Fill Simulation
 
