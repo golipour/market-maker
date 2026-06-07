@@ -1211,6 +1211,9 @@ FROM numeric_params{where}
 ORDER BY 1, 2"""
 
 
+_PRICE_SCALE_CONFIG_PARAM_REGEX = r"\.(reference_vwap_depth|shape_alpha|student_df|active_in_mpc)$"
+
+
 def _latest_strategy_model_params_sql() -> str:
     return f"""WITH model_defs(model_key, venue_scope, model_type) AS (
   {_model_params_values_sql("all")}
@@ -3180,24 +3183,56 @@ def model_parameters() -> dict[str, Any]:
         _row(15, "All Flattened Params", y=65),
         _panel(
             16,
+            "Local price scale/config",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="local",
+                model_type="price",
+                param_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX,
+            ),
+            x=0,
+            y=66,
+            w=12,
+            h=7,
+            decimals=4,
+        ),
+        _panel(
+            17,
+            "Global price scale/config",
+            "timeseries",
+            PG_DS,
+            _strategy_model_params_sql(
+                scope="global",
+                model_type="price",
+                param_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX,
+            ),
+            x=12,
+            y=66,
+            w=12,
+            h=7,
+            decimals=4,
+        ),
+        _panel(
+            18,
             "All local params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="local"),
+            _strategy_model_params_sql(scope="local", exclude_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX),
             x=0,
-            y=66,
+            y=73,
             w=12,
             h=10,
             decimals=4,
         ),
         _panel(
-            17,
+            19,
             "All global params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="global"),
+            _strategy_model_params_sql(scope="global", exclude_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX),
             x=12,
-            y=66,
+            y=73,
             w=12,
             h=10,
             decimals=4,

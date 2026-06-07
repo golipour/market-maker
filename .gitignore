@@ -6,3 +6,6 @@ __pycache__/
 
 # Runtime event lake (Parquet / JSONL); set MM_PARQUET_ROOT to repo-root data/parquet
 /data/
+
+# Local runtime logs
+/logs/mm-runtime.jsonl

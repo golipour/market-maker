@@ -2,6 +2,9 @@ server:
   http_listen_port: 3200
   grpc_listen_port: 9095
 
+usage_report:
+  reporting_enabled: false
+
 querier:
   frontend_worker:
     frontend_address: 127.0.0.1:9095
