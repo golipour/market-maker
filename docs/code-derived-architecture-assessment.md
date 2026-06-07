@@ -242,7 +242,7 @@ Recommendation:
 
 Severity: Medium
 
-`OrderManager` updates `_live_orders` optimistically after router results. Private state reconciliation later applies exchange-confirmed state. The ledger also maintains its own state and emits consistency diagnostics.
+`OrderManager` updates `_live_orders` optimistically after router results. Private state reconciliation later applies exchange-confirmed state. The ledger also maintains its own state and emits consistency diagnostics. Persistent ledger/order-manager mismatches now produce `LedgerOrderManagerMismatch` events.
 
 Impact: During the gap, own-order subtraction, planning, and diagnostics can see inconsistent live orders. Partial failures in cancel/place calls can widen the gap.
 
@@ -251,7 +251,7 @@ Recommendation:
 - Make the ledger the single authoritative live-order source for planning where feasible.
 - Track optimistic vs confirmed state separately.
 - Add explicit pending order/cancel states with timeouts.
-- Alert on ledger/order-manager mismatch.
+- Route `LedgerOrderManagerMismatch` events into the chosen operator notification path when alerting infrastructure is prioritized.
 
 ### 12. Alerting Is Not Provisioned
 
@@ -275,7 +275,7 @@ Add alert rules for:
 - execution sync failures,
 - router adapter failures,
 - order validation rejection spikes,
-- ledger/order-manager mismatch,
+- sustained `LedgerOrderManagerMismatch` events,
 - persistence write failures or queue growth,
 - Prometheus target down,
 - Loki log ingestion stopped,
@@ -507,7 +507,6 @@ Priority recommendations:
 ### Priority 0: Safety And Correctness
 
 - Add alert rules for stale data, stale private state, execution failures, persistence failures, and kill switch.
-- Add ledger/order-manager mismatch alerting.
 
 ### Priority 1: Scalability
 

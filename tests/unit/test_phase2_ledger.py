@@ -378,3 +378,93 @@ async def test_portfolio_ledger_service_publishes_consistency_diagnostic(
         await reconciler.stop()
         await exec_reconciler.stop()
         await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_ledger_service_publishes_persistent_mismatch_event() -> None:
+    now_ms = 1000
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(api_token="token"),
+    )
+    bus = InMemoryBus()
+    mismatch_queue = bus.subscribe_queue("ledger:diagnostics:mismatch:nobitex")
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 1000)
+    manager._live_orders = {"o1": _buy_order(qty=0.4)}
+    service = PortfolioLedgerService(
+        config,
+        config.binding,
+        bus,
+        order_managers={"nobitex": manager},
+        clock_ms=lambda: now_ms,
+    )
+    service._local.apply_snapshot(
+        PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=900,
+            balances={"BTC": make_balance("nobitex", "BTC", 1.0, 0.0, 900)},
+            open_orders={"o1": _buy_order(qty=0.5)},
+        )
+    )
+
+    await service._publish_after_update("nobitex")
+    assert mismatch_queue.empty()
+    now_ms = 1500
+    await service._publish_after_update("nobitex")
+    assert mismatch_queue.empty()
+    now_ms = 2000
+    await service._publish_after_update("nobitex")
+
+    payload = await asyncio.wait_for(mismatch_queue.get(), timeout=1.0)
+
+    assert payload["type"] == "LedgerOrderManagerMismatch"
+    assert payload["exchange"] == "nobitex"
+    assert payload["first_seen_ms"] == 1000
+    assert payload["timestamp_ms"] == 2000
+    assert payload["age_ms"] == 1000
+    assert payload["consecutive_count"] == 3
+    assert payload["ledger_order_count"] == 1
+    assert payload["manager_order_count"] == 1
+    assert payload["mismatches"][0]["reason"] == "remaining_qty"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_ledger_service_resets_persistent_mismatch_after_match() -> None:
+    now_ms = 1000
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(api_token="token"),
+    )
+    bus = InMemoryBus()
+    mismatch_queue = bus.subscribe_queue("ledger:diagnostics:mismatch:nobitex")
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 1000)
+    manager._live_orders = {"o1": _buy_order(qty=0.4)}
+    service = PortfolioLedgerService(
+        config,
+        config.binding,
+        bus,
+        order_managers={"nobitex": manager},
+        clock_ms=lambda: now_ms,
+    )
+    service._local.apply_snapshot(
+        PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=900,
+            balances={"BTC": make_balance("nobitex", "BTC", 1.0, 0.0, 900)},
+            open_orders={"o1": _buy_order(qty=0.5)},
+        )
+    )
+
+    await service._publish_after_update("nobitex")
+    now_ms = 1500
+    await service._publish_after_update("nobitex")
+    manager._live_orders = {"o1": _buy_order(qty=0.5)}
+    now_ms = 2000
+    await service._publish_after_update("nobitex")
+    manager._live_orders = {"o1": _buy_order(qty=0.4)}
+    now_ms = 2500
+    await service._publish_after_update("nobitex")
+    now_ms = 3000
+    await service._publish_after_update("nobitex")
+
+    assert mismatch_queue.empty()

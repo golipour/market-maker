@@ -317,6 +317,8 @@ def test_persistence_topics_default_when_unset() -> None:
     assert "execution:errors" in config.effective_persistence_topics
     assert "private:state:nobitex:errors" in config.effective_persistence_topics
     assert "private:state:wallex:errors" in config.effective_persistence_topics
+    assert "ledger:diagnostics:mismatch:nobitex" in config.effective_persistence_topics
+    assert "ledger:diagnostics:mismatch:wallex" in config.effective_persistence_topics
 
 
 def test_persistence_topic_template_rejects_unknown_placeholder() -> None:

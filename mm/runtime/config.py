@@ -564,6 +564,7 @@ class MarketMakerRuntimeConfig:
             f"private:state:{local_exchange}:snapshot",
             f"private:state:{local_exchange}:fills",
             f"private:state:{local_exchange}:errors",
+            f"ledger:diagnostics:mismatch:{local_exchange}",
         ]
         if self.controller is not None:
             topics.append(self.controller.normalized_decisions_topic)
@@ -579,6 +580,7 @@ class MarketMakerRuntimeConfig:
                     f"private:state:{global_exchange}:snapshot",
                     f"private:state:{global_exchange}:fills",
                     f"private:state:{global_exchange}:errors",
+                    f"ledger:diagnostics:mismatch:{global_exchange}",
                 ]
             )
         return tuple(dict.fromkeys(topics))

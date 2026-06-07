@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
@@ -12,7 +13,11 @@ from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
-from mm.ledger.models import LedgerConsistencyDiagnostic, LedgerOrderMismatch
+from mm.ledger.models import (
+    LedgerConsistencyDiagnostic,
+    LedgerOrderManagerMismatch,
+    LedgerOrderMismatch,
+)
 from mm.ledger.state_machine import VenueLedgerStateMachine, build_joint_ledger_snapshot
 from mm.runtime.config import MarketMakerRuntimeConfig
 
@@ -74,6 +79,13 @@ def _compare_live_orders(
     return not mismatches, tuple(mismatches)
 
 
+@dataclass(slots=True)
+class _MismatchTracker:
+    signature: tuple[tuple[str, str, str, str], ...]
+    first_seen_ms: int
+    consecutive_count: int = 1
+
+
 class PortfolioLedgerService:
     """Maintain the strategy-facing ledger from private state snapshots."""
 
@@ -105,6 +117,8 @@ class PortfolioLedgerService:
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
         self._reference_price = 0.0
+        self._mismatch_trackers: dict[str, _MismatchTracker] = {}
+        self._mismatch_alert_after_count = 3
 
     @property
     def local_ledger(self) -> VenueLedger:
@@ -275,9 +289,59 @@ class PortfolioLedgerService:
                 f"ledger:diagnostics:consistency:{exchange}",
                 diagnostic.as_payload(),
             )
+            mismatch = self._persistent_mismatch_event(diagnostic)
+            if mismatch is not None:
+                await self.bus.publish(
+                    f"ledger:diagnostics:mismatch:{exchange}",
+                    mismatch.as_payload(),
+                )
 
     def set_reference_price(self, price: float) -> None:
         self._reference_price = float(price)
+
+    def _persistent_mismatch_event(
+        self,
+        diagnostic: LedgerConsistencyDiagnostic,
+    ) -> LedgerOrderManagerMismatch | None:
+        exchange = diagnostic.exchange.lower().strip()
+        if diagnostic.matches:
+            self._mismatch_trackers.pop(exchange, None)
+            return None
+        signature = _mismatch_signature(diagnostic.mismatches)
+        tracker = self._mismatch_trackers.get(exchange)
+        if tracker is None or tracker.signature != signature:
+            tracker = _MismatchTracker(
+                signature=signature,
+                first_seen_ms=diagnostic.timestamp_ms,
+            )
+            self._mismatch_trackers[exchange] = tracker
+        else:
+            tracker.consecutive_count += 1
+        if tracker.consecutive_count < self._mismatch_alert_after_count:
+            return None
+        return LedgerOrderManagerMismatch(
+            exchange=exchange,
+            timestamp_ms=diagnostic.timestamp_ms,
+            first_seen_ms=tracker.first_seen_ms,
+            consecutive_count=tracker.consecutive_count,
+            ledger_order_count=diagnostic.ledger_order_count,
+            manager_order_count=diagnostic.manager_order_count,
+            mismatches=diagnostic.mismatches,
+        )
+
+
+def _mismatch_signature(
+    mismatches: tuple[LedgerOrderMismatch, ...],
+) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple(
+        (
+            mismatch.exchange_order_id,
+            mismatch.reason,
+            repr(mismatch.ledger_value),
+            repr(mismatch.manager_value),
+        )
+        for mismatch in mismatches
+    )
 
 
 def build_portfolio_ledger_service(

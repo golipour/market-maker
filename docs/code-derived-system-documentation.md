@@ -163,6 +163,8 @@ All strategy-facing prices are quote-per-base floats and all quantities are base
 - `ledger:snapshot` with a joint payload,
 - optional ledger vs order-manager consistency diagnostics.
 
+When ledger live orders and `OrderManager.live_orders` disagree with the same mismatch for three consecutive diagnostics, the service publishes `LedgerOrderManagerMismatch` on `ledger:diagnostics:mismatch:<exchange>`. This event includes mismatch reason, order id, ledger value, manager value, first-seen time, age, and consecutive count.
+
 The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledger exists, `StrategyRunner.on_joint_frame()` raises.
 
 ### Strategy Runner
@@ -466,6 +468,7 @@ Representative runtime topics:
 - execution errors,
 - execution orders and state per exchange,
 - private snapshots/fills/errors per exchange,
+- persistent ledger/order-manager mismatch diagnostics per exchange,
 - decisions, diagnostics, and target books when the controller is configured.
 
 Raw market-data topics are not in the default persistence topic list, but the observability subscriber watches raw topics for metrics.

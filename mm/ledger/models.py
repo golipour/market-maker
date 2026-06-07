@@ -12,6 +12,7 @@ __all__ = [
     "LedgerConsistencyDiagnostic",
     "LedgerFreshness",
     "LedgerOrderMismatch",
+    "LedgerOrderManagerMismatch",
     "VenueLedger",
 ]
 
@@ -53,5 +54,33 @@ class LedgerConsistencyDiagnostic:
             "ledger_order_count": int(self.ledger_order_count),
             "manager_order_count": int(self.manager_order_count),
             "matches": self.matches,
+            "mismatches": [m.as_payload() for m in self.mismatches],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LedgerOrderManagerMismatch:
+    """Persistent divergence between ledger truth and OrderManager state."""
+
+    exchange: str
+    timestamp_ms: int
+    first_seen_ms: int
+    consecutive_count: int
+    ledger_order_count: int
+    manager_order_count: int
+    mismatches: tuple[LedgerOrderMismatch, ...] = ()
+
+    def as_payload(self) -> dict[str, Any]:
+        timestamp_ms = int(self.timestamp_ms)
+        first_seen_ms = int(self.first_seen_ms)
+        return {
+            "type": "LedgerOrderManagerMismatch",
+            "exchange": self.exchange,
+            "timestamp_ms": timestamp_ms,
+            "first_seen_ms": first_seen_ms,
+            "age_ms": max(0, timestamp_ms - first_seen_ms),
+            "consecutive_count": int(self.consecutive_count),
+            "ledger_order_count": int(self.ledger_order_count),
+            "manager_order_count": int(self.manager_order_count),
             "mismatches": [m.as_payload() for m in self.mismatches],
         }
