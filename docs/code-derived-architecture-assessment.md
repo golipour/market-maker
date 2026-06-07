@@ -167,7 +167,7 @@ Recommendation:
 
 Severity: High for larger configs, Medium for current defaults
 
-The MPC path scales with `adam_epochs * horizon * n_samples * grid_levels`, and joint optimization roughly doubles the state/action work. The controller runs synchronously inside the async strategy loop.
+The MPC path scales with `adam_epochs * horizon * n_samples * grid_levels`, and joint optimization roughly doubles the state/action work. Decision compute now has a configured timeout and hold-current-orders fallback, but the underlying optimizer work can still continue in a background thread after a timeout.
 
 The inspected strategy code also captures optimizer stdout through `contextlib.redirect_stdout()` while calling the optimizer. That is useful for diagnostics, but it is another sign that optimizer execution is treated as an inline blocking step rather than an isolated compute service.
 
@@ -176,8 +176,8 @@ Impact: Larger configs can exceed the decision interval. If optimization stalls,
 Recommendation:
 
 - Export optimizer total time vs interval budget as a first-class SLO.
-- Add a hard decision timeout and safe fallback action.
-- Run the optimizer in a worker process or thread pool if CPU-bound.
+- Monitor `ControllerFallback` timeout rate and tune `decision_timeout_ms` per strategy interval.
+- Move from thread-based isolation to a dedicated worker process if CPU-bound optimizer work still starves the runtime.
 - Cache or warm-start carefully, with diagnostics for stale warm starts.
 - Add load tests for representative `n_samples`, `horizon`, `adam_epochs`, and symbol counts.
 
@@ -507,7 +507,6 @@ Priority recommendations:
 ### Priority 0: Safety And Correctness
 
 - Add alert rules for stale data, stale private state, execution failures, persistence failures, and kill switch.
-- Add optimizer decision timeout and safe fallback behavior.
 - Add ledger/order-manager mismatch alerting.
 
 ### Priority 1: Scalability

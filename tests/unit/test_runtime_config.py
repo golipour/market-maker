@@ -221,13 +221,16 @@ def test_controller_placement_settings_from_mapping() -> None:
             {
                 "enabled": True,
                 "placement_timeout_ms": 2500,
+                "decision_timeout_ms": 1200,
                 "placement_max_concurrency": 4,
             },
         )
     )
     assert config.controller is not None
     assert config.controller.placement_timeout_ms == 2500
+    assert config.controller.decision_timeout_ms == 1200
     assert config.controller.placement_max_concurrency == 4
+    assert config.as_contract()["controller"]["decision_timeout_ms"] == 1200
 
 
 def test_controller_action_start_after_steps_from_mapping() -> None:

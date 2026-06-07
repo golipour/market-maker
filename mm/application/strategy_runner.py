@@ -40,6 +40,14 @@ from mm.runtime.control import RuntimeControlPlane
 from mm.strategies.mpc_engine import MpcStrategyEngine, order_summary_dict
 
 
+class OptimizerDecisionTimeout(RuntimeError):
+    """Raised when MPC decision compute exceeds the configured frame budget."""
+
+
+class OptimizerDecisionInProgress(RuntimeError):
+    """Raised when the previous timed-out optimizer call is still running."""
+
+
 @dataclass(slots=True)
 class StrategyRunner:
     """Consumes ``JointStrategyFrame``, runs MPC, risk, and optional live execution.
@@ -70,6 +78,7 @@ class StrategyRunner:
     _diagnostics: DiagnosticsPublisher = field(init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
+    _decide_task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _last_local_exchange: str = field(default="", init=False, repr=False)
 
@@ -168,9 +177,14 @@ class StrategyRunner:
             decide_started = time.monotonic_ns()
             try:
                 self._engine.set_ledger_context(ledger)
-                decision = self._engine.decide(clean_frame, frame_step=self._frame_step)
+                decision = await self._decide_with_timeout(clean_frame, frame_step=self._frame_step)
                 ctx.record_decision(decision)
                 ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
+            except (OptimizerDecisionTimeout, OptimizerDecisionInProgress) as exc:
+                ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
+                ctx.record_warning(str(exc))
+                await self._publish_controller_fallback(frame, reason=_fallback_reason(exc), message=str(exc))
+                return approved
             except Exception as exc:
                 ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
                 ctx.record_controller_error(exc)
@@ -424,6 +438,55 @@ class StrategyRunner:
             ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
 
+    async def _decide_with_timeout(
+        self,
+        frame: StrategyInputFrame,
+        *,
+        frame_step: int,
+    ) -> StrategyDecision:
+        timeout_ms = int(self.config.decision_timeout_ms)
+        if timeout_ms <= 0:
+            return self._engine.decide(frame, frame_step=frame_step)
+        if self._decide_task is not None:
+            if not self._decide_task.done():
+                raise OptimizerDecisionInProgress(
+                    "OptimizerDecisionInProgress: previous optimizer decision is still running; "
+                    "holding current orders"
+                )
+            self._decide_task = None
+
+        task = asyncio.create_task(asyncio.to_thread(self._engine.decide, frame, frame_step=frame_step))
+        self._decide_task = task
+        timed_out = False
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_ms / 1000.0)
+        except asyncio.TimeoutError as exc:
+            timed_out = True
+            task.add_done_callback(self._on_decide_task_done)
+            raise OptimizerDecisionTimeout(
+                f"OptimizerDecisionTimeout: exceeded {timeout_ms}ms decision_timeout_ms; "
+                "holding current orders"
+            ) from exc
+        finally:
+            if not timed_out and self._decide_task is task:
+                self._decide_task = None
+
+    def _on_decide_task_done(self, task: asyncio.Task) -> None:
+        if self._decide_task is task:
+            self._decide_task = None
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log_event(
+                "optimizer_decision_task_failed",
+                {
+                    "actor_id": self.config.actor_id,
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
+
     async def _sync_joint_with_timeout(
         self,
         execution_book,
@@ -486,6 +549,28 @@ class StrategyRunner:
             payload["latency_ms"] = max(0.0, float(latency_ms))
         log_event("execution_sync_failed", payload)
         await self.bus.publish("execution:errors", payload)
+
+    async def _publish_controller_fallback(
+        self,
+        frame: StrategyInputFrame,
+        *,
+        reason: str,
+        message: str,
+    ) -> None:
+        await self._publish(
+            self.config.normalized_decisions_topic,
+            {
+                "type": "ControllerFallback",
+                "actor_id": self.config.actor_id,
+                "exchange": frame.local.exchange,
+                "symbol": frame.local.symbol,
+                "t_end_ms": frame.local.t_end_ms,
+                "frame_step": self._frame_step,
+                "reason": reason,
+                "fallback_policy": "hold_current_orders",
+                "message": message,
+            },
+        )
 
     async def _publish_controller_error(
         self,
@@ -550,6 +635,14 @@ def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:
         for exchange_order_id, open_order in venue.live_orders.items():
             out[f"{exchange_key}:{exchange_order_id}"] = open_order.order
     return out
+
+
+def _fallback_reason(exc: BaseException) -> str:
+    if isinstance(exc, OptimizerDecisionTimeout):
+        return "optimizer_decision_timeout"
+    if isinstance(exc, OptimizerDecisionInProgress):
+        return "optimizer_decision_in_progress"
+    return "controller_fallback"
 
 
 def _risk_rejection_rows(

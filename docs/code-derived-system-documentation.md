@@ -60,7 +60,7 @@ Most runtime components communicate through topic names rather than direct calls
 - `ObservabilityRuntimeConfig`: metrics, JSON logs, log path, run id, and OTLP settings.
 - `LiquiditySourcingRuntimeConfig`: single venue vs liquidity sourcing mode.
 - `ExecutionRuntimeConfig`: per-venue planner, observe-only, max order count, max size, and max quote distance.
-- `ControllerRuntimeConfig`: MPC model configs, optimizer config, orderbook grid, risk, reconciliation, observe-only, warmup, and topics.
+- `ControllerRuntimeConfig`: MPC model configs, optimizer config, orderbook grid, decision and placement timeouts, risk, reconciliation, observe-only, warmup, and topics.
 - `MarketMakerRuntimeConfig`: the resolved bot runtime.
 
 `runtime_config_from_mapping()` expects one bot per config file. It resolves:
@@ -176,7 +176,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 5. Produces a clean frame by subtracting own live orders from local and global orderbooks.
 6. Builds `TradingState` from the local ledger.
 7. Creates a `DecisionContext` for diagnostics.
-8. Runs `MpcStrategyEngine.decide()`.
+8. Runs `MpcStrategyEngine.decide()` under `decision_timeout_ms`.
 9. Prepares the execution target book according to per-venue execution settings.
 10. Computes venue execution gates.
 11. Runs target-book risk validation.
@@ -185,6 +185,8 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 14. Optionally syncs live orders through order managers with a timeout.
 15. Publishes a compact journal event.
 16. Always publishes `ControllerDiagnostics` in `finally`.
+
+When decision compute exceeds `decision_timeout_ms`, or a previous timed-out optimizer call is still running, the runner publishes a `ControllerFallback` event with `fallback_policy="hold_current_orders"`. It does not publish a new target book or approved action for that frame, so existing exchange orders are left unchanged.
 
 Live execution is blocked by:
 

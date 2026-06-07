@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -67,6 +68,7 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
         "actor_id": "test-runner",
         "observe_only": False,
         "action_start_after_steps": 0,
+        "decision_timeout_ms": 0,
         "placement_timeout_ms": 50,
         "risk": RiskRuntimeConfig(enabled=True),
         "optimizer": {
@@ -206,6 +208,50 @@ async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypa
     assert error["error"] == "ExecutionSyncTimeout"
     assert error["latency_ms"] >= 50.0
     assert "timestamp_ms" in error
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_holds_current_orders_after_decision_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def slow_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        time.sleep(0.05)
+        return strategy_decision_with_joint(frame.local, frame_step=frame_step, actor_id="test-runner")
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", slow_decide)
+
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    decision_queue = bus.subscribe_queue("strategy:decisions")
+    action_queue = bus.subscribe_queue("strategy:actions")
+    target_queue = bus.subscribe_queue("strategy:target_books:test-runner")
+    manager = _SlowOrderManager(delay_s=0.0)
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    runner = StrategyRunner(
+        config=_runner_config(decision_timeout_ms=10),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": manager},
+        risk_engine=PassThroughRiskEngine(),
+        bus=bus,
+    )
+
+    approved = await _run_market_frame(runner)
+
+    fallback = await asyncio.wait_for(decision_queue.get(), timeout=1.0)
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert approved == []
+    assert fallback["type"] == "ControllerFallback"
+    assert fallback["reason"] == "optimizer_decision_timeout"
+    assert fallback["fallback_policy"] == "hold_current_orders"
+    assert manager.sync_calls == 0
+    assert action_queue.empty()
+    assert target_queue.empty()
+    assert any("OptimizerDecisionTimeout" in warning for warning in diagnostics["warnings"])
+
+    await asyncio.sleep(0.06)
 
 
 @pytest.mark.asyncio
