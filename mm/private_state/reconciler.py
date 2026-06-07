@@ -46,27 +46,23 @@ class PrivateStateReconciler:
 
     async def start(self) -> None:
         await self.adapter.connect()
-        try:
-            snapshot = await self.adapter.snapshot()
-            await self._publish_snapshot(self.store.apply_snapshot(snapshot))
-        except Exception as exc:
-            await self._publish_adapter_error("initial_snapshot", exc)
+        self._tasks.append(asyncio.create_task(self._publish_initial_snapshot()))
         if isinstance(self.adapter, RestPollingPrivateStateAdapter):
             # One authoritative snapshot per poll: balances + open orders from the same fetch.
             # Avoids incremental diff streams that inferred synthetic zeros when an asset vanished
             # from a partial or flaky REST response.
-            self._tasks = [
+            self._tasks.extend([
                 asyncio.create_task(self._listen_rest_polling_unified()),
                 asyncio.create_task(self._listen_order_updates()),
-            ]
+            ])
             if self.fill_event_source == "exchange_fill_history":
                 self._tasks.append(asyncio.create_task(self._listen_fills()))
         else:
-            self._tasks = [
+            self._tasks.extend([
                 asyncio.create_task(self._listen_balances()),
                 asyncio.create_task(self._listen_open_orders()),
                 asyncio.create_task(self._listen_order_updates()),
-            ]
+            ])
             if self.fill_event_source == "exchange_fill_history":
                 self._tasks.append(asyncio.create_task(self._listen_fills()))
         if hasattr(self.adapter, "error_stream"):
@@ -81,6 +77,15 @@ class PrivateStateReconciler:
 
     def snapshot(self) -> PrivateStateSnapshot:
         return self.store.snapshot()
+
+    async def _publish_initial_snapshot(self) -> None:
+        try:
+            snapshot = await self.adapter.snapshot()
+            await self._publish_snapshot(self.store.apply_snapshot(snapshot))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._publish_adapter_error("initial_snapshot", exc)
 
     async def _listen_rest_polling_unified(self) -> None:
         poll_ms = max(500, int(getattr(self.adapter, "poll_interval_ms", 5000)))

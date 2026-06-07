@@ -78,6 +78,32 @@ class FakePrivateStateAdapter(AbstractPrivateStateAdapter):
             yield item
 
 
+class BlockingSnapshotPrivateStateAdapter(FakePrivateStateAdapter):
+    def __init__(self):
+        super().__init__()
+        self.snapshot_started = asyncio.Event()
+        self.release_snapshot = asyncio.Event()
+
+    async def snapshot(self) -> PrivateStateSnapshot:
+        self.snapshot_started.set()
+        await self.release_snapshot.wait()
+        return await super().snapshot()
+
+
+@pytest.mark.asyncio
+async def test_private_state_reconciler_start_does_not_wait_for_initial_snapshot() -> None:
+    adapter = BlockingSnapshotPrivateStateAdapter()
+    bus = InMemoryBus()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+
+    try:
+        await asyncio.wait_for(reconciler.start(), timeout=0.1)
+        await asyncio.wait_for(adapter.snapshot_started.wait(), timeout=1.0)
+    finally:
+        adapter.release_snapshot.set()
+        await reconciler.stop()
+
+
 @pytest.mark.asyncio
 async def test_private_state_reconciler_publishes_snapshot_and_open_orders() -> None:
     adapter = FakePrivateStateAdapter()

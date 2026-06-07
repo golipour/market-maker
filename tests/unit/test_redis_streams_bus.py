@@ -106,6 +106,26 @@ async def test_redis_streams_bus_skips_zero_balance_stream_writes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_redis_streams_bus_publish_keeps_local_delivery_when_stream_write_fails() -> None:
+    class FailingRedis:
+        async def xadd(self, stream, fields, **kwargs):
+            raise ConnectionError("redis unavailable")
+
+        async def aclose(self):
+            pass
+
+    bus = RedisStreamsBus(stream_prefix="test")
+    bus._redis = FailingRedis()
+    queue = bus.subscribe_queue("strategy:decisions")
+    event = {"type": "StrategyDecision", "actor_id": "a1"}
+
+    await bus.publish("strategy:decisions", event)
+
+    assert await asyncio.wait_for(queue.get(), timeout=1.0) is event
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_bus_subscribe_receives_cross_process_stream_events() -> None:
     redis = SharedFakeRedis()
     publisher = RedisStreamsBus(stream_prefix="test", read_block_ms=10)

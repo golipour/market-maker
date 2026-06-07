@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -38,11 +39,11 @@ class RedisStreamsBus(AbstractEventBus):
         self._closed = False
         self._forward_tasks: set[asyncio.Task] = set()
         self._subscribers: dict[str, list[asyncio.Queue[Any]]] = defaultdict(list)
+        self._last_error_log_monotonic: dict[tuple[str, str], float] = {}
 
     async def publish(self, topic: str, event: Any) -> None:
         for queue in list(self._subscribers.get(topic, ())):
             await queue.put(event)
-        r = await self._client()
         stream_event = _compact_stream_event(topic, event)
         if stream_event is None:
             return
@@ -50,7 +51,11 @@ class RedisStreamsBus(AbstractEventBus):
         kwargs: dict[str, Any] = {}
         if self.maxlen is not None and self.maxlen > 0:
             kwargs = {"maxlen": int(self.maxlen), "approximate": True}
-        await r.xadd(self._stream(topic), {"data": encode_envelope(envelope)}, **kwargs)
+        try:
+            r = await self._client()
+            await r.xadd(self._stream(topic), {"data": encode_envelope(envelope)}, **kwargs)
+        except Exception as exc:
+            self._log_stream_error("redis_stream_publish_failed", topic, exc)
 
     async def collect(self, topic: str, limit: int) -> list[Any]:
         out = []
@@ -122,13 +127,19 @@ class RedisStreamsBus(AbstractEventBus):
         task.add_done_callback(self._forward_tasks.discard)
 
     async def _forward_remote_stream(self, topic: str, queue: asyncio.Queue[Any]) -> None:
-        try:
-            async for envelope in self.subscribe_envelopes(topic, start_id="$"):
-                if getattr(envelope, "source", "") == self._source:
-                    continue
-                await queue.put(envelope.payload)
-        except asyncio.CancelledError:
-            raise
+        while not self._closed:
+            try:
+                async for envelope in self.subscribe_envelopes(topic, start_id="$"):
+                    if getattr(envelope, "source", "") == self._source:
+                        continue
+                    await queue.put(envelope.payload)
+                if not self._closed:
+                    await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log_stream_error("redis_stream_subscribe_failed", topic, exc)
+                await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
 
     async def _client(self) -> Any:
         if self._redis is None:
@@ -140,6 +151,27 @@ class RedisStreamsBus(AbstractEventBus):
     def _stream(self, topic: str) -> str:
         normalized = topic.replace(":", ".").strip(".")
         return f"{self.stream_prefix}.{normalized}"
+
+    def _log_stream_error(self, event: str, topic: str, exc: Exception) -> None:
+        key = (event, topic)
+        now = time.monotonic()
+        previous = self._last_error_log_monotonic.get(key, 0.0)
+        if now - previous < 10.0:
+            return
+        self._last_error_log_monotonic[key] = now
+        try:
+            from mm.observability.logs import log_event
+
+            log_event(
+                event,
+                {
+                    "topic": topic,
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                },
+            )
+        except Exception:
+            return
 
 
 def _balance_is_zero(balance: Balance) -> bool:

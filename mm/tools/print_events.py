@@ -320,7 +320,7 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
             for task in done:
                 label = pending.pop(task)
                 event = task.result()
-                print(json.dumps({"topic": label, **summarize_event(event)}, ensure_ascii=False))
+                print(json.dumps({"topic": label, **summarize_event(event)}, ensure_ascii=False), flush=True)
                 printed += 1
                 stats.printed = printed
                 if event_count > 0 and printed >= event_count:
@@ -348,7 +348,7 @@ async def run(args: argparse.Namespace) -> None:
             for role, selection in runtime.private_state_selections.items()
         }
         contract["strategy_runner_enabled"] = runtime.strategy_runner is not None
-        print(json.dumps(contract, ensure_ascii=False))
+        print(json.dumps(contract, ensure_ascii=False), flush=True)
         await run_print_loop(runtime, args)
         return
 
@@ -468,7 +468,7 @@ async def run(args: argparse.Namespace) -> None:
         "max_global_lag_ms": args.max_global_lag_ms,
         "global_grace_ms": args.global_grace_ms,
     }
-    print(json.dumps(contract, ensure_ascii=False))
+    print(json.dumps(contract, ensure_ascii=False), flush=True)
 
     await run_print_loop(runtime, args)
 
@@ -492,7 +492,7 @@ async def run_print_loop(runtime: RuntimeComponents, args: argparse.Namespace) -
                     f"printed {stats.printed} event(s) before timeout_s={args.timeout_s}; "
                     f"target_events={args.events}"
                 ),
-            }))
+            }), flush=True)
     finally:
         print_task.cancel()
         await asyncio.gather(print_task, return_exceptions=True)

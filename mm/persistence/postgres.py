@@ -73,6 +73,7 @@ class PostgresEventWriter:
         batch_size: int = 100,
         flush_interval_ms: int = 1000,
         run_id: str = "",
+        connect_timeout_s: int = 5,
     ):
         self.bus = bus
         self.topics = topics
@@ -80,6 +81,7 @@ class PostgresEventWriter:
         self.batch_size = max(1, int(batch_size))
         self.flush_interval_ms = max(50, int(flush_interval_ms))
         self.run_id = run_id
+        self.connect_timeout_s = max(1, int(connect_timeout_s))
         self._queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=self.batch_size * 10)
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
@@ -88,12 +90,18 @@ class PostgresEventWriter:
 
     async def start(self) -> None:
         self._stopped.clear()
-        ready = await asyncio.to_thread(self._ensure_ready)
         self._tasks = [asyncio.create_task(self._consume(topic)) for topic in self.topics]
         self._tasks.append(asyncio.create_task(self._write_loop()))
+        self._tasks.append(asyncio.create_task(self._ensure_ready_background()))
         log_event(
             "postgres_event_writer_started",
-            {"topics": list(self.topics), "batch_size": self.batch_size, "ready": ready},
+            {
+                "topics": list(self.topics),
+                "batch_size": self.batch_size,
+                "ready": False,
+                "startup": "non_blocking",
+                "connect_timeout_s": self.connect_timeout_s,
+            },
         )
 
     async def stop(self) -> None:
@@ -163,7 +171,10 @@ class PostgresEventWriter:
             return
         with self._lock:
             try:
-                conn = psycopg2.connect(self.database_url)
+                conn = psycopg2.connect(
+                    self.database_url,
+                    connect_timeout=self.connect_timeout_s,
+                )
                 try:
                     with conn.cursor() as cur:
                         if not self._ready:
@@ -277,7 +288,10 @@ class PostgresEventWriter:
             return False
         with self._lock:
             try:
-                conn = psycopg2.connect(self.database_url)
+                conn = psycopg2.connect(
+                    self.database_url,
+                    connect_timeout=self.connect_timeout_s,
+                )
                 try:
                     with conn.cursor() as cur:
                         cur.execute(_DDL)
@@ -291,6 +305,17 @@ class PostgresEventWriter:
                 counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
                 log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
                 return False
+
+    async def _ensure_ready_background(self) -> None:
+        ready = await asyncio.to_thread(self._ensure_ready)
+        if not ready and not self._stopped.is_set():
+            log_event(
+                "postgres_event_writer_degraded",
+                {
+                    "message": "postgres persistence is not ready; runtime continues and write batches will retry",
+                    "connect_timeout_s": self.connect_timeout_s,
+                },
+            )
 
 
 def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
