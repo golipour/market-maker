@@ -1,3 +1,11 @@
-from mm.strategies.mpc_engine import MpcStrategyEngine
+from mm.strategies.mpc_engine import (
+    MpcControllerOptimizerBackend,
+    MpcStrategyEngine,
+    StrategyOptimizerBackend,
+)
 
-__all__ = ["MpcStrategyEngine"]
+__all__ = [
+    "MpcControllerOptimizerBackend",
+    "MpcStrategyEngine",
+    "StrategyOptimizerBackend",
+]

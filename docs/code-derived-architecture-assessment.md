@@ -22,7 +22,6 @@ The main architectural risks are:
 - Postgres dashboards depend on expensive JSONB queries over large event payloads,
 - Parquet persistence stores JSON strings rather than typed columnar facts,
 - the MPC path can become CPU/GPU expensive as optimizer settings scale,
-- controller diagnostics and execution state are gathered through a broad mutable context object,
 - execution has a visible pending-confirmation window between router acceptance and private exchange truth,
 - Prometheus alert rules exist, but notification routing is not provisioned,
 - some state wiring has edge-case gaps.
@@ -181,22 +180,7 @@ Recommendation:
 - Cache or warm-start carefully, with diagnostics for stale warm starts.
 - Add load tests for representative `n_samples`, `horizon`, `adam_epochs`, and symbol counts.
 
-### 7. MPC And Controller Hot Path Are Tightly Coupled
-
-Severity: Medium
-
-`MpcStrategyEngine` directly constructs and calls the PyTorch-backed optimizer implementation. `DecisionContext` gathers frame state, clean frame state, trading state, ledger, timings, warnings, proposed/approved actions, execution gates, risk counters, and action-pipeline diagnostics across one strategy invocation.
-
-Impact: For the current low-frequency, single-bot runtime this is understandable and practical. As the controller grows, the broad mutable context can become hard to reason about and easy to mutate incorrectly. Direct strategy-to-PyTorch coupling also makes it harder to swap optimizer implementations, run the optimizer out of process, or unit-test the decision lifecycle separately from the math backend.
-
-Recommendation:
-
-- Introduce a small optimizer backend interface around `optimize(state)` and diagnostics retrieval.
-- Split `DecisionContext` into narrower records, for example frame diagnostics, decision diagnostics, risk diagnostics, and execution diagnostics.
-- Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
-- Add tests that exercise the strategy runner with a fake optimizer backend.
-
-### 8. Alert Notification Routing Is Not Provisioned
+### 7. Alert Notification Routing Is Not Provisioned
 
 Severity: Medium to High operational risk
 
@@ -211,7 +195,7 @@ Recommendation:
 - Add log-derived Loki alerts for events that are not yet Prometheus metrics, such as sustained `LedgerOrderManagerMismatch` events and Loki ingestion failures.
 - Tune thresholds per deployment interval and venue.
 
-### 9. Observability Depends Too Heavily On JSONB Event Queries
+### 8. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -230,7 +214,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 10. Custom Metrics Registry Has Limited Production Features
+### 9. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -244,7 +228,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 11. Event Bus And Persistence Backpressure Are Underdeveloped
+### 10. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -259,7 +243,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 12. Runtime Scaling Is One Bot Per Process
+### 11. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -275,7 +259,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 13. Exchange Capability And Factory Code Is Centralized
+### 12. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -288,7 +272,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 14. No Clear Schema Versioning Beyond Envelope Version
+### 13. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -303,7 +287,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 15. Secrets And Local Compose Defaults Need Production Hardening
+### 14. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -433,10 +417,6 @@ Priority recommendations:
 
 ## Prioritized Roadmap
 
-### Priority 0: Safety And Correctness
-
-- Add Alertmanager or Grafana notification routing for the provisioned Prometheus alert rules.
-
 ### Priority 1: Scalability
 
 - Add per-topic queue depth, lag, and payload-size metrics.
@@ -448,8 +428,6 @@ Priority recommendations:
 
 ### Priority 2: Engine And Execution Quality
 
-- Add an optimizer backend interface and fake backend tests.
-- Split `DecisionContext` into narrower diagnostic records.
 - Add load tests for optimizer settings and multi-symbol runtime.
 - Improve global frame alignment metrics and policy.
 

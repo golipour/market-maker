@@ -79,6 +79,7 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
         "observe_only": False,
         "action_start_after_steps": 0,
         "placement_timeout_ms": 1000,
+        "decision_timeout_ms": 0,
         "risk": RiskRuntimeConfig(enabled=True),
         "optimizer": {
             "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},

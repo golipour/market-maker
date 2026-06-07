@@ -10,7 +10,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol
 
 from mm.core.order_constraints import (
     OrderConstraints,
@@ -128,6 +128,82 @@ def _set_model_vwap_depth(model: Any, vwap_depth: float | None) -> None:
     setattr(model, "_target_depth_lots", max(0.0, depth))
 
 
+class StrategyOptimizerBackend(Protocol):
+    """Small optimizer boundary consumed by ``MpcStrategyEngine``."""
+
+    @property
+    def local_market_flow_model(self) -> Any | None:
+        ...
+
+    @property
+    def local_price_model(self) -> Any | None:
+        ...
+
+    @property
+    def global_market_flow_model(self) -> Any | None:
+        ...
+
+    @property
+    def global_price_model(self) -> Any | None:
+        ...
+
+    @property
+    def last_diagnostics(self) -> Any | None:
+        ...
+
+    @property
+    def global_sigmoid_action(self) -> Any | None:
+        ...
+
+    @property
+    def fallback_diagnostics(self) -> dict[str, Any]:
+        ...
+
+    def optimize(self, state: State) -> Any:
+        ...
+
+
+class MpcControllerOptimizerBackend:
+    """Adapter from the concrete MPC controller to the strategy backend protocol."""
+
+    def __init__(self, controller: Any):
+        self.controller = controller
+
+    @property
+    def local_market_flow_model(self) -> Any | None:
+        return getattr(self.controller, "local_market_flow_model", None)
+
+    @property
+    def local_price_model(self) -> Any | None:
+        return getattr(self.controller, "local_price_model", None)
+
+    @property
+    def global_market_flow_model(self) -> Any | None:
+        return getattr(self.controller, "global_market_flow_model", None)
+
+    @property
+    def global_price_model(self) -> Any | None:
+        return getattr(self.controller, "global_price_model", None)
+
+    @property
+    def last_diagnostics(self) -> Any | None:
+        return getattr(self.controller, "last_diagnostics", None)
+
+    @property
+    def global_sigmoid_action(self) -> Any | None:
+        return getattr(self.controller, "_last_global_sigmoid_action", None)
+
+    @property
+    def fallback_diagnostics(self) -> dict[str, Any]:
+        return {
+            "last_expected_delta_wealth": getattr(self.controller, "_last_E_dW", None),
+            "last_components": getattr(self.controller, "_last_J_components", None),
+        }
+
+    def optimize(self, state: State) -> Any:
+        return self.controller.optimize(state)
+
+
 def _market_flow_step_tuple(frame: StrategyInputFrame) -> tuple[Any, ...]:
     """Tuple shape expected by ``mm.mpc`` market-flow ``update`` (stats-only path)."""
 
@@ -164,7 +240,8 @@ class MpcStrategyEngine:
         default_factory=LiquiditySourcingRuntimeConfig
     )
     execution: ExecutionRuntimeConfig = field(default_factory=ExecutionRuntimeConfig)
-    _controller: Any = field(init=False, repr=False)
+    optimizer_backend: StrategyOptimizerBackend | None = field(default=None, repr=False)
+    _optimizer_backend: StrategyOptimizerBackend = field(init=False, repr=False)
     _local_market_flow_model: Any = field(init=False, repr=False)
     _local_price_model: Any = field(init=False, repr=False)
     _global_market_flow_model: Any = field(init=False, repr=False)
@@ -173,15 +250,15 @@ class MpcStrategyEngine:
     _ledger_context: JointLedgerSnapshot | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._controller = _build_controller(
+        self._optimizer_backend = self.optimizer_backend or _build_optimizer_backend(
             self.config,
             self.binding,
             liquidity_sourcing=self.liquidity_sourcing,
         )
-        self._local_market_flow_model = getattr(self._controller, "local_market_flow_model", None)
-        self._local_price_model = getattr(self._controller, "local_price_model", None)
-        self._global_market_flow_model = getattr(self._controller, "global_market_flow_model", None)
-        self._global_price_model = getattr(self._controller, "global_price_model", None)
+        self._local_market_flow_model = self._optimizer_backend.local_market_flow_model
+        self._local_price_model = self._optimizer_backend.local_price_model
+        self._global_market_flow_model = self._optimizer_backend.global_market_flow_model
+        self._global_price_model = self._optimizer_backend.global_price_model
 
     def set_ledger_context(self, ledger: JointLedgerSnapshot | None) -> None:
         self._ledger_context = ledger
@@ -280,8 +357,8 @@ class MpcStrategyEngine:
             )
         optimizer_stdout = io.StringIO()
         with contextlib.redirect_stdout(optimizer_stdout):
-            sigmoid_action = self._controller.optimize(state)
-        optimizer_run = getattr(self._controller, "last_diagnostics", None)
+            sigmoid_action = self._optimizer_backend.optimize(state)
+        optimizer_run = self._optimizer_backend.last_diagnostics
         local_max_orders_per_side = int(
             self.execution.local.max_orders_per_side
             or self.config.max_orders_per_side
@@ -304,7 +381,7 @@ class MpcStrategyEngine:
             if self.liquidity_sourcing.enabled and self.liquidity_sourcing.mode == "liquidity_sourcing"
             else "single_venue"
         )
-        global_sigmoid = getattr(self._controller, "_last_global_sigmoid_action", None)
+        global_sigmoid = self._optimizer_backend.global_sigmoid_action
         global_event = frame.global_ if sourcing_mode == "liquidity_sourcing" else None
         global_constraints = None
         if global_event is not None and self.binding.global_ is not None:
@@ -337,10 +414,11 @@ class MpcStrategyEngine:
             optimizer = optimizer_run.to_payload()
             optimizer["rollout"] = {**dict(optimizer.get("rollout", {})), "log": optimizer_log}
         else:
+            fallback = self._optimizer_backend.fallback_diagnostics
             optimizer = {
                 "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
-                "last_expected_delta_wealth": getattr(self._controller, "_last_E_dW", None),
-                "last_components": getattr(self._controller, "_last_J_components", None),
+                "last_expected_delta_wealth": fallback.get("last_expected_delta_wealth"),
+                "last_components": fallback.get("last_components"),
                 "log": optimizer_log,
             }
         decision = StrategyDecision(
@@ -435,6 +513,21 @@ class MpcStrategyEngine:
                 ),
             },
         )
+
+
+def _build_optimizer_backend(
+    config: ControllerRuntimeConfig,
+    binding: SymbolBinding,
+    *,
+    liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
+) -> StrategyOptimizerBackend:
+    return MpcControllerOptimizerBackend(
+        _build_controller(
+            config,
+            binding,
+            liquidity_sourcing=liquidity_sourcing,
+        )
+    )
 
 
 def _build_controller(

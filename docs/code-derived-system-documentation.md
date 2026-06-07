@@ -177,7 +177,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 4. Extracts live orders from the ledger.
 5. Produces a clean frame by subtracting own live orders from local and global orderbooks using tolerance-aware price matching.
 6. Builds `TradingState` from the local ledger.
-7. Creates a `DecisionContext` for diagnostics.
+7. Creates a `DecisionContext` for diagnostics. The context is the final assembler for `ControllerDiagnostics`, with timing, risk, execution-gate, and action-pipeline facts held in narrower diagnostic state records. The runner records lifecycle facts through those state records rather than broad compatibility aliases on the context.
 8. Runs `MpcStrategyEngine.decide()` under `decision_timeout_ms`.
 9. Prepares the execution target book according to per-venue execution settings.
 10. Computes venue execution gates.
@@ -189,6 +189,8 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 16. Always publishes `ControllerDiagnostics` in `finally`.
 
 When decision compute exceeds `decision_timeout_ms`, or a previous timed-out optimizer call is still running, the runner publishes a `ControllerFallback` event with `fallback_policy="hold_current_orders"`. It does not publish a new target book or approved action for that frame, so existing exchange orders are left unchanged.
+
+`MpcStrategyEngine` depends on a strategy-level optimizer backend protocol rather than the concrete tensor optimizer directly. The default backend wraps the existing `MonteCarloMPCTensorBatched` controller, while tests or future worker-process implementations can inject another backend that provides `optimize(state)`, model handles, optimizer diagnostics, and optional global sigmoid action.
 
 Live execution is blocked by:
 

@@ -83,6 +83,113 @@ def _order_stage_summary(orders: tuple[Any, ...]) -> dict[str, Any]:
 
 
 @dataclass(slots=True)
+class TimingDiagnosticsState:
+    """Mutable controller timing facts for one frame."""
+
+    latency_ms: float = 0.0
+    stage_timings_ms: dict[str, float] = field(default_factory=dict)
+
+    def record_stage_latency(self, stage: str, latency_ms: float) -> None:
+        name = stage.strip()
+        if not name:
+            return
+        self.stage_timings_ms[name] = max(0.0, float(latency_ms))
+
+    def optimizer_timing_payload(self) -> dict[str, float]:
+        payload = {f"{stage}_ms": value for stage, value in self.stage_timings_ms.items()}
+        if self.latency_ms:
+            payload["controller_total_ms"] = max(0.0, float(self.latency_ms))
+        return payload
+
+
+@dataclass(slots=True)
+class RiskDiagnosticsState:
+    """Mutable risk facts for one frame."""
+
+    proposed_actions: list[Action] = field(default_factory=list)
+    approved_actions: list[Action] = field(default_factory=list)
+    rejection_counts: dict[str, int] = field(default_factory=dict)
+    exposure_before: dict[str, float] = field(default_factory=dict)
+    exposure_after: dict[str, float] = field(default_factory=dict)
+
+    def record_result(
+        self,
+        proposed: list[Action],
+        approved: list[Action],
+        *,
+        rejection_counts: dict[str, int] | None = None,
+        exposure_before: dict[str, float] | None = None,
+        exposure_after: dict[str, float] | None = None,
+    ) -> None:
+        self.proposed_actions = list(proposed)
+        self.approved_actions = list(approved)
+        if exposure_before is not None:
+            self.exposure_before = dict(exposure_before)
+        if exposure_after is not None:
+            self.exposure_after = dict(exposure_after)
+        if rejection_counts:
+            self.rejection_counts = dict(rejection_counts)
+        elif len(approved) < len(proposed):
+            self.rejection_counts["actions_filtered"] = len(proposed) - len(approved)
+            proposed_orders = sum(len(a.orders) for a in proposed)
+            approved_orders = sum(len(a.orders) for a in approved)
+            if approved_orders < proposed_orders:
+                self.rejection_counts["orders_filtered"] = proposed_orders - approved_orders
+
+
+@dataclass(slots=True)
+class ExecutionDiagnosticsState:
+    """Mutable execution gate facts for one frame."""
+
+    executed: bool = False
+    blocked_reasons: list[str] = field(default_factory=list)
+    venue_gates: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def record_gates(
+        self,
+        *,
+        executed: bool,
+        blocked_reasons: list[str],
+        venue_gates: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        self.executed = executed
+        self.blocked_reasons = list(blocked_reasons)
+        if venue_gates is not None:
+            self.venue_gates = dict(venue_gates)
+
+    def as_diagnostics(self) -> ExecutionGateDiagnostics:
+        return ExecutionGateDiagnostics(
+            executed=self.executed,
+            blocked_reasons=tuple(self.blocked_reasons),
+            venue_gates=dict(self.venue_gates),
+        )
+
+
+@dataclass(slots=True)
+class ActionPipelineDiagnosticsState:
+    """Mutable action-pipeline report for one frame."""
+
+    report: ActionPipelineReport | None = None
+
+    def record_decision(self, decision: StrategyDecision) -> None:
+        if decision.action_pipeline_report is not None:
+            self.report = decision.action_pipeline_report
+
+    def apply_risk(self, risk_report: ActionStageReport) -> None:
+        if self.report is not None:
+            self.report.risk_approved_target = risk_report
+
+    def apply_execution(self, execution_report: ExecutionSyncReport, *, executed: bool) -> None:
+        if self.report is None:
+            return
+        apply_execution_stages_to_pipeline(
+            self.report,
+            execution_report,
+            executed=executed,
+        )
+
+
+@dataclass(slots=True)
 class DecisionContext:
     """Facts gathered across one ``StrategyRunner.on_frame`` invocation."""
 
@@ -96,21 +203,14 @@ class DecisionContext:
     ledger: JointLedgerSnapshot | None = None
     frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
-    latency_ms: float = 0.0
-    stage_timings_ms: dict[str, float] = field(default_factory=dict)
 
     decision: StrategyDecision | None = None
     controller_error: str | None = None
-    proposed_actions: list[Action] = field(default_factory=list)
-    approved_actions: list[Action] = field(default_factory=list)
-    executed: bool = False
-    blocked_reasons: list[str] = field(default_factory=list)
-    venue_gates: dict[str, dict[str, Any]] = field(default_factory=dict)
-    risk_rejection_counts: dict[str, int] = field(default_factory=dict)
-    risk_exposure_before: dict[str, float] = field(default_factory=dict)
-    risk_exposure_after: dict[str, float] = field(default_factory=dict)
-    action_pipeline_report: ActionPipelineReport | None = None
     extra_warnings: list[str] = field(default_factory=list)
+    timing: TimingDiagnosticsState = field(default_factory=TimingDiagnosticsState)
+    risk_state: RiskDiagnosticsState = field(default_factory=RiskDiagnosticsState)
+    execution_state: ExecutionDiagnosticsState = field(default_factory=ExecutionDiagnosticsState)
+    pipeline_state: ActionPipelineDiagnosticsState = field(default_factory=ActionPipelineDiagnosticsState)
 
     def record_controller_error(self, exc: BaseException) -> None:
         self.controller_error = f"{type(exc).__name__}: {exc}"
@@ -122,15 +222,11 @@ class DecisionContext:
             self.extra_warnings.append(text)
 
     def record_stage_latency(self, stage: str, latency_ms: float) -> None:
-        name = stage.strip()
-        if not name:
-            return
-        self.stage_timings_ms[name] = max(0.0, float(latency_ms))
+        self.timing.record_stage_latency(stage, latency_ms)
 
     def record_decision(self, decision: StrategyDecision) -> None:
         self.decision = decision
-        if decision.action_pipeline_report is not None:
-            self.action_pipeline_report = decision.action_pipeline_report
+        self.pipeline_state.record_decision(decision)
 
     def record_risk_result(
         self,
@@ -141,34 +237,19 @@ class DecisionContext:
         exposure_before: dict[str, float] | None = None,
         exposure_after: dict[str, float] | None = None,
     ) -> None:
-        self.proposed_actions = list(proposed)
-        self.approved_actions = list(approved)
-        if exposure_before is not None:
-            self.risk_exposure_before = dict(exposure_before)
-        if exposure_after is not None:
-            self.risk_exposure_after = dict(exposure_after)
-        if rejection_counts:
-            self.risk_rejection_counts = dict(rejection_counts)
-        elif len(approved) < len(proposed):
-            self.risk_rejection_counts["actions_filtered"] = len(proposed) - len(approved)
-            proposed_orders = sum(len(a.orders) for a in proposed)
-            approved_orders = sum(len(a.orders) for a in approved)
-            if approved_orders < proposed_orders:
-                self.risk_rejection_counts["orders_filtered"] = proposed_orders - approved_orders
+        self.risk_state.record_result(
+            proposed,
+            approved,
+            rejection_counts=rejection_counts,
+            exposure_before=exposure_before,
+            exposure_after=exposure_after,
+        )
 
     def apply_risk_to_pipeline(self, risk_report: ActionStageReport) -> None:
-        if self.action_pipeline_report is None:
-            return
-        self.action_pipeline_report.risk_approved_target = risk_report
+        self.pipeline_state.apply_risk(risk_report)
 
     def apply_execution_to_pipeline(self, execution_report: ExecutionSyncReport, *, executed: bool) -> None:
-        if self.action_pipeline_report is None:
-            return
-        apply_execution_stages_to_pipeline(
-            self.action_pipeline_report,
-            execution_report,
-            executed=executed,
-        )
+        self.pipeline_state.apply_execution(execution_report, executed=executed)
 
     def record_execution_gates(
         self,
@@ -177,10 +258,11 @@ class DecisionContext:
         blocked_reasons: list[str],
         venue_gates: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        self.executed = executed
-        self.blocked_reasons = list(blocked_reasons)
-        if venue_gates is not None:
-            self.venue_gates = dict(venue_gates)
+        self.execution_state.record_gates(
+            executed=executed,
+            blocked_reasons=blocked_reasons,
+            venue_gates=venue_gates,
+        )
 
     def to_diagnostics(self) -> ControllerDiagnostics:
         decision = self.decision
@@ -211,11 +293,7 @@ class DecisionContext:
         optimizer = self._optimizer_diagnostics(decision)
         action_pipeline = self._action_pipeline(decision)
         risk = self._risk_diagnostics()
-        execution_gates = ExecutionGateDiagnostics(
-            executed=self.executed,
-            blocked_reasons=tuple(self.blocked_reasons),
-            venue_gates=dict(self.venue_gates),
-        )
+        execution_gates = self.execution_state.as_diagnostics()
 
         return ControllerDiagnostics(
             actor_id=self.config.actor_id,
@@ -339,9 +417,7 @@ class DecisionContext:
         return {}
 
     def _optimizer_diagnostics(self, decision: StrategyDecision | None) -> OptimizerDiagnostics:
-        stage_timing_payload = {f"{stage}_ms": value for stage, value in self.stage_timings_ms.items()}
-        if self.latency_ms:
-            stage_timing_payload["controller_total_ms"] = max(0.0, float(self.latency_ms))
+        stage_timing_payload = self.timing.optimizer_timing_payload()
         def config_payload(base: dict[str, Any]) -> dict[str, Any]:
             return {
                 **dict(base),
@@ -380,8 +456,8 @@ class DecisionContext:
         )
 
     def _action_pipeline(self, decision: StrategyDecision | None) -> ActionPipelineDiagnostics:
-        if self.action_pipeline_report is not None:
-            report = self.action_pipeline_report
+        if self.pipeline_state.report is not None:
+            report = self.pipeline_state.report
             return ActionPipelineDiagnostics(
                 continuous=dict(report.continuous),
                 ladder=report.ladder.as_dict(),
@@ -396,7 +472,7 @@ class DecisionContext:
             )
         if decision is None:
             return ActionPipelineDiagnostics()
-        approved_orders = tuple(order for a in self.approved_actions for order in a.orders)
+        approved_orders = tuple(order for a in self.risk_state.approved_actions for order in a.orders)
         target_summary = _order_stage_summary_from_dicts(tuple(decision.orders))
         return ActionPipelineDiagnostics(
             continuous=dict(decision.diagnostics.continuous_action_depth),
@@ -404,23 +480,23 @@ class DecisionContext:
             capped=target_summary,
             target_book=target_summary,
             risk_approved_target=_order_stage_summary(approved_orders),
-            router_accepted=_order_stage_summary(approved_orders) if self.executed else {},
+            router_accepted=_order_stage_summary(approved_orders) if self.execution_state.executed else {},
         )
 
     def _risk_diagnostics(self) -> RiskDiagnostics:
         limits = self.config.risk
         orders_ok = all(
             len(a.orders) == len(p.orders)
-            for a, p in zip(self.approved_actions, self.proposed_actions)
-        ) if self.proposed_actions else True
-        exposure_before = self.risk_exposure_before or {
+            for a, p in zip(self.risk_state.approved_actions, self.risk_state.proposed_actions)
+        ) if self.risk_state.proposed_actions else True
+        exposure_before = self.risk_state.exposure_before or {
             "inventory": self.trading_state.inventory,
             "cash": self.trading_state.cash,
         }
-        exposure_after = self.risk_exposure_after or exposure_before
+        exposure_after = self.risk_state.exposure_after or exposure_before
         return RiskDiagnostics(
-            approved=orders_ok and not self.risk_rejection_counts,
-            rejection_counts=dict(self.risk_rejection_counts),
+            approved=orders_ok and not self.risk_state.rejection_counts,
+            rejection_counts=dict(self.risk_state.rejection_counts),
             exposure_before=exposure_before,
             exposure_after=exposure_after,
             limits=_risk_limits_payload(limits),

@@ -400,6 +400,60 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
     assert decision.action_pipeline_report.target_book.order_count >= 1
 
 
+def test_mpc_engine_uses_injected_optimizer_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mm.strategies.mpc_engine import MpcStrategyEngine
+
+    class _FakeBackend:
+        local_market_flow_model = None
+        local_price_model = None
+        global_market_flow_model = None
+        global_price_model = None
+        last_diagnostics = None
+        global_sigmoid_action = None
+        fallback_diagnostics = {
+            "last_expected_delta_wealth": 1.25,
+            "last_components": {"fake": 1.25},
+        }
+
+        def __init__(self) -> None:
+            self.states = []
+
+        def optimize(self, state):
+            self.states.append(state)
+            return _sigmoid_action()
+
+    def _should_not_build_controller(*args, **kwargs):
+        raise AssertionError("concrete MPC controller should not be built")
+
+    monkeypatch.setattr("mm.strategies.mpc_engine._build_controller", _should_not_build_controller)
+
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        controller=ControllerRuntimeConfig(
+            enabled=True,
+            actor_id="mpc-controller",
+            orderbook_grid=OrderbookGridConfig(spread_max=200.0, spread_step=20.0),
+            optimizer={
+                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+            },
+        ),
+    )
+    backend = _FakeBackend()
+    engine = MpcStrategyEngine(
+        config=runtime.controller,
+        binding=runtime.binding,
+        optimizer_backend=backend,
+    )
+
+    decision = engine.decide(StrategyInputFrame(local=_market_event()), frame_step=1)
+
+    assert len(backend.states) == 1
+    assert decision.joint_target_book is not None
+    assert decision.diagnostics.optimizer["last_expected_delta_wealth"] == pytest.approx(1.25)
+    assert decision.action_pipeline_report.target_book.order_count >= 1
+
+
 @pytest.mark.asyncio
 async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.MonkeyPatch) -> None:
     order = Order("nobitex", "BTC_IRT", "buy", 99.0, 1.0, client_order_id="c1")

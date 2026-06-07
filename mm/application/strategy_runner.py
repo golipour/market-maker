@@ -429,13 +429,13 @@ class StrategyRunner:
                 )
             return approved
         except Exception as exc:
-            if "risk" not in ctx.stage_timings_ms:
+            if "risk" not in ctx.timing.stage_timings_ms:
                 ctx.record_stage_latency("risk", _elapsed_ms(risk_started) if "risk_started" in locals() else 0.0)
             ctx.record_controller_error(exc)
             await self._publish_controller_error(frame, exc)
             return approved
         finally:
-            ctx.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
+            ctx.timing.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
 
     async def _decide_with_timeout(
@@ -510,7 +510,7 @@ class StrategyRunner:
             ctx.record_warning(message)
             ctx.record_execution_gates(
                 executed=False,
-                blocked_reasons=[*ctx.blocked_reasons, "execution_sync_timeout"],
+                blocked_reasons=[*ctx.execution_state.blocked_reasons, "execution_sync_timeout"],
             )
             await self._publish_execution_error(ctx, message, latency_ms=_elapsed_ms(started_ns))
             return None
@@ -519,7 +519,7 @@ class StrategyRunner:
             ctx.record_warning(message)
             ctx.record_execution_gates(
                 executed=False,
-                blocked_reasons=[*ctx.blocked_reasons, "execution_sync_error"],
+                blocked_reasons=[*ctx.execution_state.blocked_reasons, "execution_sync_error"],
             )
             await self._publish_execution_error(ctx, message, latency_ms=_elapsed_ms(started_ns))
             return None
@@ -654,11 +654,12 @@ def _risk_rejection_rows(
     if not rejection_counts:
         return ()
     source_orders: tuple[dict[str, Any], ...] = ()
-    if ctx.action_pipeline_report is not None:
+    report = ctx.pipeline_state.report
+    if report is not None:
         source_orders = (
-            ctx.action_pipeline_report.risk_approved_target.orders
-            or ctx.action_pipeline_report.capped.orders
-            or ctx.action_pipeline_report.target_book.orders
+            report.risk_approved_target.orders
+            or report.capped.orders
+            or report.target_book.orders
         )
     if not source_orders and fallback_orders:
         source_orders = tuple(order_summary_dict(order) for order in fallback_orders)
