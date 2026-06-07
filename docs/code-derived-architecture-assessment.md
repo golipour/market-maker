@@ -224,21 +224,7 @@ Recommendation:
 - If pre-execution quantization should be visible earlier, populate it consistently.
 - Keep final validation at the execution boundary regardless.
 
-### 10. Own-Order Subtraction Uses Exact Float Price Matching
-
-Severity: Medium
-
-`subtract_own_orders()` subtracts open orders by exact float price keys in the book. Order adapters may round prices at execution, while strategy frames use float target prices.
-
-Impact: Own orders may fail to subtract if live order price differs from public book level by rounding or representation. That can bias the clean book and cause self-referential quote decisions.
-
-Recommendation:
-
-- Subtract using venue tick-aware price normalization or a tolerance.
-- Use exchange-confirmed live order prices after adapter normalization.
-- Add tests for rounded prices and cross-venue unit scaling.
-
-### 11. Optimistic OrderManager State Can Diverge From Ledger Truth
+### 10. Optimistic OrderManager State Can Diverge From Ledger Truth
 
 Severity: Medium
 
@@ -253,7 +239,7 @@ Recommendation:
 - Add explicit pending order/cancel states with timeouts.
 - Route `LedgerOrderManagerMismatch` events into the chosen operator notification path when alerting infrastructure is prioritized.
 
-### 12. Alerting Is Not Provisioned
+### 11. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -283,7 +269,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 13. Observability Depends Too Heavily On JSONB Event Queries
+### 12. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -302,7 +288,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 14. Custom Metrics Registry Has Limited Production Features
+### 13. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -316,7 +302,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 15. Event Bus And Persistence Backpressure Are Underdeveloped
+### 14. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -331,7 +317,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 16. Runtime Scaling Is One Bot Per Process
+### 15. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -347,7 +333,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 17. Exchange Capability And Factory Code Is Centralized
+### 16. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -360,7 +346,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 18. No Clear Schema Versioning Beyond Envelope Version
+### 17. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -375,7 +361,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 19. Secrets And Local Compose Defaults Need Production Hardening
+### 18. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -522,7 +508,6 @@ Priority recommendations:
 - Wire or remove no-op optimizer threshold penalty config.
 - Add an optimizer backend interface and fake backend tests.
 - Split `DecisionContext` into narrower diagnostic records.
-- Make own-order subtraction tick/tolerance-aware.
 - Make execution state pending/confirmed rather than purely optimistic.
 - Add load tests for optimizer settings and multi-symbol runtime.
 - Improve global frame alignment metrics and policy.

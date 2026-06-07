@@ -175,7 +175,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 2. Increments `frame_step`.
 3. Syncs the runtime control-plane kill switch into the risk engine.
 4. Extracts live orders from the ledger.
-5. Produces a clean frame by subtracting own live orders from local and global orderbooks.
+5. Produces a clean frame by subtracting own live orders from local and global orderbooks using tolerance-aware price matching.
 6. Builds `TradingState` from the local ledger.
 7. Creates a `DecisionContext` for diagnostics.
 8. Runs `MpcStrategyEngine.decide()` under `decision_timeout_ms`.

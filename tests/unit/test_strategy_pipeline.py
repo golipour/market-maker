@@ -59,6 +59,36 @@ def test_subtract_own_orders_removes_and_reduces_matching_levels():
     assert clean.asks == (PriceLevel(101.0, 4.0),)
 
 
+def test_subtract_own_orders_matches_tiny_price_rounding_difference():
+    state_orders = {
+        "bid-1": Order("nobitex", "BTC_IRT", "buy", 100.000000001, 2.0),
+    }
+
+    clean = subtract_own_orders(market_event().orderbook, state_orders)
+
+    assert clean.bids == (PriceLevel(100.0, 3.0), PriceLevel(99.0, 3.0))
+
+
+def test_subtract_own_orders_ignores_price_outside_tolerance():
+    state_orders = {
+        "bid-1": Order("nobitex", "BTC_IRT", "buy", 100.01, 2.0),
+    }
+
+    clean = subtract_own_orders(market_event().orderbook, state_orders)
+
+    assert clean.bids == market_event().orderbook.bids
+
+
+def test_subtract_own_orders_drops_level_without_negative_depth():
+    state_orders = {
+        "bid-1": Order("nobitex", "BTC_IRT", "buy", 100.0, 9.0),
+    }
+
+    clean = subtract_own_orders(market_event().orderbook, state_orders)
+
+    assert clean.bids == (PriceLevel(99.0, 3.0),)
+
+
 def test_clean_strategy_frame_adjusts_local_book():
     frame = StrategyInputFrame(local=market_event())
     open_orders = {"own-bid": Order("nobitex", "BTC_IRT", "buy", 100.0, 4.0)}
