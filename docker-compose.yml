@@ -49,6 +49,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./docker/prometheus:/etc/prometheus/rules
       - prometheus_data:/prometheus
 
   loki:

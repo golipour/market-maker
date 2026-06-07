@@ -24,7 +24,7 @@ The main architectural risks are:
 - the MPC path can become CPU/GPU expensive as optimizer settings scale,
 - controller diagnostics and execution state are gathered through a broad mutable context object,
 - execution has a visible pending-confirmation window between router acceptance and private exchange truth,
-- alerting is not provisioned,
+- Prometheus alert rules exist, but notification routing is not provisioned,
 - some state wiring has edge-case gaps.
 
 ## Strengths
@@ -196,36 +196,20 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 8. Alerting Is Not Provisioned
+### 8. Alert Notification Routing Is Not Provisioned
 
-Severity: High operational risk
+Severity: Medium to High operational risk
 
-Grafana dashboards exist, but no Grafana alert rules, Prometheus alert rules, or Alertmanager configuration were found.
+Prometheus alert rules are now provisioned in `docker/prometheus/market_maker_alerts.yml` and mounted by the local Compose stack. They cover target down, stale market data, high ingest/frame lag, stale private/ledger readiness, execution sync failures, router failures, stale pending order confirmations, validation rejection spikes, persistence errors, kill switch, and observe-only state.
 
-Impact: Operators must watch dashboards manually. Critical issues such as stale market data, stale private state, execution failures, high reject rates, persistence failures, and kill-switch state may go unnoticed.
+Impact: Prometheus can evaluate and display firing alerts, but no Alertmanager, Grafana contact point, notification policy, escalation route, or on-call receiver is provisioned. Operators still need to watch Prometheus/Grafana manually unless they add local notification routing.
 
 Recommendation:
 
-Add alert rules for:
-
-- no market events for a configured venue/symbol,
-- raw market ingest lag above threshold,
-- frame age above threshold,
-- stale or missing private state,
-- controller decisions missing,
-- optimizer total time near interval budget,
-- risk rejects above baseline,
-- execution sync failures,
-- router adapter failures,
-- order validation rejection spikes,
-- pending order confirmation age above threshold,
-- sustained `LedgerOrderManagerMismatch` events,
-- persistence write failures or queue growth,
-- Prometheus target down,
-- Loki log ingestion stopped,
-- Postgres write latency high,
-- kill switch enabled,
-- unexpected observe-only/live state.
+- Add Alertmanager or Grafana-managed contact points and notification policies.
+- Route critical execution, market-data, persistence, and kill-switch alerts to an operator channel.
+- Add log-derived Loki alerts for events that are not yet Prometheus metrics, such as sustained `LedgerOrderManagerMismatch` events and Loki ingestion failures.
+- Tune thresholds per deployment interval and venue.
 
 ### 9. Observability Depends Too Heavily On JSONB Event Queries
 
@@ -368,7 +352,8 @@ Logs and traces:
 
 ### Gaps
 
-- No alert rules.
+- No Alertmanager/contact-point notification routing.
+- No Loki alert rules for log-only failure modes.
 - No event-loop lag metric.
 - No process CPU/memory/thread/file-descriptor metrics.
 - No external exchange API request latency/success metrics per endpoint.
@@ -450,7 +435,7 @@ Priority recommendations:
 
 ### Priority 0: Safety And Correctness
 
-- Add alert rules for stale data, stale private state, execution failures, persistence failures, and kill switch.
+- Add Alertmanager or Grafana notification routing for the provisioned Prometheus alert rules.
 
 ### Priority 1: Scalability
 

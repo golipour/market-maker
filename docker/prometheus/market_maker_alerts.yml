@@ -1,0 +1,122 @@
+groups:
+  - name: market-maker-runtime
+    rules:
+      - alert: MarketMakerMetricsTargetDown
+        expr: up{job="market_maker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: runtime
+        annotations:
+          summary: "Market maker metrics target is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for more than 1 minute."
+
+      - alert: MarketMakerNoRawOrderbookData
+        expr: time() * 1000 - mm_raw_market_event_timestamp_ms{kind="orderbook"} > 30000
+        for: 1m
+        labels:
+          severity: critical
+          component: market-data
+        annotations:
+          summary: "No recent raw orderbook data for {{ $labels.exchange }} {{ $labels.symbol }}"
+          description: "The latest raw orderbook timestamp is more than 30s behind wall clock."
+
+      - alert: MarketMakerRawMarketIngestLagHigh
+        expr: mm_raw_market_ingest_lag_latest_ms > 30000
+        for: 1m
+        labels:
+          severity: warning
+          component: market-data
+        annotations:
+          summary: "Raw market ingest lag is high for {{ $labels.exchange }} {{ $labels.symbol }}"
+          description: "Latest {{ $labels.kind }} ingest lag is {{ $value }}ms."
+
+      - alert: MarketMakerFrameAgeHigh
+        expr: mm_frame_age_ms > 10000
+        for: 1m
+        labels:
+          severity: warning
+          component: controller
+        annotations:
+          summary: "Controller frame age is high for {{ $labels.exchange }} {{ $labels.symbol }}"
+          description: "Controller diagnostics report frame age {{ $value }}ms."
+
+      - alert: MarketMakerFrameSyncNotReady
+        expr: mm_frame_sync_ready{field=~"local_private_ready|global_private_ready|ledger_fresh"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: private-state
+        annotations:
+          summary: "Frame sync dependency is not ready for {{ $labels.exchange }} {{ $labels.symbol }}"
+          description: "{{ $labels.field }} has remained false for more than 2 minutes."
+
+      - alert: MarketMakerExecutionSyncFailed
+        expr: increase(mm_execution_sync_failed_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: execution
+        annotations:
+          summary: "Execution sync failed on {{ $labels.exchange }}"
+          description: "{{ $value }} execution sync failure(s) observed in the last 5 minutes."
+
+      - alert: MarketMakerOrderRouterFailure
+        expr: increase(mm_order_router_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: execution
+        annotations:
+          summary: "Order router adapter failure on {{ $labels.exchange }}"
+          description: "{{ $labels.operation }} failed with {{ $labels.error }} in the last 5 minutes."
+
+      - alert: MarketMakerPendingOrderConfirmationStale
+        expr: mm_execution_pending_order_max_age_ms > 30000
+        for: 30s
+        labels:
+          severity: critical
+          component: execution
+        annotations:
+          summary: "Pending order confirmation is stale on {{ $labels.exchange }}"
+          description: "Oldest router-accepted order change has waited {{ $value }}ms for private confirmation."
+
+      - alert: MarketMakerOrderValidationRejectionsHigh
+        expr: increase(mm_order_validation_rejected_total[5m]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          component: execution
+        annotations:
+          summary: "Venue rule rejections are elevated on {{ $labels.exchange }}"
+          description: "{{ $value }} validation rejections for reason {{ $labels.reason }} in the last 5 minutes."
+
+      - alert: MarketMakerPersistenceErrors
+        expr: increase(mm_persistence_errors_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: persistence
+        annotations:
+          summary: "Persistence writer errors for {{ $labels.writer }}"
+          description: "{{ $value }} persistence error(s) of type {{ $labels.error }} observed in the last 5 minutes."
+
+      - alert: MarketMakerKillSwitchEnabled
+        expr: mm_kill_switch_state == 1
+        for: 0m
+        labels:
+          severity: critical
+          component: control
+        annotations:
+          summary: "Market maker kill switch is enabled"
+          description: "Runtime control plane reports kill_switch=true."
+
+      - alert: MarketMakerObserveOnlyEnabled
+        expr: mm_observe_only_state == 1
+        for: 5m
+        labels:
+          severity: warning
+          component: control
+        annotations:
+          summary: "Market maker observe-only mode is enabled"
+          description: "Runtime control plane reports observe_only=true for more than 5 minutes."

@@ -47,6 +47,7 @@ Provisioning:
 - Dashboard JSON: `grafana/dashboards/`
 - Observability v2 dashboard JSON: `grafana/observability-v2/`
 - Prometheus config: `docker/prometheus.yml`
+- Prometheus alert rules: `docker/prometheus/market_maker_alerts.yml`
 - Loki / Tempo / Alloy config: `docker/loki.yaml`, `docker/tempo.yaml`, `docker/alloy.alloy`
 
 Grafana folders:
@@ -73,6 +74,12 @@ Metrics:
 - Do not use order ids, client order ids, trace ids, exception messages, raw topics with unbounded values, or payload blobs as labels.
 - Prefer histograms for latency and distributions, counters for events, gauges for current state.
 - Expose only the fields needed for dashboards and alerts; leave rich detail in events.
+
+Alert rules:
+
+- Prometheus loads source-controlled rules from `docker/prometheus/market_maker_alerts.yml`.
+- The local rule set covers target reachability, stale market data, ingest lag, frame age, stale private/ledger readiness, execution sync failures, router failures, stale pending order confirmations, validation rejection spikes, persistence errors, kill switch, and observe-only state.
+- The local Compose stack evaluates alerts but does not provision Alertmanager or Grafana contact points. Production deployments should add notification routing and tune thresholds to the configured strategy interval and venue behavior.
 
 Logs:
 
