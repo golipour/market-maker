@@ -26,7 +26,7 @@ The main architectural risks are:
 - controller diagnostics and execution state are gathered through a broad mutable context object,
 - execution has an unavoidable window between optimistic order-manager state and private exchange truth,
 - alerting is not provisioned,
-- some credential and state wiring has edge-case gaps.
+- some state wiring has edge-case gaps.
 
 ## Strengths
 
@@ -87,21 +87,7 @@ Recommendation:
 - Add consumer group support for durable workers.
 - Add tests proving that a separately constructed Redis bus can publish `admin:commands` and a runtime bus can receive them.
 
-### 2. Ledger Service Credential Detection Ignores API-Key Credentials
-
-Severity: High
-
-`PortfolioLedgerService._configured_exchanges()` checks `private.resolved_api_token(...)`. Runtime adapter construction supports token credentials and API-key/private-key credentials through `resolved_api_credentials()`.
-
-Impact: Venues configured with API-key/private-key credentials can get private adapters and execution managers, but the ledger service may decide the exchange is not tracked. The strategy runner requires a ledger-backed frame, so this can prevent controller operation or create inconsistent private/execution state behavior.
-
-Recommendation:
-
-- Change ledger tracking to use `private.resolved_api_credentials(exchange)` or `private.enabled`.
-- Add regression tests for Nobitex/Tabdeal/Bitpin API-key configs.
-- Consider validating at config load that execution-enabled venues also have ledger tracking enabled.
-
-### 3. Event Payload Duplication Will Grow Quickly
+### 2. Event Payload Duplication Will Grow Quickly
 
 Severity: High
 
@@ -131,7 +117,7 @@ Recommendation:
 - Add payload-size metrics per event type and topic.
 - Add retention policies per topic.
 
-### 4. Postgres Persistence Opens A New Connection Per Batch
+### 3. Postgres Persistence Opens A New Connection Per Batch
 
 Severity: Medium
 
@@ -145,7 +131,7 @@ Recommendation:
 - Track failed batch retry behavior explicitly.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 5. Parquet Writer Rewrites Existing Files
+### 4. Parquet Writer Rewrites Existing Files
 
 Severity: Medium
 
@@ -164,7 +150,7 @@ Recommendation:
 - Drop redundant `payload_json` if full envelopes are retained, or retain only metadata columns plus a typed payload table.
 - For high-value event types, write typed Parquet columns instead of opaque JSON strings.
 
-### 6. Strategy Frame Assembly Can Lose Or Delay Global Alignment
+### 5. Strategy Frame Assembly Can Lose Or Delay Global Alignment
 
 Severity: Medium
 
@@ -179,7 +165,7 @@ Recommendation:
 - Make history size and grace policy configurable.
 - Add backpressure or skip policies for slow global feeds.
 
-### 7. Scheduler Awaits Callbacks Sequentially
+### 6. Scheduler Awaits Callbacks Sequentially
 
 Severity: Medium
 
@@ -193,7 +179,7 @@ Recommendation:
 - Record callback execution time and missed-deadline count.
 - Consider one scheduler per symbol/venue or a timing wheel with independent tasks.
 
-### 8. Optimizer Runtime Cost Can Dominate The Decision Loop
+### 7. Optimizer Runtime Cost Can Dominate The Decision Loop
 
 Severity: High for larger configs, Medium for current defaults
 
@@ -211,7 +197,7 @@ Recommendation:
 - Cache or warm-start carefully, with diagnostics for stale warm starts.
 - Add load tests for representative `n_samples`, `horizon`, `adam_epochs`, and symbol counts.
 
-### 9. MPC And Controller Hot Path Are Tightly Coupled
+### 8. MPC And Controller Hot Path Are Tightly Coupled
 
 Severity: Medium
 
@@ -226,7 +212,7 @@ Recommendation:
 - Keep a final assembler for `ControllerDiagnostics`, but avoid using one mutable object as the main lifecycle carrier.
 - Add tests that exercise the strategy runner with a fake optimizer backend.
 
-### 10. Threshold Penalty Config Appears Ineffective In Single-Venue Optimizer Path
+### 9. Threshold Penalty Config Appears Ineffective In Single-Venue Optimizer Path
 
 Severity: Medium
 
@@ -240,7 +226,7 @@ Recommendation:
 - Add tests proving objective components change when the configured penalty changes.
 - Surface no-op config fields in runtime validation.
 
-### 11. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
+### 10. Strategy-Side Venue Quantization Stage Is Mostly Diagnostic Dead Weight
 
 Severity: Low to Medium
 
@@ -254,7 +240,7 @@ Recommendation:
 - If pre-execution quantization should be visible earlier, populate it consistently.
 - Keep final validation at the execution boundary regardless.
 
-### 12. Own-Order Subtraction Uses Exact Float Price Matching
+### 11. Own-Order Subtraction Uses Exact Float Price Matching
 
 Severity: Medium
 
@@ -268,7 +254,7 @@ Recommendation:
 - Use exchange-confirmed live order prices after adapter normalization.
 - Add tests for rounded prices and cross-venue unit scaling.
 
-### 13. Optimistic OrderManager State Can Diverge From Ledger Truth
+### 12. Optimistic OrderManager State Can Diverge From Ledger Truth
 
 Severity: Medium
 
@@ -283,7 +269,7 @@ Recommendation:
 - Add explicit pending order/cancel states with timeouts.
 - Alert on ledger/order-manager mismatch.
 
-### 14. Alerting Is Not Provisioned
+### 13. Alerting Is Not Provisioned
 
 Severity: High operational risk
 
@@ -313,7 +299,7 @@ Add alert rules for:
 - kill switch enabled,
 - unexpected observe-only/live state.
 
-### 15. Observability Depends Too Heavily On JSONB Event Queries
+### 14. Observability Depends Too Heavily On JSONB Event Queries
 
 Severity: Medium
 
@@ -332,7 +318,7 @@ Recommendation:
 - Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
 
-### 16. Custom Metrics Registry Has Limited Production Features
+### 15. Custom Metrics Registry Has Limited Production Features
 
 Severity: Medium
 
@@ -346,7 +332,7 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 17. Event Bus And Persistence Backpressure Are Underdeveloped
+### 16. Event Bus And Persistence Backpressure Are Underdeveloped
 
 Severity: Medium
 
@@ -361,7 +347,7 @@ Recommendation:
 - Separate critical trading paths from observability/persistence paths.
 - Use bounded queues by default in production.
 
-### 18. Runtime Scaling Is One Bot Per Process
+### 17. Runtime Scaling Is One Bot Per Process
 
 Severity: Medium
 
@@ -377,7 +363,7 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 19. Exchange Capability And Factory Code Is Centralized
+### 18. Exchange Capability And Factory Code Is Centralized
 
 Severity: Low to Medium
 
@@ -390,7 +376,7 @@ Recommendation:
 - Introduce a registry pattern where exchange packages self-register adapters and capabilities.
 - Keep factory validation, but avoid long if/elif chains.
 
-### 20. No Clear Schema Versioning Beyond Envelope Version
+### 19. No Clear Schema Versioning Beyond Envelope Version
 
 Severity: Medium
 
@@ -405,7 +391,7 @@ Recommendation:
 - Add migration tests for dashboards and replay.
 - Keep old fields until dashboards are migrated.
 
-### 21. Secrets And Local Compose Defaults Need Production Hardening
+### 20. Secrets And Local Compose Defaults Need Production Hardening
 
 Severity: Medium for production, Low for local development
 
@@ -536,7 +522,6 @@ Priority recommendations:
 
 ### Priority 0: Safety And Correctness
 
-- Fix ledger credential detection for API-key/private-key venues.
 - Clarify or fix Redis Streams cross-process subscription semantics.
 - Add alert rules for stale data, stale private state, execution failures, persistence failures, and kill switch.
 - Add optimizer decision timeout and safe fallback behavior.

@@ -175,7 +175,7 @@ class PortfolioLedgerService:
             private = self.config.private_config_for(source.role)
             if private is None:
                 continue
-            if not private.resolved_api_token(source.normalized_exchange()):
+            if not private.resolved_api_credentials(source.normalized_exchange()):
                 continue
             exchanges.append(source.normalized_exchange())
         return tuple(exchanges)

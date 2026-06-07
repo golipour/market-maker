@@ -262,6 +262,40 @@ async def test_portfolio_ledger_service_publishes_snapshots_from_private_topics(
 
 
 @pytest.mark.asyncio
+async def test_portfolio_ledger_service_tracks_api_key_private_key_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOBITEX_API_KEY", "public-key")
+    monkeypatch.setenv("NOBITEX_API_PRIVATE_KEY", "private-key")
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        local_private=PrivateRuntimeConfig(),
+    )
+    bus = InMemoryBus()
+    venue_queue = bus.subscribe_queue("ledger:snapshot:nobitex")
+    joint_queue = bus.subscribe_queue("ledger:snapshot")
+
+    service = PortfolioLedgerService(config, config.binding, bus)
+    adapter = FakePrivateStateAdapter()
+    reconciler = PrivateStateReconciler("nobitex", adapter, bus)
+
+    try:
+        await service.start()
+        await reconciler.start()
+        await adapter.open_orders.put(_buy_order())
+
+        venue_payload = await asyncio.wait_for(venue_queue.get(), timeout=1.0)
+        joint_payload = await asyncio.wait_for(joint_queue.get(), timeout=1.0)
+
+        assert venue_payload["exchange"] == "nobitex"
+        assert "o1" in venue_payload["live_orders"]
+        assert joint_payload["local"]["exchange"] == "nobitex"
+    finally:
+        await reconciler.stop()
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_portfolio_ledger_service_consistency_diagnostic_detects_divergence() -> None:
     config = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
         local_private=PrivateRuntimeConfig(api_token_env="NOBITEX_API_TOKEN"),
