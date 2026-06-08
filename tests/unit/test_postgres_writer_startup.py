@@ -319,11 +319,18 @@ def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.Mon
         JointTargetBook(
             actor_id="mpc-controller",
             mode="liquidity_sourcing",
+            frame_id="frame-1",
+            decision_id="decision-1",
+            target_book_id="target-1",
             local=VenueTargetBook(
                 exchange="nobitex",
                 symbol="BTC_IRT",
                 actor_id="mpc-controller",
                 policy="reconcile",
+                frame_id="frame-1",
+                decision_id="decision-1",
+                target_book_id="target-1",
+                execution_plan_id="plan-local",
                 orders=(
                     TargetOrder(
                         "nobitex",
@@ -340,6 +347,10 @@ def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.Mon
                 symbol="BTC_IRT",
                 actor_id="mpc-controller",
                 policy="replace",
+                frame_id="frame-1",
+                decision_id="decision-1",
+                target_book_id="target-1",
+                execution_plan_id="plan-global",
                 orders=(
                     TargetOrder(
                         "wallex",
@@ -371,10 +382,15 @@ def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.Mon
     assert local[16] == 49.5
     assert local[17] == "limit"
     assert local[18].value == ["local", "risk_approved"]
+    assert local[19] == "frame-1"
+    assert local[20] == "decision-1"
+    assert local[21] == "target-1"
+    assert local[22] == "plan-local"
     assert global_[7] == "wallex"
     assert global_[11] == "replace"
     assert global_[13] == "sell"
     assert global_[16] == 25.25
+    assert global_[22] == "plan-global"
 
 
 def test_postgres_writer_materializes_execution_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -403,6 +419,10 @@ def test_postgres_writer_materializes_execution_order_facts(monkeypatch: pytest.
                 },
             ],
             "timestamp_ms": 2_000,
+            "frame_id": "frame-1",
+            "decision_id": "decision-1",
+            "target_book_id": "target-1",
+            "execution_plan_id": "plan-local",
         },
     )
 
@@ -422,6 +442,10 @@ def test_postgres_writer_materializes_execution_order_facts(monkeypatch: pytest.
     assert row[17] == 100.0
     assert row[18] == 0.5
     assert row[22] == "limit"
+    assert row[28] == "frame-1"
+    assert row[29] == "decision-1"
+    assert row[30] == "target-1"
+    assert row[31] == "plan-local"
 
 
 def test_postgres_writer_materializes_fill_execution_fact(monkeypatch: pytest.MonkeyPatch) -> None:

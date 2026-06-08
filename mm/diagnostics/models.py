@@ -140,6 +140,9 @@ class ControllerDiagnostics:
     frame_step: int
     created_at_ms: int
     run_id: str = ""
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
     frame: FrameDiagnostics = field(default_factory=FrameDiagnostics)
     state: StateDiagnostics = field(default_factory=StateDiagnostics)
     models: dict[str, ModelScore] = field(default_factory=dict)
@@ -162,6 +165,9 @@ class ControllerDiagnostics:
             "frame_step": self.frame_step,
             "created_at_ms": self.created_at_ms,
             "run_id": self.run_id,
+            "frame_id": self.frame_id,
+            "decision_id": self.decision_id,
+            "target_book_id": self.target_book_id,
             "frame": _frame_payload(self.frame),
             "state": _state_payload(self.state),
             "models": {name: _model_score_payload(score) for name, score in self.models.items()},

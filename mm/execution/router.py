@@ -51,6 +51,7 @@ class OrderRouter:
                     "exchange": self.exchange,
                     "order_ids": cancel_ids,
                     "policy": plan.policy,
+                    **_lineage_payload(plan),
                     "timestamp_ms": self.clock_ms(),
                 },
             )
@@ -63,6 +64,7 @@ class OrderRouter:
                         "type": "CancelOrdersAccepted",
                         "exchange": self.exchange,
                         "order_ids": cancel_ids,
+                        **_lineage_payload(plan),
                         "timestamp_ms": self.clock_ms(),
                     },
                 )
@@ -77,6 +79,7 @@ class OrderRouter:
                         "order_ids": cancel_ids,
                         "error": type(exc).__name__,
                         "message": str(exc),
+                        **_lineage_payload(plan),
                         "timestamp_ms": self.clock_ms(),
                     },
                 )
@@ -95,6 +98,7 @@ class OrderRouter:
                     "exchange": self.exchange,
                     "orders": [_order_summary(order) for order in orders],
                     "policy": plan.policy,
+                    **_lineage_payload(plan),
                     "timestamp_ms": self.clock_ms(),
                 },
             )
@@ -118,6 +122,7 @@ class OrderRouter:
                         "orders": [_order_summary(command.order) for command in plan.place],
                         "error": type(exc).__name__,
                         "message": str(exc),
+                        **_lineage_payload(plan),
                         "timestamp_ms": self.clock_ms(),
                     },
                 )
@@ -139,6 +144,7 @@ class OrderRouter:
                         "exchange": self.exchange,
                         "order_ids": order_ids,
                         "orders": accepted_orders,
+                        **_lineage_payload(plan),
                         "timestamp_ms": timestamp_ms,
                     },
                 )
@@ -155,6 +161,7 @@ class OrderRouter:
                     "price": float(rejection.order.price),
                     "qty": float(rejection.order.qty),
                     "stage": rejection.stage,
+                    **_lineage_payload(plan),
                     "timestamp_ms": self.clock_ms(),
                 },
             )
@@ -204,4 +211,13 @@ def _order_summary(order: Order) -> dict[str, Any]:
         "qty": order.qty,
         "order_type": order.order_type,
         "client_order_id": order.client_order_id,
+    }
+
+
+def _lineage_payload(plan: ExecutionPlan) -> dict[str, str]:
+    return {
+        "frame_id": plan.frame_id,
+        "decision_id": plan.decision_id,
+        "target_book_id": plan.target_book_id,
+        "execution_plan_id": plan.execution_plan_id,
     }

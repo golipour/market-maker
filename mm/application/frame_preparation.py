@@ -35,6 +35,7 @@ def clean_strategy_frame(
         global_lag_ms=frame.global_lag_ms,
         max_global_lag_ms=frame.max_global_lag_ms,
         created_at_ms=frame.created_at_ms,
+        frame_id=frame.frame_id,
     )
 
 

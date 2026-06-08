@@ -46,6 +46,7 @@ class JointStrategyFrame:
     sync_status: FrameSyncStatus = field(default_factory=FrameSyncStatus)
     created_at_ms: int = 0
     input_frame: "StrategyInputFrame | None" = None
+    frame_id: str = ""
 
     @property
     def t_end_ms(self) -> int:
@@ -74,4 +75,5 @@ class JointStrategyFrame:
             "sync_status": self.sync_status.as_payload(),
             "created_at_ms": int(self.created_at_ms),
             "t_end_ms": self.t_end_ms,
+            "frame_id": self.frame_id,
         }

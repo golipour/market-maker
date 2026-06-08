@@ -171,6 +171,10 @@ class OrderManager(AbstractOrderManager):
                 "symbol": target.symbol,
                 "action_count": 1,
                 "target_count": target_count,
+                "frame_id": target.frame_id,
+                "decision_id": target.decision_id,
+                "target_book_id": target.target_book_id,
+                "execution_plan_id": target.execution_plan_id,
                 "timestamp_ms": self.clock_ms(),
             },
         )
@@ -201,6 +205,10 @@ class OrderManager(AbstractOrderManager):
             symbol=target.symbol,
             target_count=target_count,
             latency_ms=_elapsed_ms(started_ns),
+            frame_id=target.frame_id,
+            decision_id=target.decision_id,
+            target_book_id=target.target_book_id,
+            execution_plan_id=target.execution_plan_id,
         )
         await self._publish_snapshot()
         return report
@@ -481,6 +489,10 @@ class OrderManager(AbstractOrderManager):
                     "pending_place_count": pending_place_count,
                     "pending_cancel_count": pending_cancel_count,
                 },
+                frame_id=target.frame_id,
+                decision_id=target.decision_id,
+                target_book_id=target.target_book_id,
+                execution_plan_id=target.execution_plan_id,
             )
         ledger = VenueLedger(
             exchange=self.exchange,
@@ -506,6 +518,10 @@ class OrderManager(AbstractOrderManager):
                 "planned_place_count": len(raw_plan.place),
                 "planned_place_orders": tuple(command.order for command in raw_plan.place),
             },
+            frame_id=validated_plan.frame_id,
+            decision_id=validated_plan.decision_id,
+            target_book_id=validated_plan.target_book_id,
+            execution_plan_id=validated_plan.execution_plan_id,
         )
 
     def _pending_counts_for_scope(self, target: VenueTargetBook) -> tuple[int, int]:
@@ -584,6 +600,10 @@ class OrderManager(AbstractOrderManager):
         symbol: str,
         target_count: int,
         latency_ms: float,
+        frame_id: str = "",
+        decision_id: str = "",
+        target_book_id: str = "",
+        execution_plan_id: str = "",
     ) -> None:
         timestamp_ms = self.clock_ms()
         await self._publish(
@@ -594,6 +614,10 @@ class OrderManager(AbstractOrderManager):
                 "actor_id": actor_id,
                 "symbol": symbol,
                 "target_count": int(target_count),
+                "frame_id": frame_id,
+                "decision_id": decision_id,
+                "target_book_id": target_book_id,
+                "execution_plan_id": execution_plan_id,
                 "keep_count": int(report.kept.order_count),
                 "cancel_count": int(report.cancel_count),
                 "place_count": int(report.to_place.order_count),

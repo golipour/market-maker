@@ -64,6 +64,10 @@ def apply_venue_execution_caps(
         actor_id=book.actor_id,
         orders=tuple(filtered),
         policy=book.policy,
+        frame_id=book.frame_id,
+        decision_id=book.decision_id,
+        target_book_id=book.target_book_id,
+        execution_plan_id=book.execution_plan_id,
     )
 
 
@@ -82,6 +86,10 @@ def execution_book_from_joint(
             actor_id=global_book.actor_id,
             orders=(),
             policy=global_book.policy,
+            frame_id=global_book.frame_id,
+            decision_id=global_book.decision_id,
+            target_book_id=global_book.target_book_id,
+            execution_plan_id=global_book.execution_plan_id,
         )
     return JointTargetBook(
         actor_id=book.actor_id,
@@ -89,6 +97,9 @@ def execution_book_from_joint(
         global_=global_book,
         mode=book.mode,
         diagnostics=dict(book.diagnostics),
+        frame_id=book.frame_id,
+        decision_id=book.decision_id,
+        target_book_id=book.target_book_id,
     )
 
 
@@ -204,6 +215,10 @@ def prepare_execution_joint_book(
         actor_id=book.local.actor_id,
         orders=book.local.orders,
         policy=execution.local.planner,
+        frame_id=book.local.frame_id,
+        decision_id=book.local.decision_id,
+        target_book_id=book.local.target_book_id,
+        execution_plan_id=book.local.execution_plan_id,
     )
     local = apply_venue_execution_caps(
         local,
@@ -224,6 +239,10 @@ def prepare_execution_joint_book(
             actor_id=global_book.actor_id,
             orders=global_book.orders,
             policy=execution.global_.planner,
+            frame_id=global_book.frame_id,
+            decision_id=global_book.decision_id,
+            target_book_id=global_book.target_book_id,
+            execution_plan_id=global_book.execution_plan_id,
         )
         global_book = apply_venue_execution_caps(
             global_book,
@@ -237,6 +256,9 @@ def prepare_execution_joint_book(
         global_=global_book,
         mode=book.mode,
         diagnostics=dict(book.diagnostics),
+        frame_id=book.frame_id,
+        decision_id=book.decision_id,
+        target_book_id=book.target_book_id,
     )
 
 

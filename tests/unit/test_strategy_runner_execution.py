@@ -174,6 +174,75 @@ class _RecordingVenueOrderManager:
 
 
 @pytest.mark.asyncio
+async def test_strategy_runner_propagates_lineage_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_decide(self, frame: StrategyInputFrame, *, frame_step: int) -> StrategyDecision:
+        target = JointTargetBook(
+            actor_id="test-runner",
+            local=VenueTargetBook(
+                exchange="nobitex",
+                symbol="BTC_IRT",
+                actor_id="test-runner",
+                orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 0.5),),
+            ),
+        )
+        return StrategyDecision(
+            actor_id="test-runner",
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=frame_step,
+            action=Action(
+                actor_id="test-runner",
+                orders=(Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5),),
+            ),
+            joint_target_book=target,
+            action_pipeline_report=ActionPipelineReport(target_book=ActionStageReport(order_count=1)),
+        )
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", fake_decide)
+
+    bus = InMemoryBus()
+    decision_queue = bus.subscribe_queue("strategy:decisions")
+    target_queue = bus.subscribe_queue("strategy:target_books:test-runner")
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    manager = _RecordingVenueOrderManager()
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT")
+    )
+    runner = StrategyRunner(
+        config=_runner_config(),
+        binding=runtime.binding,
+        frame_queue=asyncio.Queue(),
+        order_managers={"nobitex": manager},
+        risk_engine=PassThroughRiskEngine(),
+        bus=bus,
+    )
+
+    await _run_market_frame(runner)
+
+    decision = await asyncio.wait_for(decision_queue.get(), timeout=1.0)
+    target = await asyncio.wait_for(target_queue.get(), timeout=1.0)
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert decision["frame_id"] == "frame:test-runner:nobitex:btc_irt:2000:1"
+    assert decision["decision_id"] == "decision:frame_test-runner_nobitex_btc_irt_2000_1"
+    assert decision["target_book_id"] == "target:frame_test-runner_nobitex_btc_irt_2000_1"
+    assert target["frame_id"] == decision["frame_id"]
+    assert target["decision_id"] == decision["decision_id"]
+    assert target["target_book_id"] == decision["target_book_id"]
+    assert target["local"]["execution_plan_id"] == (
+        "execplan:target_frame_test-runner_nobitex_btc_irt_2000_1:local:nobitex"
+    )
+    assert diagnostics["frame_id"] == decision["frame_id"]
+    assert diagnostics["decision_id"] == decision["decision_id"]
+    assert diagnostics["target_book_id"] == decision["target_book_id"]
+    [manager_target] = manager.targets
+    assert manager_target.frame_id == decision["frame_id"]
+    assert manager_target.decision_id == decision["decision_id"]
+    assert manager_target.target_book_id == decision["target_book_id"]
+    assert manager_target.execution_plan_id == target["local"]["execution_plan_id"]
+
+
+@pytest.mark.asyncio
 async def test_strategy_runner_publishes_diagnostics_after_sync_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "mm.application.strategy_runner.MpcStrategyEngine.decide",

@@ -97,6 +97,9 @@ CREATE TABLE IF NOT EXISTS mm_action_stage_facts (
     rejections_compacted_count INT,
     orders_digest TEXT,
     rejections_digest TEXT,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT,
     PRIMARY KEY (event_id, stage)
 );
 CREATE INDEX IF NOT EXISTS mm_action_stage_facts_actor_stage_ts_idx
@@ -133,6 +136,10 @@ CREATE TABLE IF NOT EXISTS mm_execution_facts (
     error_message TEXT,
     latency_ms DOUBLE PRECISION,
     count_value INT,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT,
+    execution_plan_id TEXT,
     PRIMARY KEY (event_id, row_key)
 );
 CREATE INDEX IF NOT EXISTS mm_execution_facts_exchange_symbol_ts_idx
@@ -162,6 +169,10 @@ CREATE TABLE IF NOT EXISTS mm_target_order_facts (
     notional DOUBLE PRECISION NOT NULL,
     order_type TEXT,
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT,
+    execution_plan_id TEXT,
     PRIMARY KEY (event_id, row_key)
 );
 CREATE INDEX IF NOT EXISTS mm_target_order_facts_actor_venue_ts_idx
@@ -190,6 +201,9 @@ CREATE TABLE IF NOT EXISTS mm_model_score_facts (
     observation_count INT,
     params_before_count INT,
     params_after_count INT,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT,
     PRIMARY KEY (event_id, model_name)
 );
 CREATE INDEX IF NOT EXISTS mm_model_score_facts_actor_model_ts_idx
@@ -232,7 +246,10 @@ CREATE TABLE IF NOT EXISTS mm_optimizer_facts (
     best_main_reward_mean DOUBLE PRECISION,
     best_global_reward_mean DOUBLE PRECISION,
     gradient_issue_count INT,
-    rollout_count INT
+    rollout_count INT,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT
 );
 CREATE INDEX IF NOT EXISTS mm_optimizer_facts_actor_ts_idx
 ON mm_optimizer_facts (actor_id, ts DESC);
@@ -254,12 +271,36 @@ CREATE TABLE IF NOT EXISTS mm_optimizer_component_facts (
     frame_step INT,
     value DOUBLE PRECISION,
     contribution_fraction DOUBLE PRECISION,
+    frame_id TEXT,
+    decision_id TEXT,
+    target_book_id TEXT,
     PRIMARY KEY (event_id, snapshot, component)
 );
 CREATE INDEX IF NOT EXISTS mm_optimizer_component_facts_actor_component_ts_idx
 ON mm_optimizer_component_facts (actor_id, component, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_optimizer_component_facts_exchange_symbol_component_ts_idx
 ON mm_optimizer_component_facts (exchange, symbol, component, ts DESC);
+
+ALTER TABLE mm_action_stage_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_action_stage_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_action_stage_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_execution_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_execution_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_execution_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_execution_facts ADD COLUMN IF NOT EXISTS execution_plan_id TEXT;
+ALTER TABLE mm_target_order_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_target_order_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_target_order_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_target_order_facts ADD COLUMN IF NOT EXISTS execution_plan_id TEXT;
+ALTER TABLE mm_model_score_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_model_score_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_model_score_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
+ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
+ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
 
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
@@ -510,7 +551,8 @@ class PostgresEventWriter:
                                 timestamp_ms, ts, t_end_ms, order_count, buy_count, sell_count,
                                 buy_qty, sell_qty, buy_notional, sell_notional, rejection_count,
                                 rejection_counts, orders_compacted_count,
-                                rejections_compacted_count, orders_digest, rejections_digest
+                                rejections_compacted_count, orders_digest, rejections_digest,
+                                frame_id, decision_id, target_book_id
                             ) VALUES %s
                             ON CONFLICT (event_id, stage) DO NOTHING
                             """,
@@ -530,7 +572,8 @@ class PostgresEventWriter:
                                 lifecycle, success, state_kind, actor_id, exchange, symbol,
                                 timestamp_ms, ts, client_order_id, exchange_order_id, side,
                                 price, qty, remaining_qty, filled_qty, fee, order_type,
-                                status, error_type, error_message, latency_ms, count_value
+                                status, error_type, error_message, latency_ms, count_value,
+                                frame_id, decision_id, target_book_id, execution_plan_id
                             ) VALUES %s
                             ON CONFLICT (event_id, row_key) DO NOTHING
                             """,
@@ -548,7 +591,8 @@ class PostgresEventWriter:
                             INSERT INTO mm_target_order_facts (
                                 event_id, row_key, run_id, topic, actor_id, mode,
                                 venue_role, exchange, symbol, timestamp_ms, ts, policy,
-                                order_index, side, price, qty, notional, order_type, tags
+                                order_index, side, price, qty, notional, order_type, tags,
+                                frame_id, decision_id, target_book_id, execution_plan_id
                             ) VALUES %s
                             ON CONFLICT (event_id, row_key) DO NOTHING
                             """,
@@ -568,7 +612,8 @@ class PostgresEventWriter:
                                 symbol, timestamp_ms, ts, t_end_ms, frame_step,
                                 model_kind, updated, skip_reason, log_likelihood, nll,
                                 standardized_residual, observation_count,
-                                params_before_count, params_after_count
+                                params_before_count, params_after_count,
+                                frame_id, decision_id, target_book_id
                             ) VALUES %s
                             ON CONFLICT (event_id, model_name) DO NOTHING
                             """,
@@ -593,7 +638,8 @@ class PostgresEventWriter:
                                 best_minus_initial, final_minus_initial,
                                 best_expected_total_reward, best_expected_total_return,
                                 best_expected_next_reward, best_main_reward_mean,
-                                best_global_reward_mean, gradient_issue_count, rollout_count
+                                best_global_reward_mean, gradient_issue_count, rollout_count,
+                                frame_id, decision_id, target_book_id
                             ) VALUES %s
                             ON CONFLICT (event_id) DO NOTHING
                             """,
@@ -611,7 +657,8 @@ class PostgresEventWriter:
                             INSERT INTO mm_optimizer_component_facts (
                                 event_id, snapshot, component, run_id, topic, actor_id,
                                 exchange, symbol, timestamp_ms, ts, t_end_ms, frame_step,
-                                value, contribution_fraction
+                                value, contribution_fraction, frame_id, decision_id,
+                                target_book_id
                             ) VALUES %s
                             ON CONFLICT (event_id, snapshot, component) DO NOTHING
                             """,
@@ -951,6 +998,9 @@ def _action_stage_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 rejections_compacted_count,
                 _optional_str(stage_payload.get("orders_digest")),
                 _optional_str(stage_payload.get("rejections_digest")),
+                _optional_str(payload.get("frame_id")),
+                _optional_str(payload.get("decision_id")),
+                _optional_str(payload.get("target_book_id")),
             )
         )
     return rows
@@ -972,6 +1022,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
     error_type = _optional_str(payload.get("error"))
     error_message = _optional_str(payload.get("message"))
     latency_ms = _float_or_none(payload.get("latency_ms"))
+    lineage = _execution_lineage(payload)
 
     if event_type.startswith("ExecutionSync"):
         lifecycle = _execution_lifecycle(event_type)
@@ -991,6 +1042,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 error_message=error_message,
                 latency_ms=latency_ms,
                 count_value=_int_or_none(payload.get("target_count")),
+                **lineage,
             )
         ]
 
@@ -1020,6 +1072,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                         exchange_order_id=exchange_order_id,
                         error_type=error_type,
                         error_message=error_message,
+                        **lineage,
                     )
                 )
         else:
@@ -1038,6 +1091,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                     error_type=error_type,
                     error_message=error_message,
                     count_value=_int_or_none(payload.get("count")),
+                    **lineage,
                 )
             )
         return rows
@@ -1070,6 +1124,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 error_type=error_type,
                 error_message=error_message,
                 count_value=_int_or_none(payload.get("count")),
+                **lineage,
             )
             for index, order_id in enumerate(ids)
         ]
@@ -1090,6 +1145,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 order=payload,
                 status=_optional_str(payload.get("reason")),
                 error_type=_optional_str(payload.get("reason")),
+                **lineage,
             )
         ]
 
@@ -1111,6 +1167,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 filled_qty=_float_or_none(payload.get("qty")),
                 fee=_float_or_none(payload.get("fee")),
                 status="filled",
+                **lineage,
             )
         ]
 
@@ -1120,6 +1177,7 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
             payload,
             timestamp_ms=timestamp_ms,
             exchange=exchange,
+            lineage=lineage,
         )
 
     return []
@@ -1182,6 +1240,10 @@ def _target_order_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                     price * qty,
                     _optional_str(order.get("order_type")),
                     psycopg2.extras.Json(tag_list, dumps=_strict_json_dumps),
+                    _optional_str(payload.get("frame_id") or book.get("frame_id")),
+                    _optional_str(payload.get("decision_id") or book.get("decision_id")),
+                    _optional_str(payload.get("target_book_id") or book.get("target_book_id")),
+                    _optional_str(book.get("execution_plan_id")),
                 )
             )
     return rows
@@ -1235,6 +1297,9 @@ def _model_score_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
                 _dict_len(score.get("observation")),
                 _dict_len(score.get("params_before")),
                 _dict_len(score.get("params_after")),
+                _optional_str(payload.get("frame_id")),
+                _optional_str(payload.get("decision_id")),
+                _optional_str(payload.get("target_book_id")),
             )
         )
     return rows
@@ -1293,6 +1358,9 @@ def _optimizer_fact_row(envelope: EventEnvelope) -> tuple[Any, ...] | None:
         _float_or_none(best.get("global_reward_mean")),
         _payload_count(gradients),
         _payload_count(rollout),
+        _optional_str(payload.get("frame_id")),
+        _optional_str(payload.get("decision_id")),
+        _optional_str(payload.get("target_book_id")),
     )
 
 
@@ -1323,6 +1391,9 @@ def _optimizer_component_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, .
                     *base,
                     value,
                     fraction,
+                    _optional_str(payload.get("frame_id")),
+                    _optional_str(payload.get("decision_id")),
+                    _optional_str(payload.get("target_book_id")),
                 )
             )
     return rows
@@ -1334,7 +1405,9 @@ def _execution_snapshot_rows(
     *,
     timestamp_ms: int,
     exchange: str | None,
+    lineage: dict[str, str | None] | None = None,
 ) -> list[tuple[Any, ...]]:
+    lineage = lineage or {}
     rows = [
         _execution_row(
             envelope,
@@ -1348,6 +1421,7 @@ def _execution_snapshot_rows(
             symbol=None,
             timestamp_ms=timestamp_ms,
             count_value=_int_or_none(payload.get("live_order_count")),
+            **lineage,
         )
     ]
     live_orders = payload.get("live_orders")
@@ -1361,6 +1435,7 @@ def _execution_snapshot_rows(
                 exchange=exchange,
                 order_id=str(order_id),
                 open_order=open_order,
+                lineage=lineage,
             )
             if row is not None:
                 rows.append(row)
@@ -1376,6 +1451,7 @@ def _execution_snapshot_rows(
                     exchange=exchange,
                     order_id=str(order_id),
                     change=change,
+                    lineage=lineage,
                 )
                 if row is not None:
                     rows.append(row)
@@ -1391,6 +1467,7 @@ def _open_order_execution_row(
     exchange: str | None,
     order_id: str,
     open_order: Any,
+    lineage: dict[str, str | None] | None = None,
 ) -> tuple[Any, ...] | None:
     if not isinstance(open_order, dict):
         return None
@@ -1411,6 +1488,7 @@ def _open_order_execution_row(
         remaining_qty=_float_or_none(open_order.get("remaining_qty")),
         filled_qty=_float_or_none(open_order.get("filled_qty")),
         status=_optional_str(open_order.get("status")),
+        **(lineage or {}),
     )
 
 
@@ -1423,6 +1501,7 @@ def _pending_execution_row(
     exchange: str | None,
     order_id: str,
     change: Any,
+    lineage: dict[str, str | None] | None = None,
 ) -> tuple[Any, ...] | None:
     if not isinstance(change, dict):
         return None
@@ -1441,6 +1520,7 @@ def _pending_execution_row(
         order=order if isinstance(order, dict) else None,
         exchange_order_id=order_id,
         status=_optional_str(change.get("reason")) or state_kind,
+        **(lineage or {}),
     )
 
 
@@ -1467,6 +1547,10 @@ def _execution_row(
     error_message: str | None = None,
     latency_ms: float | None = None,
     count_value: int | None = None,
+    frame_id: str | None = None,
+    decision_id: str | None = None,
+    target_book_id: str | None = None,
+    execution_plan_id: str | None = None,
 ) -> tuple[Any, ...]:
     order = order or {}
     return (
@@ -1498,6 +1582,10 @@ def _execution_row(
         error_message,
         latency_ms,
         count_value,
+        frame_id,
+        decision_id,
+        target_book_id,
+        execution_plan_id,
     )
 
 
@@ -1508,6 +1596,15 @@ def _is_execution_fact_event(topic: str, event_type: str) -> bool:
         or topic.startswith("private:state:") and event_type == "Fill"
         or event_type in {"Fill", "ExecutionSnapshot"}
     )
+
+
+def _execution_lineage(payload: dict[str, Any]) -> dict[str, str | None]:
+    return {
+        "frame_id": _optional_str(payload.get("frame_id")),
+        "decision_id": _optional_str(payload.get("decision_id")),
+        "target_book_id": _optional_str(payload.get("target_book_id")),
+        "execution_plan_id": _optional_str(payload.get("execution_plan_id")),
+    }
 
 
 def _execution_lifecycle(event_type: str) -> str:

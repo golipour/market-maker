@@ -146,6 +146,15 @@ class StrategyRunner:
     ) -> list[Action]:
         t0 = time.monotonic_ns()
         self._frame_step += 1
+        lineage = _lineage_ids(
+            actor_id=self.config.actor_id,
+            exchange=frame.local.exchange,
+            symbol=frame.local.symbol,
+            t_end_ms=frame.local.t_end_ms,
+            frame_step=self._frame_step,
+            existing_frame_id=frame.frame_id,
+        )
+        frame = replace(frame, frame_id=lineage["frame_id"])
         self._last_local_exchange = frame.local.exchange.lower().strip()
         self._sync_control_plane_to_risk()
 
@@ -178,6 +187,7 @@ class StrategyRunner:
             try:
                 self._engine.set_ledger_context(ledger)
                 decision = await self._decide_with_timeout(clean_frame, frame_step=self._frame_step)
+                decision = _with_decision_lineage(decision, lineage)
                 ctx.record_decision(decision)
                 ctx.record_stage_latency("decide", _elapsed_ms(decide_started))
             except (OptimizerDecisionTimeout, OptimizerDecisionInProgress) as exc:
@@ -420,6 +430,9 @@ class StrategyRunner:
                         "exchange": frame.local.exchange,
                         "symbol": frame.local.symbol,
                         "t_end_ms": frame.local.t_end_ms,
+                        "frame_id": frame.frame_id,
+                        "decision_id": decision.decision_id,
+                        "target_book_id": decision.target_book_id,
                         "global_status": frame.global_status,
                         "proposed_actions": len(proposed),
                         "approved_actions": len(approved),
@@ -540,6 +553,9 @@ class StrategyRunner:
             "symbol": ctx.frame.local.symbol,
             "t_end_ms": ctx.frame.t_end_ms,
             "frame_step": ctx.frame_step,
+            "frame_id": ctx.frame.frame_id,
+            "decision_id": ctx.decision.decision_id if ctx.decision is not None else "",
+            "target_book_id": ctx.decision.target_book_id if ctx.decision is not None else "",
             "error": message.split(":", 1)[0],
             "message": message,
             "retryable": True,
@@ -566,6 +582,7 @@ class StrategyRunner:
                 "symbol": frame.local.symbol,
                 "t_end_ms": frame.local.t_end_ms,
                 "frame_step": self._frame_step,
+                "frame_id": frame.frame_id,
                 "reason": reason,
                 "fallback_policy": "hold_current_orders",
                 "message": message,
@@ -585,6 +602,7 @@ class StrategyRunner:
                 "exchange": frame.local.exchange,
                 "symbol": frame.local.symbol,
                 "t_end_ms": frame.local.t_end_ms,
+                "frame_id": frame.frame_id,
                 "error": type(exc).__name__,
                 "message": str(exc),
             },
@@ -635,6 +653,105 @@ def _live_orders_from_ledger(ledger: JointLedgerSnapshot) -> dict[str, Order]:
         for exchange_order_id, open_order in venue.live_orders.items():
             out[f"{exchange_key}:{exchange_order_id}"] = open_order.order
     return out
+
+
+def _lineage_ids(
+    *,
+    actor_id: str,
+    exchange: str,
+    symbol: str,
+    t_end_ms: int,
+    frame_step: int,
+    existing_frame_id: str = "",
+) -> dict[str, str]:
+    frame_id = existing_frame_id.strip() or _lineage_id(
+        "frame",
+        actor_id,
+        exchange,
+        symbol,
+        str(int(t_end_ms)),
+        str(int(frame_step)),
+    )
+    decision_id = _lineage_id("decision", frame_id)
+    target_book_id = _lineage_id("target", frame_id)
+    return {
+        "frame_id": frame_id,
+        "decision_id": decision_id,
+        "target_book_id": target_book_id,
+    }
+
+
+def _with_decision_lineage(
+    decision: StrategyDecision,
+    lineage: dict[str, str],
+) -> StrategyDecision:
+    target_book = (
+        _with_target_book_lineage(decision.joint_target_book, lineage)
+        if decision.joint_target_book is not None
+        else None
+    )
+    return replace(
+        decision,
+        frame_id=lineage["frame_id"],
+        decision_id=lineage["decision_id"],
+        target_book_id=lineage["target_book_id"] if target_book is not None else "",
+        joint_target_book=target_book,
+    )
+
+
+def _with_target_book_lineage(
+    book,
+    lineage: dict[str, str],
+):
+    local = _with_venue_book_lineage(book.local, role="local", lineage=lineage)
+    global_book = (
+        _with_venue_book_lineage(book.global_, role="global", lineage=lineage)
+        if book.global_ is not None
+        else None
+    )
+    return replace(
+        book,
+        local=local,
+        global_=global_book,
+        frame_id=lineage["frame_id"],
+        decision_id=lineage["decision_id"],
+        target_book_id=lineage["target_book_id"],
+    )
+
+
+def _with_venue_book_lineage(
+    book,
+    *,
+    role: str,
+    lineage: dict[str, str],
+):
+    exchange = str(getattr(book, "exchange", role))
+    execution_plan_id = _lineage_id(
+        "execplan",
+        lineage["target_book_id"],
+        role,
+        exchange,
+    )
+    return replace(
+        book,
+        frame_id=lineage["frame_id"],
+        decision_id=lineage["decision_id"],
+        target_book_id=lineage["target_book_id"],
+        execution_plan_id=execution_plan_id,
+    )
+
+
+def _lineage_id(prefix: str, *parts: str) -> str:
+    normalized = [
+        str(part or "")
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace(":", "_")
+        for part in parts
+    ]
+    return ":".join((prefix, *normalized))
 
 
 def _fallback_reason(exc: BaseException) -> str:

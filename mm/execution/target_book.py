@@ -57,6 +57,10 @@ class ExecutionPlan:
     place: tuple[PlaceCommand, ...] = ()
     rejected: tuple[CommandRejection, ...] = ()
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
+    execution_plan_id: str = ""
 
     @property
     def cancel_ids(self) -> tuple[str, ...]:
@@ -73,6 +77,10 @@ class ExecutionPlan:
             place=self.place,
             rejected=rejected,
             diagnostics=dict(self.diagnostics),
+            frame_id=self.frame_id,
+            decision_id=self.decision_id,
+            target_book_id=self.target_book_id,
+            execution_plan_id=self.execution_plan_id,
         )
 
     def with_places(self, place: tuple[PlaceCommand, ...]) -> ExecutionPlan:
@@ -86,6 +94,10 @@ class ExecutionPlan:
             place=place,
             rejected=self.rejected,
             diagnostics=dict(self.diagnostics),
+            frame_id=self.frame_id,
+            decision_id=self.decision_id,
+            target_book_id=self.target_book_id,
+            execution_plan_id=self.execution_plan_id,
         )
 
     def as_payload(self) -> dict[str, Any]:
@@ -98,6 +110,10 @@ class ExecutionPlan:
             "cancel_count": len(self.cancel),
             "place_count": len(self.place),
             "rejected_count": len(self.rejected),
+            "frame_id": self.frame_id,
+            "decision_id": self.decision_id,
+            "target_book_id": self.target_book_id,
+            "execution_plan_id": self.execution_plan_id,
             "diagnostics": dict(self.diagnostics),
         }
 

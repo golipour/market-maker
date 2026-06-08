@@ -96,7 +96,7 @@ Recommendation:
 - Persist large snapshots at lower frequency or only by explicit topic selection.
 - Store orderbooks and raw trades in normalized append tables, compressed columnar partitions, or a dedicated time-series store when raw market history is needed.
 - Store diagnostics in typed tables for common panels.
-- Use references for repeated structures, for example `frame_id`, `decision_id`, `target_book_id`.
+- Use references for repeated structures. The runtime now carries `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`; replay contracts should verify those links end to end.
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
@@ -198,7 +198,7 @@ Severity: Medium
 
 Most Grafana panels query `mm_events.payload` with JSONB extraction, lateral JSON expansion, regex numeric casts, and generated time buckets.
 
-Postgres persistence now creates typed side tables for common dashboard facts. `mm_market_facts` materializes `MarketEvent` interval data into normal columns for top-of-book, mid, spread, microprice, VWAP, interval flow, imbalance, trade count, depth level counts, and timestamps. `mm_action_stage_facts` materializes `ControllerDiagnostics.action_pipeline` stage summaries into normal columns for counts, side counts, quantities, notionals, rejection counts, compacted counts, and order/rejection digests. `mm_execution_facts` materializes sync, place, cancel, validation rejection, fill, and execution snapshot events into normal columns for lifecycle, success, confirmed/pending state, order ids, quantities, fees, status, error, and latency. `mm_target_order_facts` materializes `JointTargetBook` order intent into normal columns for actor, mode, venue role, exchange, symbol, policy, side, price, quantity, notional, order type, and tags. `mm_model_score_facts` materializes model quality and update-skip facts. `mm_optimizer_facts` and `mm_optimizer_component_facts` materialize optimizer timing, objective values, improvement, best expected reward/return fields, and objective components. `mm_events` remains the replay/debug event log.
+Postgres persistence now creates typed side tables for common dashboard facts. `mm_market_facts` materializes `MarketEvent` interval data into normal columns for top-of-book, mid, spread, microprice, VWAP, interval flow, imbalance, trade count, depth level counts, and timestamps. `mm_action_stage_facts` materializes `ControllerDiagnostics.action_pipeline` stage summaries into normal columns for counts, side counts, quantities, notionals, rejection counts, compacted counts, order/rejection digests, and lineage IDs. `mm_execution_facts` materializes sync, place, cancel, validation rejection, fill, and execution snapshot events into normal columns for lifecycle, success, confirmed/pending state, order ids, quantities, fees, status, error, latency, and lineage IDs. `mm_target_order_facts` materializes `JointTargetBook` order intent into normal columns for actor, mode, venue role, exchange, symbol, policy, side, price, quantity, notional, order type, tags, and lineage IDs. `mm_model_score_facts` materializes model quality and update-skip facts. `mm_optimizer_facts` and `mm_optimizer_component_facts` materialize optimizer timing, objective values, improvement, best expected reward/return fields, objective components, and lineage IDs. `mm_events` remains the replay/debug event log.
 
 There are also two dashboard generations: older `Market Maker` dashboards and a newer `MM Observability v2` set. That breadth is helpful for local debugging, but can become dashboard sprawl without a stronger fleet/drilldown hierarchy and shared template variables.
 
@@ -408,8 +408,7 @@ Priority recommendations:
 5. Continue materializing dashboard facts into typed tables; current coverage includes market intervals, action-pipeline stages, order lifecycle, target-book intent, model scores, optimizer objectives, and optimizer objective components.
 6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
 7. Keep full diagnostics configurable and sampled in production.
-8. Add event ids and references between frame, decision, target book, risk result, and execution report.
-9. Add replay contracts that verify the reduced event model can reconstruct required state.
+8. Add replay contracts that verify lineage IDs and the reduced event model can reconstruct required state.
 
 ## Prioritized Roadmap
 

@@ -234,6 +234,10 @@ def _row(envelope: EventEnvelope) -> dict[str, Any]:
         "symbol": envelope.symbol,
         "actor_id": envelope.actor_id,
         "timestamp_ms": envelope.timestamp_ms,
+        "frame_id": _optional_str(payload.get("frame_id")),
+        "decision_id": _optional_str(payload.get("decision_id")),
+        "target_book_id": _optional_str(payload.get("target_book_id")),
+        "execution_plan_id": _optional_str(payload.get("execution_plan_id")),
         "envelope_json": json.dumps(envelope.as_dict(), ensure_ascii=False),
     }
     row.update(_market_columns(envelope, payload))
@@ -452,6 +456,10 @@ def _parquet_schema(pa: Any) -> Any:
             ("symbol", pa.string()),
             ("actor_id", pa.string()),
             ("timestamp_ms", pa.int64()),
+            ("frame_id", pa.string()),
+            ("decision_id", pa.string()),
+            ("target_book_id", pa.string()),
+            ("execution_plan_id", pa.string()),
             ("envelope_json", pa.string()),
             ("interval_ms", pa.int64()),
             ("t_start_ms", pa.int64()),

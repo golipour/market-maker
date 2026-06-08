@@ -176,6 +176,9 @@ def test_parquet_writer_materializes_typed_strategy_and_execution_columns(tmp_pa
             "created_at_ms": 2_100,
             "t_end_ms": 2_000,
             "frame_step": 12,
+            "frame_id": "frame-1",
+            "decision_id": "decision-1",
+            "target_book_id": "target-1",
             "state": {
                 "local_inventory": 0.5,
                 "global_inventory": 1.5,
@@ -247,6 +250,10 @@ def test_parquet_writer_materializes_typed_strategy_and_execution_columns(tmp_pa
                 }
             ],
             "timestamp_ms": 3_000,
+            "frame_id": "frame-1",
+            "decision_id": "decision-1",
+            "target_book_id": "target-1",
+            "execution_plan_id": "plan-local",
         },
     )
 
@@ -254,6 +261,9 @@ def test_parquet_writer_materializes_typed_strategy_and_execution_columns(tmp_pa
 
     rows_by_type = {row["event_type"]: row for row in _parquet_rows(tmp_path)}
     diag = rows_by_type["ControllerDiagnostics"]
+    assert diag["frame_id"] == "frame-1"
+    assert diag["decision_id"] == "decision-1"
+    assert diag["target_book_id"] == "target-1"
     assert diag["frame_step"] == 12
     assert diag["local_inventory"] == 0.5
     assert diag["model_count"] == 2
@@ -277,6 +287,10 @@ def test_parquet_writer_materializes_typed_strategy_and_execution_columns(tmp_pa
     assert target["global_target_notional"] == 12.0
 
     order = rows_by_type["PlaceOrdersAccepted"]
+    assert order["frame_id"] == "frame-1"
+    assert order["decision_id"] == "decision-1"
+    assert order["target_book_id"] == "target-1"
+    assert order["execution_plan_id"] == "plan-local"
     assert order["execution_action"] == "place"
     assert order["execution_lifecycle"] == "accepted"
     assert order["execution_success"] is True

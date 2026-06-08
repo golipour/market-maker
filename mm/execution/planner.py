@@ -88,6 +88,10 @@ class ToleranceReconcilePlanner(AbstractExecutionPlanner):
                 "cancel_count": len(reconcile_plan.cancel_ids),
                 "place_count": len(reconcile_plan.place),
             },
+            frame_id=target.frame_id,
+            decision_id=target.decision_id,
+            target_book_id=target.target_book_id,
+            execution_plan_id=target.execution_plan_id,
         )
 
 
@@ -140,6 +144,10 @@ class AtomicReplacePlanner(AbstractExecutionPlanner):
                 "cancel_count": len(scoped_live),
                 "place_count": len(desired),
             },
+            frame_id=target.frame_id,
+            decision_id=target.decision_id,
+            target_book_id=target.target_book_id,
+            execution_plan_id=target.execution_plan_id,
         )
 
 

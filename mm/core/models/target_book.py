@@ -42,12 +42,20 @@ class VenueTargetBook:
     actor_id: str
     orders: tuple[TargetOrder, ...] = ()
     policy: ExecutionPolicy = "reconcile"
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
+    execution_plan_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
         return {
             "exchange": self.exchange,
             "symbol": self.symbol,
             "actor_id": self.actor_id,
+            "frame_id": self.frame_id,
+            "decision_id": self.decision_id,
+            "target_book_id": self.target_book_id,
+            "execution_plan_id": self.execution_plan_id,
             "orders": [order.as_payload() for order in self.orders],
             "policy": self.policy,
         }
@@ -62,10 +70,16 @@ class JointTargetBook:
     global_: VenueTargetBook | None = None
     mode: LiquiditySourcingMode = "single_venue"
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
         return {
             "actor_id": self.actor_id,
+            "frame_id": self.frame_id,
+            "decision_id": self.decision_id,
+            "target_book_id": self.target_book_id,
             "local": self.local.as_payload(),
             "global": self.global_.as_payload() if self.global_ is not None else None,
             "mode": self.mode,

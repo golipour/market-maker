@@ -30,6 +30,7 @@ class StrategyInputFrame:
     global_lag_ms: int | None = None
     max_global_lag_ms: int = 0
     created_at_ms: int = 0
+    frame_id: str = ""
 
     @property
     def has_global(self) -> bool:
@@ -94,6 +95,9 @@ class StrategyDecision:
     action_pipeline_report: ActionPipelineReport | None = None
     diagnostics: DecisionDiagnostics = field(default_factory=DecisionDiagnostics)
     economics: dict[str, Any] | None = None
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
 
     @property
     def order_count(self) -> int:
@@ -108,6 +112,9 @@ class StrategyDecision:
             "exchange": self.exchange,
             "symbol": self.symbol,
             "t_end_ms": self.t_end_ms,
+            "frame_id": self.frame_id,
+            "decision_id": self.decision_id,
+            "target_book_id": self.target_book_id,
             "observe_only": self.observe_only,
             "frame_step": self.frame_step,
             "action_start_after_steps": self.action_start_after_steps,

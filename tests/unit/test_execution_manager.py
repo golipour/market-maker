@@ -161,6 +161,10 @@ async def test_venue_target_sync_publishes_execution_snapshot() -> None:
             symbol="BTC_IRT",
             actor_id="actor-1",
             orders=(TargetOrder("nobitex", "BTC_IRT", "buy", 100.0, 0.5),),
+            frame_id="frame-1",
+            decision_id="decision-1",
+            target_book_id="target-1",
+            execution_plan_id="plan-1",
         )
     )
 
@@ -171,11 +175,21 @@ async def test_venue_target_sync_publishes_execution_snapshot() -> None:
     snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)
 
     assert requested["type"] == "ExecutionSyncRequested"
+    assert requested["frame_id"] == "frame-1"
+    assert requested["decision_id"] == "decision-1"
+    assert requested["target_book_id"] == "target-1"
+    assert requested["execution_plan_id"] == "plan-1"
     assert placed["type"] == "PlaceOrdersRequested"
+    assert placed["target_book_id"] == "target-1"
+    assert placed["execution_plan_id"] == "plan-1"
     assert accepted["type"] == "PlaceOrdersAccepted"
+    assert accepted["target_book_id"] == "target-1"
+    assert accepted["execution_plan_id"] == "plan-1"
     assert accepted["orders"][0]["side"] == "buy"
     assert accepted["orders"][0]["qty"] == 0.5
     assert completed["type"] == "ExecutionSyncCompleted"
+    assert completed["target_book_id"] == "target-1"
+    assert completed["execution_plan_id"] == "plan-1"
     assert report.accepted.order_count == 1
     assert isinstance(snapshot, ExecutionSnapshot)
     assert snapshot.live_order_count == 0
