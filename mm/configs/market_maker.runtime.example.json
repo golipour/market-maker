@@ -116,9 +116,23 @@
       "max_global_lag_ms": 2000,
       "global_grace_ms": 250,
       "liquidity_sourcing": {
-        "_comment": "off = no liquidity-source venue; simulate = include source venue in model/objective but never route source orders; live = include source venue and allow source live orders. If liquidity_source_exchange equals quoting_exchange, this resolves to off internally.",
+        "_comment": "off = observe the liquidity exchange only for pricing; simulate = include it in model/objective but never route liquidity orders; live = include it and allow live liquidity orders. If liquidity_exchange equals quoting_exchange, this resolves to off internally.",
         "_options": {"mode": ["off", "simulate", "live"]},
         "mode": "live"
+      },
+      "pricing": {
+        "_comment": "quote_anchor centers maker quotes; inventory_mark selects the venue whose inventory-depth liquidation VWAP marks wealth.",
+        "quote_anchor": {
+          "_options": {"mode": ["quoting_mid", "liquidity_mid", "liquidity_weighted_mid"]},
+          "_comment": "liquidity_weighted_mid computes bid/ask VWAPs inside anchor_vwap_bps on both venues and weights each side by the volume inside that bps window.",
+          "mode": "liquidity_weighted_mid",
+          "anchor_vwap_bps": 20.0
+        },
+        "inventory_mark": {
+          "_options": {"venue": ["quoting", "liquidity"]},
+          "_comment": "Long inventory is marked at selected venue bid-side VWAP; short inventory at ask-side VWAP. The VWAP volume is derived from inventory.",
+          "venue": "liquidity"
+        }
       },
       "execution": {
         "quoting": {
@@ -128,8 +142,8 @@
           "planner": "replace",
           "max_orders_per_side": 10
         },
-        "liquidity_source": {
-          "_comment": "Planner and caps for liquidity_source_exchange. Do not set enabled here; source live execution is controlled only by liquidity_sourcing.mode = live.",
+        "liquidity": {
+          "_comment": "Planner and caps for liquidity_exchange. Do not set enabled here; source live execution is controlled only by liquidity_sourcing.mode = live.",
           "_options": {"planner": ["reconcile", "replace"]},
           "planner": "replace",
           "max_orders_per_side": 2
@@ -175,7 +189,7 @@
         },
         "local_price_model": {
           "kind": "conditional_mechanical_mixture",
-          "reference_vwap_depth": 1000.0,
+          "reference_vwap_vol": 1000.0,
           "shape_alpha": 0.5,
           "decay": 0.99,
           "initial_sigma": 50.0,
@@ -199,7 +213,7 @@
         },
         "global_price_model": {
           "kind": "conditional_mechanical_mixture",
-          "reference_vwap_depth": 100.0,
+          "reference_vwap_vol": 100.0,
           "shape_alpha": 0.5,
           "decay": 0.99,
           "student_df": 3.0
@@ -254,12 +268,11 @@
   },
   "bots": {
     "mpc-controller": {
-      "_comment": "One runtime config currently starts one bot. quoting_exchange is where orders are quoted; liquidity_source_exchange may equal quoting_exchange; reference_exchanges are fair-value inputs.",
+      "_comment": "One runtime config currently starts one bot. quoting_exchange is where maker quotes are placed; liquidity_exchange is the second book and optional liquidity-source venue.",
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
       "quoting_exchange": "nobitex",
-      "liquidity_source_exchange": "nobitex",
-      "reference_exchanges": ["tabdeal"]
+      "liquidity_exchange": "tabdeal"
     }
   },
   "bus": {

@@ -1211,7 +1211,7 @@ FROM numeric_params{where}
 ORDER BY 1, 2"""
 
 
-_PRICE_SCALE_CONFIG_PARAM_REGEX = r"\.(reference_vwap_depth|shape_alpha|student_df|active_in_mpc)$"
+_PRICE_SCALE_CONFIG_PARAM_REGEX = r"\.(reference_vwap_vol|shape_alpha|student_df|active_in_mpc)$"
 
 
 def _latest_strategy_model_params_sql() -> str:
@@ -3013,8 +3013,8 @@ def model_parameters() -> dict[str, Any]:
         "`spread_t = spread_{t-1} * exp(delta_log_spread)`\n\n"
         "`buy_shape_t = buy_shape_{t-1} * exp(delta_log_buy_shape)`\n\n"
         "`sell_shape_t = sell_shape_{t-1} * exp(delta_log_sell_shape)`\n\n"
-        "`buy_vwap(depth) = mid_t + spread_t / 2 + buy_shape_t * depth_ratio(depth, reference_vwap_depth, shape_alpha)`\n\n"
-        "`sell_vwap(depth) = mid_t - spread_t / 2 - sell_shape_t * depth_ratio(depth, reference_vwap_depth, shape_alpha)`\n\n"
+        "`buy_vwap(depth) = mid_t + spread_t / 2 + buy_shape_t * depth_ratio(depth, reference_vwap_vol, shape_alpha)`\n\n"
+        "`sell_vwap(depth) = mid_t - spread_t / 2 - sell_shape_t * depth_ratio(depth, reference_vwap_vol, shape_alpha)`\n\n"
         "Shapes are defined from the fixed reference depth: "
         "`buy_shape = buy_vwap_ref - mid - spread/2`, "
         "`sell_shape = mid - sell_vwap_ref - spread/2`.\n\n"

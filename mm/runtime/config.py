@@ -19,6 +19,8 @@ SourceRole = Literal["local", "global"]
 NeutralVenueRole = Literal["local", "global"]
 LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 ReferenceVenueRole = Literal["global", "local"]
+QuoteVenueRole = Literal["quoting", "liquidity"]
+QuoteAnchorMode = Literal["quoting_mid", "liquidity_mid", "liquidity_weighted_mid"]
 BusKind = Literal["memory", "redis_streams"]
 FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
 
@@ -28,6 +30,22 @@ def _normalize_reference_price_source(value: Any) -> ReferenceVenueRole:
     if source not in ("global", "local"):
         raise ValueError("controller.reference_price_source must be 'global' or 'local'")
     return source  # type: ignore[return-value]
+
+
+def _normalize_quote_venue(value: Any, *, field_name: str) -> QuoteVenueRole:
+    venue = str(value or "liquidity").strip().lower()
+    if venue not in ("quoting", "liquidity"):
+        raise ValueError(f"{field_name} must be 'quoting' or 'liquidity'")
+    return venue  # type: ignore[return-value]
+
+
+def _normalize_quote_anchor_mode(value: Any) -> QuoteAnchorMode:
+    mode = str(value or "liquidity_weighted_mid").strip().lower()
+    if mode not in ("quoting_mid", "liquidity_mid", "liquidity_weighted_mid"):
+        raise ValueError(
+            "pricing.quote_anchor.mode must be 'quoting_mid', 'liquidity_mid', or 'liquidity_weighted_mid'"
+        )
+    return mode  # type: ignore[return-value]
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,20 +290,15 @@ class BotRuntimeConfig:
     preset: str
     symbol: str
     quoting_exchange: str
-    liquidity_source_exchange: str
-    reference_exchanges: tuple[str, ...] = ()
+    liquidity_exchange: str
 
     @property
     def normalized_quoting_exchange(self) -> str:
         return self.quoting_exchange.lower().strip()
 
     @property
-    def normalized_liquidity_source_exchange(self) -> str:
-        return self.liquidity_source_exchange.lower().strip()
-
-    @property
-    def normalized_reference_exchanges(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(exchange.lower().strip() for exchange in self.reference_exchanges if str(exchange).strip()))
+    def normalized_liquidity_exchange(self) -> str:
+        return self.liquidity_exchange.lower().strip()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -293,8 +306,50 @@ class BotRuntimeConfig:
             "preset": self.preset,
             "symbol": self.symbol,
             "quoting_exchange": self.normalized_quoting_exchange,
-            "liquidity_source_exchange": self.normalized_liquidity_source_exchange,
-            "reference_exchanges": self.normalized_reference_exchanges,
+            "liquidity_exchange": self.normalized_liquidity_exchange,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class QuoteAnchorRuntimeConfig:
+    mode: QuoteAnchorMode = "liquidity_weighted_mid"
+    anchor_vwap_bps: float = 20.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", _normalize_quote_anchor_mode(self.mode))
+        object.__setattr__(self, "anchor_vwap_bps", max(0.0, float(self.anchor_vwap_bps)))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "anchor_vwap_bps": self.anchor_vwap_bps,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryMarkRuntimeConfig:
+    venue: QuoteVenueRole = "liquidity"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "venue",
+            _normalize_quote_venue(self.venue, field_name="pricing.inventory_mark.venue"),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"venue": self.venue}
+
+
+@dataclass(frozen=True, slots=True)
+class PricingRuntimeConfig:
+    quote_anchor: QuoteAnchorRuntimeConfig = field(default_factory=QuoteAnchorRuntimeConfig)
+    inventory_mark: InventoryMarkRuntimeConfig = field(default_factory=InventoryMarkRuntimeConfig)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "quote_anchor": self.quote_anchor.as_dict(),
+            "inventory_mark": self.inventory_mark.as_dict(),
         }
 
 
@@ -408,6 +463,7 @@ class ControllerRuntimeConfig:
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
     max_orders_per_side: int = 5
     reference_price_source: ReferenceVenueRole = "global"
+    pricing: PricingRuntimeConfig = field(default_factory=PricingRuntimeConfig)
     local_price_model: dict[str, Any] | None = None
     local_market_flow_model: dict[str, Any] | None = None
     global_market_flow_model: dict[str, Any] | None = None
@@ -729,9 +785,10 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
     liquidity_sourcing = _liquidity_sourcing_from_preset(
         preset.get("liquidity_sourcing"),
         has_distinct_source=(
-            bot.normalized_liquidity_source_exchange != bot.normalized_quoting_exchange
+            bot.normalized_liquidity_exchange != bot.normalized_quoting_exchange
         ),
     )
+    pricing = _pricing_from_preset(preset.get("pricing"))
     controller_payload = _controller_payload_from_preset(
         preset,
         bot=bot,
@@ -741,7 +798,11 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
             if isinstance(global_payload, dict)
             else None
         ),
-        reference_price_source=_reference_price_source_from_bot(bot),
+        reference_price_source=_reference_price_source_from_pricing(
+            pricing,
+            has_distinct_liquidity=global_payload is not None,
+        ),
+        pricing=pricing,
         exchanges=payload.get("exchanges"),
     )
     return MarketMakerRuntimeConfig(
@@ -786,23 +847,15 @@ def _resolve_bot_runtime(
     quoting_exchange = str(bot_payload.get("quoting_exchange", "")).lower().strip()
     if not quoting_exchange:
         raise ValueError(f"bots.{bot_id}.quoting_exchange is required")
-    liquidity_source_exchange = str(
-        bot_payload.get("liquidity_source_exchange", quoting_exchange)
-    ).lower().strip()
-    references = bot_payload.get("reference_exchanges", ())
-    if isinstance(references, str):
-        reference_exchanges = (references,)
-    elif isinstance(references, (list, tuple)):
-        reference_exchanges = tuple(str(exchange) for exchange in references)
-    else:
-        reference_exchanges = ()
+    liquidity_exchange = str(bot_payload.get("liquidity_exchange", "")).lower().strip()
+    if not liquidity_exchange:
+        raise ValueError(f"bots.{bot_id}.liquidity_exchange is required")
     bot = BotRuntimeConfig(
         bot_id=bot_id,
         preset=preset_name,
         symbol=symbol,
         quoting_exchange=quoting_exchange,
-        liquidity_source_exchange=liquidity_source_exchange,
-        reference_exchanges=reference_exchanges,
+        liquidity_exchange=liquidity_exchange,
     )
     local_payload = _exchange_market_payload(
         payload,
@@ -831,21 +884,20 @@ def _single_bot_payload(payload: Any) -> tuple[str, dict[str, Any]]:
 
 def _secondary_exchange_for_bot(bot: BotRuntimeConfig) -> str | None:
     quoting = bot.normalized_quoting_exchange
-    source = bot.normalized_liquidity_source_exchange
-    if source and source != quoting:
-        return source
-    for exchange in bot.normalized_reference_exchanges:
-        if exchange != quoting:
-            return exchange
+    liquidity = bot.normalized_liquidity_exchange
+    if liquidity and liquidity != quoting:
+        return liquidity
     return None
 
 
-def _reference_price_source_from_bot(bot: BotRuntimeConfig) -> ReferenceVenueRole:
-    quoting = bot.normalized_quoting_exchange
-    references = bot.normalized_reference_exchanges
-    if not references or references == (quoting,):
-        return "local"
-    return "global"
+def _reference_price_source_from_pricing(
+    pricing: PricingRuntimeConfig,
+    *,
+    has_distinct_liquidity: bool,
+) -> ReferenceVenueRole:
+    if pricing.inventory_mark.venue == "liquidity" and has_distinct_liquidity:
+        return "global"
+    return "local"
 
 
 def _exchange_config(payload: dict[str, Any], exchange: str) -> dict[str, Any]:
@@ -893,14 +945,20 @@ def _controller_payload_from_preset(
     local_exchange: str,
     global_exchange: str | None,
     reference_price_source: ReferenceVenueRole,
+    pricing: PricingRuntimeConfig,
     exchanges: Any,
 ) -> Any:
     controller = preset.get("controller")
     if not isinstance(controller, dict):
         return None
+    if "reference_price_source" in controller:
+        raise ValueError(
+            "controller.reference_price_source was removed; use pricing.inventory_mark.venue"
+        )
     merged = dict(controller)
     merged.setdefault("actor_id", bot.bot_id)
     merged["reference_price_source"] = reference_price_source
+    merged["pricing"] = pricing.as_dict()
     execution_model = _execution_model_from_exchanges(
         exchanges,
         local_exchange=local_exchange,
@@ -911,6 +969,52 @@ def _controller_payload_from_preset(
         existing.update(execution_model)
         merged["execution_model"] = existing
     return merged
+
+
+def _pricing_from_preset(payload: Any) -> PricingRuntimeConfig:
+    if payload is None:
+        return PricingRuntimeConfig()
+    if not isinstance(payload, dict):
+        raise ValueError("strategy preset pricing must be an object")
+    allowed = {"quote_anchor", "inventory_mark"}
+    unknown = sorted(key for key in payload if not str(key).startswith("_") and key not in allowed)
+    if unknown:
+        raise ValueError(f"unknown strategy preset pricing keys: {', '.join(unknown)}")
+    quote_anchor_payload = payload.get("quote_anchor")
+    if quote_anchor_payload is None:
+        quote_anchor = QuoteAnchorRuntimeConfig()
+    elif isinstance(quote_anchor_payload, dict):
+        allowed_anchor = {"mode", "anchor_vwap_bps"}
+        unknown_anchor = sorted(
+            key for key in quote_anchor_payload if not str(key).startswith("_") and key not in allowed_anchor
+        )
+        if unknown_anchor:
+            raise ValueError(f"unknown pricing.quote_anchor keys: {', '.join(unknown_anchor)}")
+        quote_anchor = QuoteAnchorRuntimeConfig(
+            mode=_normalize_quote_anchor_mode(quote_anchor_payload.get("mode")),
+            anchor_vwap_bps=float(quote_anchor_payload.get("anchor_vwap_bps", 20.0)),
+        )
+    else:
+        raise ValueError("pricing.quote_anchor must be an object")
+    inventory_mark_payload = payload.get("inventory_mark")
+    if inventory_mark_payload is None:
+        inventory_mark = InventoryMarkRuntimeConfig()
+    elif isinstance(inventory_mark_payload, dict):
+        allowed_mark = {"venue"}
+        unknown_mark = sorted(
+            key for key in inventory_mark_payload if not str(key).startswith("_") and key not in allowed_mark
+        )
+        if unknown_mark:
+            raise ValueError(f"unknown pricing.inventory_mark keys: {', '.join(unknown_mark)}")
+        inventory_mark = InventoryMarkRuntimeConfig(
+            venue=_normalize_quote_venue(
+                inventory_mark_payload.get("venue"),
+                field_name="pricing.inventory_mark.venue",
+            )
+        )
+    else:
+        raise ValueError("pricing.inventory_mark must be an object")
+    return PricingRuntimeConfig(quote_anchor=quote_anchor, inventory_mark=inventory_mark)
 
 
 def _execution_model_from_exchanges(
@@ -979,11 +1083,13 @@ def _execution_from_preset(
                 planner="replace",
             )
         )
-    source_payload = payload.get("liquidity_source")
+    if "liquidity_source" in payload:
+        raise ValueError("execution.liquidity_source was removed; use execution.liquidity")
+    source_payload = payload.get("liquidity")
     if isinstance(source_payload, dict) and "enabled" in source_payload:
         raise ValueError(
-            "execution.liquidity_source.enabled is derived from "
-            "liquidity_sourcing.mode; use mode='live' to allow source live orders"
+            "execution.liquidity.enabled is derived from liquidity_sourcing.mode; "
+            "use mode='live' to allow liquidity live orders"
         )
     source_execution = _venue_execution_from_mapping(
         source_payload,
@@ -1255,6 +1361,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         reference_price_source=_normalize_reference_price_source(
             payload.get("reference_price_source", "global")
         ),
+        pricing=_pricing_from_preset(payload.get("pricing")),
         local_price_model=_dict_or_none(payload.get("local_price_model")),
         local_market_flow_model=_dict_or_none(payload.get("local_market_flow_model")),
         global_market_flow_model=_dict_or_none(payload.get("global_market_flow_model")),
@@ -1362,11 +1469,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "abs(local_inventory + global_inventory) when liquidity sourcing is enabled; "
             "VWAP helpers cap to visible book depth when requested depth is larger; "
             "conditional_mechanical_mixture price models use their own fixed "
-            "reference_vwap_depth for learning and convert to this dynamic depth in MPC"
+            "reference_vwap_vol for learning and convert to this dynamic depth in MPC"
         ),
+        "pricing": config.pricing.as_dict(),
         "reference_price_source": config.reference_price_source,
         "reference_price_source_note": (
-            "selects which simulated sell-side VWAP path marks inventory and objective returns"
+            "internal local/global form derived from pricing.inventory_mark.venue"
         ),
         "model_inputs": {
             "local_price_model": config.local_price_model or {"kind": "residual"},

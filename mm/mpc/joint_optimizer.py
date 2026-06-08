@@ -223,6 +223,13 @@ def optimize_joint_with_diagnostics(
     local_opt = mpc.local_optimizer
     global_opt = mpc.global_optimizer
 
+    def inventory_mark_price_batched(net_inventory, buy_vwap, sell_vwap, flat_price):
+        return torch_mod.where(
+            net_inventory < 0.0,
+            buy_vwap,
+            torch_mod.where(net_inventory > 0.0, sell_vwap, flat_price),
+        )
+
     def draw_samples():
         sample_shape = (mpc.n_samples, mpc.horizon)
         if hasattr(mpc.local_market_flow_model, "sample"):
@@ -573,7 +580,7 @@ def optimize_joint_with_diagnostics(
                     local_mid_next = _mid_from_book_best_levels_batched(
                         ob_bids_next, ob_asks_next, mid_t, spread_grid
                     )
-                    ref_depth = float(getattr(mpc.local_price_model, "reference_vwap_depth", 100.0))
+                    ref_depth = float(getattr(mpc.local_price_model, "reference_vwap_vol", 100.0))
                     prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
                         ob_bids,
                         ob_asks,
@@ -630,7 +637,7 @@ def optimize_joint_with_diagnostics(
                         global_mid_t,
                         spread_grid,
                     )
-                    ref_depth = float(getattr(global_price_model, "reference_vwap_depth", 100.0))
+                    ref_depth = float(getattr(global_price_model, "reference_vwap_vol", 100.0))
                     prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
                         global_ob_bids,
                         global_ob_asks,
@@ -680,7 +687,22 @@ def optimize_joint_with_diagnostics(
                     global_buy_vwap_t = conditional_global_buy_vwap_t
                     global_sell_vwap_t = conditional_global_sell_vwap_t
 
-                ref_next = global_sell_vwap_t if use_global_reference else sell_vwap_t
+                net_inv_next = inv_next + global_inv_next
+                ref_next = (
+                    inventory_mark_price_batched(
+                        net_inv_next,
+                        global_buy_vwap_t,
+                        global_sell_vwap_t,
+                        global_mid_t,
+                    )
+                    if use_global_reference
+                    else inventory_mark_price_batched(
+                        net_inv_next,
+                        buy_vwap_t,
+                        sell_vwap_t,
+                        mid_t,
+                    )
+                )
                 local_step_reward = (
                     cash_next + inv_next * ref_next - (cash_t + inv_t * ref_t)
                 ).squeeze(1)

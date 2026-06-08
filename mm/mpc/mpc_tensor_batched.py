@@ -685,16 +685,20 @@ def soft_fill_batched(
 
 
 def _delta_wealth_mtm_batched(
+    buy_vwap: torch.Tensor,
     sell_vwap: torch.Tensor,
     inv: torch.Tensor,
     cash: torch.Tensor,
+    buy_vwap_next: torch.Tensor,
     sell_vwap_next: torch.Tensor,
     inv_next: torch.Tensor,
     cash_next: torch.Tensor,
 ) -> torch.Tensor:
-    """Per-sample ΔW with inventory marked at sell-side VWAP: W = cash + inv * sell_vwap."""
-    W = cash + inv * sell_vwap
-    W_next = cash_next + inv_next * sell_vwap_next
+    """Per-sample ΔW with long inventory at bid VWAP and short inventory at ask VWAP."""
+    mark = torch.where(inv < 0.0, buy_vwap, sell_vwap)
+    mark_next = torch.where(inv_next < 0.0, buy_vwap_next, sell_vwap_next)
+    W = cash + inv * mark
+    W_next = cash_next + inv_next * mark_next
     return (W_next - W).squeeze(1)
 
 
@@ -1026,8 +1030,10 @@ class MonteCarloMPCTensorBatched:
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)
         cash_0 = float(state.cash)
+        buy_vwap_0 = float(state.buy_vwap)
         sell_vwap_0 = float(state.sell_vwap)
-        wealth_0 = portfolio_wealth(cash_0, inv_0, sell_vwap_0)
+        mark_0 = buy_vwap_0 if inv_0 < 0.0 else sell_vwap_0 if inv_0 > 0.0 else mid_0
+        wealth_0 = portfolio_wealth(cash_0, inv_0, mark_0)
         (
             bid_quote_size_min_0,
             bid_quote_size_max_0,
@@ -1317,7 +1323,7 @@ class MonteCarloMPCTensorBatched:
                         spread_grid,
                     )
                     if conditional_price_model:
-                        ref_depth = float(getattr(self.local_price_model, "reference_vwap_depth", 100.0))
+                        ref_depth = float(getattr(self.local_price_model, "reference_vwap_vol", 100.0))
                         prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = (
                             _fixed_depth_shape_features_batched(
                                 ob_bids,
@@ -1379,7 +1385,14 @@ class MonteCarloMPCTensorBatched:
                     ob_bids, ob_asks = ob_bids_next, ob_asks_next
 
                     step_reward_main = _delta_wealth_mtm_batched(
-                        sell_vwap_t, inv_t, cash_t, sell_vwap_next, inv_next, cash_next
+                        buy_vwap_t,
+                        sell_vwap_t,
+                        inv_t,
+                        cash_t,
+                        buy_vwap_next,
+                        sell_vwap_next,
+                        inv_next,
+                        cash_next,
                     )
                     step_reward = step_reward_main
                     if h == 0:

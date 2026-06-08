@@ -28,11 +28,12 @@ from mm.core.adapters.joint import joint_target_book_to_action
 from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
 from mm.mpc.mpc_state import State
-from mm.pricing import vwap_from_raw_orderbook
+from mm.pricing import quote_anchor_price, two_sided_mid, vwap_from_raw_orderbook
 from mm.runtime.config import (
     ControllerRuntimeConfig,
     ExecutionRuntimeConfig,
     LiquiditySourcingRuntimeConfig,
+    PricingRuntimeConfig,
 )
 from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
@@ -116,7 +117,7 @@ def _set_model_vwap_depth(model: Any, vwap_depth: float | None) -> None:
         model is None
         or vwap_depth is None
         or not hasattr(model, "_target_depth_lots")
-        or hasattr(model, "reference_vwap_depth")
+        or hasattr(model, "reference_vwap_vol")
     ):
         return
     try:
@@ -270,6 +271,7 @@ class MpcStrategyEngine:
             self.binding,
             self.config.orderbook_grid.spread_max,
             reference_price_source=self.config.reference_price_source,
+            pricing=self.config.pricing,
             liquidity_sourcing=self.liquidity_sourcing,
             ledger=self._ledger_context,
         )
@@ -396,6 +398,7 @@ class MpcStrategyEngine:
             orderbook_grid=self.config.orderbook_grid,
             local_constraints=order_constraints,
             continuous=continuous_depth,
+            local_anchor_price=float(state.mid),
             mode=sourcing_mode,
             local_policy=self.execution.local.planner,
             global_policy=self.execution.global_.planner,
@@ -669,8 +672,11 @@ def _build_price_model(
     price_cfg = dict(cfg or {})
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
     if price_kind in ("conditional_mechanical_mixture", "flow_gated_mixture"):
-        if "vwap_depth" in price_cfg and "reference_vwap_depth" not in price_cfg:
-            price_cfg["reference_vwap_depth"] = price_cfg.pop("vwap_depth")
+        removed = [key for key in ("vwap_depth", "reference_vwap_depth") if key in price_cfg]
+        if removed:
+            raise ValueError(
+                f"{config_name}.{', '.join(removed)} was removed; use reference_vwap_vol"
+            )
         # The conditional sigmoid gate uses the model decay for adaptation. Ignore
         # older/experimental gate knobs if they appear in a config.
         for key in ("gate_kind", "gate_bins", "gate_learning_rate"):
@@ -681,9 +687,9 @@ def _build_price_model(
         )
     if price_kind != "residual":
         raise ValueError(f"unsupported {config_name} kind: {price_kind}")
-    if "vwap_depth" in price_cfg or "reference_vwap_depth" in price_cfg:
+    if "vwap_depth" in price_cfg or "reference_vwap_depth" in price_cfg or "reference_vwap_vol" in price_cfg:
         raise ValueError(
-            f"{config_name}.vwap_depth/reference_vwap_depth is only supported by "
+            f"{config_name}.reference_vwap_vol is only supported by "
             "kind=conditional_mechanical_mixture; residual VWAP depth is derived from inventory"
         )
     return TorchResidualPriceModel(market_flow_model=market_flow_model, **price_cfg)
@@ -813,6 +819,7 @@ def _state_from_frame(
     spread_max: float,
     *,
     reference_price_source: str = "global",
+    pricing: PricingRuntimeConfig | None = None,
     liquidity_sourcing: LiquiditySourcingRuntimeConfig | None = None,
     ledger: JointLedgerSnapshot | None = None,
 ) -> State:
@@ -839,31 +846,51 @@ def _state_from_frame(
         global_inventory,
         liquidity_sourcing_enabled=global_portfolio_enabled,
     )
-    local_mid = mid_from_orderbook(frame.local.orderbook)
+    pricing_cfg = pricing or PricingRuntimeConfig()
+    liquidity_event = frame.global_ if frame.global_ is not None else frame.local
+    anchor_result = quote_anchor_price(
+        quoting_book=frame.local.orderbook,
+        liquidity_book=liquidity_event.orderbook,
+        mode=pricing_cfg.quote_anchor.mode,
+        anchor_vwap_bps=pricing_cfg.quote_anchor.anchor_vwap_bps,
+    )
+    quote_anchor = float(anchor_result.price)
+    local_book_mid = _two_sided_mid_or_none(frame.local.orderbook)
+    liquidity_book_mid = _two_sided_mid_or_none(liquidity_event.orderbook)
     bids = tuple(
         (spread, level.qty)
         for level in frame.local.orderbook.bids
-        if (spread := local_mid - level.price) >= 0 and spread <= spread_max and level.qty > 0
+        if (spread := quote_anchor - level.price) >= 0 and spread <= spread_max and level.qty > 0
     )
     asks = tuple(
         (spread, level.qty)
         for level in frame.local.orderbook.asks
-        if (spread := level.price - local_mid) >= 0 and spread <= spread_max and level.qty > 0
+        if (spread := level.price - quote_anchor) >= 0 and spread <= spread_max and level.qty > 0
     )
-    buy_vwap, sell_vwap = vwap_from_raw_orderbook(frame.local.orderbook, target_depth=vwap_depth)
+    buy_vwap, sell_vwap = _inventory_vwap_or_anchor(
+        frame.local.orderbook,
+        target_depth=vwap_depth,
+        anchor_price=quote_anchor,
+    )
     global_buy_vwap = global_sell_vwap = None
     global_ob_rel = None
     global_buy_vol = 0.0
     global_sell_vol = 0.0
     global_mid = None
     if frame.global_ is not None:
-        global_mid = mid_from_orderbook(frame.global_.orderbook)
-        global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=spread_max)
+        try:
+            global_mid = mid_from_orderbook(frame.global_.orderbook)
+            global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=spread_max)
+        except ValueError:
+            global_mid = None
+            global_ob_rel = OrderbookRelative(bids=(), asks=())
         global_buy_vol = float(frame.global_.buy_volume)
         global_sell_vol = float(frame.global_.sell_volume)
         try:
-            global_buy_vwap, global_sell_vwap = vwap_from_raw_orderbook(
-                frame.global_.orderbook, target_depth=vwap_depth
+            global_buy_vwap, global_sell_vwap = _inventory_vwap_or_anchor(
+                frame.global_.orderbook,
+                target_depth=vwap_depth,
+                anchor_price=quote_anchor,
             )
             global_buy_vwap = float(global_buy_vwap)
             global_sell_vwap = float(global_sell_vwap)
@@ -874,10 +901,18 @@ def _state_from_frame(
         and global_sell_vwap is not None
         and float(global_sell_vwap) > 0.0
     )
-    reference_price = float(global_sell_vwap if use_global_reference else sell_vwap)
+    mark_buy_vwap = global_buy_vwap if use_global_reference and global_buy_vwap is not None else buy_vwap
+    mark_sell_vwap = global_sell_vwap if use_global_reference and global_sell_vwap is not None else sell_vwap
+    net_inventory = local_inventory + (global_inventory if global_portfolio_enabled else 0.0)
+    reference_price = _inventory_mark_price(
+        net_inventory=net_inventory,
+        buy_vwap=float(mark_buy_vwap),
+        sell_vwap=float(mark_sell_vwap),
+        flat_price=quote_anchor,
+    )
     global_active = _global_active_for_frame(frame, sourcing)
     return State(
-        mid=local_mid,
+        mid=quote_anchor,
         ob_rel=OrderbookRelative(bids=bids, asks=asks),
         buy_vol=frame.local.buy_volume,
         sell_vol=frame.local.sell_volume,
@@ -895,8 +930,47 @@ def _state_from_frame(
         global_buy_vol=global_buy_vol,
         global_sell_vol=global_sell_vol,
         reference_price=reference_price,
+        local_book_mid=local_book_mid,
+        liquidity_book_mid=liquidity_book_mid,
+        quote_anchor_price=quote_anchor,
+        inventory_mark_price=reference_price,
         global_active=global_active,
     )
+
+
+def _two_sided_mid_or_none(orderbook: Any) -> float | None:
+    try:
+        return float(two_sided_mid(orderbook))
+    except ValueError:
+        return None
+
+
+def _inventory_vwap_or_anchor(
+    orderbook: Any,
+    *,
+    target_depth: float,
+    anchor_price: float,
+) -> tuple[float, float]:
+    try:
+        return vwap_from_raw_orderbook(orderbook, target_depth=target_depth)
+    except ValueError:
+        if not math.isfinite(float(anchor_price)) or float(anchor_price) <= 0.0:
+            raise
+        return float(anchor_price), float(anchor_price)
+
+
+def _inventory_mark_price(
+    *,
+    net_inventory: float,
+    buy_vwap: float,
+    sell_vwap: float,
+    flat_price: float,
+) -> float:
+    if net_inventory > 0.0:
+        return float(sell_vwap)
+    if net_inventory < 0.0:
+        return float(buy_vwap)
+    return float(flat_price)
 
 
 def _venue_inventory_cash(

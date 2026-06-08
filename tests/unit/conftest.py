@@ -70,8 +70,7 @@ def venues_payload(
                 "preset": "test_preset",
                 "symbol": symbol,
                 "quoting_exchange": local_exchange,
-                "liquidity_source_exchange": global_exchange,
-                "reference_exchanges": [global_exchange] if global_exchange != local_exchange else [local_exchange],
+                "liquidity_exchange": global_exchange,
             }
         },
         **extra,

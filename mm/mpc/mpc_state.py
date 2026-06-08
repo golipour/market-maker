@@ -250,4 +250,8 @@ class State:
     global_buy_vol: float = 0.0
     global_sell_vol: float = 0.0
     reference_price: float = 0.0
+    local_book_mid: float | None = None
+    liquidity_book_mid: float | None = None
+    quote_anchor_price: float | None = None
+    inventory_mark_price: float | None = None
     global_active: bool = False

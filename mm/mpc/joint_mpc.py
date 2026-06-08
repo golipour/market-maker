@@ -68,20 +68,60 @@ class JointSigmoidMixtureAction:
 
 
 def reference_price_from_state(state: State, reference_price_source: str | None = None) -> float:
-    """Return the selected sell-side VWAP reference used to mark inventory."""
+    """Return the selected liquidation VWAP reference used to mark inventory."""
 
     source = str(reference_price_source or "").strip().lower()
+    net_inventory = float(state.inventory) + float(state.global_inventory)
     if source == "local":
-        return float(state.sell_vwap)
+        return _inventory_mark_price_from_vwaps(
+            net_inventory,
+            buy_vwap=float(state.buy_vwap),
+            sell_vwap=float(state.sell_vwap),
+            flat_price=float(state.reference_price or state.mid),
+        )
     if source == "global":
         if state.global_sell_vwap is not None and float(state.global_sell_vwap) > 0.0:
-            return float(state.global_sell_vwap)
-        return float(state.sell_vwap)
+            return _inventory_mark_price_from_vwaps(
+                net_inventory,
+                buy_vwap=float(state.global_buy_vwap or state.buy_vwap),
+                sell_vwap=float(state.global_sell_vwap),
+                flat_price=float(state.reference_price or state.global_mid or state.mid),
+            )
+        return _inventory_mark_price_from_vwaps(
+            net_inventory,
+            buy_vwap=float(state.buy_vwap),
+            sell_vwap=float(state.sell_vwap),
+            flat_price=float(state.reference_price or state.mid),
+        )
     if state.reference_price > 0.0:
         return float(state.reference_price)
     if state.global_sell_vwap is not None and float(state.global_sell_vwap) > 0.0:
-        return float(state.global_sell_vwap)
-    return float(state.sell_vwap)
+        return _inventory_mark_price_from_vwaps(
+            net_inventory,
+            buy_vwap=float(state.global_buy_vwap or state.buy_vwap),
+            sell_vwap=float(state.global_sell_vwap),
+            flat_price=float(state.global_mid or state.mid),
+        )
+    return _inventory_mark_price_from_vwaps(
+        net_inventory,
+        buy_vwap=float(state.buy_vwap),
+        sell_vwap=float(state.sell_vwap),
+        flat_price=float(state.mid),
+    )
+
+
+def _inventory_mark_price_from_vwaps(
+    net_inventory: float,
+    *,
+    buy_vwap: float,
+    sell_vwap: float,
+    flat_price: float,
+) -> float:
+    if net_inventory > 0.0:
+        return float(sell_vwap)
+    if net_inventory < 0.0:
+        return float(buy_vwap)
+    return float(flat_price)
 
 
 def consolidated_wealth_scalar(
@@ -249,6 +289,10 @@ def enrich_state_for_joint(
         global_buy_vol=state.global_buy_vol,
         global_sell_vol=state.global_sell_vol,
         reference_price=ref,
+        local_book_mid=state.local_book_mid,
+        liquidity_book_mid=state.liquidity_book_mid,
+        quote_anchor_price=state.quote_anchor_price,
+        inventory_mark_price=state.inventory_mark_price,
         global_active=bool(global_active),
     )
 

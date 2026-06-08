@@ -126,8 +126,7 @@ def test_runtime_config_parses_exchange_configs_for_bot_roles() -> None:
                     "preset": "arb",
                     "symbol": "USDT_IRT",
                     "quoting_exchange": "wallex",
-                    "liquidity_source_exchange": "nobitex",
-                    "reference_exchanges": ["nobitex"],
+                    "liquidity_exchange": "nobitex",
                 }
             },
         }

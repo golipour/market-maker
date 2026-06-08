@@ -100,7 +100,7 @@ def test_execution_config_parses_per_venue_policies() -> None:
     )
     payload["strategy_presets"]["test_preset"]["execution"] = {
         "quoting": {"planner": "reconcile"},
-        "liquidity_source": {"planner": "replace", "max_order_qty": 0.25, "max_quote_distance": 5.0},
+        "liquidity": {"planner": "replace", "max_order_qty": 0.25, "max_quote_distance": 5.0},
     }
     payload["strategy_presets"]["test_preset"]["liquidity_sourcing"] = {"mode": "simulate"}
     config = runtime_config_from_mapping(
@@ -122,7 +122,7 @@ def test_liquidity_sourcing_live_mode_derives_source_execution_enabled() -> None
     payload["strategy_presets"]["test_preset"]["liquidity_sourcing"] = {"mode": "live"}
     payload["strategy_presets"]["test_preset"]["execution"] = {
         "quoting": {"enabled": False, "planner": "replace"},
-        "liquidity_source": {"planner": "replace", "max_order_qty": 0.25},
+        "liquidity": {"planner": "replace", "max_order_qty": 0.25},
     }
 
     config = runtime_config_from_mapping(payload)
@@ -133,16 +133,29 @@ def test_liquidity_sourcing_live_mode_derives_source_execution_enabled() -> None
     assert config.execution.global_.max_order_qty == 0.25
 
 
-def test_liquidity_source_execution_enabled_is_rejected() -> None:
+def test_liquidity_execution_enabled_is_rejected() -> None:
     payload = venues_payload(
         local={"exchange": "nobitex", "symbol": "BTC_IRT"},
         global_={"exchange": "wallex", "symbol": "BTC_IRT"},
     )
     payload["strategy_presets"]["test_preset"]["execution"] = {
-        "liquidity_source": {"enabled": True, "planner": "replace"},
+        "liquidity": {"enabled": True, "planner": "replace"},
     }
 
-    with pytest.raises(ValueError, match="liquidity_source.enabled"):
+    with pytest.raises(ValueError, match="liquidity.enabled"):
+        runtime_config_from_mapping(payload)
+
+
+def test_old_liquidity_source_execution_key_is_rejected() -> None:
+    payload = venues_payload(
+        local={"exchange": "nobitex", "symbol": "BTC_IRT"},
+        global_={"exchange": "wallex", "symbol": "BTC_IRT"},
+    )
+    payload["strategy_presets"]["test_preset"]["execution"] = {
+        "liquidity_source": {"planner": "replace"},
+    }
+
+    with pytest.raises(ValueError, match="execution.liquidity_source was removed"):
         runtime_config_from_mapping(payload)
 
 

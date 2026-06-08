@@ -119,8 +119,7 @@ def _bus_config_from_env() -> BusRuntimeConfig:
                     "preset": "admin",
                     "symbol": "ADMIN",
                     "quoting_exchange": "admin",
-                    "liquidity_source_exchange": "admin",
-                    "reference_exchanges": ["admin"],
+                    "liquidity_exchange": "admin",
                 }
             },
             "bus": {

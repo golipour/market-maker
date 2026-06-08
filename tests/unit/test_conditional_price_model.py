@@ -20,7 +20,7 @@ def test_conditional_price_model_uses_sigmoid_flow_gate_in_rollout() -> None:
     torch = pytest.importorskip("torch")
 
     model = TorchConditionalMechanicalMixturePriceModel(
-        reference_vwap_depth=100.0,
+        reference_vwap_vol=100.0,
         point_mode="mean",
     )
     model._gate_beta = np.array([0.0, 1.0], dtype=np.float64)
@@ -67,11 +67,11 @@ def test_conditional_price_model_updates_sigmoid_gate_with_decay() -> None:
     )
     fast = TorchConditionalMechanicalMixturePriceModel(
         decay=0.5,
-        reference_vwap_depth=1.0,
+        reference_vwap_vol=1.0,
     )
     slow = TorchConditionalMechanicalMixturePriceModel(
         decay=0.99,
-        reference_vwap_depth=1.0,
+        reference_vwap_vol=1.0,
     )
     before_fast = np.asarray(fast.get_params()["gate_beta"], dtype=np.float64)
     before_slow = np.asarray(slow.get_params()["gate_beta"], dtype=np.float64)
@@ -94,7 +94,7 @@ def test_conditional_price_model_zero_depth_has_finite_gradient() -> None:
     torch = pytest.importorskip("torch")
 
     model = TorchConditionalMechanicalMixturePriceModel(
-        reference_vwap_depth=100.0,
+        reference_vwap_vol=100.0,
         shape_alpha=0.5,
         point_mode="mean",
     )

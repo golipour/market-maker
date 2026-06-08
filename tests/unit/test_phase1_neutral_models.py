@@ -64,7 +64,7 @@ def _market_event(*, exchange: str = "nobitex", symbol: str = "USDT_IRT") -> Mar
     )
 
 
-def test_bot_assigns_quoting_and_liquidity_source_exchanges() -> None:
+def test_bot_assigns_quoting_and_liquidity_exchanges() -> None:
     payload = venues_payload(
         local={"exchange": "nobitex", "symbol": "USDT_IRT"},
         global_={"exchange": "wallex", "symbol": "USDT_IRT"},
@@ -264,14 +264,18 @@ def test_runtime_contract_includes_venues() -> None:
 def test_example_config_loads_liquidity_sourcing() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.liquidity_sourcing.enabled is False
-    assert config.liquidity_sourcing.mode == "single_venue"
+    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.mode == "liquidity_sourcing"
+    assert config.liquidity_sourcing.global_live_orders is True
     assert config.controller is not None
     assert config.controller.enabled is True
+    assert config.controller.pricing.quote_anchor.mode == "liquidity_weighted_mid"
+    assert config.controller.pricing.quote_anchor.anchor_vwap_bps == 20.0
+    assert config.controller.pricing.inventory_mark.venue == "liquidity"
     assert config.controller.optimizer is not None
     assert config.controller.optimizer["local"]["n_components"] == 4
     assert config.controller.optimizer["global"]["n_components"] == 2
-    assert config.execution.local.max_orders_per_side == 5
+    assert config.execution.local.max_orders_per_side == 10
     assert config.execution.global_.max_orders_per_side == 2
 
 

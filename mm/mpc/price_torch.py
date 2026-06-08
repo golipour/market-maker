@@ -372,7 +372,7 @@ class TorchConditionalMechanicalMixturePriceModel:
         self,
         market_flow_model: object | None = None,
         *,
-        reference_vwap_depth: float = 100.0,
+        reference_vwap_vol: float = 100.0,
         shape_alpha: float = 0.5,
         decay: float = 0.99,
         initial_sigma: float = 50.0,
@@ -385,8 +385,8 @@ class TorchConditionalMechanicalMixturePriceModel:
         device: str | None = None,
     ):
         self.market_flow_model = market_flow_model
-        self._reference_vwap_depth = max(1e-12, float(reference_vwap_depth))
-        self._target_depth_lots = self._reference_vwap_depth
+        self._reference_vwap_vol = max(1e-12, float(reference_vwap_vol))
+        self._target_depth_lots = self._reference_vwap_vol
         self._shape_alpha = max(0.0, float(shape_alpha))
         self._gamma = max(1e-6, min(0.9999, float(decay)))
         self._alpha = 1.0 - self._gamma
@@ -420,8 +420,8 @@ class TorchConditionalMechanicalMixturePriceModel:
         self.market_sigma_hist: list[float] = []
 
     @property
-    def reference_vwap_depth(self) -> float:
-        return self._reference_vwap_depth
+    def reference_vwap_vol(self) -> float:
+        return self._reference_vwap_vol
 
     @property
     def shape_alpha(self) -> float:
@@ -475,14 +475,14 @@ class TorchConditionalMechanicalMixturePriceModel:
         _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
         try:
             prev_buy, prev_sell = reference_prices_ticks_from_orderbook(
-                prev_ob, self._reference_vwap_depth
+                prev_ob, self._reference_vwap_vol
             )
             obs_buy, obs_sell, mech_buy, mech_sell = reference_prices_from_transition_ticks(
                 prev_ob,
                 cur_ob,
                 float(buy_vol),
                 float(sell_vol),
-                self._reference_vwap_depth,
+                self._reference_vwap_vol,
             )
             prev_mid = float(prev_ob.mid)
             obs_mid = float(cur_ob.mid)
@@ -587,7 +587,7 @@ class TorchConditionalMechanicalMixturePriceModel:
     def get_params(self) -> dict[str, Any]:
         return {
             "kind": "conditional_mechanical_mixture",
-            "reference_vwap_depth": self._reference_vwap_depth,
+            "reference_vwap_vol": self._reference_vwap_vol,
             "shape_alpha": self._shape_alpha,
             "student_df": self._student_df,
             "gate_beta": self._gate_beta.tolist(),
@@ -717,7 +717,7 @@ class TorchConditionalMechanicalMixturePriceModel:
         pred_sell_shape = prev_sell_shape * torch.exp(
             torch.clamp(pred_components["log_sell_shape"], min=-5.0, max=5.0)
         )
-        ref_depth = torch.tensor(self._reference_vwap_depth, dtype=dtype, device=device)
+        ref_depth = torch.tensor(self._reference_vwap_vol, dtype=dtype, device=device)
         alpha = torch.tensor(self._shape_alpha, dtype=dtype, device=device)
         buy_ratio = self._depth_shape_ratio_torch(buy_depth, ref_depth, alpha)
         sell_ratio = self._depth_shape_ratio_torch(sell_depth, ref_depth, alpha)

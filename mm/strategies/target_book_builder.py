@@ -66,6 +66,7 @@ def build_joint_target_book_from_sigmoid(
     orderbook_grid: Any,
     local_constraints: OrderConstraints,
     continuous: dict[str, Any] | None = None,
+    local_anchor_price: float | None = None,
     mode: LiquiditySourcingMode = "single_venue",
     local_policy: ExecutionPolicy = "reconcile",
     global_policy: ExecutionPolicy = "replace",
@@ -82,6 +83,7 @@ def build_joint_target_book_from_sigmoid(
         orderbook_grid=orderbook_grid,
         constraints=local_constraints,
         continuous=continuous,
+        anchor_price=local_anchor_price,
     )
     action_ladder = list(ladder)
     local_book = build_venue_target_book_from_orders(

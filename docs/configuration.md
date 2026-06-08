@@ -77,22 +77,20 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 ```json
 "bots": {
   "mpc-controller": {
-    "preset": "thin_local_liquidity_weighted_mpc",
-    "symbol": "USDT_IRT",
-    "quoting_exchange": "nobitex",
-    "liquidity_source_exchange": "tabdeal",
-    "reference_exchanges": ["tabdeal", "wallex", "nobitex"]
-  }
-}
-```
+	    "preset": "thin_local_liquidity_weighted_mpc",
+	    "symbol": "USDT_IRT",
+	    "quoting_exchange": "nobitex",
+	    "liquidity_exchange": "tabdeal"
+	  }
+	}
+	```
 
 | Field | Default | Notes |
 |-------|---------|-------|
 | `preset` | required | Name under `strategy_presets` |
 | `symbol` | required | Strategy symbol for every selected exchange |
 | `quoting_exchange` | required | Exchange where this bot builds the local/quoting target book |
-| `liquidity_source_exchange` | quoting exchange | Exchange used as current secondary/source venue |
-| `reference_exchanges` | quoting exchange | Ordered fair-value/reference candidates; current engine maps external references to the internal global slot |
+| `liquidity_exchange` | required | Second orderbook and optional liquidity-source venue; may equal `quoting_exchange` |
 
 ### Strategy Presets
 
@@ -102,10 +100,17 @@ Without token, private reconciler is skipped and **no live orders** on that exch
     "interval_ms": 10000,
     "max_global_lag_ms": 2000,
     "global_grace_ms": 250,
-    "liquidity_sourcing": {"mode": "simulate"},
-    "execution": {
+	    "liquidity_sourcing": {"mode": "simulate"},
+	    "pricing": {
+	      "quote_anchor": {
+	        "mode": "liquidity_weighted_mid",
+	        "anchor_vwap_bps": 20.0
+	      },
+	      "inventory_mark": {"venue": "liquidity"}
+	    },
+	    "execution": {
       "quoting": {"enabled": false, "planner": "replace"},
-      "liquidity_source": {"planner": "replace"}
+	      "liquidity": {"planner": "replace"}
     },
     "controller": {
       "enabled": true,
@@ -118,8 +123,11 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 | Field | Notes |
 |-------|--------|
 | `liquidity_sourcing.mode` | `off`, `simulate`, or `live`; `simulate/live` require a distinct liquidity source exchange |
+| `pricing.quote_anchor.mode` | `quoting_mid`, `liquidity_mid`, or `liquidity_weighted_mid` |
+| `pricing.quote_anchor.anchor_vwap_bps` | Fixed bps window from each venue's best bid/ask for anchor side VWAPs; side weights are the volume inside this window |
+| `pricing.inventory_mark.venue` | `quoting` or `liquidity`; selects whose inventory-depth liquidation VWAP marks wealth |
 | `execution.quoting` | Planner/caps for the quoting exchange |
-| `execution.liquidity_source` | Planner/caps for the liquidity source exchange; live enablement is derived from `liquidity_sourcing.mode == "live"` |
+| `execution.liquidity` | Planner/caps for the liquidity exchange; live enablement is derived from `liquidity_sourcing.mode == "live"` |
 | `controller` | MPC controller config, including risk/models/optimizer |
 | `planner` | `reconcile` (keep within tolerance) or `replace` (cancel-all then place) |
 | `observe_only` | Per-venue dry-run override |
@@ -128,9 +136,9 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 
 ## Controller (MPC)
 
-Controller config lives under a strategy preset, not at top level. The bot role
-assignment derives internal `reference_price_source`: all-local references map
-to `local`, while any external reference maps to `global`.
+Controller config lives under a strategy preset, not at top level. User config
+does not set `reference_price_source`; it is derived internally from
+`pricing.inventory_mark.venue`.
 
 ```json
 "controller": {
@@ -204,6 +212,11 @@ derives VWAP depth each frame from `abs(local_inventory)`, or from
 `abs(local_inventory + global_inventory)` when liquidity sourcing is enabled.
 If that depth is larger than the displayed book, VWAP consumes only available
 book depth.
+
+`reference_vwap_vol` belongs only to `conditional_mechanical_mixture` price
+models. It is a fixed base volume for learning book-shape features. It is
+separate from `anchor_vwap_bps`, which is a fixed price window used only to
+compute the quote anchor.
 
 | Field | Safety |
 |-------|--------|

@@ -230,11 +230,11 @@ def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
     assert "jsonb_each" in local_all_sql
     assert "active_in_mpc" in local_all_sql
     assert "StrategyDecision" in local_all_sql
-    assert "reference_vwap_depth" in local_config_sql
+    assert "reference_vwap_vol" in local_config_sql
     assert "shape_alpha" in local_config_sql
     assert "student_df" in local_config_sql
     assert "metric !~" in local_all_sql
-    assert "reference_vwap_depth" in local_all_sql
+    assert "reference_vwap_vol" in local_all_sql
 
 
 def test_action_pipeline_exposes_order_flow_charts() -> None:

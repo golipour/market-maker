@@ -92,13 +92,13 @@ def test_example_runtime_config_loads() -> None:
     assert config.controller.action_start_after_steps == 10
     assert config.controller.execution_model == {
         "kind": "real",
-        "local_maker_fee": 0.000015,
-        "global_maker_fee": 0.003,
+        "local_maker_fee": 0.0015,
+        "global_maker_fee": 0.0033,
     }
-    assert config.liquidity_sourcing.enabled is False
-    assert config.liquidity_sourcing.global_live_orders is False
-    assert config.execution.local.enabled is False
-    assert config.execution.global_.enabled is False
+    assert config.liquidity_sourcing.enabled is True
+    assert config.liquidity_sourcing.global_live_orders is True
+    assert config.execution.local.enabled is True
+    assert config.execution.global_.enabled is True
     assert config.execution.local.planner == "replace"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
