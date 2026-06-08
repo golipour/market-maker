@@ -89,6 +89,7 @@ class PostgresEventWriter:
         self._stopped = asyncio.Event()
         self._lock = threading.Lock()
         self._ready = False
+        self._conn: Any | None = None
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -112,6 +113,7 @@ class PostgresEventWriter:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        await asyncio.to_thread(self._close_connection)
 
     async def _consume(self, topic: str) -> None:
         try:
@@ -175,86 +177,82 @@ class PostgresEventWriter:
             return
         with self._lock:
             try:
-                conn = psycopg2.connect(
-                    self.database_url,
-                    connect_timeout=self.connect_timeout_s,
-                )
-                try:
-                    with conn.cursor() as cur:
-                        if not self._ready:
-                            cur.execute(_DDL)
-                            self._ready = True
-                        rows = [_event_row(envelope) for envelope in batch]
+                conn = self._connection(psycopg2)
+                with conn.cursor() as cur:
+                    if not self._ready:
+                        cur.execute(_DDL)
+                        self._ready = True
+                    rows = [_event_row(envelope) for envelope in batch]
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO mm_events (
+                            event_id, schema, version, run_id, source, topic, event_type,
+                            exchange, symbol, actor_id, timestamp_ms, ts, payload, envelope
+                        ) VALUES %s
+                        ON CONFLICT (event_id) DO NOTHING
+                        """,
+                        rows,
+                    )
+                    latest_rows = [
+                        (
+                            _latest_key(envelope),
+                            envelope.topic,
+                            envelope.event_id,
+                            envelope.run_id,
+                            _ts(envelope.timestamp_ms),
+                            psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
+                            psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
+                        )
+                        for envelope in batch
+                        if _is_latest_state(envelope)
+                    ]
+                    latest_rows = _dedupe_latest_rows_by_state_key(latest_rows)
+                    if latest_rows:
                         psycopg2.extras.execute_values(
                             cur,
                             """
-                            INSERT INTO mm_events (
-                                event_id, schema, version, run_id, source, topic, event_type,
-                                exchange, symbol, actor_id, timestamp_ms, ts, payload, envelope
+                            INSERT INTO mm_latest_state (
+                                state_key, topic, event_id, run_id, updated_at, payload, envelope
                             ) VALUES %s
-                            ON CONFLICT (event_id) DO NOTHING
+                            ON CONFLICT (state_key) DO UPDATE SET
+                                topic = EXCLUDED.topic,
+                                event_id = EXCLUDED.event_id,
+                                run_id = EXCLUDED.run_id,
+                                updated_at = EXCLUDED.updated_at,
+                                payload = EXCLUDED.payload,
+                                envelope = EXCLUDED.envelope
                             """,
-                            rows,
+                            latest_rows,
                         )
-                        latest_rows = [
-                            (
-                                _latest_key(envelope),
-                                envelope.topic,
-                                envelope.event_id,
-                                envelope.run_id,
-                                _ts(envelope.timestamp_ms),
-                                psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
-                                psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
-                            )
-                            for envelope in batch
-                            if _is_latest_state(envelope)
-                        ]
-                        latest_rows = _dedupe_latest_rows_by_state_key(latest_rows)
-                        if latest_rows:
-                            psycopg2.extras.execute_values(
-                                cur,
-                                """
-                                INSERT INTO mm_latest_state (
-                                    state_key, topic, event_id, run_id, updated_at, payload, envelope
-                                ) VALUES %s
-                                ON CONFLICT (state_key) DO UPDATE SET
-                                    topic = EXCLUDED.topic,
-                                    event_id = EXCLUDED.event_id,
-                                    run_id = EXCLUDED.run_id,
-                                    updated_at = EXCLUDED.updated_at,
-                                    payload = EXCLUDED.payload,
-                                    envelope = EXCLUDED.envelope
-                                """,
-                                latest_rows,
-                            )
-                    conn.commit()
-                    latency_ms = _elapsed_ms(started_ns)
-                    counter_inc("mm_persistence_events_written_total", len(batch), labels={"writer": "postgres"})
-                    gauge("mm_persistence_batch_size", len(batch), labels={"writer": "postgres"})
-                    gauge(
-                        obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
-                        float(queue_depth),
-                        labels={"writer": "postgres"},
-                        help="Persistence writer queue depth",
-                    )
-                    histogram_observe(
-                        obs_schema.MM_PERSISTENCE_WRITE_LATENCY_MS,
-                        latency_ms,
-                        labels={"writer": "postgres"},
-                        help="Persistence batch write latency",
-                    )
-                    log_event(
-                        obs_schema.EVENT_PERSISTENCE_BATCH_WRITTEN,
-                        {
-                            "writer": "postgres",
-                            "batch_size": len(batch),
-                            "queue_depth": int(queue_depth),
-                            "latency_ms": latency_ms,
-                        },
-                    )
-                finally:
-                    conn.close()
+                conn.commit()
+                latency_ms = _elapsed_ms(started_ns)
+                counter_inc("mm_persistence_events_written_total", len(batch), labels={"writer": "postgres"})
+                gauge("mm_persistence_batch_size", len(batch), labels={"writer": "postgres"})
+                gauge(
+                    obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
+                    float(queue_depth),
+                    labels={"writer": "postgres"},
+                    help="Persistence writer queue depth",
+                )
+                histogram_observe(
+                    obs_schema.MM_PERSISTENCE_WRITE_LATENCY_MS,
+                    latency_ms,
+                    labels={"writer": "postgres"},
+                    help="Persistence batch write latency",
+                )
+                log_event(
+                    obs_schema.EVENT_PERSISTENCE_BATCH_WRITTEN,
+                    {
+                        "writer": "postgres",
+                        "batch_size": len(batch),
+                        "queue_depth": int(queue_depth),
+                        "latency_ms": latency_ms,
+                    },
+                )
             except Exception as exc:
+                self._rollback_connection()
+                self._drop_connection()
                 counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
                 log_event(
                     "postgres_event_writer_error",
@@ -292,20 +290,16 @@ class PostgresEventWriter:
             return False
         with self._lock:
             try:
-                conn = psycopg2.connect(
-                    self.database_url,
-                    connect_timeout=self.connect_timeout_s,
-                )
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(_DDL)
-                    conn.commit()
-                    self._ready = True
-                    log_event("postgres_event_writer_ready", {"database_url_configured": True})
-                    return True
-                finally:
-                    conn.close()
+                conn = self._connection(psycopg2)
+                with conn.cursor() as cur:
+                    cur.execute(_DDL)
+                conn.commit()
+                self._ready = True
+                log_event("postgres_event_writer_ready", {"database_url_configured": True})
+                return True
             except Exception as exc:
+                self._rollback_connection()
+                self._drop_connection()
                 counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
                 log_event("postgres_event_writer_error", {"error": type(exc).__name__, "message": str(exc)})
                 return False
@@ -320,6 +314,44 @@ class PostgresEventWriter:
                     "connect_timeout_s": self.connect_timeout_s,
                 },
             )
+
+    def _connection(self, psycopg2: Any) -> Any:
+        if self._conn is None or getattr(self._conn, "closed", False):
+            self._conn = psycopg2.connect(
+                self.database_url,
+                connect_timeout=self.connect_timeout_s,
+            )
+            self._ready = False
+        return self._conn
+
+    def _rollback_connection(self) -> None:
+        conn = self._conn
+        if conn is None or getattr(conn, "closed", False):
+            return
+        rollback = getattr(conn, "rollback", None)
+        if callable(rollback):
+            try:
+                rollback()
+            except Exception:
+                pass
+
+    def _drop_connection(self) -> None:
+        self._close_connection_locked()
+        self._ready = False
+
+    def _close_connection(self) -> None:
+        with self._lock:
+            self._close_connection_locked()
+
+    def _close_connection_locked(self) -> None:
+        conn = self._conn
+        self._conn = None
+        if conn is None or getattr(conn, "closed", False):
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:

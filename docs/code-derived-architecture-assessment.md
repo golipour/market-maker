@@ -98,18 +98,18 @@ Recommendation:
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
-### 2. Postgres Persistence Opens A New Connection Per Batch
+### 2. Postgres Persistence Still Has Best-Effort Retry Semantics
 
 Severity: Medium
 
-`PostgresEventWriter._write_batch()` calls `psycopg2.connect()` for every batch.
+`PostgresEventWriter` now keeps a reusable psycopg2 connection across batches and drops/reconnects after write or readiness failures.
 
-Impact: At low frequency this works, but at larger event volume it adds connection overhead and can exhaust database connection limits. Connection churn also makes transient database failures more disruptive.
+Impact: Connection churn is no longer the main bottleneck. The remaining issue is that failed write batches are logged as retryable but are not requeued with a durable retry policy. During sustained database outages, persistence can still lose archived events even though trading continues.
 
 Recommendation:
 
-- Use a persistent connection with reconnect logic or a small connection pool.
 - Track failed batch retry behavior explicitly.
+- Add bounded retry/backoff or a local durable spill queue for failed batches.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
 ### 3. Parquet Storage Still Uses Opaque JSON Envelopes

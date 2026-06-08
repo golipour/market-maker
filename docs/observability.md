@@ -139,7 +139,7 @@ It currently emits metrics and logs for:
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available and replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available and replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches and reconnects after failures.
 
 `ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
