@@ -35,6 +35,8 @@ from mm.core.wallet import (
     wallet_pair_from_snapshot,
     wallet_pair_from_venue_ledger,
 )
+from mm.core.order_constraints import mid_from_orderbook
+from mm.pricing import vwap_from_raw_orderbook
 from mm.runtime.config import ControllerRuntimeConfig, RiskRuntimeConfig
 
 
@@ -333,13 +335,21 @@ class DecisionContext:
         else:
             local_inventory = self.trading_state.inventory
             local_cash = self.trading_state.cash
-            mid = 0.0
-            local_buy_vwap = 0.0
-            local_sell_vwap = 0.0
+            mid, local_buy_vwap, local_sell_vwap = _book_vwap_diagnostics(
+                self.clean_frame.local.orderbook,
+                target_depth=abs(float(local_inventory)),
+            )
+            global_inventory, _global_cash_for_depth = self._global_inventory_cash()
             global_buy_vwap = None
             global_sell_vwap = None
+            if self.clean_frame.global_ is not None:
+                _global_mid, global_buy_vwap, global_sell_vwap = _book_vwap_diagnostics(
+                    self.clean_frame.global_.orderbook,
+                    target_depth=abs(float(global_inventory)),
+                )
         global_inventory, global_cash = self._global_inventory_cash()
-        local_wealth = portfolio_wealth(local_cash, local_inventory, local_sell_vwap or mid)
+        local_mark = local_sell_vwap if local_inventory >= 0.0 else local_buy_vwap
+        local_wealth = portfolio_wealth(local_cash, local_inventory, local_mark or mid or 0.0)
         global_wealth: float | None = None
         if global_sell_vwap is not None:
             global_wealth = portfolio_wealth(global_cash, global_inventory, global_sell_vwap)
@@ -501,6 +511,18 @@ class DecisionContext:
             exposure_after=exposure_after,
             limits=_risk_limits_payload(limits),
         )
+
+
+def _book_vwap_diagnostics(orderbook: Any, *, target_depth: float) -> tuple[float | None, float | None, float | None]:
+    try:
+        mid = float(mid_from_orderbook(orderbook))
+        buy_vwap, sell_vwap = vwap_from_raw_orderbook(
+            orderbook,
+            target_depth=max(0.0, float(target_depth)),
+        )
+        return mid, float(buy_vwap), float(sell_vwap)
+    except (ValueError, TypeError, AttributeError):
+        return None, None, None
 
 
 def _order_stage_summary_from_dicts(orders: tuple[dict[str, Any], ...]) -> dict[str, Any]:

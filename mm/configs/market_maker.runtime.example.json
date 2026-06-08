@@ -118,15 +118,15 @@
       "liquidity_sourcing": {
         "_comment": "off = observe the liquidity exchange only for pricing; simulate = include it in model/objective but never route liquidity orders; live = include it and allow live liquidity orders. If liquidity_exchange equals quoting_exchange, this resolves to off internally.",
         "_options": {"mode": ["off", "simulate", "live"]},
-        "mode": "live"
+        "mode": "off"
       },
       "pricing": {
         "_comment": "quote_anchor centers maker quotes; inventory_mark selects the venue whose inventory-depth liquidation VWAP marks wealth.",
         "quote_anchor": {
           "_options": {"mode": ["quoting_mid", "liquidity_mid", "liquidity_weighted_mid"]},
           "_comment": "liquidity_weighted_mid computes bid/ask VWAPs inside anchor_vwap_bps on both venues and weights each side by the volume inside that bps window.",
-          "mode": "liquidity_weighted_mid",
-          "anchor_vwap_bps": 20.0
+          "mode": "liquidity_mid",
+          "anchor_vwap_bps": 100.0
         },
         "inventory_mark": {
           "_options": {"venue": ["quoting", "liquidity"]},

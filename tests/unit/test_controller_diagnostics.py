@@ -295,6 +295,11 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.frame.global_status == "ready"
     assert diag.frame.global_lag_ms == 12
     assert diag.frame.frame_age_ms == 1500
+    assert diag.state.mid == pytest.approx(100.5)
+    assert diag.state.local_buy_vwap == pytest.approx(100.5)
+    assert diag.state.local_sell_vwap == pytest.approx(100.5)
+    assert diag.state.global_buy_vwap == pytest.approx(100.5)
+    assert diag.state.global_sell_vwap == pytest.approx(100.5)
     assert diag.cleared_orderbook["bids"] == [{"price": 100.0, "qty": 5.0}]
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
     assert diag.global_cleared_orderbook["bids"] == [{"price": 99.0, "qty": 7.0}]

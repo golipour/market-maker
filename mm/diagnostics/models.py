@@ -96,13 +96,13 @@ class FrameDiagnostics:
 
 @dataclass(frozen=True, slots=True)
 class StateDiagnostics:
-    mid: float = 0.0
+    mid: float | None = None
     local_inventory: float = 0.0
     local_cash: float = 0.0
     global_inventory: float = 0.0
     global_cash: float = 0.0
-    local_buy_vwap: float = 0.0
-    local_sell_vwap: float = 0.0
+    local_buy_vwap: float | None = None
+    local_sell_vwap: float | None = None
     global_buy_vwap: float | None = None
     global_sell_vwap: float | None = None
     local_base_wallet: dict[str, Any] = field(default_factory=dict)

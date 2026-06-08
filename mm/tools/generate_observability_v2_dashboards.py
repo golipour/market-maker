@@ -3846,6 +3846,7 @@ WHERE m.event_type = 'MarketEvent'
   AND m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND (m.payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
+  AND {best_bid} > 0.0
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT m.ts AS "time", (m.exchange || ' best_ask') AS metric,
@@ -3856,6 +3857,7 @@ WHERE m.event_type = 'MarketEvent'
   AND m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND (m.payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
+  AND {best_ask} > 0.0
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' buy_vwap') AS metric,
@@ -3868,6 +3870,7 @@ WHERE e.topic = '${{diagnostics_topic}}'
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
   AND r.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND (e.payload #>> ARRAY['state','{buy_field}']) IS NOT NULL
+  AND {buy_vwap} > 0.0
   AND $__timeFilter(e.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' sell_vwap') AS metric,
@@ -3880,6 +3883,7 @@ WHERE e.topic = '${{diagnostics_topic}}'
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
   AND r.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND (e.payload #>> ARRAY['state','{sell_field}']) IS NOT NULL
+  AND {sell_vwap} > 0.0
   AND $__timeFilter(e.ts)
 ORDER BY 1"""
 
