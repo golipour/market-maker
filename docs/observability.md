@@ -140,10 +140,13 @@ It currently emits metrics and logs for:
 - `mm_action_stage_facts`: typed controller action-stage facts
 - `mm_execution_facts`: typed order execution lifecycle facts
 - `mm_target_order_facts`: typed target-book intent orders
+- `mm_model_score_facts`: typed model score and skip facts
+- `mm_optimizer_facts`: typed optimizer timing and objective facts
+- `mm_optimizer_component_facts`: typed optimizer objective component facts
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Each `ControllerDiagnostics.action_pipeline` stage is written to `mm_action_stage_facts` with typed columns for order counts, side counts, quantities, notionals, rejection counts, compacted counts, and digests. Execution sync, place, cancel, validation rejection, fill, and execution snapshot events are written to `mm_execution_facts` with typed order lifecycle fields, including confirmed versus pending state kind. Each `JointTargetBook` order is written to `mm_target_order_facts` with typed intent fields for actor, mode, venue role, exchange, symbol, policy, side, price, quantity, notional, order type, and tags. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Each `ControllerDiagnostics.action_pipeline` stage is written to `mm_action_stage_facts` with typed columns for order counts, side counts, quantities, notionals, rejection counts, compacted counts, and digests. Execution sync, place, cancel, validation rejection, fill, and execution snapshot events are written to `mm_execution_facts` with typed order lifecycle fields, including confirmed versus pending state kind. Each `JointTargetBook` order is written to `mm_target_order_facts` with typed intent fields for actor, mode, venue role, exchange, symbol, policy, side, price, quantity, notional, order type, and tags. Model score diagnostics are written to `mm_model_score_facts`, and optimizer timing/objective/component diagnostics are written to `mm_optimizer_facts` and `mm_optimizer_component_facts`. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
 
 `ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
@@ -669,6 +672,7 @@ Panels:
 
 Recommended event source:
 
+- `mm_model_score_facts`
 - `ControllerDiagnostics.models.{model}.nll`
 - `ControllerDiagnostics.models.{model}.standardized_residual`
 - `params_before`
@@ -693,6 +697,8 @@ Panels:
 - rollout expected fills
 - optimizer timing
 - gradient norm, nonfinite loss count, nonfinite gradient count when available
+
+Preferred Postgres tables: `mm_optimizer_facts` and `mm_optimizer_component_facts`.
 
 Existing dashboard:
 
@@ -937,12 +943,15 @@ Typed tables already available for common dashboard paths:
 - `mm_action_stage_facts`
 - `mm_execution_facts`
 - `mm_target_order_facts`
+- `mm_model_score_facts`
+- `mm_optimizer_facts`
+- `mm_optimizer_component_facts`
 
 Recommended materialized views if remaining dashboard latency becomes an issue:
 
 - `mm_controller_diagnostics_flat`
 - `mm_risk_decisions_flat`
-- `mm_model_optimizer_flat`
+- Debug-only model/optimizer views for fields not covered by typed facts, such as full parameter dictionaries, gradients, and rollout internals.
 
 ## Example SQL snippets
 

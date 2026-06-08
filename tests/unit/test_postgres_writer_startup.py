@@ -168,6 +168,145 @@ def test_postgres_writer_materializes_action_stage_facts(monkeypatch: pytest.Mon
     assert rules[22]
 
 
+def test_postgres_writer_materializes_model_and_optimizer_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = envelope_event(
+        "strategy:diagnostics:mpc-controller",
+        {
+            "type": "ControllerDiagnostics",
+            "actor_id": "mpc-controller",
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "t_end_ms": 2_000,
+            "frame_step": 12,
+            "created_at_ms": 2_100,
+            "models": {
+                "price": {
+                    "kind": "normal",
+                    "updated": True,
+                    "observation": {"delta": 1.25, "mid": 100.0},
+                    "params_before": {"mu": 0.0},
+                    "params_after": {"mu": 0.1, "sigma": 2.0},
+                    "log_likelihood": -1.25,
+                    "nll": 1.25,
+                    "standardized_residual": 0.5,
+                }
+            },
+            "optimizer": {
+                "config": {"kind": "monte_carlo"},
+                "timing": {
+                    "controller_total_ms": 12.0,
+                    "optimize_ms": 7.5,
+                    "clean_ms": 2.0,
+                    "model_score_ms": 0.5,
+                },
+                "objective": {
+                    "initial": {
+                        "value": 1.0,
+                        "loss": -1.0,
+                        "components": {
+                            "risk_adjusted_return": 2.0,
+                            "threshold_shortfall_penalty": -1.0,
+                        },
+                        "contribution_fractions": {
+                            "risk_adjusted_return": 0.67,
+                            "threshold_shortfall_penalty": 0.33,
+                        },
+                    },
+                    "final": {
+                        "value": 3.0,
+                        "loss": -3.0,
+                        "components": {
+                            "risk_adjusted_return": 4.0,
+                            "threshold_shortfall_penalty": -1.0,
+                        },
+                        "contribution_fractions": {
+                            "risk_adjusted_return": 0.8,
+                            "threshold_shortfall_penalty": 0.2,
+                        },
+                    },
+                    "best": {
+                        "value": 3.5,
+                        "loss": -3.5,
+                        "expected_total_reward": 10.0,
+                        "expected_total_return": 0.03,
+                        "expected_next_reward": 1.5,
+                        "main_reward_mean": 2.5,
+                        "global_reward_mean": 0.1,
+                        "components": {
+                            "risk_adjusted_return": 4.5,
+                            "threshold_shortfall_penalty": -1.0,
+                        },
+                        "contribution_fractions": {
+                            "risk_adjusted_return": 0.82,
+                            "threshold_shortfall_penalty": 0.18,
+                        },
+                    },
+                    "improvement": {
+                        "best_minus_initial": 2.5,
+                        "final_minus_initial": 2.0,
+                    },
+                },
+                "gradients": {"issues": ["nan_clipped"]},
+                "rollout": {"sample_count": 64, "horizon": 4},
+            },
+        },
+    )
+
+    writer._write_batch([envelope])
+
+    [model_row] = _model_score_fact_rows(fake)
+    assert model_row[1] == "price"
+    assert model_row[4] == "mpc-controller"
+    assert model_row[5] == "nobitex"
+    assert model_row[6] == "BTC_IRT"
+    assert model_row[7] == 2_100
+    assert model_row[9] == 2_000
+    assert model_row[10] == 12
+    assert model_row[11] == "normal"
+    assert model_row[12] is True
+    assert model_row[14] == -1.25
+    assert model_row[15] == 1.25
+    assert model_row[16] == 0.5
+    assert model_row[17] == 2
+    assert model_row[18] == 1
+    assert model_row[19] == 2
+
+    [optimizer_row] = _optimizer_fact_rows(fake)
+    assert optimizer_row[3] == "mpc-controller"
+    assert optimizer_row[10] == "monte_carlo"
+    assert optimizer_row[11] == 12.0
+    assert optimizer_row[12] == 7.5
+    assert optimizer_row[13] == 2.0
+    assert optimizer_row[14] == 0.5
+    assert optimizer_row[20] == 1.0
+    assert optimizer_row[21] == 3.0
+    assert optimizer_row[22] == 3.5
+    assert optimizer_row[26] == 2.5
+    assert optimizer_row[27] == 2.0
+    assert optimizer_row[28] == 10.0
+    assert optimizer_row[29] == 0.03
+    assert optimizer_row[33] == 1
+    assert optimizer_row[34] == 64
+
+    component_rows = _optimizer_component_fact_rows(fake)
+    best_return = next(
+        row
+        for row in component_rows
+        if row[1] == "best" and row[2] == "risk_adjusted_return"
+    )
+    assert best_return[5] == "mpc-controller"
+    assert best_return[10] == 2_000
+    assert best_return[11] == 12
+    assert best_return[12] == 4.5
+    assert best_return[13] == 0.82
+
+
 def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install_fake_psycopg2(monkeypatch)
     writer = PostgresEventWriter(
@@ -538,6 +677,36 @@ def _target_order_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
         call
         for call in conn.execute_values_calls
         if "INSERT INTO mm_target_order_facts" in call["sql"]
+    )
+    return call["rows"]
+
+
+def _model_score_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
+    conn = fake.connections[0]
+    call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_model_score_facts" in call["sql"]
+    )
+    return call["rows"]
+
+
+def _optimizer_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
+    conn = fake.connections[0]
+    call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_optimizer_facts" in call["sql"]
+    )
+    return call["rows"]
+
+
+def _optimizer_component_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
+    conn = fake.connections[0]
+    call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_optimizer_component_facts" in call["sql"]
     )
     return call["rows"]
 

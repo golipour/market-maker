@@ -169,6 +169,98 @@ ON mm_target_order_facts (actor_id, venue_role, exchange, symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_target_order_facts_exchange_symbol_side_ts_idx
 ON mm_target_order_facts (exchange, symbol, side, ts DESC);
 
+CREATE TABLE IF NOT EXISTS mm_model_score_facts (
+    event_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    actor_id TEXT,
+    exchange TEXT,
+    symbol TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    t_end_ms BIGINT,
+    frame_step INT,
+    model_kind TEXT,
+    updated BOOLEAN,
+    skip_reason TEXT,
+    log_likelihood DOUBLE PRECISION,
+    nll DOUBLE PRECISION,
+    standardized_residual DOUBLE PRECISION,
+    observation_count INT,
+    params_before_count INT,
+    params_after_count INT,
+    PRIMARY KEY (event_id, model_name)
+);
+CREATE INDEX IF NOT EXISTS mm_model_score_facts_actor_model_ts_idx
+ON mm_model_score_facts (actor_id, model_name, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_model_score_facts_exchange_symbol_model_ts_idx
+ON mm_model_score_facts (exchange, symbol, model_name, ts DESC);
+
+CREATE TABLE IF NOT EXISTS mm_optimizer_facts (
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    actor_id TEXT,
+    exchange TEXT,
+    symbol TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    t_end_ms BIGINT,
+    frame_step INT,
+    optimizer_kind TEXT,
+    controller_total_ms DOUBLE PRECISION,
+    optimize_ms DOUBLE PRECISION,
+    clean_ms DOUBLE PRECISION,
+    model_score_ms DOUBLE PRECISION,
+    model_update_ms DOUBLE PRECISION,
+    discretize_ms DOUBLE PRECISION,
+    risk_ms DOUBLE PRECISION,
+    publish_ms DOUBLE PRECISION,
+    execute_ms DOUBLE PRECISION,
+    initial_value DOUBLE PRECISION,
+    final_value DOUBLE PRECISION,
+    best_value DOUBLE PRECISION,
+    initial_loss DOUBLE PRECISION,
+    final_loss DOUBLE PRECISION,
+    best_loss DOUBLE PRECISION,
+    best_minus_initial DOUBLE PRECISION,
+    final_minus_initial DOUBLE PRECISION,
+    best_expected_total_reward DOUBLE PRECISION,
+    best_expected_total_return DOUBLE PRECISION,
+    best_expected_next_reward DOUBLE PRECISION,
+    best_main_reward_mean DOUBLE PRECISION,
+    best_global_reward_mean DOUBLE PRECISION,
+    gradient_issue_count INT,
+    rollout_count INT
+);
+CREATE INDEX IF NOT EXISTS mm_optimizer_facts_actor_ts_idx
+ON mm_optimizer_facts (actor_id, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_optimizer_facts_exchange_symbol_ts_idx
+ON mm_optimizer_facts (exchange, symbol, ts DESC);
+
+CREATE TABLE IF NOT EXISTS mm_optimizer_component_facts (
+    event_id TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    component TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    actor_id TEXT,
+    exchange TEXT,
+    symbol TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    t_end_ms BIGINT,
+    frame_step INT,
+    value DOUBLE PRECISION,
+    contribution_fraction DOUBLE PRECISION,
+    PRIMARY KEY (event_id, snapshot, component)
+);
+CREATE INDEX IF NOT EXISTS mm_optimizer_component_facts_actor_component_ts_idx
+ON mm_optimizer_component_facts (actor_id, component, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_optimizer_component_facts_exchange_symbol_component_ts_idx
+ON mm_optimizer_component_facts (exchange, symbol, component, ts DESC);
+
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -461,6 +553,69 @@ class PostgresEventWriter:
                             ON CONFLICT (event_id, row_key) DO NOTHING
                             """,
                             target_order_rows,
+                        )
+                    model_score_rows = [
+                        row
+                        for envelope in batch
+                        for row in _model_score_fact_rows(envelope)
+                    ]
+                    if model_score_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_model_score_facts (
+                                event_id, model_name, run_id, topic, actor_id, exchange,
+                                symbol, timestamp_ms, ts, t_end_ms, frame_step,
+                                model_kind, updated, skip_reason, log_likelihood, nll,
+                                standardized_residual, observation_count,
+                                params_before_count, params_after_count
+                            ) VALUES %s
+                            ON CONFLICT (event_id, model_name) DO NOTHING
+                            """,
+                            model_score_rows,
+                        )
+                    optimizer_rows = [
+                        row
+                        for envelope in batch
+                        if (row := _optimizer_fact_row(envelope)) is not None
+                    ]
+                    if optimizer_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_optimizer_facts (
+                                event_id, run_id, topic, actor_id, exchange, symbol,
+                                timestamp_ms, ts, t_end_ms, frame_step, optimizer_kind,
+                                controller_total_ms, optimize_ms, clean_ms,
+                                model_score_ms, model_update_ms, discretize_ms, risk_ms,
+                                publish_ms, execute_ms, initial_value, final_value,
+                                best_value, initial_loss, final_loss, best_loss,
+                                best_minus_initial, final_minus_initial,
+                                best_expected_total_reward, best_expected_total_return,
+                                best_expected_next_reward, best_main_reward_mean,
+                                best_global_reward_mean, gradient_issue_count, rollout_count
+                            ) VALUES %s
+                            ON CONFLICT (event_id) DO NOTHING
+                            """,
+                            optimizer_rows,
+                        )
+                    optimizer_component_rows = [
+                        row
+                        for envelope in batch
+                        for row in _optimizer_component_fact_rows(envelope)
+                    ]
+                    if optimizer_component_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_optimizer_component_facts (
+                                event_id, snapshot, component, run_id, topic, actor_id,
+                                exchange, symbol, timestamp_ms, ts, t_end_ms, frame_step,
+                                value, contribution_fraction
+                            ) VALUES %s
+                            ON CONFLICT (event_id, snapshot, component) DO NOTHING
+                            """,
+                            optimizer_component_rows,
                         )
                     latest_rows = [
                         (
@@ -1032,6 +1187,147 @@ def _target_order_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
     return rows
 
 
+def _controller_diagnostics_payload(envelope: EventEnvelope) -> dict[str, Any] | None:
+    if envelope.event_type != "ControllerDiagnostics" or not isinstance(envelope.payload, dict):
+        return None
+    payload = to_jsonable(envelope.payload)
+    return payload if isinstance(payload, dict) else None
+
+
+def _controller_fact_base(envelope: EventEnvelope, payload: dict[str, Any]) -> tuple[Any, ...]:
+    timestamp_ms = _int_or_none(payload.get("created_at_ms")) or envelope.timestamp_ms
+    return (
+        envelope.run_id,
+        envelope.topic,
+        _optional_str(payload.get("actor_id") or envelope.actor_id),
+        _optional_str(payload.get("exchange") or envelope.exchange),
+        _optional_str(payload.get("symbol") or envelope.symbol),
+        timestamp_ms,
+        _ts(timestamp_ms),
+        _int_or_none(payload.get("t_end_ms")),
+        _int_or_none(payload.get("frame_step")),
+    )
+
+
+def _model_score_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
+    payload = _controller_diagnostics_payload(envelope)
+    if payload is None:
+        return []
+    models = payload.get("models")
+    if not isinstance(models, dict):
+        return []
+    base = _controller_fact_base(envelope, payload)
+    rows: list[tuple[Any, ...]] = []
+    for model_name, score in models.items():
+        if not isinstance(score, dict):
+            continue
+        rows.append(
+            (
+                envelope.event_id,
+                str(model_name),
+                *base,
+                _optional_str(score.get("kind")),
+                _bool_or_none(score.get("updated")),
+                _optional_str(score.get("skip_reason")),
+                _float_or_none(score.get("log_likelihood")),
+                _float_or_none(score.get("nll")),
+                _float_or_none(score.get("standardized_residual")),
+                _dict_len(score.get("observation")),
+                _dict_len(score.get("params_before")),
+                _dict_len(score.get("params_after")),
+            )
+        )
+    return rows
+
+
+def _optimizer_fact_row(envelope: EventEnvelope) -> tuple[Any, ...] | None:
+    payload = _controller_diagnostics_payload(envelope)
+    if payload is None:
+        return None
+    optimizer = payload.get("optimizer")
+    if not isinstance(optimizer, dict):
+        return None
+    config = _dict_or_empty(optimizer.get("config"))
+    timing = _dict_or_empty(optimizer.get("timing"))
+    objective = _dict_or_empty(optimizer.get("objective"))
+    gradients = _dict_or_empty(optimizer.get("gradients"))
+    rollout = _dict_or_empty(optimizer.get("rollout"))
+    initial = _objective_snapshot(objective, "initial")
+    final = _objective_snapshot(objective, "final")
+    best = _objective_snapshot(objective, "best")
+    improvement = _dict_or_empty(objective.get("improvement"))
+    initial_value = _objective_value(initial)
+    final_value = _objective_value(final)
+    best_value = _objective_value(best)
+    return (
+        envelope.event_id,
+        *_controller_fact_base(envelope, payload),
+        _optional_str(config.get("kind") or optimizer.get("kind")),
+        _timing_float(timing, "controller_total_ms"),
+        _timing_float(timing, "optimize_ms", "optimizer_ms", "total_ms"),
+        _timing_float(timing, "clean_ms"),
+        _timing_float(timing, "model_score_ms"),
+        _timing_float(timing, "model_update_ms"),
+        _timing_float(timing, "discretize_ms"),
+        _timing_float(timing, "risk_ms"),
+        _timing_float(timing, "publish_ms"),
+        _timing_float(timing, "execute_ms"),
+        initial_value,
+        final_value,
+        best_value,
+        _float_or_none(initial.get("loss")),
+        _float_or_none(final.get("loss")),
+        _float_or_none(best.get("loss")),
+        _coalesce_float(
+            _float_or_none(improvement.get("best_minus_initial")),
+            _float_diff(best_value, initial_value),
+        ),
+        _coalesce_float(
+            _float_or_none(improvement.get("final_minus_initial")),
+            _float_diff(final_value, initial_value),
+        ),
+        _float_or_none(best.get("expected_total_reward")),
+        _float_or_none(best.get("expected_total_return")),
+        _float_or_none(best.get("expected_next_reward")),
+        _float_or_none(best.get("main_reward_mean")),
+        _float_or_none(best.get("global_reward_mean")),
+        _payload_count(gradients),
+        _payload_count(rollout),
+    )
+
+
+def _optimizer_component_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
+    payload = _controller_diagnostics_payload(envelope)
+    if payload is None:
+        return []
+    optimizer = payload.get("optimizer")
+    if not isinstance(optimizer, dict):
+        return []
+    objective = _dict_or_empty(optimizer.get("objective"))
+    base = _controller_fact_base(envelope, payload)
+    rows: list[tuple[Any, ...]] = []
+    for snapshot_name in ("initial", "final", "best"):
+        snapshot = _objective_snapshot(objective, snapshot_name)
+        components = _dict_or_empty(snapshot.get("components"))
+        fractions = _dict_or_empty(snapshot.get("contribution_fractions"))
+        for component, raw_value in components.items():
+            value = _float_or_none(raw_value)
+            fraction = _float_or_none(fractions.get(component))
+            if value is None and fraction is None:
+                continue
+            rows.append(
+                (
+                    envelope.event_id,
+                    snapshot_name,
+                    str(component),
+                    *base,
+                    value,
+                    fraction,
+                )
+            )
+    return rows
+
+
 def _execution_snapshot_rows(
     envelope: EventEnvelope,
     payload: dict[str, Any],
@@ -1303,6 +1599,75 @@ def _sum_numeric_values(value: dict[str, Any]) -> int:
         if numeric is not None:
             total += numeric
     return total
+
+
+def _dict_len(value: Any) -> int:
+    return len(value) if isinstance(value, dict) else 0
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "t", "1", "yes"}:
+            return True
+        if normalized in {"false", "f", "0", "no"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return None
+
+
+def _objective_snapshot(objective: dict[str, Any], name: str) -> dict[str, Any]:
+    snapshot = objective.get(name)
+    return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+
+def _objective_value(snapshot: dict[str, Any]) -> float | None:
+    for key in ("value", "objective_value"):
+        value = _float_or_none(snapshot.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _timing_float(timing: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _float_or_none(timing.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _float_diff(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return left - right
+
+
+def _coalesce_float(*values: float | None) -> float | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _payload_count(value: Any) -> int:
+    if isinstance(value, dict):
+        issues = value.get("issues")
+        if isinstance(issues, list):
+            return len(issues)
+        for key in ("count", "sample_count", "n_samples", "rollout_count"):
+            count = _int_or_none(value.get(key))
+            if count is not None:
+                return count
+        return len(value)
+    if isinstance(value, list):
+        return len(value)
+    return 0
 
 
 def _optional_str(value: Any) -> str | None:
