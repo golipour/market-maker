@@ -77,6 +77,22 @@ def encode_envelope(envelope: EventEnvelope) -> str:
     return json.dumps(envelope.as_dict(), ensure_ascii=False, separators=(",", ":"))
 
 
+def json_size_bytes(value: Any) -> int:
+    """Return the UTF-8 JSON size after runtime payload normalization."""
+
+    raw = json.dumps(
+        to_jsonable(value),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+    return len(raw.encode("utf-8"))
+
+
+def envelope_size_bytes(envelope: EventEnvelope) -> int:
+    return len(encode_envelope(envelope).encode("utf-8"))
+
+
 def decode_envelope(raw: str | bytes | dict[str, Any]) -> EventEnvelope:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")

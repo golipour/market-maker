@@ -6,7 +6,7 @@ import math
 import pytest
 
 from mm.bus.factory import build_event_bus
-from mm.core.events import decode_envelope, encode_envelope, envelope_event, to_jsonable
+from mm.core.events import decode_envelope, encode_envelope, envelope_event, json_size_bytes, to_jsonable
 from mm.core.models.execution import Action
 from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
@@ -16,6 +16,7 @@ from mm.core.models.strategy import ModelUpdateReport, StrategyDecision
 from mm.core.models.strategy import StrategyInputFrame
 from tests.unit.conftest import venues_payload
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
+from mm.observability.registry import REGISTRY
 from mm.strategies import mpc_engine
 
 
@@ -92,6 +93,15 @@ def test_event_envelope_encoding_sanitizes_non_finite_numbers() -> None:
     assert decoded["payload"]["raw_params"]["flat"] == [None]
 
 
+def test_json_size_bytes_measures_normalized_utf8_payload() -> None:
+    payload = {"type": "PayloadSizeContract", "name": "تست", "raw": float("nan")}
+
+    size = json_size_bytes(payload)
+
+    encoded = json.dumps(to_jsonable(payload), ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    assert size == len(encoded.encode("utf-8"))
+
+
 def test_joint_frame_envelope_omits_embedded_private_frame_snapshot() -> None:
     private = PrivateStateSnapshot(
         exchange="nobitex",
@@ -130,6 +140,21 @@ async def test_memory_bus_factory_preserves_publish_subscribe() -> None:
     await bus.publish("strategy:actions", {"type": "Action", "actor_id": "a1"})
 
     assert await queue.get() == {"type": "Action", "actor_id": "a1"}
+
+
+@pytest.mark.asyncio
+async def test_memory_bus_publish_records_payload_size_without_mutating_event() -> None:
+    bus = build_event_bus(BusRuntimeConfig(kind="memory"))
+    topic = "unit:payload-size:memory"
+    queue = bus.subscribe_queue(topic)
+    event = {"type": "PayloadSizeMetric", "orders": [{"price": 100.0, "qty": 2.0}]}
+
+    await bus.publish(topic, event)
+
+    assert await queue.get() is event
+    text = REGISTRY.render()
+    assert 'mm_event_payloads_total{event_type="PayloadSizeMetric",stage="bus_publish",topic="unit:payload-size:memory"}' in text
+    assert 'mm_event_payload_bytes_total{event_type="PayloadSizeMetric",stage="bus_publish",topic="unit:payload-size:memory"}' in text
 
 
 def test_runtime_config_parses_bus_persistence_and_observability() -> None:

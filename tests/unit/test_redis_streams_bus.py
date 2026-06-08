@@ -6,6 +6,7 @@ import pytest
 
 from mm.bus.redis_streams import RedisStreamsBus
 from mm.core.models.private import Balance, PrivateStateSnapshot
+from mm.observability.registry import REGISTRY
 
 
 class SharedFakeRedis:
@@ -81,6 +82,31 @@ async def test_redis_streams_bus_preserves_typed_local_delivery(monkeypatch) -> 
     assert await queue.get() is snapshot
     assert writes
     assert writes[0][0] == "test.private.state.wallex.snapshot"
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_bus_records_stream_envelope_size() -> None:
+    writes = []
+
+    class FakeRedis:
+        async def xadd(self, stream, fields, **kwargs):
+            writes.append((stream, fields, kwargs))
+
+        async def aclose(self):
+            pass
+
+    bus = RedisStreamsBus(stream_prefix="test")
+    bus._redis = FakeRedis()
+    event = {"type": "RedisPayloadSizeMetric", "exchange": "wallex", "payload": "x" * 512}
+
+    await bus.publish("unit:payload-size:redis", event)
+
+    assert writes
+    text = REGISTRY.render()
+    assert 'mm_event_payloads_total{event_type="RedisPayloadSizeMetric",stage="bus_publish",topic="unit:payload-size:redis"}' in text
+    assert 'mm_event_envelope_bytes_total{event_type="RedisPayloadSizeMetric",stage="redis_stream",topic="unit:payload-size:redis"}' in text
+    await bus.close()
 
 
 @pytest.mark.asyncio
@@ -103,6 +129,7 @@ async def test_redis_streams_bus_skips_zero_balance_stream_writes() -> None:
 
     assert await queue.get() is balance
     assert writes == []
+    await bus.close()
 
 
 @pytest.mark.asyncio

@@ -97,7 +97,7 @@ Recommendation:
 - Store orderbooks and trades in normalized append tables or compressed columnar partitions.
 - Store diagnostics in typed tables for common panels.
 - Use references for repeated structures, for example `frame_id`, `decision_id`, `target_book_id`.
-- Add payload-size metrics per event type and topic.
+- Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
 ### 2. Postgres Persistence Opens A New Connection Per Batch
@@ -120,9 +120,9 @@ Severity: Medium
 
 `ParquetEventWriter` reads an existing Parquet file, concatenates it with the new batch, and writes a replacement file.
 
-The row schema also stores both `payload_json` and `envelope_json`. Since the envelope includes the payload, this duplicates the largest field. Both are stored as strings, which gives up most of Parquet's typed columnar benefits for analytics.
+The row schema now stores one compact `envelope_json` instead of both `payload_json` and `envelope_json`. For archival Parquet rows it compacts data that has already been summarized or integrated: `MarketEvent.trades` are replaced by trade counts/timestamps while retaining interval features such as buy/sell volume and VWAP, and zero private balances are removed while retaining balance counts. The remaining issue is that the retained payload is still an opaque JSON string, which gives up most of Parquet's typed columnar benefits for analytics.
 
-Impact: This is acceptable for small local files, but it is not scalable for high event volume. Appending to the same hourly event-type file causes repeated read/modify/write cycles and makes object-store deployment impractical. Analysts also have to deserialize JSON at query time instead of filtering typed columns.
+Impact: This is acceptable for small local files, and archival byte volume is much lower than before. It is still not scalable for high event volume. Appending to the same hourly event-type file causes repeated read/modify/write cycles and makes object-store deployment impractical. Analysts also have to deserialize JSON at query time instead of filtering typed columns.
 
 Recommendation:
 
@@ -130,7 +130,6 @@ Recommendation:
 - Compact offline if needed.
 - Partition by date/hour/topic/event_type/exchange/symbol.
 - Avoid reading existing Parquet during live writes.
-- Drop redundant `payload_json` if full envelopes are retained, or retain only metadata columns plus a typed payload table.
 - For high-value event types, write typed Parquet columns instead of opaque JSON strings.
 
 ### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment
@@ -344,8 +343,7 @@ Logs and traces:
 - No websocket reconnect counters per exchange.
 - No REST polling success/failure latency histograms by adapter endpoint.
 - No order adapter rate-limit metrics.
-- No subscriber queue lag by topic.
-- No persisted payload size or event volume metrics by topic/event type.
+- No subscriber queue lag by topic beyond writer queue depth.
 - No database table size, write throughput, or dashboard query latency metrics.
 - No clear SLO dashboards for "decision freshness", "execution freshness", or "data freshness".
 - No explicit trace spans for full frame -> decision -> risk -> execution lifecycle.
@@ -404,7 +402,7 @@ At one bot and a low interval, this is workable. At many symbols, venues, and st
 Priority recommendations:
 
 1. Define topic retention and persistence tiering.
-2. Measure payload bytes per topic and event type.
+2. Use payload and envelope byte metrics to rank high-cost topics and event types.
 3. Store large orderbook/trade data separately from controller events.
 4. Replace repeated snapshots with deltas plus periodic snapshots.
 5. Materialize latest state and dashboard facts into typed tables.
@@ -419,7 +417,7 @@ Priority recommendations:
 
 ### Priority 1: Scalability
 
-- Add per-topic queue depth, lag, and payload-size metrics.
+- Add per-topic subscriber queue depth and lag metrics.
 - Convert Parquet writer to immutable part files.
 - Replace opaque Parquet JSON payloads with typed columns for high-value event types.
 - Reuse Postgres connections or use a pool.

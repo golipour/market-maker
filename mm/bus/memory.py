@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
+from mm.observability.event_payloads import observe_runtime_event
 
 
 class InMemoryBus(AbstractEventBus):
@@ -19,6 +20,7 @@ class InMemoryBus(AbstractEventBus):
     async def publish(self, topic: str, event: Any) -> None:
         if self._closed:
             return
+        observe_runtime_event(topic, event, stage="bus_publish")
         subscribers = list(self._subscribers.get(topic, ()))
         for queue in subscribers:
             await queue.put(event)

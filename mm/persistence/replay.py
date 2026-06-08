@@ -22,7 +22,9 @@ def read_event_rows(path: str | Path) -> Iterator[dict[str, Any]]:
             import pyarrow.parquet as pq
         except ImportError as exc:
             raise RuntimeError("pyarrow is required to read parquet replay files") from exc
-        for row in pq.read_table(p).to_pylist():
+        # Avoid Hive partition-column inference from event_date=/exchange=/symbol=/
+        # paths colliding with the real columns stored in each event file.
+        for row in pq.ParquetFile(p).read().to_pylist():
             yield row
         return
     with p.open("r", encoding="utf-8") as f:

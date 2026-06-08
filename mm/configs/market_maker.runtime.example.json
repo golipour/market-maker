@@ -37,7 +37,7 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.0015
+        "maker_fee": 0.000015
       }
     },
     "tabdeal": {
@@ -161,8 +161,8 @@
         "action_topic": "strategy:actions",
         "orderbook_grid": {
           "_comment": "Absolute quote-per-base spread grid used for both optimizer depth curves and target order ladder prices.",
-          "spread_step": 40.0,
-          "spread_max": 400.0
+          "spread_step": 20.0,
+          "spread_max": 200.0
         },
         "risk": {
           "_comment": "Hard pre-execution gates. local = quoting exchange, global = selected liquidity source/reference slot.",
@@ -272,7 +272,7 @@
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
       "quoting_exchange": "nobitex",
-      "liquidity_exchange": "tabdeal"
+      "liquidity_exchange": "nobitex"
     }
   },
   "bus": {

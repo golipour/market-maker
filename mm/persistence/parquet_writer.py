@@ -4,14 +4,16 @@ import asyncio
 import json
 import os
 import time
+import dataclasses
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
-from mm.core.events import EventEnvelope, envelope_event
+from mm.core.events import EventEnvelope, envelope_event, to_jsonable
 from mm.observability import counter_inc, gauge, histogram_observe, log_event
 from mm.observability import schema as obs_schema
+from mm.observability.event_payloads import observe_envelope
 
 
 class ParquetEventWriter:
@@ -30,6 +32,7 @@ class ParquetEventWriter:
         batch_size: int = 100,
         flush_interval_ms: int = 1000,
         run_id: str = "",
+        compact_payloads: bool = True,
     ):
         self.bus = bus
         self.topics = topics
@@ -37,6 +40,7 @@ class ParquetEventWriter:
         self.batch_size = max(1, int(batch_size))
         self.flush_interval_ms = max(50, int(flush_interval_ms))
         self.run_id = run_id
+        self.compact_payloads = bool(compact_payloads)
         self._queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=self.batch_size * 10)
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
@@ -56,7 +60,9 @@ class ParquetEventWriter:
     async def _consume(self, topic: str) -> None:
         try:
             async for event in self.bus.subscribe(topic):
-                await self._queue.put(envelope_event(topic, event, run_id=self.run_id, source="parquet-writer"))
+                envelope = envelope_event(topic, event, run_id=self.run_id, source="parquet-writer")
+                observe_envelope(envelope, stage="parquet_enqueue")
+                await self._queue.put(envelope)
                 gauge(
                     obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,
                     float(self._queue.qsize()),
@@ -97,8 +103,9 @@ class ParquetEventWriter:
         started_ns = time.monotonic_ns()
         grouped: dict[Path, list[dict[str, Any]]] = {}
         for envelope in batch:
-            path = self._partition_path(envelope)
-            grouped.setdefault(path, []).append(_row(envelope))
+            stored = _compact_envelope(envelope) if self.compact_payloads else envelope
+            path = self._partition_path(stored)
+            grouped.setdefault(path, []).append(_row(stored))
         sink = "parquet"
         written_count = 0
         for path, rows in grouped.items():
@@ -209,7 +216,6 @@ def _row(envelope: EventEnvelope) -> dict[str, Any]:
         "symbol": envelope.symbol,
         "actor_id": envelope.actor_id,
         "timestamp_ms": envelope.timestamp_ms,
-        "payload_json": json.dumps(envelope.payload, ensure_ascii=False),
         "envelope_json": json.dumps(envelope.as_dict(), ensure_ascii=False),
     }
 
@@ -228,7 +234,6 @@ def _parquet_schema(pa: Any) -> Any:
             ("symbol", pa.string()),
             ("actor_id", pa.string()),
             ("timestamp_ms", pa.int64()),
-            ("payload_json", pa.string()),
             ("envelope_json", pa.string()),
         ]
     )
@@ -250,6 +255,86 @@ def _align_table_to_schema(pa: Any, table: Any, schema: Any) -> Any:
         else:
             arrays.append(pa.nulls(table.num_rows, type=field.type))
     return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _compact_envelope(envelope: EventEnvelope) -> EventEnvelope:
+    payload = _compact_payload(envelope.event_type, envelope.payload)
+    if payload is envelope.payload:
+        return envelope
+    return dataclasses.replace(envelope, payload=payload)
+
+
+def _compact_payload(event_type: str, payload: Any) -> Any:
+    value = to_jsonable(payload)
+    if not isinstance(value, dict):
+        return value
+    if event_type == "MarketEvent":
+        return _compact_market_event_payload(value)
+    if event_type == "PrivateStateSnapshot":
+        return _compact_private_snapshot_payload(value)
+    return value
+
+
+def _compact_market_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    trades = out.get("trades")
+    if isinstance(trades, list) and trades:
+        out["trade_count"] = len(trades)
+        first_ts = _first_numeric(trades, "timestamp_ms")
+        last_ts = _last_numeric(trades, "timestamp_ms")
+        if first_ts is not None:
+            out["first_trade_timestamp_ms"] = first_ts
+        if last_ts is not None:
+            out["last_trade_timestamp_ms"] = last_ts
+        out["trades"] = []
+        out["trades_compacted"] = True
+    return out
+
+
+def _compact_private_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    balances = payload.get("balances")
+    if not isinstance(balances, dict) or not balances:
+        return payload
+    nonzero_balances = {
+        asset: row
+        for asset, row in balances.items()
+        if not _balance_payload_is_zero(row)
+    }
+    if len(nonzero_balances) == len(balances):
+        return payload
+    out = dict(payload)
+    out["balance_count"] = len(balances)
+    out["nonzero_balance_count"] = len(nonzero_balances)
+    out["balances"] = nonzero_balances
+    out["balances_compacted"] = True
+    return out
+
+
+def _balance_payload_is_zero(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    try:
+        return (
+            abs(float(row.get("total", 0.0) or 0.0)) <= 1e-12
+            and abs(float(row.get("free", 0.0) or 0.0)) <= 1e-12
+            and abs(float(row.get("locked", 0.0) or 0.0)) <= 1e-12
+        )
+    except Exception:
+        return False
+
+
+def _first_numeric(rows: list[Any], key: str) -> int | float | None:
+    for row in rows:
+        if isinstance(row, dict) and row.get(key) is not None:
+            return row[key]
+    return None
+
+
+def _last_numeric(rows: list[Any], key: str) -> int | float | None:
+    for row in reversed(rows):
+        if isinstance(row, dict) and row.get(key) is not None:
+            return row[key]
+    return None
 
 
 def _elapsed_ms(started_ns: int) -> float:

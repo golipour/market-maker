@@ -11,6 +11,7 @@ from mm.bus.base import AbstractEventBus
 from mm.core.events import EventEnvelope, envelope_event, to_jsonable
 from mm.observability import counter_inc, gauge, histogram_observe, log_event
 from mm.observability import schema as obs_schema
+from mm.observability.event_payloads import observe_envelope
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS mm_events (
@@ -115,6 +116,7 @@ class PostgresEventWriter:
         try:
             async for event in self.bus.subscribe(topic):
                 envelope = envelope_event(topic, event, run_id=self.run_id, source="postgres-writer")
+                observe_envelope(envelope, stage="postgres_enqueue")
                 await self._queue.put(envelope)
                 gauge(
                     obs_schema.MM_PERSISTENCE_QUEUE_DEPTH,

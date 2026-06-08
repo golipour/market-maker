@@ -10,6 +10,7 @@ from typing import Any
 from mm.bus.base import AbstractEventBus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.models.private import Balance, PrivateStateSnapshot
+from mm.observability.event_payloads import observe_envelope, observe_runtime_event
 
 
 class RedisStreamsBus(AbstractEventBus):
@@ -42,12 +43,14 @@ class RedisStreamsBus(AbstractEventBus):
         self._last_error_log_monotonic: dict[tuple[str, str], float] = {}
 
     async def publish(self, topic: str, event: Any) -> None:
+        observe_runtime_event(topic, event, stage="bus_publish")
         for queue in list(self._subscribers.get(topic, ())):
             await queue.put(event)
         stream_event = _compact_stream_event(topic, event)
         if stream_event is None:
             return
         envelope = envelope_event(topic, stream_event, run_id=self.run_id, source=self._source)
+        observe_envelope(envelope, stage="redis_stream")
         kwargs: dict[str, Any] = {}
         if self.maxlen is not None and self.maxlen > 0:
             kwargs = {"maxlen": int(self.maxlen), "approximate": True}

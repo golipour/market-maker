@@ -492,6 +492,8 @@ It creates indexes on run/topic/timestamp, exchange/symbol/timestamp, topic/type
 event_date=<yyyy-mm-dd>/exchange=<exchange>/symbol=<symbol>/<hour>-<event_type>.parquet
 ```
 
+Parquet rows retain one compact `envelope_json` plus metadata columns. The writer does not store a separate `payload_json` copy. For archival storage, it compacts `MarketEvent.trades` after interval features are already present and removes zero private balances while preserving counts and compaction flags. This makes Parquet suitable for compact replay and offline analysis of summarized facts, not exact raw trade-list recovery.
+
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 
 `RedisStreamsBus` writes compact envelopes to Redis streams named from topics. It compacts zero balances and private snapshots before stream writing. Local subscribers receive the original in-process object, while remote stream messages are decoded to envelope payloads and forwarded through `subscribe()`/`subscribe_queue()`. Each bus instance tags its own stream writes and skips them in its stream forwarder to avoid duplicate same-process delivery.
@@ -515,6 +517,7 @@ If pyarrow is unavailable, it falls back to JSONL files in the same partition la
 - live order counts and quantities by side,
 - placement failures, fill counts and quantities,
 - persistence queue depth and write latency,
+- event payload and envelope bytes by topic, event type, and pipeline stage,
 - runtime errors.
 
 Metrics are stored by a custom in-process Prometheus text registry in `mm/observability/registry.py`. `configure_observability()` starts an HTTP server on the configured metrics port when metrics are enabled.

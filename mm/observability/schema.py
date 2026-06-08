@@ -59,6 +59,11 @@ MM_EXECUTION_SYNC_FAILED_TOTAL = "mm_execution_sync_failed_total"
 MM_ORDER_ROUTER_FAILURES_TOTAL = "mm_order_router_failures_total"
 MM_PERSISTENCE_QUEUE_DEPTH = "mm_persistence_queue_depth"
 MM_PERSISTENCE_WRITE_LATENCY_MS = "mm_persistence_write_latency_ms"
+MM_EVENT_PAYLOADS_TOTAL = "mm_event_payloads_total"
+MM_EVENT_PAYLOAD_BYTES_TOTAL = "mm_event_payload_bytes_total"
+MM_EVENT_PAYLOAD_BYTES = "mm_event_payload_bytes"
+MM_EVENT_ENVELOPE_BYTES_TOTAL = "mm_event_envelope_bytes_total"
+MM_EVENT_ENVELOPE_BYTES = "mm_event_envelope_bytes"
 
 # Log event keys (mm.observability.log_event)
 EVENT_STRATEGY_FRAME = "strategy_frame"

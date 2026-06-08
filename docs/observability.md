@@ -139,6 +139,8 @@ It currently emits metrics and logs for:
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
+`ParquetEventWriter` stores compact archival envelopes. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, and removes zero private balances while preserving counts.
+
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,
 execution events, execution state, and private state for local/global venues.
@@ -399,6 +401,16 @@ Recommended gate reasons:
 | `mm_persistence_queue_depth` | gauge | `writer` | proposed writer metric | Queue backlog |
 | `mm_persistence_write_latency_ms` | histogram | `writer` | proposed writer metric | Flush latency |
 | `mm_persistence_dropped_events_total` | counter | `writer`, `reason` | proposed if queues can drop | Dropped persistence events |
+
+### Event Payload Size
+
+| Metric | Type | Labels | Source | Meaning |
+|--------|------|--------|--------|---------|
+| `mm_event_payloads_total` | counter | `topic`, `event_type`, `stage` | bus and persistence enqueue paths | Event count measured for byte sizing |
+| `mm_event_payload_bytes_total` | counter | `topic`, `event_type`, `stage` | bus and persistence enqueue paths | Total normalized JSON payload bytes |
+| `mm_event_payload_bytes` | histogram | `topic`, `event_type`, `stage` | bus and persistence enqueue paths | Payload byte distribution |
+| `mm_event_envelope_bytes_total` | counter | `topic`, `event_type`, `stage` | Redis stream and persistence enqueue paths | Total durable envelope bytes |
+| `mm_event_envelope_bytes` | histogram | `topic`, `event_type`, `stage` | Redis stream and persistence enqueue paths | Envelope byte distribution |
 
 ## Logs and exceptions
 
