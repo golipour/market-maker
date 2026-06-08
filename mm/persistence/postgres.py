@@ -104,6 +104,44 @@ ON mm_action_stage_facts (actor_id, stage, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_action_stage_facts_exchange_symbol_stage_ts_idx
 ON mm_action_stage_facts (exchange, symbol, stage, ts DESC);
 
+CREATE TABLE IF NOT EXISTS mm_execution_facts (
+    event_id TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    action TEXT NOT NULL,
+    lifecycle TEXT NOT NULL,
+    success BOOLEAN,
+    state_kind TEXT,
+    actor_id TEXT,
+    exchange TEXT,
+    symbol TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    client_order_id TEXT,
+    exchange_order_id TEXT,
+    side TEXT,
+    price DOUBLE PRECISION,
+    qty DOUBLE PRECISION,
+    remaining_qty DOUBLE PRECISION,
+    filled_qty DOUBLE PRECISION,
+    fee DOUBLE PRECISION,
+    order_type TEXT,
+    status TEXT,
+    error_type TEXT,
+    error_message TEXT,
+    latency_ms DOUBLE PRECISION,
+    count_value INT,
+    PRIMARY KEY (event_id, row_key)
+);
+CREATE INDEX IF NOT EXISTS mm_execution_facts_exchange_symbol_ts_idx
+ON mm_execution_facts (exchange, symbol, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_execution_facts_order_ts_idx
+ON mm_execution_facts (exchange_order_id, ts DESC) WHERE exchange_order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS mm_execution_facts_action_lifecycle_ts_idx
+ON mm_execution_facts (action, lifecycle, ts DESC);
+
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -358,6 +396,26 @@ class PostgresEventWriter:
                             ON CONFLICT (event_id, stage) DO NOTHING
                             """,
                             action_stage_rows,
+                        )
+                    execution_rows = [
+                        row
+                        for envelope in batch
+                        for row in _execution_fact_rows(envelope)
+                    ]
+                    if execution_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_execution_facts (
+                                event_id, row_key, run_id, topic, event_type, action,
+                                lifecycle, success, state_kind, actor_id, exchange, symbol,
+                                timestamp_ms, ts, client_order_id, exchange_order_id, side,
+                                price, qty, remaining_qty, filled_qty, fee, order_type,
+                                status, error_type, error_message, latency_ms, count_value
+                            ) VALUES %s
+                            ON CONFLICT (event_id, row_key) DO NOTHING
+                            """,
+                            execution_rows,
                         )
                     latest_rows = [
                         (
@@ -696,6 +754,391 @@ def _action_stage_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
             )
         )
     return rows
+
+
+def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
+    payload = to_jsonable(envelope.payload)
+    if not isinstance(payload, dict):
+        return []
+    event_type = envelope.event_type
+    topic = envelope.topic
+    if not _is_execution_fact_event(topic, event_type):
+        return []
+
+    timestamp_ms = _int_or_none(payload.get("timestamp_ms")) or envelope.timestamp_ms
+    exchange = _nonempty_str(payload.get("exchange") or envelope.exchange) or None
+    actor_id = _nonempty_str(payload.get("actor_id") or envelope.actor_id) or None
+    symbol = _nonempty_str(payload.get("symbol") or envelope.symbol) or None
+    error_type = _optional_str(payload.get("error"))
+    error_message = _optional_str(payload.get("message"))
+    latency_ms = _float_or_none(payload.get("latency_ms"))
+
+    if event_type.startswith("ExecutionSync"):
+        lifecycle = _execution_lifecycle(event_type)
+        return [
+            _execution_row(
+                envelope,
+                row_key="sync",
+                action="sync",
+                lifecycle=lifecycle,
+                success=_success_for_lifecycle(lifecycle),
+                state_kind=None,
+                actor_id=actor_id,
+                exchange=exchange,
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                error_type=error_type,
+                error_message=error_message,
+                latency_ms=latency_ms,
+                count_value=_int_or_none(payload.get("target_count")),
+            )
+        ]
+
+    if event_type in {"PlaceOrdersRequested", "PlaceOrdersAccepted", "PlaceOrdersFailed"}:
+        lifecycle = _order_lifecycle(event_type)
+        orders = payload.get("orders")
+        order_ids = payload.get("order_ids")
+        rows: list[tuple[Any, ...]] = []
+        if isinstance(orders, list) and orders:
+            for index, order in enumerate(orders):
+                if not isinstance(order, dict):
+                    continue
+                exchange_order_id = _order_id_at(order_ids, index) or _optional_str(order.get("exchange_order_id"))
+                rows.append(
+                    _execution_row(
+                        envelope,
+                        row_key=f"place:{index}:{exchange_order_id or ''}",
+                        action="place",
+                        lifecycle=lifecycle,
+                        success=_success_for_lifecycle(lifecycle),
+                        state_kind="requested" if lifecycle == "requested" else "pending" if lifecycle == "accepted" else None,
+                        actor_id=actor_id,
+                        exchange=_nonempty_str(order.get("exchange") or exchange) or None,
+                        symbol=_nonempty_str(order.get("symbol") or symbol) or None,
+                        timestamp_ms=timestamp_ms,
+                        order=order,
+                        exchange_order_id=exchange_order_id,
+                        error_type=error_type,
+                        error_message=error_message,
+                    )
+                )
+        else:
+            rows.append(
+                _execution_row(
+                    envelope,
+                    row_key="place",
+                    action="place",
+                    lifecycle=lifecycle,
+                    success=_success_for_lifecycle(lifecycle),
+                    state_kind=None,
+                    actor_id=actor_id,
+                    exchange=exchange,
+                    symbol=symbol,
+                    timestamp_ms=timestamp_ms,
+                    error_type=error_type,
+                    error_message=error_message,
+                    count_value=_int_or_none(payload.get("count")),
+                )
+            )
+        return rows
+
+    if event_type in {
+        "CancelOrdersRequested",
+        "CancelOrdersAccepted",
+        "CancelOrdersFailed",
+        "CancelActorOrdersRequested",
+    }:
+        lifecycle = _order_lifecycle(event_type)
+        order_ids = payload.get("order_ids")
+        ids = [str(item) for item in order_ids] if isinstance(order_ids, list) else []
+        if not ids:
+            ids = [""]
+        return [
+            _execution_row(
+                envelope,
+                row_key=f"cancel:{index}:{order_id}",
+                action="cancel",
+                lifecycle=lifecycle,
+                success=_success_for_lifecycle(lifecycle),
+                state_kind="requested" if lifecycle == "requested" else "pending" if lifecycle == "accepted" else None,
+                actor_id=actor_id,
+                exchange=exchange,
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                exchange_order_id=order_id or None,
+                status="cancel_requested" if lifecycle == "requested" else None,
+                error_type=error_type,
+                error_message=error_message,
+                count_value=_int_or_none(payload.get("count")),
+            )
+            for index, order_id in enumerate(ids)
+        ]
+
+    if event_type == "OrderValidationRejected":
+        return [
+            _execution_row(
+                envelope,
+                row_key="validation:0",
+                action="validation",
+                lifecycle="rejected",
+                success=False,
+                state_kind=None,
+                actor_id=actor_id,
+                exchange=exchange,
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                order=payload,
+                status=_optional_str(payload.get("reason")),
+                error_type=_optional_str(payload.get("reason")),
+            )
+        ]
+
+    if event_type == "Fill":
+        return [
+            _execution_row(
+                envelope,
+                row_key=f"fill:{payload.get('exchange_order_id') or ''}",
+                action="fill",
+                lifecycle="filled",
+                success=True,
+                state_kind="confirmed",
+                actor_id=actor_id,
+                exchange=exchange,
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                order=payload,
+                exchange_order_id=_optional_str(payload.get("exchange_order_id")),
+                filled_qty=_float_or_none(payload.get("qty")),
+                fee=_float_or_none(payload.get("fee")),
+                status="filled",
+            )
+        ]
+
+    if event_type == "ExecutionSnapshot":
+        return _execution_snapshot_rows(
+            envelope,
+            payload,
+            timestamp_ms=timestamp_ms,
+            exchange=exchange,
+        )
+
+    return []
+
+
+def _execution_snapshot_rows(
+    envelope: EventEnvelope,
+    payload: dict[str, Any],
+    *,
+    timestamp_ms: int,
+    exchange: str | None,
+) -> list[tuple[Any, ...]]:
+    rows = [
+        _execution_row(
+            envelope,
+            row_key="snapshot",
+            action="snapshot",
+            lifecycle="snapshot",
+            success=True,
+            state_kind="aggregate",
+            actor_id=None,
+            exchange=exchange,
+            symbol=None,
+            timestamp_ms=timestamp_ms,
+            count_value=_int_or_none(payload.get("live_order_count")),
+        )
+    ]
+    live_orders = payload.get("live_orders")
+    if isinstance(live_orders, dict):
+        for order_id, open_order in live_orders.items():
+            row = _open_order_execution_row(
+                envelope,
+                row_key=f"live:{order_id}",
+                state_kind="confirmed",
+                timestamp_ms=timestamp_ms,
+                exchange=exchange,
+                order_id=str(order_id),
+                open_order=open_order,
+            )
+            if row is not None:
+                rows.append(row)
+    for key, state_kind in (("pending_places", "pending_place"), ("pending_cancels", "pending_cancel")):
+        pending = payload.get(key)
+        if isinstance(pending, dict):
+            for order_id, change in pending.items():
+                row = _pending_execution_row(
+                    envelope,
+                    row_key=f"{state_kind}:{order_id}",
+                    state_kind=state_kind,
+                    timestamp_ms=timestamp_ms,
+                    exchange=exchange,
+                    order_id=str(order_id),
+                    change=change,
+                )
+                if row is not None:
+                    rows.append(row)
+    return rows
+
+
+def _open_order_execution_row(
+    envelope: EventEnvelope,
+    *,
+    row_key: str,
+    state_kind: str,
+    timestamp_ms: int,
+    exchange: str | None,
+    order_id: str,
+    open_order: Any,
+) -> tuple[Any, ...] | None:
+    if not isinstance(open_order, dict):
+        return None
+    order = open_order.get("order")
+    return _execution_row(
+        envelope,
+        row_key=row_key,
+        action="snapshot",
+        lifecycle="open",
+        success=True,
+        state_kind=state_kind,
+        actor_id=_optional_str(open_order.get("actor_id")),
+        exchange=_nonempty_str((order or {}).get("exchange") if isinstance(order, dict) else exchange) or exchange,
+        symbol=_nonempty_str((order or {}).get("symbol") if isinstance(order, dict) else None) or None,
+        timestamp_ms=timestamp_ms,
+        order=order if isinstance(order, dict) else None,
+        exchange_order_id=order_id,
+        remaining_qty=_float_or_none(open_order.get("remaining_qty")),
+        filled_qty=_float_or_none(open_order.get("filled_qty")),
+        status=_optional_str(open_order.get("status")),
+    )
+
+
+def _pending_execution_row(
+    envelope: EventEnvelope,
+    *,
+    row_key: str,
+    state_kind: str,
+    timestamp_ms: int,
+    exchange: str | None,
+    order_id: str,
+    change: Any,
+) -> tuple[Any, ...] | None:
+    if not isinstance(change, dict):
+        return None
+    order = change.get("order")
+    return _execution_row(
+        envelope,
+        row_key=row_key,
+        action=_optional_str(change.get("operation")) or "pending",
+        lifecycle="accepted",
+        success=True,
+        state_kind=state_kind,
+        actor_id=_optional_str(change.get("actor_id")),
+        exchange=_nonempty_str((order or {}).get("exchange") if isinstance(order, dict) else exchange) or exchange,
+        symbol=_nonempty_str((order or {}).get("symbol") if isinstance(order, dict) else None) or None,
+        timestamp_ms=timestamp_ms,
+        order=order if isinstance(order, dict) else None,
+        exchange_order_id=order_id,
+        status=_optional_str(change.get("reason")) or state_kind,
+    )
+
+
+def _execution_row(
+    envelope: EventEnvelope,
+    *,
+    row_key: str,
+    action: str,
+    lifecycle: str,
+    success: bool | None,
+    state_kind: str | None,
+    actor_id: str | None,
+    exchange: str | None,
+    symbol: str | None,
+    timestamp_ms: int,
+    order: dict[str, Any] | None = None,
+    client_order_id: str | None = None,
+    exchange_order_id: str | None = None,
+    remaining_qty: float | None = None,
+    filled_qty: float | None = None,
+    fee: float | None = None,
+    status: str | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    latency_ms: float | None = None,
+    count_value: int | None = None,
+) -> tuple[Any, ...]:
+    order = order or {}
+    return (
+        envelope.event_id,
+        row_key,
+        envelope.run_id,
+        envelope.topic,
+        envelope.event_type,
+        action,
+        lifecycle,
+        success,
+        state_kind,
+        actor_id,
+        exchange,
+        symbol,
+        timestamp_ms,
+        _ts(timestamp_ms),
+        client_order_id or _optional_str(order.get("client_order_id")),
+        exchange_order_id or _optional_str(order.get("exchange_order_id")),
+        _optional_str(order.get("side")),
+        _float_or_none(order.get("price")),
+        _float_or_none(order.get("qty")),
+        remaining_qty,
+        filled_qty,
+        fee,
+        _optional_str(order.get("order_type")),
+        status,
+        error_type,
+        error_message,
+        latency_ms,
+        count_value,
+    )
+
+
+def _is_execution_fact_event(topic: str, event_type: str) -> bool:
+    return (
+        topic.startswith("execution:orders:")
+        or topic.startswith("execution:state:")
+        or topic.startswith("private:state:") and event_type == "Fill"
+        or event_type in {"Fill", "ExecutionSnapshot"}
+    )
+
+
+def _execution_lifecycle(event_type: str) -> str:
+    if event_type.endswith("Requested"):
+        return "requested"
+    if event_type.endswith("Completed"):
+        return "completed"
+    if event_type.endswith("Failed"):
+        return "failed"
+    return "event"
+
+
+def _order_lifecycle(event_type: str) -> str:
+    if event_type.endswith("Requested"):
+        return "requested"
+    if event_type.endswith("Accepted"):
+        return "accepted"
+    if event_type.endswith("Failed"):
+        return "failed"
+    return "event"
+
+
+def _success_for_lifecycle(lifecycle: str) -> bool | None:
+    if lifecycle in {"accepted", "completed", "filled"}:
+        return True
+    if lifecycle in {"failed", "rejected"}:
+        return False
+    return None
+
+
+def _order_id_at(order_ids: Any, index: int) -> str | None:
+    if not isinstance(order_ids, list) or index >= len(order_ids):
+        return None
+    return _optional_str(order_ids[index])
 
 
 def _nonempty_str(value: Any) -> str:

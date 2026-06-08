@@ -138,10 +138,11 @@ It currently emits metrics and logs for:
 - `mm_events`: append-only event truth
 - `mm_market_facts`: typed market interval facts
 - `mm_action_stage_facts`: typed controller action-stage facts
+- `mm_execution_facts`: typed order execution lifecycle facts
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Each `ControllerDiagnostics.action_pipeline` stage is written to `mm_action_stage_facts` with typed columns for order counts, side counts, quantities, notionals, rejection counts, compacted counts, and digests. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Each `ControllerDiagnostics.action_pipeline` stage is written to `mm_action_stage_facts` with typed columns for order counts, side counts, quantities, notionals, rejection counts, compacted counts, and digests. Execution sync, place, cancel, validation rejection, fill, and execution snapshot events are written to `mm_execution_facts` with typed order lifecycle fields, including confirmed versus pending state kind. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
 
 `ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
@@ -759,8 +760,8 @@ Sources:
 
 - `ControllerDiagnostics.risk`
 - `ControllerDiagnostics.execution_gates`
-- `execution:orders:{exchange}`
-- `execution:state:{exchange}`
+- `mm_execution_facts`
+- `execution:orders:{exchange}` and `execution:state:{exchange}` for full payload replay
 - Prometheus execution metrics
 - Loki adapter failure logs
 
@@ -929,13 +930,18 @@ fast health. If a PostgreSQL panel becomes slow:
 2. Create a materialized view for repeated JSON extraction.
 3. Move only the low-cardinality value to Prometheus if it is alert-worthy.
 
-Recommended materialized views if dashboard latency becomes an issue:
+Typed tables already available for common dashboard paths:
+
+- `mm_market_facts`
+- `mm_action_stage_facts`
+- `mm_execution_facts`
+
+Recommended materialized views if remaining dashboard latency becomes an issue:
 
 - `mm_controller_diagnostics_flat`
-- `mm_action_pipeline_flat`
 - `mm_risk_decisions_flat`
-- `mm_execution_events_flat`
-- `mm_market_top_of_book_flat`
+- `mm_target_book_flat`
+- `mm_model_optimizer_flat`
 
 ## Example SQL snippets
 

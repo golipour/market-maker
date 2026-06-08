@@ -10,6 +10,9 @@ import pytest
 
 from mm.bus.memory import InMemoryBus
 from mm.core.events import envelope_event
+from mm.core.models.execution import Fill, Order
+from mm.core.models.private import OpenOrder
+from mm.execution.order_manager import ExecutionSnapshot, PendingOrderChange
 from mm.persistence.compaction import compact_envelope_for_persistence
 from mm.persistence.postgres import PostgresEventWriter
 
@@ -164,6 +167,148 @@ def test_postgres_writer_materializes_action_stage_facts(monkeypatch: pytest.Mon
     assert rules[22]
 
 
+def test_postgres_writer_materializes_execution_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = envelope_event(
+        "execution:orders:nobitex",
+        {
+            "type": "PlaceOrdersAccepted",
+            "exchange": "nobitex",
+            "order_ids": ["ex-1"],
+            "orders": [
+                {
+                    "exchange": "nobitex",
+                    "symbol": "BTC_IRT",
+                    "side": "buy",
+                    "price": 100.0,
+                    "qty": 0.5,
+                    "order_type": "limit",
+                    "client_order_id": "client-1",
+                    "exchange_order_id": "ex-1",
+                },
+            ],
+            "timestamp_ms": 2_000,
+        },
+    )
+
+    writer._write_batch([envelope])
+
+    row = _single_execution_fact_row(fake)
+    assert row[4] == "PlaceOrdersAccepted"
+    assert row[5] == "place"
+    assert row[6] == "accepted"
+    assert row[7] is True
+    assert row[8] == "pending"
+    assert row[10] == "nobitex"
+    assert row[11] == "BTC_IRT"
+    assert row[14] == "client-1"
+    assert row[15] == "ex-1"
+    assert row[16] == "buy"
+    assert row[17] == 100.0
+    assert row[18] == 0.5
+    assert row[22] == "limit"
+
+
+def test_postgres_writer_materializes_fill_execution_fact(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = envelope_event(
+        "private:state:nobitex:fills",
+        Fill(
+            exchange_order_id="ex-1",
+            actor_id="actor-1",
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            side="buy",
+            price=100.0,
+            qty=0.25,
+            fee=0.01,
+            timestamp_ms=2_500,
+        ),
+    )
+
+    writer._write_batch([envelope])
+
+    row = _single_execution_fact_row(fake)
+    assert row[4] == "Fill"
+    assert row[5] == "fill"
+    assert row[6] == "filled"
+    assert row[7] is True
+    assert row[8] == "confirmed"
+    assert row[9] == "actor-1"
+    assert row[15] == "ex-1"
+    assert row[16] == "buy"
+    assert row[17] == 100.0
+    assert row[18] == 0.25
+    assert row[20] == 0.25
+    assert row[21] == 0.01
+    assert row[23] == "filled"
+
+
+def test_postgres_writer_materializes_execution_snapshot_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    order = Order("nobitex", "BTC_IRT", "sell", 101.0, 0.4, client_order_id="client-sell")
+    envelope = envelope_event(
+        "execution:state:nobitex",
+        ExecutionSnapshot(
+            exchange="nobitex",
+            timestamp_ms=3_000,
+            live_order_count=1,
+            live_orders={
+                "live-1": OpenOrder(
+                    exchange_order_id="live-1",
+                    actor_id="actor-1",
+                    order=order,
+                    remaining_qty=0.3,
+                    filled_qty=0.1,
+                    status="open",
+                    timestamp_ms=3_000,
+                )
+            },
+            pending_place_count=1,
+            pending_cancel_count=0,
+            pending_places={
+                "pending-1": PendingOrderChange(
+                    operation="place",
+                    exchange_order_id="pending-1",
+                    actor_id="actor-1",
+                    accepted_ms=3_000,
+                    order=order,
+                )
+            },
+        ),
+    )
+
+    writer._write_batch([envelope])
+
+    rows = _execution_fact_rows(fake)
+    by_key = {row[1]: row for row in rows}
+    assert by_key["snapshot"][5] == "snapshot"
+    assert by_key["snapshot"][8] == "aggregate"
+    assert by_key["snapshot"][27] == 1
+    assert by_key["live:live-1"][8] == "confirmed"
+    assert by_key["live:live-1"][15] == "live-1"
+    assert by_key["live:live-1"][19] == 0.3
+    assert by_key["live:live-1"][20] == 0.1
+    assert by_key["live:live-1"][23] == "open"
+    assert by_key["pending_place:pending-1"][5] == "place"
+    assert by_key["pending_place:pending-1"][8] == "pending_place"
+
+
 def test_postgres_writer_spools_batch_after_retries_exhausted(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -304,6 +449,21 @@ def _diagnostics_envelope():
             },
         },
     )
+
+
+def _execution_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
+    conn = fake.connections[0]
+    call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_execution_facts" in call["sql"]
+    )
+    return call["rows"]
+
+
+def _single_execution_fact_row(fake: "_FakePsycopg2") -> tuple:
+    [row] = _execution_fact_rows(fake)
+    return row
 
 
 class _FakeCursor:
