@@ -114,21 +114,21 @@ Recommendation:
 - Add retention and cleanup rules for successfully reingested spool files.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 3. Parquet Storage Still Uses Opaque JSON Envelopes
+### 3. Parquet Storage Still Needs Columnar Lifecycle Policies
 
 Severity: Medium
 
 `ParquetEventWriter` now writes immutable part files and no longer reads, concatenates, and rewrites the existing hourly Parquet file during live writes.
 
-The row schema now stores one compact `envelope_json` instead of both `payload_json` and `envelope_json`. For archival Parquet rows it compacts data that has already been summarized or integrated: `MarketEvent.trades` are replaced by trade counts/timestamps while retaining interval features such as buy/sell volume and VWAP, and zero private balances are removed while retaining balance counts. The remaining issue is that the retained payload is still an opaque JSON string, which gives up most of Parquet's typed columnar benefits for analytics.
+The row schema now stores one compact `envelope_json` instead of both `payload_json` and `envelope_json`. For archival Parquet rows it compacts data that has already been summarized or integrated: `MarketEvent.trades` are replaced by trade counts/timestamps while retaining interval features such as buy/sell volume and VWAP, and zero private balances are removed while retaining balance counts. Parquet rows also include typed nullable columns for high-value market, controller, optimizer, target-book, and execution fields, so common offline scans no longer need to deserialize JSON.
 
-Impact: Live archival writes are now append-like and object-store friendly, and archival byte volume is much lower than before. Analysts still have to deserialize JSON at query time instead of filtering typed columns, and many small part files may need periodic offline compaction.
+Impact: Live archival writes are now append-like and object-store friendly, archival byte volume is lower than before, and common analytics can use typed columns. Remaining scaling risks are small-file growth, raw orderbook/debug payload storage, and the fact that long-form facts such as per-objective components are still better represented by separate datasets when scan volume grows.
 
 Recommendation:
 
 - Compact offline if needed.
 - Partition by date/hour/topic/event_type/exchange/symbol.
-- For high-value event types, write typed Parquet columns instead of opaque JSON strings.
+- Add separate columnar datasets for very large raw snapshots or long-form facts when typed envelope columns are not enough.
 
 ### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment
 
@@ -409,15 +409,13 @@ Priority recommendations:
 6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
 7. Keep full diagnostics configurable and sampled in production.
 8. Add event ids and references between frame, decision, target book, risk result, and execution report.
-9. Replace opaque Parquet JSON payloads with typed columns for high-value event types.
-10. Add replay contracts that verify the reduced event model can reconstruct required state.
+9. Add replay contracts that verify the reduced event model can reconstruct required state.
 
 ## Prioritized Roadmap
 
 ### Priority 1: Scalability
 
 - Add per-topic subscriber queue depth and lag metrics.
-- Replace opaque Parquet JSON payloads with typed columns for high-value event types.
 - Evaluate a time-series database alongside SQL for high-volume market data, execution latency, and low-cardinality business metrics.
 - Add retention and compaction policies.
 
