@@ -112,22 +112,20 @@ Recommendation:
 - Track failed batch retry behavior explicitly.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 3. Parquet Writer Rewrites Existing Files
+### 3. Parquet Storage Still Uses Opaque JSON Envelopes
 
 Severity: Medium
 
-`ParquetEventWriter` reads an existing Parquet file, concatenates it with the new batch, and writes a replacement file.
+`ParquetEventWriter` now writes immutable part files and no longer reads, concatenates, and rewrites the existing hourly Parquet file during live writes.
 
 The row schema now stores one compact `envelope_json` instead of both `payload_json` and `envelope_json`. For archival Parquet rows it compacts data that has already been summarized or integrated: `MarketEvent.trades` are replaced by trade counts/timestamps while retaining interval features such as buy/sell volume and VWAP, and zero private balances are removed while retaining balance counts. The remaining issue is that the retained payload is still an opaque JSON string, which gives up most of Parquet's typed columnar benefits for analytics.
 
-Impact: This is acceptable for small local files, and archival byte volume is much lower than before. It is still not scalable for high event volume. Appending to the same hourly event-type file causes repeated read/modify/write cycles and makes object-store deployment impractical. Analysts also have to deserialize JSON at query time instead of filtering typed columns.
+Impact: Live archival writes are now append-like and object-store friendly, and archival byte volume is much lower than before. Analysts still have to deserialize JSON at query time instead of filtering typed columns, and many small part files may need periodic offline compaction.
 
 Recommendation:
 
-- Write immutable chunk files, for example `part-<timestamp>-<uuid>.parquet`.
 - Compact offline if needed.
 - Partition by date/hour/topic/event_type/exchange/symbol.
-- Avoid reading existing Parquet during live writes.
 - For high-value event types, write typed Parquet columns instead of opaque JSON strings.
 
 ### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment

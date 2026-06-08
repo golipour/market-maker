@@ -141,7 +141,7 @@ It currently emits metrics and logs for:
 
 Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available and replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth.
 
-`ParquetEventWriter` stores compact archival envelopes. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, and removes zero private balances while preserving counts.
+`ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,

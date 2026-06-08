@@ -9,7 +9,7 @@ from mm.persistence.parquet_writer import ParquetEventWriter
 from mm.persistence.replay import read_envelopes
 
 
-def test_parquet_writer_appends_under_hive_partition_path(tmp_path) -> None:
+def test_parquet_writer_writes_immutable_parts_under_hive_partition_path(tmp_path) -> None:
     pa = pytest.importorskip("pyarrow")
     pq = pytest.importorskip("pyarrow.parquet")
 
@@ -41,12 +41,25 @@ def test_parquet_writer_appends_under_hive_partition_path(tmp_path) -> None:
     writer._write_batch([first])
     writer._write_batch([second])
 
-    path = tmp_path / "event_date=1970-01-01" / "exchange=nobitex" / "symbol=BTC_IRT" / "00-MarketEvent.parquet"
-    table = pq.ParquetFile(path).read()
-    assert table.num_rows == 2
-    assert table.schema.field("exchange").type == pa.string()
-    assert "payload_json" not in table.schema.names
-    assert "envelope_json" in table.schema.names
+    partition = (
+        tmp_path
+        / "event_date=1970-01-01"
+        / "exchange=nobitex"
+        / "symbol=BTC_IRT"
+        / "event_type=MarketEvent"
+        / "hour=00"
+    )
+    files = sorted(partition.glob("part-*.parquet"))
+    assert len(files) == 2
+    row_count = 0
+    for path in files:
+        table = pq.ParquetFile(path).read()
+        row_count += table.num_rows
+        assert table.schema.field("exchange").type == pa.string()
+        assert "payload_json" not in table.schema.names
+        assert "envelope_json" in table.schema.names
+    assert row_count == 2
+    assert [envelope.timestamp_ms for envelope in read_envelopes(tmp_path)] == [1_000, 2_000]
 
 
 def test_parquet_writer_compacts_archival_market_trades(tmp_path) -> None:

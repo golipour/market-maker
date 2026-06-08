@@ -489,10 +489,10 @@ It compacts persisted market events by dropping raw trade lists after interval s
 `ParquetEventWriter` writes partitioned Parquet rows under:
 
 ```
-event_date=<yyyy-mm-dd>/exchange=<exchange>/symbol=<symbol>/<hour>-<event_type>.parquet
+event_date=<yyyy-mm-dd>/exchange=<exchange>/symbol=<symbol>/event_type=<event_type>/hour=<hh>/part-<timestamp>-<uuid>.parquet
 ```
 
-Parquet rows retain one compact `envelope_json` plus metadata columns. The writer does not store a separate `payload_json` copy. For archival storage, it compacts `MarketEvent.trades` after interval features are already present, compacts joint-frame embedded ledgers to summaries/references, and removes zero private balances while preserving counts and compaction flags. This makes Parquet suitable for compact replay and offline analysis of summarized facts, not exact raw trade-list recovery.
+Each flush writes immutable part files; live writes do not read or rewrite existing Parquet files. Parquet rows retain one compact `envelope_json` plus metadata columns. The writer does not store a separate `payload_json` copy. For archival storage, it compacts `MarketEvent.trades` after interval features are already present, compacts joint-frame embedded ledgers to summaries/references, and removes zero private balances while preserving counts and compaction flags. This makes Parquet suitable for compact replay and offline analysis of summarized facts, not exact raw trade-list recovery.
 
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -101,18 +102,19 @@ class ParquetEventWriter:
         if not batch:
             return
         started_ns = time.monotonic_ns()
-        grouped: dict[Path, list[dict[str, Any]]] = {}
+        grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
         for envelope in batch:
             stored = (
                 compact_envelope_for_persistence(envelope, sink="parquet")
                 if self.compact_payloads
                 else envelope
             )
-            path = self._partition_path(stored)
-            grouped.setdefault(path, []).append(_row(stored))
+            partition = self._partition_key(stored)
+            grouped.setdefault(partition, []).append(_row(stored))
         sink = "parquet"
         written_count = 0
-        for path, rows in grouped.items():
+        for partition, rows in grouped.items():
+            path = self._part_path(partition)
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 import pyarrow as pa
@@ -121,9 +123,6 @@ class ParquetEventWriter:
                 schema = _parquet_schema(pa)
                 table = pa.Table.from_pylist(rows, schema=schema)
                 tmp = path.with_suffix(path.suffix + ".tmp")
-                if path.exists():
-                    existing = _read_existing_parquet(pa, pq, path, schema)
-                    table = pa.concat_tables([existing, table], promote_options="default")
                 pq.write_table(table, tmp)
                 os.replace(tmp, path)
                 written_count += len(rows)
@@ -196,15 +195,27 @@ class ParquetEventWriter:
             },
         )
 
-    def _partition_path(self, envelope: EventEnvelope) -> Path:
+    def _partition_key(self, envelope: EventEnvelope) -> tuple[str, str, str, str, str]:
         dt = datetime.fromtimestamp(envelope.timestamp_ms / 1000.0, tz=timezone.utc)
         event_date = dt.strftime("%Y-%m-%d")
         event_hour = dt.strftime("%H")
         exchange = envelope.exchange or "none"
         symbol = envelope.symbol or "none"
         event_type = envelope.event_type or "event"
-        filename = f"{event_hour}-{event_type}.parquet"
-        return self.root_path / f"event_date={event_date}" / f"exchange={exchange}" / f"symbol={symbol}" / filename
+        return event_date, event_hour, exchange, symbol, event_type
+
+    def _part_path(self, partition: tuple[str, str, str, str, str]) -> Path:
+        event_date, event_hour, exchange, symbol, event_type = partition
+        filename = f"part-{time.time_ns()}-{uuid.uuid4().hex}.parquet"
+        return (
+            self.root_path
+            / f"event_date={event_date}"
+            / f"exchange={exchange}"
+            / f"symbol={symbol}"
+            / f"event_type={event_type}"
+            / f"hour={event_hour}"
+            / filename
+        )
 
 
 def _row(envelope: EventEnvelope) -> dict[str, Any]:
@@ -241,24 +252,6 @@ def _parquet_schema(pa: Any) -> Any:
             ("envelope_json", pa.string()),
         ]
     )
-
-
-def _read_existing_parquet(pa: Any, pq: Any, path: Path, schema: Any) -> Any:
-    # pq.read_table() can infer Hive partition columns from event_date=/exchange=/
-    # directories and then collide with the real string columns stored in the file.
-    table = pq.ParquetFile(path).read()
-    return _align_table_to_schema(pa, table, schema)
-
-
-def _align_table_to_schema(pa: Any, table: Any, schema: Any) -> Any:
-    arrays = []
-    names = set(table.column_names)
-    for field in schema:
-        if field.name in names:
-            arrays.append(table[field.name].cast(field.type))
-        else:
-            arrays.append(pa.nulls(table.num_rows, type=field.type))
-    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def _elapsed_ms(started_ns: int) -> float:
