@@ -484,7 +484,7 @@ Raw market-data topics are not in the default persistence topic list, but the ob
 - `mm_events`: append-only event table,
 - `mm_latest_state`: latest state table for private and execution state.
 
-It compacts persisted market events by dropping raw trade lists after interval summaries are present, and compacts persisted joint frames by replacing the embedded ledger with a summary plus `ledger:snapshot` reference. Private snapshots remain full in Postgres so `mm_latest_state` can preserve current-state truth. It creates indexes on run/topic/timestamp, exchange/symbol/timestamp, topic/type/timestamp, and actor/timestamp. Batches are written in a worker thread through a reusable psycopg2 connection; failed writes drop the connection so the next batch reconnects.
+It compacts persisted market events by dropping raw trade lists after interval summaries are present, and compacts persisted joint frames by replacing the embedded ledger with a summary plus `ledger:snapshot` reference. Private snapshots remain full in Postgres so `mm_latest_state` can preserve current-state truth. It creates indexes on run/topic/timestamp, exchange/symbol/timestamp, topic/type/timestamp, and actor/timestamp. Batches are written in a worker thread through a reusable psycopg2 connection. Failed writes drop the connection, retry with bounded backoff, and spill exhausted batches to local JSONL files under `persistence_spool/postgres`.
 
 `ParquetEventWriter` writes partitioned Parquet rows under:
 

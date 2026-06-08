@@ -4,7 +4,9 @@ import asyncio
 import json
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
@@ -76,6 +78,9 @@ class PostgresEventWriter:
         flush_interval_ms: int = 1000,
         run_id: str = "",
         connect_timeout_s: int = 5,
+        retry_attempts: int = 2,
+        retry_backoff_ms: int = 100,
+        failed_batch_spool_dir: str | None = "persistence_spool/postgres",
     ):
         self.bus = bus
         self.topics = topics
@@ -84,6 +89,13 @@ class PostgresEventWriter:
         self.flush_interval_ms = max(50, int(flush_interval_ms))
         self.run_id = run_id
         self.connect_timeout_s = max(1, int(connect_timeout_s))
+        self.retry_attempts = max(0, int(retry_attempts))
+        self.retry_backoff_ms = max(0, int(retry_backoff_ms))
+        self.failed_batch_spool_dir = (
+            Path(failed_batch_spool_dir).expanduser()
+            if failed_batch_spool_dir
+            else None
+        )
         self._queue: asyncio.Queue[EventEnvelope] = asyncio.Queue(maxsize=self.batch_size * 10)
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
@@ -164,7 +176,7 @@ class PostgresEventWriter:
         try:
             import psycopg2
             import psycopg2.extras
-        except ImportError:
+        except ImportError as exc:
             counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": "ImportError"})
             log_event(
                 "postgres_event_writer_unavailable",
@@ -174,7 +186,54 @@ class PostgresEventWriter:
                     "batch_size": len(batch),
                 },
             )
+            self._spill_failed_batch(batch, exc, started_ns)
             return
+        attempts = self.retry_attempts + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                self._write_batch_once(psycopg2, batch, queue_depth, started_ns)
+                return
+            except Exception as exc:
+                last_error = exc
+                retryable = attempt < self.retry_attempts
+                counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
+                log_event(
+                    "postgres_event_writer_error",
+                    {
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "batch_size": len(batch),
+                        "latency_ms": _elapsed_ms(started_ns),
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                        "retryable": retryable,
+                    },
+                )
+                log_event(
+                    obs_schema.EVENT_PERSISTENCE_BATCH_FAILED,
+                    {
+                        "writer": "postgres",
+                        "batch_size": len(batch),
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                        "retryable": retryable,
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                    },
+                )
+                if retryable and self.retry_backoff_ms > 0:
+                    time.sleep((self.retry_backoff_ms / 1000.0) * (2 ** attempt))
+        if last_error is not None:
+            self._spill_failed_batch(batch, last_error, started_ns)
+
+    def _write_batch_once(
+        self,
+        psycopg2: Any,
+        batch: list[EventEnvelope],
+        queue_depth: int,
+        started_ns: int,
+    ) -> None:
         with self._lock:
             try:
                 conn = self._connection(psycopg2)
@@ -253,27 +312,7 @@ class PostgresEventWriter:
             except Exception as exc:
                 self._rollback_connection()
                 self._drop_connection()
-                counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
-                log_event(
-                    "postgres_event_writer_error",
-                    {
-                        "error": type(exc).__name__,
-                        "message": str(exc),
-                        "batch_size": len(batch),
-                        "latency_ms": _elapsed_ms(started_ns),
-                    },
-                )
-                log_event(
-                    obs_schema.EVENT_PERSISTENCE_BATCH_FAILED,
-                    {
-                        "writer": "postgres",
-                        "batch_size": len(batch),
-                        "error": type(exc).__name__,
-                        "message": str(exc),
-                        "retryable": True,
-                    },
-                )
-                return
+                raise
 
     def _ensure_ready(self) -> bool:
         try:
@@ -312,6 +351,63 @@ class PostgresEventWriter:
                 {
                     "message": "postgres persistence is not ready; runtime continues and write batches will retry",
                     "connect_timeout_s": self.connect_timeout_s,
+                },
+            )
+
+    def _spill_failed_batch(
+        self,
+        batch: list[EventEnvelope],
+        error: Exception,
+        started_ns: int,
+    ) -> None:
+        if self.failed_batch_spool_dir is None:
+            return
+        spilled_at_ms = int(time.time() * 1000)
+        dt = datetime.fromtimestamp(spilled_at_ms / 1000.0, tz=timezone.utc)
+        path = (
+            self.failed_batch_spool_dir
+            / f"event_date={dt.strftime('%Y-%m-%d')}"
+            / f"hour={dt.strftime('%H')}"
+            / f"postgres-failed-{spilled_at_ms}-{uuid.uuid4().hex}.jsonl"
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", encoding="utf-8") as f:
+                for envelope in batch:
+                    f.write(
+                        _strict_json_dumps(
+                            {
+                                "schema": "mm.persistence.failed_batch",
+                                "version": 1,
+                                "writer": "postgres",
+                                "spilled_at_ms": spilled_at_ms,
+                                "error": type(error).__name__,
+                                "message": str(error),
+                                "envelope": envelope.as_dict(),
+                            }
+                        )
+                        + "\n"
+                    )
+            log_event(
+                "postgres_event_writer_batch_spooled",
+                {
+                    "writer": "postgres",
+                    "batch_size": len(batch),
+                    "path": str(path),
+                    "error": type(error).__name__,
+                    "latency_ms": _elapsed_ms(started_ns),
+                },
+            )
+        except Exception as exc:
+            counter_inc("mm_persistence_errors_total", labels={"writer": "postgres", "error": type(exc).__name__})
+            log_event(
+                "postgres_event_writer_spool_failed",
+                {
+                    "writer": "postgres",
+                    "batch_size": len(batch),
+                    "path": str(path),
+                    "error": type(exc).__name__,
+                    "message": str(exc),
                 },
             )
 

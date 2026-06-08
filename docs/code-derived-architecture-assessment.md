@@ -98,18 +98,18 @@ Recommendation:
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
-### 2. Postgres Persistence Still Has Best-Effort Retry Semantics
+### 2. Postgres Persistence Spool Needs Reingest Tooling
 
 Severity: Medium
 
-`PostgresEventWriter` now keeps a reusable psycopg2 connection across batches and drops/reconnects after write or readiness failures.
+`PostgresEventWriter` now keeps a reusable psycopg2 connection across batches, drops/reconnects after write or readiness failures, retries failed batches with bounded backoff, and spills exhausted batches to local JSONL files.
 
-Impact: Connection churn is no longer the main bottleneck. The remaining issue is that failed write batches are logged as retryable but are not requeued with a durable retry policy. During sustained database outages, persistence can still lose archived events even though trading continues.
+Impact: Connection churn and immediate batch loss are no longer the main bottlenecks. During sustained database outages, events are preserved locally for later recovery, but operators still need explicit tooling or a runbook to reingest spooled JSONL files into Postgres.
 
 Recommendation:
 
-- Track failed batch retry behavior explicitly.
-- Add bounded retry/backoff or a local durable spill queue for failed batches.
+- Add a replay/reingest command for `persistence_spool/postgres` files.
+- Add retention and cleanup rules for successfully reingested spool files.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
 ### 3. Parquet Storage Still Uses Opaque JSON Envelopes

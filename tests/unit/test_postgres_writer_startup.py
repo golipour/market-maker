@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
 import types
@@ -62,11 +63,12 @@ def test_postgres_writer_reuses_connection_across_batches(monkeypatch: pytest.Mo
 
 def test_postgres_writer_reconnects_after_failed_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install_fake_psycopg2(monkeypatch)
-    fake.fail_commit_once = True
+    fake.fail_commit_count = 1
     writer = PostgresEventWriter(
         bus=InMemoryBus(),
         topics=(),
         database_url="postgresql://example/db",
+        retry_backoff_ms=0,
     )
 
     writer._write_batch([_market_envelope(1_000)])
@@ -76,8 +78,40 @@ def test_postgres_writer_reconnects_after_failed_batch(monkeypatch: pytest.Monke
     first, second = fake.connections
     assert first.rollback_count == 1
     assert first.close_count == 1
-    assert second.commit_count == 1
+    assert second.commit_count == 2
     assert second.close_count == 0
+
+
+def test_postgres_writer_spools_batch_after_retries_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    fake.fail_commit_count = 3
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+        retry_attempts=2,
+        retry_backoff_ms=0,
+        failed_batch_spool_dir=str(tmp_path),
+    )
+    envelope = _market_envelope(1_000)
+
+    writer._write_batch([envelope])
+
+    assert len(fake.connections) == 3
+    assert all(conn.close_count == 1 for conn in fake.connections)
+    [spool_file] = list(tmp_path.rglob("*.jsonl"))
+    [record] = [
+        json.loads(line)
+        for line in spool_file.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert record["writer"] == "postgres"
+    assert record["error"] == "RuntimeError"
+    assert record["envelope"]["event_id"] == envelope.event_id
+    assert record["envelope"]["payload"]["t_end_ms"] == 1_000
 
 
 def _market_envelope(t_end_ms: int):
@@ -121,8 +155,8 @@ class _FakeConnection:
         return _FakeCursor(self)
 
     def commit(self) -> None:
-        if self.module.fail_commit_once:
-            self.module.fail_commit_once = False
+        if self.module.fail_commit_count > 0:
+            self.module.fail_commit_count -= 1
             raise RuntimeError("commit failed")
         self.commit_count += 1
 
@@ -138,7 +172,7 @@ class _FakePsycopg2(types.ModuleType):
     def __init__(self) -> None:
         super().__init__("psycopg2")
         self.connections: list[_FakeConnection] = []
-        self.fail_commit_once = False
+        self.fail_commit_count = 0
         self.extras = types.ModuleType("psycopg2.extras")
         self.extras.Json = _FakeJson
         self.extras.execute_values = self._execute_values
