@@ -3571,11 +3571,11 @@ def _orderbook_depth_sql(kind: str, *, role: str = "local") -> str:
         raw_t_end_ms = _numeric_sql("m.payload->>'t_end_ms'", default="NULL")
         selected = f"""selected AS (
   SELECT COALESCE(
-           NULLIF(ctx.mid, 0.0),
            (
              {raw_bid_price} +
              {raw_ask_price}
            ) / 2.0,
+           NULLIF(ctx.mid, 0.0),
            0.0
          ) AS mid,
          ctx.spread_max,
@@ -3705,12 +3705,12 @@ def _orderbook_context_cte(role: str = "local") -> str:
          e.actor_id,
          {t_end_ms} AS t_end_ms,
          COALESCE(
-           {state_mid},
            (
              {clean_bid} +
              {clean_ask}
            ) / 2.0,
-         0.0
+           {state_mid},
+           0.0
          ) AS mid,
          GREATEST({spread_max}, 1.0) AS spread_max
   FROM mm_events e
@@ -3846,7 +3846,6 @@ WHERE m.event_type = 'MarketEvent'
   AND m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND (m.payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
-  AND {best_bid} > 0.0
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT m.ts AS "time", (m.exchange || ' best_ask') AS metric,
@@ -3857,7 +3856,6 @@ WHERE m.event_type = 'MarketEvent'
   AND m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND (m.payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
-  AND {best_ask} > 0.0
   AND $__timeFilter(m.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' buy_vwap') AS metric,
@@ -3870,7 +3868,6 @@ WHERE e.topic = '${{diagnostics_topic}}'
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
   AND r.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND (e.payload #>> ARRAY['state','{buy_field}']) IS NOT NULL
-  AND {buy_vwap} > 0.0
   AND $__timeFilter(e.ts)
 UNION ALL
 SELECT e.ts AS "time", (r.exchange || ' sell_vwap') AS metric,
@@ -3883,7 +3880,6 @@ WHERE e.topic = '${{diagnostics_topic}}'
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
   AND r.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND (e.payload #>> ARRAY['state','{sell_field}']) IS NOT NULL
-  AND {sell_vwap} > 0.0
   AND $__timeFilter(e.ts)
 ORDER BY 1"""
 
