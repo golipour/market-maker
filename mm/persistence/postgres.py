@@ -142,6 +142,33 @@ ON mm_execution_facts (exchange_order_id, ts DESC) WHERE exchange_order_id IS NO
 CREATE INDEX IF NOT EXISTS mm_execution_facts_action_lifecycle_ts_idx
 ON mm_execution_facts (action, lifecycle, ts DESC);
 
+CREATE TABLE IF NOT EXISTS mm_target_order_facts (
+    event_id TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    actor_id TEXT,
+    mode TEXT,
+    venue_role TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    policy TEXT,
+    order_index INT NOT NULL,
+    side TEXT NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    qty DOUBLE PRECISION NOT NULL,
+    notional DOUBLE PRECISION NOT NULL,
+    order_type TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    PRIMARY KEY (event_id, row_key)
+);
+CREATE INDEX IF NOT EXISTS mm_target_order_facts_actor_venue_ts_idx
+ON mm_target_order_facts (actor_id, venue_role, exchange, symbol, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_target_order_facts_exchange_symbol_side_ts_idx
+ON mm_target_order_facts (exchange, symbol, side, ts DESC);
+
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -416,6 +443,24 @@ class PostgresEventWriter:
                             ON CONFLICT (event_id, row_key) DO NOTHING
                             """,
                             execution_rows,
+                        )
+                    target_order_rows = [
+                        row
+                        for envelope in batch
+                        for row in _target_order_fact_rows(envelope)
+                    ]
+                    if target_order_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_target_order_facts (
+                                event_id, row_key, run_id, topic, actor_id, mode,
+                                venue_role, exchange, symbol, timestamp_ms, ts, policy,
+                                order_index, side, price, qty, notional, order_type, tags
+                            ) VALUES %s
+                            ON CONFLICT (event_id, row_key) DO NOTHING
+                            """,
+                            target_order_rows,
                         )
                     latest_rows = [
                         (
@@ -923,6 +968,68 @@ def _execution_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
         )
 
     return []
+
+
+def _target_order_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
+    if envelope.event_type != "JointTargetBook" or not isinstance(envelope.payload, dict):
+        return []
+    payload = to_jsonable(envelope.payload)
+    if not isinstance(payload, dict):
+        return []
+
+    import psycopg2.extras
+
+    timestamp_ms = _int_or_none(payload.get("timestamp_ms")) or envelope.timestamp_ms
+    actor_id = _optional_str(payload.get("actor_id") or envelope.actor_id)
+    mode = _optional_str(payload.get("mode"))
+    rows: list[tuple[Any, ...]] = []
+    for venue_role, book_key in (("local", "local"), ("global", "global")):
+        book = payload.get(book_key)
+        if not isinstance(book, dict):
+            continue
+        exchange = _nonempty_str(book.get("exchange"))
+        symbol = _nonempty_str(book.get("symbol"))
+        if not exchange or not symbol:
+            continue
+        book_actor_id = _optional_str(book.get("actor_id")) or actor_id
+        policy = _optional_str(book.get("policy"))
+        orders = book.get("orders")
+        if not isinstance(orders, list):
+            continue
+        for index, order in enumerate(orders):
+            if not isinstance(order, dict):
+                continue
+            side = _optional_str(order.get("side"))
+            price = _float_or_none(order.get("price"))
+            qty = _float_or_none(order.get("qty"))
+            if side is None or price is None or qty is None:
+                continue
+            tags = order.get("tags")
+            tag_list = list(tags) if isinstance(tags, list) else []
+            rows.append(
+                (
+                    envelope.event_id,
+                    f"{venue_role}:{index}",
+                    envelope.run_id,
+                    envelope.topic,
+                    book_actor_id,
+                    mode,
+                    venue_role,
+                    _nonempty_str(order.get("exchange") or exchange),
+                    _nonempty_str(order.get("symbol") or symbol),
+                    timestamp_ms,
+                    _ts(timestamp_ms),
+                    policy,
+                    index,
+                    side,
+                    price,
+                    qty,
+                    price * qty,
+                    _optional_str(order.get("order_type")),
+                    psycopg2.extras.Json(tag_list, dumps=_strict_json_dumps),
+                )
+            )
+    return rows
 
 
 def _execution_snapshot_rows(

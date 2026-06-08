@@ -12,6 +12,7 @@ from mm.bus.memory import InMemoryBus
 from mm.core.events import envelope_event
 from mm.core.models.execution import Fill, Order
 from mm.core.models.private import OpenOrder
+from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.execution.order_manager import ExecutionSnapshot, PendingOrderChange
 from mm.persistence.compaction import compact_envelope_for_persistence
 from mm.persistence.postgres import PostgresEventWriter
@@ -165,6 +166,76 @@ def test_postgres_writer_materializes_action_stage_facts(monkeypatch: pytest.Mon
     assert rules[18].value == {"rules_min_notional": 1}
     assert rules[20] == 1
     assert rules[22]
+
+
+def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = envelope_event(
+        "strategy:target_books:mpc-controller",
+        JointTargetBook(
+            actor_id="mpc-controller",
+            mode="liquidity_sourcing",
+            local=VenueTargetBook(
+                exchange="nobitex",
+                symbol="BTC_IRT",
+                actor_id="mpc-controller",
+                policy="reconcile",
+                orders=(
+                    TargetOrder(
+                        "nobitex",
+                        "BTC_IRT",
+                        "buy",
+                        99.0,
+                        0.5,
+                        tags=("local", "risk_approved"),
+                    ),
+                ),
+            ),
+            global_=VenueTargetBook(
+                exchange="wallex",
+                symbol="BTC_IRT",
+                actor_id="mpc-controller",
+                policy="replace",
+                orders=(
+                    TargetOrder(
+                        "wallex",
+                        "BTC_IRT",
+                        "sell",
+                        101.0,
+                        0.25,
+                        tags=("global",),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    writer._write_batch([envelope])
+
+    rows_by_role = {row[6]: row for row in _target_order_fact_rows(fake)}
+    local = rows_by_role["local"]
+    global_ = rows_by_role["global"]
+    assert local[4] == "mpc-controller"
+    assert local[5] == "liquidity_sourcing"
+    assert local[7] == "nobitex"
+    assert local[8] == "BTC_IRT"
+    assert local[11] == "reconcile"
+    assert local[12] == 0
+    assert local[13] == "buy"
+    assert local[14] == 99.0
+    assert local[15] == 0.5
+    assert local[16] == 49.5
+    assert local[17] == "limit"
+    assert local[18].value == ["local", "risk_approved"]
+    assert global_[7] == "wallex"
+    assert global_[11] == "replace"
+    assert global_[13] == "sell"
+    assert global_[16] == 25.25
 
 
 def test_postgres_writer_materializes_execution_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -457,6 +528,16 @@ def _execution_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
         call
         for call in conn.execute_values_calls
         if "INSERT INTO mm_execution_facts" in call["sql"]
+    )
+    return call["rows"]
+
+
+def _target_order_fact_rows(fake: "_FakePsycopg2") -> list[tuple]:
+    conn = fake.connections[0]
+    call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_target_order_facts" in call["sql"]
     )
     return call["rows"]
 
