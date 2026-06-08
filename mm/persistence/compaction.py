@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from typing import Any, Literal
 
 from mm.core.events import EventEnvelope, to_jsonable
@@ -29,6 +31,8 @@ def compact_payload_for_persistence(event_type: str, payload: Any, *, sink: Pers
         return _compact_market_event_payload(value)
     if event_type == "JointStrategyFrame":
         return _compact_joint_frame_payload(value)
+    if event_type == "ControllerDiagnostics":
+        return _compact_controller_diagnostics_payload(value)
     if sink == "parquet" and event_type == "PrivateStateSnapshot":
         return _compact_private_snapshot_payload(value)
     return value
@@ -115,6 +119,79 @@ def _compact_private_snapshot_payload(payload: dict[str, Any]) -> dict[str, Any]
     out["balances"] = nonzero_balances
     out["balances_compacted"] = True
     return out
+
+
+def _compact_controller_diagnostics_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    pipeline = payload.get("action_pipeline")
+    if not isinstance(pipeline, dict):
+        return payload
+    compacted_pipeline: dict[str, Any] = {}
+    changed = False
+    for stage, stage_payload in pipeline.items():
+        if isinstance(stage_payload, dict):
+            compacted_stage, stage_changed = _compact_action_pipeline_stage(stage_payload)
+            compacted_pipeline[str(stage)] = compacted_stage
+            changed = changed or stage_changed
+        else:
+            compacted_pipeline[str(stage)] = stage_payload
+    if not changed:
+        return payload
+    out = dict(payload)
+    out["action_pipeline"] = compacted_pipeline
+    out["action_pipeline_compacted"] = True
+    return out
+
+
+def _compact_action_pipeline_stage(stage: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    out = dict(stage)
+    changed = False
+    orders = out.get("orders")
+    if isinstance(orders, list) and orders:
+        out.setdefault("buy_count", _count_side(orders, "buy"))
+        out.setdefault("sell_count", _count_side(orders, "sell"))
+        out["orders_digest"] = _stable_digest(orders)
+        out["orders_sample"] = [_sample_order(order) for order in orders[:2] if isinstance(order, dict)]
+        out["orders_compacted_count"] = len(orders)
+        out["orders_compacted"] = True
+        out["orders"] = []
+        changed = True
+    rejections = out.get("rejections")
+    if isinstance(rejections, list) and rejections:
+        out["rejections_digest"] = _stable_digest(rejections)
+        out["rejections_sample"] = [
+            _sample_rejection(rejection)
+            for rejection in rejections[:3]
+            if isinstance(rejection, dict)
+        ]
+        out["rejections_compacted_count"] = len(rejections)
+        out["rejections_compacted"] = True
+        out["rejections"] = []
+        changed = True
+    return out, changed
+
+
+def _count_side(rows: list[Any], side: str) -> int:
+    return sum(
+        1
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("side", "")).lower().strip() == side
+    )
+
+
+def _sample_order(order: dict[str, Any]) -> dict[str, Any]:
+    keys = ("exchange", "symbol", "side", "price", "qty", "notional", "order_type")
+    return {key: order.get(key) for key in keys if key in order}
+
+
+def _sample_rejection(rejection: dict[str, Any]) -> dict[str, Any]:
+    keys = ("exchange", "symbol", "side", "reason", "price", "qty", "notional")
+    return {key: rejection.get(key) for key in keys if key in rejection}
+
+
+def _stable_digest(value: Any) -> str:
+    raw = json.dumps(to_jsonable(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _balance_payload_is_zero(row: Any) -> bool:

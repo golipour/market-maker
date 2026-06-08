@@ -482,9 +482,10 @@ Raw market-data topics are not in the default persistence topic list, but the ob
 `PostgresEventWriter` subscribes to configured topics and writes compacted event envelopes to:
 
 - `mm_events`: append-only event table,
+- `mm_market_facts`: typed market interval facts for fast dashboards and analytics,
 - `mm_latest_state`: latest state table for private and execution state.
 
-It compacts persisted market events by dropping raw trade lists after interval summaries are present, and compacts persisted joint frames by replacing the embedded ledger with a summary plus `ledger:snapshot` reference. Private snapshots remain full in Postgres so `mm_latest_state` can preserve current-state truth. It creates indexes on run/topic/timestamp, exchange/symbol/timestamp, topic/type/timestamp, and actor/timestamp. Batches are written in a worker thread through a reusable psycopg2 connection. Failed writes drop the connection, retry with bounded backoff, and spill exhausted batches to local JSONL files under `persistence_spool/postgres`.
+It compacts persisted market events by dropping raw trade lists after interval summaries are present, compacts persisted joint frames by replacing the embedded ledger with a summary plus `ledger:snapshot` reference, and compacts persisted controller-diagnostics action-pipeline order/rejection arrays into counts, side counts, digests, and small samples. Private snapshots remain full in Postgres so `mm_latest_state` can preserve current-state truth. It also materializes every `MarketEvent` into `mm_market_facts` with typed columns for top-of-book prices and quantities, mid, spread, microprice, VWAP, interval volumes, imbalance, trade count, level counts, and event timestamps. It creates indexes on run/topic/timestamp, exchange/symbol/timestamp, topic/type/timestamp, actor/timestamp, and market-fact exchange/symbol/timestamp. Batches are written in a worker thread through a reusable psycopg2 connection. Failed writes drop the connection, retry with bounded backoff, and spill exhausted batches to local JSONL files under `persistence_spool/postgres`.
 
 `ParquetEventWriter` writes partitioned Parquet rows under:
 
@@ -492,7 +493,7 @@ It compacts persisted market events by dropping raw trade lists after interval s
 event_date=<yyyy-mm-dd>/exchange=<exchange>/symbol=<symbol>/event_type=<event_type>/hour=<hh>/part-<timestamp>-<uuid>.parquet
 ```
 
-Each flush writes immutable part files; live writes do not read or rewrite existing Parquet files. Parquet rows retain one compact `envelope_json` plus metadata columns. The writer does not store a separate `payload_json` copy. For archival storage, it compacts `MarketEvent.trades` after interval features are already present, compacts joint-frame embedded ledgers to summaries/references, and removes zero private balances while preserving counts and compaction flags. This makes Parquet suitable for compact replay and offline analysis of summarized facts, not exact raw trade-list recovery.
+Each flush writes immutable part files; live writes do not read or rewrite existing Parquet files. Parquet rows retain one compact `envelope_json` plus metadata columns. The writer does not store a separate `payload_json` copy. For archival storage, it compacts `MarketEvent.trades` after interval features are already present, compacts joint-frame embedded ledgers to summaries/references, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts and compaction flags. This makes Parquet suitable for compact replay and offline analysis of summarized facts, not exact raw trade-list recovery.
 
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 

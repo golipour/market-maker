@@ -125,3 +125,112 @@ def test_compaction_summarizes_joint_frame_ledger_with_replay_reference() -> Non
     assert "balances" not in compacted.payload["ledger"]["local"]
     assert "live_orders" not in compacted.payload["ledger"]["local"]
     assert json_size_bytes(compacted.payload) < json_size_bytes(envelope.payload)
+
+
+def test_compaction_summarizes_controller_diagnostics_action_pipeline_orders() -> None:
+    base_order = {
+        "exchange": "nobitex",
+        "symbol": "BTC_IRT",
+        "side": "buy",
+        "price": 100.0,
+        "qty": 0.5,
+        "notional": 50.0,
+        "order_type": "limit",
+        "client_order_id": "c1",
+        "strategy_trace": {
+            "level_index": 0,
+            "inventory_skew": 0.125,
+            "forecast_delta": 1.25,
+            "optimizer_objective": "spread_capture_minus_inventory_penalty",
+            "candidate_source": "joint_mpc_target_book",
+        },
+        "metadata": {
+            "local_reference_price": 100.0,
+            "global_reference_price": 100.2,
+            "normalization": "quote_notional",
+        },
+    }
+    orders = [
+        {
+            **base_order,
+            "client_order_id": f"c{i}",
+            "price": 100.0 + i,
+            "qty": 0.5 + (i * 0.01),
+            "notional": (100.0 + i) * (0.5 + (i * 0.01)),
+            "strategy_trace": {
+                **base_order["strategy_trace"],
+                "level_index": i,
+            },
+        }
+        for i in range(10)
+    ]
+    rejection = {
+        **orders[0],
+        "reason": "rules_min_notional",
+        "details": {
+            "min_notional": 100.0,
+            "available_quote": 42.0,
+            "rule_path": "exchange_rules.nobitex.BTC_IRT.min_notional",
+        },
+    }
+    payload = {
+        "type": "ControllerDiagnostics",
+        "actor_id": "mpc-controller",
+        "exchange": "nobitex",
+        "symbol": "BTC_IRT",
+        "t_end_ms": 2000,
+        "created_at_ms": 2000,
+        "action_pipeline": {
+            "target_book": {
+                "order_count": 10,
+                "buy_qty": 5.0,
+                "sell_qty": 0.0,
+                "buy_notional": 500.0,
+                "sell_notional": 0.0,
+                "orders": orders,
+                "rejection_counts": {},
+                "rejections": [],
+            },
+            "rules_valid": {
+                "order_count": 6,
+                "buy_qty": 3.0,
+                "sell_qty": 0.0,
+                "buy_notional": 300.0,
+                "sell_notional": 0.0,
+                "orders": orders[:6],
+                "rejection_counts": {"rules_min_notional": 4},
+                "rejections": [
+                    {
+                        **rejection,
+                        "client_order_id": f"rejected-{i}",
+                        "details": {
+                            **rejection["details"],
+                            "candidate_index": i,
+                        },
+                    }
+                    for i in range(4)
+                ],
+            },
+        },
+    }
+    envelope = envelope_event("strategy:diagnostics:mpc-controller", payload)
+
+    compacted = compact_envelope_for_persistence(envelope, sink="postgres")
+
+    target = compacted.payload["action_pipeline"]["target_book"]
+    rules = compacted.payload["action_pipeline"]["rules_valid"]
+    assert compacted.payload["action_pipeline_compacted"] is True
+    assert target["order_count"] == 10
+    assert target["buy_qty"] == 5.0
+    assert target["orders"] == []
+    assert target["orders_compacted_count"] == 10
+    assert target["orders_compacted"] is True
+    assert target["buy_count"] == 10
+    assert target["orders_digest"]
+    assert target["orders_sample"][0]["price"] == 100.0
+    assert "client_order_id" not in target["orders_sample"][0]
+    assert rules["rejection_counts"] == {"rules_min_notional": 4}
+    assert rules["rejections"] == []
+    assert rules["rejections_compacted_count"] == 4
+    assert rules["rejections_sample"][0]["reason"] == "rules_min_notional"
+    assert json_size_bytes(compacted.payload) < json_size_bytes(envelope.payload)

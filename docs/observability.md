@@ -136,12 +136,13 @@ It currently emits metrics and logs for:
 `PostgresEventWriter` stores envelopes in:
 
 - `mm_events`: append-only event truth
+- `mm_market_facts`: typed market interval facts
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available and replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
 
-`ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
+`ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,
@@ -610,12 +611,16 @@ Panels:
 - market ingestion errors by exchange and symbol
 - raw latest `MarketEvent` table for current variables
 
-Useful Postgres fields:
+Preferred Postgres table: `mm_market_facts`.
 
-- `payload->>'buy_volume'`
-- `payload->>'sell_volume'`
-- `payload->'orderbook'->'bids'->0->>'price'`
-- `payload->'orderbook'->'asks'->0->>'price'`
+Useful typed columns:
+
+- `buy_volume`, `sell_volume`, `total_trade_volume`
+- `best_bid`, `best_bid_qty`, `best_ask`, `best_ask_qty`
+- `mid`, `spread`, `microprice`, `vwap`, `imbalance`
+- `trade_count`, `bid_depth_levels`, `ask_depth_levels`
+
+`mm_events` remains the source for full replay/debug payloads.
 
 ### 02 Frame and controller health
 
@@ -708,10 +713,12 @@ Panels:
   cancels, unchanged existing orders, and blocked reasons
 
 Low-level planner fields such as `planned_place`, `planned_cancel`, `kept`, and
-`rules_valid` are still present in `ControllerDiagnostics.action_pipeline` for
-debugging, but the v2 dashboard intentionally does not plot them as the primary
-funnel.
-- sample rejected orders table when included in diagnostics
+`rules_valid` are still present in live `ControllerDiagnostics.action_pipeline`
+for debugging, but the v2 dashboard intentionally does not plot them as the
+primary funnel. Persisted diagnostics keep the stage counts, side counts,
+digests, and small samples instead of storing full repeated order/rejection
+arrays.
+- sample rejected orders table when included in live diagnostics
 
 Existing dashboards:
 

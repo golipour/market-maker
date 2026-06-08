@@ -39,6 +39,40 @@ CREATE INDEX IF NOT EXISTS mm_events_exchange_symbol_ts_idx ON mm_events (exchan
 CREATE INDEX IF NOT EXISTS mm_events_topic_type_ts_idx ON mm_events (topic, event_type, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_events_actor_ts_idx ON mm_events (actor_id, ts DESC) WHERE actor_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS mm_market_facts (
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    interval_ms BIGINT,
+    t_start_ms BIGINT,
+    t_end_ms BIGINT NOT NULL,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    orderbook_timestamp_ms BIGINT,
+    best_bid DOUBLE PRECISION,
+    best_bid_qty DOUBLE PRECISION,
+    best_ask DOUBLE PRECISION,
+    best_ask_qty DOUBLE PRECISION,
+    mid DOUBLE PRECISION,
+    spread DOUBLE PRECISION,
+    microprice DOUBLE PRECISION,
+    vwap DOUBLE PRECISION,
+    buy_volume DOUBLE PRECISION,
+    sell_volume DOUBLE PRECISION,
+    total_trade_volume DOUBLE PRECISION,
+    imbalance DOUBLE PRECISION,
+    trade_count INT,
+    bid_depth_levels INT,
+    ask_depth_levels INT,
+    orderbook_is_snapshot BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS mm_market_facts_exchange_symbol_ts_idx
+ON mm_market_facts (exchange, symbol, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_market_facts_run_exchange_symbol_ts_idx
+ON mm_market_facts (run_id, exchange, symbol, ts DESC);
+
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -253,6 +287,27 @@ class PostgresEventWriter:
                         """,
                         rows,
                     )
+                    market_rows = [
+                        row
+                        for envelope in batch
+                        if (row := _market_fact_row(envelope)) is not None
+                    ]
+                    if market_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_market_facts (
+                                event_id, run_id, topic, exchange, symbol, interval_ms,
+                                t_start_ms, t_end_ms, timestamp_ms, ts, orderbook_timestamp_ms,
+                                best_bid, best_bid_qty, best_ask, best_ask_qty, mid, spread,
+                                microprice, vwap, buy_volume, sell_volume, total_trade_volume,
+                                imbalance, trade_count, bid_depth_levels, ask_depth_levels,
+                                orderbook_is_snapshot
+                            ) VALUES %s
+                            ON CONFLICT (event_id) DO NOTHING
+                            """,
+                            market_rows,
+                        )
                     latest_rows = [
                         (
                             _latest_key(envelope),
@@ -469,6 +524,139 @@ def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
         psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
         psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
     )
+
+
+def _market_fact_row(envelope: EventEnvelope) -> tuple[Any, ...] | None:
+    if envelope.event_type != "MarketEvent" or not isinstance(envelope.payload, dict):
+        return None
+    payload = to_jsonable(envelope.payload)
+    if not isinstance(payload, dict):
+        return None
+    exchange = _nonempty_str(payload.get("exchange") or envelope.exchange)
+    symbol = _nonempty_str(payload.get("symbol") or envelope.symbol)
+    t_end_ms = _int_or_none(payload.get("t_end_ms"))
+    if not exchange or not symbol or t_end_ms is None:
+        return None
+
+    orderbook = payload.get("orderbook")
+    bids = _levels(orderbook, "bids")
+    asks = _levels(orderbook, "asks")
+    best_bid = bids[0][0] if bids else None
+    best_bid_qty = bids[0][1] if bids else None
+    best_ask = asks[0][0] if asks else None
+    best_ask_qty = asks[0][1] if asks else None
+    mid = (
+        (best_bid + best_ask) / 2.0
+        if best_bid is not None and best_ask is not None
+        else None
+    )
+    spread = (
+        best_ask - best_bid
+        if best_bid is not None and best_ask is not None
+        else None
+    )
+    buy_volume = _float_or_none(payload.get("buy_volume"))
+    sell_volume = _float_or_none(payload.get("sell_volume"))
+    total_trade_volume = (
+        (buy_volume or 0.0) + (sell_volume or 0.0)
+        if buy_volume is not None or sell_volume is not None
+        else None
+    )
+    timestamp_ms = _int_or_none(payload.get("t_end_ms")) or envelope.timestamp_ms
+    return (
+        envelope.event_id,
+        envelope.run_id,
+        envelope.topic,
+        exchange,
+        symbol,
+        _int_or_none(payload.get("interval_ms")),
+        _int_or_none(payload.get("t_start_ms")),
+        t_end_ms,
+        timestamp_ms,
+        _ts(timestamp_ms),
+        _orderbook_int(orderbook, "timestamp_ms"),
+        best_bid,
+        best_bid_qty,
+        best_ask,
+        best_ask_qty,
+        mid,
+        spread,
+        _float_or_none(payload.get("microprice")),
+        _float_or_none(payload.get("vwap")),
+        buy_volume,
+        sell_volume,
+        total_trade_volume,
+        _float_or_none(payload.get("imbalance")),
+        _int_or_none(payload.get("trade_count")) or _list_len(payload.get("trades")),
+        len(bids),
+        len(asks),
+        _orderbook_bool(orderbook, "is_snapshot"),
+    )
+
+
+def _nonempty_str(value: Any) -> str:
+    out = str(value or "").strip()
+    return out
+
+
+def _levels(orderbook: Any, side: str) -> list[tuple[float, float]]:
+    if not isinstance(orderbook, dict):
+        return []
+    raw = orderbook.get(side)
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[float, float]] = []
+    for level in raw:
+        price = qty = None
+        if isinstance(level, dict):
+            price = _float_or_none(level.get("price"))
+            qty = _float_or_none(level.get("qty"))
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            price = _float_or_none(level[0])
+            qty = _float_or_none(level[1])
+        if price is not None and qty is not None:
+            out.append((price, qty))
+    return out
+
+
+def _orderbook_int(orderbook: Any, key: str) -> int | None:
+    if not isinstance(orderbook, dict):
+        return None
+    return _int_or_none(orderbook.get(key))
+
+
+def _orderbook_bool(orderbook: Any, key: str) -> bool | None:
+    if not isinstance(orderbook, dict):
+        return None
+    value = orderbook.get(key)
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _list_len(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if out != out or out in (float("inf"), float("-inf")):
+        return None
+    return out
 
 
 def _ts(timestamp_ms: int) -> datetime:

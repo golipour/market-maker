@@ -82,7 +82,9 @@ A single private REST poll can publish:
 - execution state snapshots,
 - diagnostics that embed action/risk/execution stage orders.
 
-REST private polling now publishes one authoritative private snapshot per poll instead of fanning the same snapshot out again as per-balance and per-open-order events. Incremental balance/open-order topics remain for stream-style adapters and real deltas. Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions and diagnostics still repeat orders, target books, model parameters, optimizer action snapshots, and stage reports.
+REST private polling now publishes one authoritative private snapshot per poll instead of fanning the same snapshot out again as per-balance and per-open-order events. Incremental balance/open-order topics remain for stream-style adapters and real deltas. Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions, target books, model parameters, optimizer action snapshots, and stage reports still repeat related decision context in multiple durable events.
+
+Persisted controller diagnostics now also compact repeated `action_pipeline` order and rejection arrays into counts, side counts, stable digests, and small samples. This keeps live in-process diagnostics rich for runtime debugging while preventing every durable `ControllerDiagnostics` row from storing the same stage-order payloads already represented by target-book, decision, risk, and execution events. Remaining durable duplication is concentrated in strategy decisions, target-book events, optimizer/model diagnostics, full orderbook snapshots, and opaque JSON payload storage.
 
 Event serialization also recursively converts rich Python objects through `to_jsonable()`, including dataclasses, msgspec structs, dicts, lists, NumPy scalars, and arrays. That keeps publication flexible, but it means deep object graphs are repeatedly normalized into JSON-compatible structures on bus and persistence paths.
 
@@ -196,9 +198,11 @@ Severity: Medium
 
 Most Grafana panels query `mm_events.payload` with JSONB extraction, lateral JSON expansion, regex numeric casts, and generated time buckets.
 
+Postgres persistence now creates `mm_market_facts` as the first typed side table. It materializes `MarketEvent` interval data into normal columns for top-of-book, mid, spread, microprice, VWAP, interval flow, imbalance, trade count, depth level counts, and timestamps while keeping `mm_events` as the replay/debug event log.
+
 There are also two dashboard generations: older `Market Maker` dashboards and a newer `MM Observability v2` set. That breadth is helpful for local debugging, but can become dashboard sprawl without a stronger fleet/drilldown hierarchy and shared template variables.
 
-Impact: This is flexible but expensive. As event volume grows, dashboards will become slow unless retention is short or indexes/materialized views are added. Operators may also have too many narrowly focused dashboards to navigate during incidents.
+Impact: The market-data dashboard path can now avoid repeated JSONB extraction for common interval panels. The remaining expensive paths are controller/action pipeline, target-book, execution, and model diagnostics panels that still extract most facts from JSONB. Operators may also have too many narrowly focused dashboards to navigate during incidents.
 
 Recommendation:
 
@@ -375,10 +379,10 @@ Current event ownership is mostly clear:
 
 The main redundancy patterns are:
 
-- private snapshots plus balance/open-order event fan-out,
+- private snapshots plus incremental balance/open-order event topics for stream-style adapters,
 - ledger snapshots derived from private snapshots,
 - execution snapshots derived from private/open-order state,
-- strategy decisions plus controller diagnostics plus target-book events repeating order information,
+- strategy decisions, target-book events, and remaining diagnostics repeating target/order intent,
 - market events embedding full books and trades every interval,
 - dashboards recomputing derived metrics from JSON payloads.
 
@@ -401,24 +405,21 @@ Priority recommendations:
 2. Use payload and envelope byte metrics to rank high-cost topics and event types.
 3. Store large orderbook/trade data separately from controller events.
 4. Replace repeated snapshots with deltas plus periodic snapshots.
-5. Materialize latest state and dashboard facts into typed tables.
-6. Use immutable Parquet part files.
-7. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
-8. Keep full diagnostics configurable and sampled in production.
-9. Add event ids and references between frame, decision, target book, risk result, and execution report.
-10. Replace opaque Parquet JSON payloads with typed columns for high-value event types.
-11. Add replay contracts that verify the reduced event model can reconstruct required state.
+5. Continue materializing dashboard facts into typed tables; `mm_market_facts` now covers market intervals.
+6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
+7. Keep full diagnostics configurable and sampled in production.
+8. Add event ids and references between frame, decision, target book, risk result, and execution report.
+9. Replace opaque Parquet JSON payloads with typed columns for high-value event types.
+10. Add replay contracts that verify the reduced event model can reconstruct required state.
 
 ## Prioritized Roadmap
 
 ### Priority 1: Scalability
 
 - Add per-topic subscriber queue depth and lag metrics.
-- Convert Parquet writer to immutable part files.
 - Replace opaque Parquet JSON payloads with typed columns for high-value event types.
 - Evaluate a time-series database alongside SQL for high-volume market data, execution latency, and low-cardinality business metrics.
-- Reuse Postgres connections or use a pool.
-- Materialize common dashboard facts out of JSONB.
+- Materialize controller/action pipeline, target-book, and execution facts out of JSONB.
 - Add retention and compaction policies.
 
 ### Priority 2: Engine And Execution Quality
