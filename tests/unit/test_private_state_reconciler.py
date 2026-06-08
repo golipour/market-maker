@@ -479,6 +479,8 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
     bus = InMemoryBus()
     reconciler = PrivateStateReconciler("nobitex", adapter, bus)
     snapshots = bus.subscribe_queue("private:state:nobitex:snapshot")
+    balances = bus.subscribe_queue("private:state:nobitex:balances")
+    open_orders = bus.subscribe_queue("private:state:nobitex:open_orders")
 
     try:
         await reconciler.start()
@@ -487,6 +489,10 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
         second = await asyncio.wait_for(snapshots.get(), timeout=1.0)
         assert second.balances["BTC"].free == pytest.approx(0.25)
         assert adapter.snapshot_calls >= 2
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(balances.get(), timeout=0.1)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(open_orders.get(), timeout=0.1)
     finally:
         await reconciler.stop()
 

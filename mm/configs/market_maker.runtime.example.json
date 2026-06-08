@@ -45,7 +45,7 @@
         "_comment": "A market-data source can be used as a liquidity source or as a reference exchange by any bot.",
         "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
-        "depth_limit": 1000,
+        "depth_limit": 200,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
@@ -68,7 +68,7 @@
       "market_data": {
         "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
-        "depth_limit": 100,
+        "depth_limit": 200,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },
@@ -90,7 +90,7 @@
       "market_data": {
         "_options": {"mode": ["rest", "websocket"]},
         "mode": "rest",
-        "depth_limit": 100,
+        "depth_limit": 200,
         "trades_limit": 200,
         "poll_interval_ms": 1000
       },

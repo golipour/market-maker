@@ -49,6 +49,14 @@ def _buy_order(order_id: str = "o1", *, qty: float = 0.5, price: float = 100.0) 
     )
 
 
+async def _next_venue_payload_with_order(queue: asyncio.Queue, order_id: str) -> dict:
+    for _ in range(6):
+        payload = await asyncio.wait_for(queue.get(), timeout=1.0)
+        if order_id in payload.get("live_orders", {}):
+            return payload
+    raise AssertionError(f"ledger snapshot with order {order_id!r} was not published")
+
+
 def test_venue_ledger_state_machine_matches_private_store_snapshot() -> None:
     spec = _nobitex_spec()
     machine = VenueLedgerStateMachine("nobitex", spec)
@@ -249,7 +257,7 @@ async def test_portfolio_ledger_service_publishes_snapshots_from_private_topics(
         await reconciler.start()
         await adapter.open_orders.put(_buy_order())
 
-        venue_payload = await asyncio.wait_for(venue_queue.get(), timeout=1.0)
+        venue_payload = await _next_venue_payload_with_order(venue_queue, "o1")
         joint_payload = await asyncio.wait_for(joint_queue.get(), timeout=1.0)
 
         assert venue_payload["exchange"] == "nobitex"
@@ -284,7 +292,7 @@ async def test_portfolio_ledger_service_tracks_api_key_private_key_credentials(
         await reconciler.start()
         await adapter.open_orders.put(_buy_order())
 
-        venue_payload = await asyncio.wait_for(venue_queue.get(), timeout=1.0)
+        venue_payload = await _next_venue_payload_with_order(venue_queue, "o1")
         joint_payload = await asyncio.wait_for(joint_queue.get(), timeout=1.0)
 
         assert venue_payload["exchange"] == "nobitex"

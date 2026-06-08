@@ -146,7 +146,7 @@ All strategy-facing prices are quote-per-base floats and all quantities are base
 `PrivateStateReconciler` owns authenticated private state ingestion. It:
 
 - obtains an initial private snapshot,
-- for REST polling adapters, runs a unified snapshot loop and publishes snapshot, balance, open-order, and optional fill events,
+- for REST polling adapters, runs a unified snapshot loop and publishes one authoritative snapshot per poll plus optional fill events,
 - for incremental adapters, listens to balance, open-order, order-update, and fill streams,
 - publishes all private events to topics under `private:state:<exchange>:...`.
 
@@ -442,8 +442,8 @@ Representative runtime topics:
 - `market:errors:<exchange>:<symbol>`
 - `market:events:<exchange>:<symbol>:<interval_ms>`
 - `private:state:<exchange>:snapshot`
-- `private:state:<exchange>:balances`
-- `private:state:<exchange>:open_orders`
+- `private:state:<exchange>:balances` for incremental adapters
+- `private:state:<exchange>:open_orders` for incremental adapters
 - `private:state:<exchange>:order_updates`
 - `private:state:<exchange>:fills`
 - `private:state:<exchange>:errors`

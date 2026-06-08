@@ -77,14 +77,12 @@ Severity: High
 A single private REST poll can publish:
 
 - a full private snapshot,
-- each balance,
-- each open order,
 - a ledger venue snapshot,
 - a joint ledger snapshot,
 - execution state snapshots,
 - diagnostics that embed action/risk/execution stage orders.
 
-Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions and diagnostics still repeat orders, target books, model parameters, optimizer action snapshots, and stage reports.
+REST private polling now publishes one authoritative private snapshot per poll instead of fanning the same snapshot out again as per-balance and per-open-order events. Incremental balance/open-order topics remain for stream-style adapters and real deltas. Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions and diagnostics still repeat orders, target books, model parameters, optimizer action snapshots, and stage reports.
 
 Event serialization also recursively converts rich Python objects through `to_jsonable()`, including dataclasses, msgspec structs, dicts, lists, NumPy scalars, and arrays. That keeps publication flexible, but it means deep object graphs are repeatedly normalized into JSON-compatible structures on bus and persistence paths.
 

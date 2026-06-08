@@ -104,10 +104,6 @@ class PrivateStateReconciler:
                             await self._publish(f"private:state:{self.exchange}:fills", fill)
                     merged = self.store.apply_snapshot(snap_in)
                     await self._publish_snapshot(merged)
-                    for balance in snap_in.balances.values():
-                        await self._publish(f"private:state:{self.exchange}:balances", balance)
-                    for open_order in snap_in.open_orders.values():
-                        await self._publish(f"private:state:{self.exchange}:open_orders", open_order)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

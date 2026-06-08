@@ -146,6 +146,9 @@ Before writing `mm_events`, Postgres persistence compacts market-event trade lis
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,
 execution events, execution state, and private state for local/global venues.
+For REST private polling, the durable private-state path is the full snapshot;
+per-balance and per-open-order topics are reserved for incremental adapters and
+real deltas.
 
 At larger scale, keep Postgres for event truth/latest state and consider a time-series database or typed columnar store for high-volume market data, execution latency, and dashboard facts.
 
