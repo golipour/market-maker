@@ -84,17 +84,17 @@ A single private REST poll can publish:
 - execution state snapshots,
 - diagnostics that embed action/risk/execution stage orders.
 
-Market events embed the full orderbook snapshot and all interval trades. Strategy decisions and diagnostics also repeat orders, target books, model parameters, optimizer action snapshots, and stage reports.
+Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions and diagnostics still repeat orders, target books, model parameters, optimizer action snapshots, and stage reports.
 
 Event serialization also recursively converts rich Python objects through `to_jsonable()`, including dataclasses, msgspec structs, dicts, lists, NumPy scalars, and arrays. That keeps publication flexible, but it means deep object graphs are repeatedly normalized into JSON-compatible structures on bus and persistence paths.
 
-Impact: Postgres and Parquet storage growth will be dominated by repeated JSON payloads. Dashboard queries over `mm_events.payload` will slow down as data grows. Bandwidth and memory pressure increase with every new subscriber because in-memory bus fan-out copies large event objects into queues.
+Impact: Postgres and Parquet storage growth is lower after persistence compaction, but will still be dominated by repeated JSON payloads as volume grows. Dashboard queries over `mm_events.payload` will slow down as data grows. Bandwidth and memory pressure increase with every new subscriber because in-memory bus fan-out copies large event objects into queues.
 
 Recommendation:
 
 - Split event classes into facts, snapshots, and diagnostics.
 - Persist large snapshots at lower frequency or only by explicit topic selection.
-- Store orderbooks and trades in normalized append tables or compressed columnar partitions.
+- Store orderbooks and raw trades in normalized append tables, compressed columnar partitions, or a dedicated time-series store when raw market history is needed.
 - Store diagnostics in typed tables for common panels.
 - Use references for repeated structures, for example `frame_id`, `decision_id`, `target_book_id`.
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
@@ -407,7 +407,7 @@ Priority recommendations:
 4. Replace repeated snapshots with deltas plus periodic snapshots.
 5. Materialize latest state and dashboard facts into typed tables.
 6. Use immutable Parquet part files.
-7. Move high-frequency operational metrics to Prometheus or a dedicated metrics backend instead of Postgres JSONB.
+7. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
 8. Keep full diagnostics configurable and sampled in production.
 9. Add event ids and references between frame, decision, target book, risk result, and execution report.
 10. Replace opaque Parquet JSON payloads with typed columns for high-value event types.
@@ -420,6 +420,7 @@ Priority recommendations:
 - Add per-topic subscriber queue depth and lag metrics.
 - Convert Parquet writer to immutable part files.
 - Replace opaque Parquet JSON payloads with typed columns for high-value event types.
+- Evaluate a time-series database alongside SQL for high-volume market data, execution latency, and low-cardinality business metrics.
 - Reuse Postgres connections or use a pool.
 - Materialize common dashboard facts out of JSONB.
 - Add retention and compaction policies.

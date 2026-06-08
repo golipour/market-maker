@@ -139,11 +139,15 @@ It currently emits metrics and logs for:
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-`ParquetEventWriter` stores compact archival envelopes. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, and removes zero private balances while preserving counts.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available and replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth.
+
+`ParquetEventWriter` stores compact archival envelopes. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, and removes zero private balances while preserving counts.
 
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,
 execution events, execution state, and private state for local/global venues.
+
+At larger scale, keep Postgres for event truth/latest state and consider a time-series database or typed columnar store for high-volume market data, execution latency, and dashboard facts.
 
 ### Controller diagnostics
 
