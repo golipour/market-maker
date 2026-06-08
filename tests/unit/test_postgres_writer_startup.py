@@ -10,6 +10,7 @@ import pytest
 
 from mm.bus.memory import InMemoryBus
 from mm.core.events import envelope_event
+from mm.persistence.compaction import compact_envelope_for_persistence
 from mm.persistence.postgres import PostgresEventWriter
 
 
@@ -121,6 +122,48 @@ def test_postgres_writer_materializes_market_facts(monkeypatch: pytest.MonkeyPat
     assert row[26] is True
 
 
+def test_postgres_writer_materializes_action_stage_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = compact_envelope_for_persistence(_diagnostics_envelope(), sink="postgres")
+
+    writer._write_batch([envelope])
+
+    conn = fake.connections[0]
+    action_call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_action_stage_facts" in call["sql"]
+    )
+    rows_by_stage = {row[1]: row for row in action_call["rows"]}
+    target = rows_by_stage["target_book"]
+    rules = rows_by_stage["rules_valid"]
+    assert target[4] == "mpc-controller"
+    assert target[5] == "nobitex"
+    assert target[6] == "BTC_IRT"
+    assert target[9] == 2_000
+    assert target[10] == 2
+    assert target[11] == 1
+    assert target[12] == 1
+    assert target[13] == 0.5
+    assert target[14] == 0.4
+    assert target[15] == 50.0
+    assert target[16] == 44.0
+    assert target[17] == 0
+    assert target[18].value == {}
+    assert target[19] == 2
+    assert target[21]
+    assert rules[10] == 1
+    assert rules[17] == 1
+    assert rules[18].value == {"rules_min_notional": 1}
+    assert rules[20] == 1
+    assert rules[22]
+
+
 def test_postgres_writer_spools_batch_after_retries_exhausted(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -196,6 +239,69 @@ def _market_envelope(t_end_ms: int):
             "vwap": 100.5,
             "imbalance": -0.1,
             "microprice": 100.25,
+        },
+    )
+
+
+def _diagnostics_envelope():
+    orders = [
+        {
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "side": "buy",
+            "price": 100.0,
+            "qty": 0.5,
+            "notional": 50.0,
+            "order_type": "limit",
+            "client_order_id": "buy-1",
+        },
+        {
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "side": "sell",
+            "price": 110.0,
+            "qty": 0.4,
+            "notional": 44.0,
+            "order_type": "limit",
+            "client_order_id": "sell-1",
+        },
+    ]
+    rejection = {
+        **orders[0],
+        "reason": "rules_min_notional",
+        "details": {"min_notional": 100.0},
+    }
+    return envelope_event(
+        "strategy:diagnostics:mpc-controller",
+        {
+            "type": "ControllerDiagnostics",
+            "actor_id": "mpc-controller",
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "t_end_ms": 2_000,
+            "created_at_ms": 2_000,
+            "action_pipeline": {
+                "target_book": {
+                    "order_count": 2,
+                    "buy_qty": 0.5,
+                    "sell_qty": 0.4,
+                    "buy_notional": 50.0,
+                    "sell_notional": 44.0,
+                    "orders": orders,
+                    "rejection_counts": {},
+                    "rejections": [],
+                },
+                "rules_valid": {
+                    "order_count": 1,
+                    "buy_qty": 0.0,
+                    "sell_qty": 0.4,
+                    "buy_notional": 0.0,
+                    "sell_notional": 44.0,
+                    "orders": orders[1:],
+                    "rejection_counts": {"rules_min_notional": 1},
+                    "rejections": [rejection],
+                },
+            },
         },
     )
 

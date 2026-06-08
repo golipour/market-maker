@@ -137,10 +137,11 @@ It currently emits metrics and logs for:
 
 - `mm_events`: append-only event truth
 - `mm_market_facts`: typed market interval facts
+- `mm_action_stage_facts`: typed controller action-stage facts
 - `mm_latest_state`: latest state snapshots by key
 - `admin_audit_log`: administrative audit records
 
-Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
+Before writing `mm_events`, Postgres persistence compacts market-event trade lists after interval summaries are available, replaces persisted joint-frame embedded ledgers with summaries plus `ledger:snapshot` references, and stores controller-diagnostics action-pipeline order/rejection arrays as counts, side counts, digests, and small samples. It also writes each `MarketEvent` to `mm_market_facts` with typed columns for best bid/ask, depth, mid, spread, microprice, VWAP, interval flow, imbalance, and trade count. Each `ControllerDiagnostics.action_pipeline` stage is written to `mm_action_stage_facts` with typed columns for order counts, side counts, quantities, notionals, rejection counts, compacted counts, and digests. Private snapshots stay full in Postgres so `mm_latest_state` can preserve current-state truth. The writer reuses one psycopg2 connection across batches, reconnects after failures, retries failed batches, and spills exhausted batches to `persistence_spool/postgres`.
 
 `ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy, compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
@@ -718,7 +719,16 @@ for debugging, but the v2 dashboard intentionally does not plot them as the
 primary funnel. Persisted diagnostics keep the stage counts, side counts,
 digests, and small samples instead of storing full repeated order/rejection
 arrays.
-- sample rejected orders table when included in live diagnostics
+
+Preferred Postgres table: `mm_action_stage_facts`.
+
+Useful typed columns:
+
+- `stage`, `order_count`, `buy_count`, `sell_count`
+- `buy_qty`, `sell_qty`, `buy_notional`, `sell_notional`
+- `rejection_count`, `rejection_counts`
+- `orders_compacted_count`, `rejections_compacted_count`
+- `orders_digest`, `rejections_digest`
 
 Existing dashboards:
 

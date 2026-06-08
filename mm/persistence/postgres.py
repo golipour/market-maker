@@ -73,6 +73,37 @@ ON mm_market_facts (exchange, symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_market_facts_run_exchange_symbol_ts_idx
 ON mm_market_facts (run_id, exchange, symbol, ts DESC);
 
+CREATE TABLE IF NOT EXISTS mm_action_stage_facts (
+    event_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    topic TEXT NOT NULL,
+    actor_id TEXT,
+    exchange TEXT,
+    symbol TEXT,
+    timestamp_ms BIGINT NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    t_end_ms BIGINT,
+    order_count INT,
+    buy_count INT,
+    sell_count INT,
+    buy_qty DOUBLE PRECISION,
+    sell_qty DOUBLE PRECISION,
+    buy_notional DOUBLE PRECISION,
+    sell_notional DOUBLE PRECISION,
+    rejection_count INT,
+    rejection_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    orders_compacted_count INT,
+    rejections_compacted_count INT,
+    orders_digest TEXT,
+    rejections_digest TEXT,
+    PRIMARY KEY (event_id, stage)
+);
+CREATE INDEX IF NOT EXISTS mm_action_stage_facts_actor_stage_ts_idx
+ON mm_action_stage_facts (actor_id, stage, ts DESC);
+CREATE INDEX IF NOT EXISTS mm_action_stage_facts_exchange_symbol_stage_ts_idx
+ON mm_action_stage_facts (exchange, symbol, stage, ts DESC);
+
 CREATE TABLE IF NOT EXISTS mm_latest_state (
     state_key TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
@@ -307,6 +338,26 @@ class PostgresEventWriter:
                             ON CONFLICT (event_id) DO NOTHING
                             """,
                             market_rows,
+                        )
+                    action_stage_rows = [
+                        row
+                        for envelope in batch
+                        for row in _action_stage_fact_rows(envelope)
+                    ]
+                    if action_stage_rows:
+                        psycopg2.extras.execute_values(
+                            cur,
+                            """
+                            INSERT INTO mm_action_stage_facts (
+                                event_id, stage, run_id, topic, actor_id, exchange, symbol,
+                                timestamp_ms, ts, t_end_ms, order_count, buy_count, sell_count,
+                                buy_qty, sell_qty, buy_notional, sell_notional, rejection_count,
+                                rejection_counts, orders_compacted_count,
+                                rejections_compacted_count, orders_digest, rejections_digest
+                            ) VALUES %s
+                            ON CONFLICT (event_id, stage) DO NOTHING
+                            """,
+                            action_stage_rows,
                         )
                     latest_rows = [
                         (
@@ -594,6 +645,59 @@ def _market_fact_row(envelope: EventEnvelope) -> tuple[Any, ...] | None:
     )
 
 
+def _action_stage_fact_rows(envelope: EventEnvelope) -> list[tuple[Any, ...]]:
+    if envelope.event_type != "ControllerDiagnostics" or not isinstance(envelope.payload, dict):
+        return []
+    payload = to_jsonable(envelope.payload)
+    if not isinstance(payload, dict):
+        return []
+    pipeline = payload.get("action_pipeline")
+    if not isinstance(pipeline, dict):
+        return []
+
+    import psycopg2.extras
+
+    rows: list[tuple[Any, ...]] = []
+    timestamp_ms = envelope.timestamp_ms
+    t_end_ms = _int_or_none(payload.get("t_end_ms"))
+    for stage, stage_payload in pipeline.items():
+        if not isinstance(stage_payload, dict):
+            continue
+        rejection_counts = _dict_or_empty(stage_payload.get("rejection_counts"))
+        rejection_count = _sum_numeric_values(rejection_counts)
+        rejections_compacted_count = _int_or_none(stage_payload.get("rejections_compacted_count"))
+        if rejections_compacted_count is not None:
+            rejection_count = rejections_compacted_count
+        rows.append(
+            (
+                envelope.event_id,
+                str(stage),
+                envelope.run_id,
+                envelope.topic,
+                _nonempty_str(payload.get("actor_id") or envelope.actor_id) or None,
+                _nonempty_str(payload.get("exchange") or envelope.exchange) or None,
+                _nonempty_str(payload.get("symbol") or envelope.symbol) or None,
+                timestamp_ms,
+                _ts(timestamp_ms),
+                t_end_ms,
+                _int_or_none(stage_payload.get("order_count")),
+                _int_or_none(stage_payload.get("buy_count")),
+                _int_or_none(stage_payload.get("sell_count")),
+                _float_or_none(stage_payload.get("buy_qty")),
+                _float_or_none(stage_payload.get("sell_qty")),
+                _float_or_none(stage_payload.get("buy_notional")),
+                _float_or_none(stage_payload.get("sell_notional")),
+                rejection_count,
+                psycopg2.extras.Json(rejection_counts, dumps=_strict_json_dumps),
+                _int_or_none(stage_payload.get("orders_compacted_count")),
+                rejections_compacted_count,
+                _optional_str(stage_payload.get("orders_digest")),
+                _optional_str(stage_payload.get("rejections_digest")),
+            )
+        )
+    return rows
+
+
 def _nonempty_str(value: Any) -> str:
     out = str(value or "").strip()
     return out
@@ -636,6 +740,26 @@ def _orderbook_bool(orderbook: Any, key: str) -> bool | None:
 
 def _list_len(value: Any) -> int:
     return len(value) if isinstance(value, list) else 0
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _sum_numeric_values(value: dict[str, Any]) -> int:
+    total = 0
+    for item in value.values():
+        numeric = _int_or_none(item)
+        if numeric is not None:
+            total += numeric
+    return total
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    out = str(value).strip()
+    return out or None
 
 
 def _int_or_none(value: Any) -> int | None:
