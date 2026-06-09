@@ -444,3 +444,242 @@ def _fallback_execution_plan_id(payload: dict[str, Any], envelope: EventEnvelope
     if exchange or symbol:
         return f"unlinked:{exchange}:{symbol}"
     return "unlinked"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayFidelityViolation:
+    """One replay/backtest invariant failure for a lineage chain."""
+
+    code: str
+    message: str
+    execution_plan_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayFidelityReport:
+    """Result of checking one frame lineage chain for lifecycle coherence."""
+
+    frame_id: str
+    violations: tuple[ReplayFidelityViolation, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.violations
+
+
+def verify_persisted_lineage_fidelity(path: str | Path) -> dict[str, ReplayFidelityReport]:
+    """Load persisted rows and verify each ``frame_id`` lineage chain."""
+
+    return {
+        frame_id: verify_lineage_fidelity(chain)
+        for frame_id, chain in read_lineage_chains(path).items()
+    }
+
+
+def verify_lineage_fidelity(chain: ReplayLineageChain) -> ReplayFidelityReport:
+    """Verify reconstructed target/execution lifecycle invariants for one frame."""
+
+    state = chain.reconstruct_state()
+    violations: list[ReplayFidelityViolation] = []
+    violations.extend(_lineage_id_violations(chain, state))
+    violations.extend(_target_execution_coverage_violations(chain, state))
+    violations.extend(_execution_intent_violations(state))
+    violations.extend(_execution_lifecycle_order_violations(chain))
+    violations.extend(_execution_snapshot_violations(chain))
+    return ReplayFidelityReport(frame_id=chain.frame_id, violations=tuple(violations))
+
+
+def _lineage_id_violations(chain: ReplayLineageChain, state: ReplayFrameState) -> list[ReplayFidelityViolation]:
+    violations: list[ReplayFidelityViolation] = []
+    expected_decision_id = state.decision_id
+    expected_target_book_id = state.target_book_id
+    related = (
+        *chain.decisions,
+        *chain.diagnostics,
+        *chain.target_books,
+        *chain.execution_events,
+    )
+    for envelope in related:
+        decision_id = _payload_value(envelope, "decision_id")
+        if decision_id and expected_decision_id and decision_id != expected_decision_id:
+            violations.append(
+                ReplayFidelityViolation(
+                    code="decision_id_mismatch",
+                    message=(
+                        f"{envelope.event_type} decision_id={decision_id!r} "
+                        f"does not match frame decision_id={expected_decision_id!r}"
+                    ),
+                )
+            )
+        target_book_id = _payload_value(envelope, "target_book_id")
+        if target_book_id and expected_target_book_id and target_book_id != expected_target_book_id:
+            violations.append(
+                ReplayFidelityViolation(
+                    code="target_book_id_mismatch",
+                    message=(
+                        f"{envelope.event_type} target_book_id={target_book_id!r} "
+                        f"does not match frame target_book_id={expected_target_book_id!r}"
+                    ),
+                )
+            )
+    return violations
+
+
+def _target_execution_coverage_violations(
+    chain: ReplayLineageChain,
+    state: ReplayFrameState,
+) -> list[ReplayFidelityViolation]:
+    violations: list[ReplayFidelityViolation] = []
+    if chain.execution_events and not chain.target_books:
+        violations.append(
+            ReplayFidelityViolation(
+                code="execution_without_target_book",
+                message="execution events exist but no JointTargetBook is linked to this frame",
+            )
+        )
+    target_plan_ids = set(state.execution_plans.keys()) & {
+        plan_id
+        for plan_id, plan in state.execution_plans.items()
+        if plan.target_orders
+    }
+    for plan_id in sorted(target_plan_ids):
+        if not chain.execution_events_for_plan(plan_id):
+            violations.append(
+                ReplayFidelityViolation(
+                    code="target_plan_without_execution",
+                    message="target book contains orders but no execution events were recorded",
+                    execution_plan_id=plan_id,
+                )
+            )
+    for plan_id in chain.execution_plan_ids:
+        if plan_id.startswith("unlinked:"):
+            violations.append(
+                ReplayFidelityViolation(
+                    code="orphan_execution_plan",
+                    message=f"execution events use unlinked plan id {plan_id!r}",
+                    execution_plan_id=plan_id,
+                )
+            )
+        elif plan_id not in state.execution_plans:
+            violations.append(
+                ReplayFidelityViolation(
+                    code="orphan_execution_plan",
+                    message=f"execution events reference unknown plan id {plan_id!r}",
+                    execution_plan_id=plan_id,
+                )
+            )
+    return violations
+
+
+def _execution_intent_violations(state: ReplayFrameState) -> list[ReplayFidelityViolation]:
+    violations: list[ReplayFidelityViolation] = []
+    for plan_id, plan in state.execution_plans.items():
+        target_keys = {_order_key(order) for order in plan.target_orders}
+        rejected_keys = {_order_key(order) for order in plan.validation_rejections}
+        expected_place_keys = target_keys - rejected_keys
+        requested_keys = {_order_key(order) for order in plan.place_requested_orders}
+        if requested_keys - expected_place_keys:
+            extra = sorted(requested_keys - expected_place_keys)
+            violations.append(
+                ReplayFidelityViolation(
+                    code="place_request_not_from_target",
+                    message=f"place requests contain orders not in target minus validation rejections: {extra}",
+                    execution_plan_id=plan_id,
+                )
+            )
+        if rejected_keys - target_keys:
+            extra = sorted(rejected_keys - target_keys)
+            violations.append(
+                ReplayFidelityViolation(
+                    code="validation_rejection_not_from_target",
+                    message=f"validation rejections reference orders not present in target book: {extra}",
+                    execution_plan_id=plan_id,
+                )
+            )
+    return violations
+
+
+def _execution_lifecycle_order_violations(chain: ReplayLineageChain) -> list[ReplayFidelityViolation]:
+    violations: list[ReplayFidelityViolation] = []
+    for plan_id in chain.execution_plan_ids:
+        events = chain.execution_events_for_plan(plan_id)
+        place_requested_ms = _first_event_timestamp(events, "PlaceOrdersRequested")
+        place_accepted_ms = _first_event_timestamp(events, "PlaceOrdersAccepted")
+        place_failed_ms = _first_event_timestamp(events, "PlaceOrdersFailed")
+        cancel_requested_ms = _first_event_timestamp(events, "CancelOrdersRequested")
+        cancel_accepted_ms = _first_event_timestamp(events, "CancelOrdersAccepted")
+        cancel_failed_ms = _first_event_timestamp(events, "CancelOrdersFailed")
+        if place_requested_ms is not None:
+            for label, later_ms in (
+                ("PlaceOrdersAccepted", place_accepted_ms),
+                ("PlaceOrdersFailed", place_failed_ms),
+            ):
+                if later_ms is not None and later_ms < place_requested_ms:
+                    violations.append(
+                        ReplayFidelityViolation(
+                            code="execution_lifecycle_order",
+                            message=f"{label} occurred before PlaceOrdersRequested",
+                            execution_plan_id=plan_id,
+                        )
+                    )
+        if cancel_requested_ms is not None:
+            for label, later_ms in (
+                ("CancelOrdersAccepted", cancel_accepted_ms),
+                ("CancelOrdersFailed", cancel_failed_ms),
+            ):
+                if later_ms is not None and later_ms < cancel_requested_ms:
+                    violations.append(
+                        ReplayFidelityViolation(
+                            code="execution_lifecycle_order",
+                            message=f"{label} occurred before CancelOrdersRequested",
+                            execution_plan_id=plan_id,
+                        )
+                    )
+    return violations
+
+
+def _execution_snapshot_violations(chain: ReplayLineageChain) -> list[ReplayFidelityViolation]:
+    violations: list[ReplayFidelityViolation] = []
+    for envelope in chain.execution_events:
+        if envelope.event_type != "ExecutionSnapshot":
+            continue
+        payload = _dict_payload(envelope)
+        plan_id = _payload_value(envelope, "execution_plan_id")
+        for count_key, dict_key in (
+            ("live_order_count", "live_orders"),
+            ("pending_place_count", "pending_places"),
+            ("pending_cancel_count", "pending_cancels"),
+        ):
+            if count_key not in payload:
+                continue
+            collection = payload.get(dict_key)
+            if not isinstance(collection, dict):
+                continue
+            expected = int(payload[count_key])
+            actual = len(collection)
+            if expected != actual:
+                violations.append(
+                    ReplayFidelityViolation(
+                        code="execution_snapshot_count_mismatch",
+                        message=(
+                            f"ExecutionSnapshot {count_key}={expected} "
+                            f"but len({dict_key})={actual}"
+                        ),
+                        execution_plan_id=plan_id,
+                    )
+                )
+    return violations
+
+
+def _first_event_timestamp(events: tuple[EventEnvelope, ...], event_type: str) -> int | None:
+    for envelope in events:
+        if envelope.event_type == event_type:
+            return envelope.timestamp_ms
+    return None
+
+
+def _order_key(order: dict[str, Any]) -> tuple[str, float, float]:
+    side = str(order.get("side") or "").strip().lower()
+    price = round(float(order.get("price") or 0.0), 8)
+    qty = round(float(order.get("qty") or 0.0), 8)
+    return side, price, qty

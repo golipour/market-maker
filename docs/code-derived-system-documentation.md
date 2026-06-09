@@ -509,7 +509,7 @@ Typed Parquet columns cover market top-of-book/depth/flow facts, controller stat
 
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 
-`mm/persistence/replay.py` can read Parquet or JSONL rows back into event envelopes and group replayed events by explicit lineage IDs. `read_lineage_chains()` returns one chain per `frame_id`, separating decisions, diagnostics, target books, execution events, and other linked events. Each `ReplayLineageChain` can be folded with `reconstruct_state()` into latest decision, diagnostics, target book, per-venue execution plans, target orders, place/cancel outcomes, validation rejections, latest execution snapshots, pending optimistic changes, and confirmed live orders. Replay contract tests verify that persisted rows can reconstruct decision -> target book -> execution call chains, preserve failed/rejected execution calls, and distinguish pending optimistic execution changes from confirmed live orders.
+`mm/persistence/replay.py` can read Parquet or JSONL rows back into event envelopes and group replayed events by explicit lineage IDs. `read_lineage_chains()` returns one chain per `frame_id`, separating decisions, diagnostics, target books, execution events, and other linked events. Each `ReplayLineageChain` can be folded with `reconstruct_state()` into latest decision, diagnostics, target book, per-venue execution plans, target orders, place/cancel outcomes, validation rejections, latest execution snapshots, pending optimistic changes, and confirmed live orders. `verify_lineage_fidelity()` and `verify_persisted_lineage_fidelity()` check reconstructed chains for lifecycle coherence: lineage id consistency, target-book to execution coverage, place requests matching target minus validation rejections, lifecycle event ordering, and execution snapshot count consistency. Replay contract tests verify that persisted rows can reconstruct decision -> target book -> execution call chains, preserve failed/rejected execution calls, distinguish pending optimistic execution changes from confirmed live orders, and pass fidelity checks for coherent frame lifecycles.
 
 `RedisStreamsBus` writes compact envelopes to Redis streams named from topics. It compacts zero balances and private snapshots before stream writing. Local subscribers receive the original in-process object, while remote stream messages are decoded to envelope payloads and forwarded through `subscribe()`/`subscribe_queue()`. Each bus instance tags its own stream writes and skips them in its stream forwarder to avoid duplicate same-process delivery.
 
@@ -594,6 +594,6 @@ The repository contains 56 unit test files under `tests/unit`. The tests cover:
 - private state reconciler,
 - observability dashboards and subscriber behavior,
 - Postgres latest-state deduplication,
-- replay and parquet writing.
+- replay, lineage fidelity checks, and parquet writing.
 
 The test suite is broad for unit-level behavior. The codebase does not show a dedicated end-to-end exchange simulator or load/stress test harness in the inspected files.
