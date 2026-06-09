@@ -59,21 +59,43 @@ Most runtime components communicate through topic names rather than direct calls
 - `PersistenceRuntimeConfig`: Postgres and Parquet sinks, batch size, flush interval, and topics.
 - `ObservabilityRuntimeConfig`: metrics, JSON logs, log path, run id, and OTLP settings.
 - `LiquiditySourcingRuntimeConfig`: single venue vs liquidity sourcing mode.
+- `PricingRuntimeConfig`: quote-anchor selection and inventory-mark venue selection.
 - `ExecutionRuntimeConfig`: per-venue planner, observe-only, max order count, max size, and max quote distance.
 - `ControllerRuntimeConfig`: MPC model configs, optimizer config, orderbook grid, decision and placement timeouts, risk, reconciliation, observe-only, warmup, and topics.
 - `MarketMakerRuntimeConfig`: the resolved bot runtime.
 
 `runtime_config_from_mapping()` expects one bot per config file. It resolves:
 
-- `bots.<id>` into quoting exchange, liquidity source exchange, and reference exchanges,
-- a strategy preset,
+- `bots.<id>` into a quoting exchange, liquidity exchange, symbol, actor id, and strategy preset,
+- `strategy_presets.<preset>` into interval timing, controller, pricing, liquidity sourcing, execution, and risk settings,
 - local/global sources,
 - private exchange blocks,
-- controller payload merged with exchange maker fees,
+- optional exchange instrument precision overrides merged with venue trade-stat instrument specs,
+- controller payload merged with exchange maker fees and derived pricing reference behavior,
 - derived liquidity-sourcing behavior,
 - execution and persistence settings.
 
+The config schema is intentionally strict around recent runtime migrations. It rejects older fields instead of silently translating them:
+
+- `controller.reference_price_source` was removed from user config; it is derived from `pricing.inventory_mark.venue`.
+- `controller.vwap_depth` was removed; VWAP depth is derived from inventory every frame.
+- old controller model keys `price_model` and `market_flow_model` were renamed to `local_price_model` and `local_market_flow_model`.
+- global model config belongs directly under `controller`, not under `controller.optimizer`.
+- venue optimizer keys belong under `controller.optimizer.local` and `controller.optimizer.global`; old aliases such as `inv_coef`, `target_inventory`, and `soft_fill_queue_penalty` are rejected.
+- `private.enable_execution` was removed; live execution is controlled by the strategy preset's `execution` block and controller gates.
+- `execution.liquidity_source` was removed; liquidity-venue execution policy is configured under `execution.liquidity`, while its live-enabled flag is derived from `liquidity_sourcing.mode`.
+
 The example config in `mm/configs/market_maker.runtime.example.json` uses Redis Streams, Postgres or Parquet persistence, Prometheus metrics on port 8000, and an MPC controller.
+
+Pricing is configured in each strategy preset:
+
+- `pricing.quote_anchor.mode` controls where limit-order ladders are centered:
+  - `quoting_mid`: best bid/ask mid on the quoting venue.
+  - `liquidity_mid`: best bid/ask mid on the liquidity/reference venue, or the local venue when no global source exists.
+  - `liquidity_weighted_mid`: computes bid-side and ask-side VWAP windows within `anchor_vwap_bps` on both quoting and liquidity books, weights each side by visible base quantity inside the window, then averages the weighted bid and ask prices.
+- `pricing.inventory_mark.venue` controls whether wealth/reference marking uses the quoting venue or liquidity venue. Internally this becomes `controller.reference_price_source = local` or `global`.
+
+The runtime is still one bot per process/config. To scale horizontally, run multiple configs/processes with different bot ids, symbols, or venues.
 
 ### Exchange Adapters
 
@@ -178,7 +200,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 5. Produces a clean frame by subtracting own live orders from local and global orderbooks using tolerance-aware price matching.
 6. Builds `TradingState` from the local ledger.
 7. Creates a `DecisionContext` for diagnostics. The context is the final assembler for `ControllerDiagnostics`, with timing, risk, execution-gate, and action-pipeline facts held in narrower diagnostic state records. The runner records lifecycle facts through those state records rather than broad compatibility aliases on the context.
-8. Runs `MpcStrategyEngine.decide()` under `decision_timeout_ms`.
+8. Runs `MpcStrategyEngine.decide()` in a worker thread under `decision_timeout_ms`.
 9. Prepares the execution target book according to per-venue execution settings.
 10. Computes venue execution gates.
 11. Runs target-book risk validation.
@@ -188,7 +210,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 15. Publishes a compact journal event.
 16. Always publishes `ControllerDiagnostics` in `finally`.
 
-When decision compute exceeds `decision_timeout_ms`, or a previous timed-out optimizer call is still running, the runner publishes a `ControllerFallback` event with `fallback_policy="hold_current_orders"`. It does not publish a new target book or approved action for that frame, so existing exchange orders are left unchanged.
+When decision compute exceeds `decision_timeout_ms`, the runner leaves the optimizer task running in the worker thread, publishes a `ControllerFallback` event with `fallback_policy="hold_current_orders"`, and does not publish a new target book or approved action for that frame. If the next frame arrives before the previous timed-out optimizer call completes, the runner publishes the same hold-current-orders fallback for the new frame. Existing exchange orders are left unchanged in both cases.
 
 For each processed frame, the runner assigns deterministic lineage IDs: `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`. `StrategyDecision`, `ControllerDiagnostics`, `JointTargetBook`, venue target-book payloads, execution sync events, and router request/accepted/failed events carry these IDs. Execution lifecycle, snapshot, strategy-decision, controller-diagnostics, private-snapshot, ledger-snapshot, and market-event bus payloads are built only through versioned helpers in `mm/core/payload_schema.py` (`mm.execution_lifecycle` v1, `mm.execution_snapshot` v1, `mm.strategy_decision` v1, `mm.controller_diagnostics` v1, `mm.private_state_snapshot` v1, `mm.venue_ledger_snapshot` v1, `mm.joint_ledger_snapshot` v1, and `mm.market_event` v1). `SymbolEngine` publishes versioned market-event payloads; `PrivateStateReconciler` publishes private snapshots as versioned dict payloads; `PortfolioLedgerService` publishes venue and joint ledger snapshots the same way. `StrategyInputFrameAssembler` parses versioned market-event payloads back into domain structs at the queue boundary. This lets replay and incident analysis follow frame -> decision -> target book -> execution without inferring relationships from timestamp/topic proximity.
 
@@ -229,19 +251,29 @@ It publishes state to `admin:events` and updates Prometheus gauges for kill swit
 
 `MpcStrategyEngine.decide()` converts a `StrategyInputFrame` and optional ledger into an MPC `State`:
 
-- local mid from best bid/ask,
-- orderbook depth relative to mid, clipped by `spread_max`,
+- a quote anchor from the configured pricing mode,
+- local orderbook depth relative to that anchor, clipped by `spread_max`,
 - local buy/sell volume,
 - local inventory and cash,
 - local buy/sell VWAP for a dynamic depth,
 - optional global mid/orderbook/volume/VWAP,
 - optional global inventory and cash,
-- a reference price selected from local or global sell-side VWAP.
+- an inventory mark/reference price selected from local or global inventory-depth VWAPs.
+
+The quote anchor is computed by `mm/pricing/anchor.py`:
+
+- `quoting_mid` requires a two-sided local book and uses local best bid/ask mid.
+- `liquidity_mid` requires a two-sided liquidity/reference book and uses that best bid/ask mid.
+- `liquidity_weighted_mid` builds bid and ask VWAP windows on both books within `anchor_vwap_bps`, weights each side by visible quantity, and uses the average of the weighted bid and weighted ask.
+
+When a distinct global/liquidity venue is not configured, the local market event is also used as the liquidity event.
 
 VWAP depth is derived from inventory:
 
 - single venue: `abs(local_inventory)`,
 - liquidity sourcing: `abs(local_inventory + global_inventory)`.
+
+The mark price is side-aware: long inventory is marked at sell-side VWAP, short inventory is marked at buy-side VWAP, and flat inventory is marked at the quote anchor. The user-facing `pricing.inventory_mark.venue` chooses whether those VWAPs come from the quoting venue or the liquidity venue when a distinct liquidity venue exists.
 
 If no ledger snapshot is fresh, state construction falls back to private snapshots attached to the frame. In the normal runtime path, the strategy runner requires a ledger-backed frame.
 
@@ -351,10 +383,12 @@ Maker fees are read from the real execution model config and applied in fill sim
 1. Build a diagnostic continuous depth series.
 2. Evaluate cumulative depth at each configured spread ladder point.
 3. Convert cumulative depth to marginal order sizes.
-4. Build bid orders at `mid - spread` and ask orders at `mid + spread`.
+4. Build local bid orders at `quote_anchor - spread` and ask orders at `quote_anchor + spread`.
 5. Drop zero marginal quantities and invalid prices.
 6. Cap to `max_orders_per_side` by keeping the largest-quantity orders per side.
 7. Build `VenueTargetBook` and `JointTargetBook`.
+
+When liquidity sourcing is active, the joint optimizer may also expose a global sigmoid action. If present, the target-book builder discretizes the global action on the global venue's own market event and appends a global `VenueTargetBook` with its configured policy. Later, `prepare_execution_joint_book()` removes global orders unless `liquidity_sourcing.global_live_orders` is true, applies per-venue execution caps, and sets the final planner policy used by live routing.
 
 The strategy-side order pipeline intentionally does not perform final venue rounding in the current path. The execution boundary performs venue limit normalization and validation through `ExchangeRulesGateway`.
 
