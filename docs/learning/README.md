@@ -31,7 +31,7 @@ discusses. The best rhythm is:
 
 ## Suggested next files
 
-After lesson 1, a good order is:
+After lesson 3, a good order is:
 
 1. `docs/data-flow.md` - learn how data moves through the application.
 2. `requirements.txt` - learn how dependencies are declared.

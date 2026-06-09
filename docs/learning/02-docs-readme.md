@@ -179,18 +179,18 @@ The last section shows:
 
 ```text
 market_maker/
-├── mm/
-│   ├── runtime/           # build_runtime_components, CLI entry
-│   ├── application/       # Frame assembler, StrategyRunner, frame prep
-│   ├── strategies/        # MpcStrategyEngine
-│   ├── ingestion/         # SymbolEngine
-│   ├── bus/               # memory | redis_streams
-│   ├── execution/         # OrderManager
-│   ├── risk/              # RuntimeRiskEngine
-│   └── configs/           # Example runtime JSON
-├── grafana/
-├── docker-compose.yml
-└── docs/
++-- mm/
+|   +-- runtime/           # build_runtime_components, CLI entry
+|   +-- application/       # Frame assembler, StrategyRunner, frame prep
+|   +-- strategies/        # MpcStrategyEngine
+|   +-- ingestion/         # SymbolEngine
+|   +-- bus/               # memory | redis_streams
+|   +-- execution/         # OrderManager
+|   +-- risk/              # RuntimeRiskEngine
+|   +-- configs/           # Example runtime JSON
++-- grafana/
++-- docker-compose.yml
++-- docs/
 ```
 
 This is a directory tree. It is common in READMEs because it gives readers a
@@ -253,4 +253,3 @@ After reading this lesson, answer these:
 2. What is the difference between architecture, data flow, and mechanisms?
 3. Which package would you inspect first for exchange websocket data?
 4. Which package would you inspect first for live order placement?
-
