@@ -1059,6 +1059,118 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
+def _pipeline_profile_sql() -> str:
+    market_orderbook_age = "GREATEST((m.t_end_ms - m.orderbook_timestamp_ms)::double precision, 0.0)"
+    market_persist_lag = "GREATEST(EXTRACT(EPOCH FROM (m.ts - to_timestamp(m.t_end_ms / 1000.0))) * 1000.0, 0.0)"
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    controller_metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
+    market_metric_prefix = "(m.exchange || ' ' || m.symbol || ' ')"
+    value_expr = _pipeline_value_ms_sql("s.raw_value", "s.unit")
+    return f"""WITH market AS (
+  SELECT
+    {_approx_step_time_alias_sql("to_timestamp(m.t_end_ms / 1000.0)")},
+    {market_metric_prefix} || s.metric AS metric,
+    s.value AS value
+  FROM mm_market_facts m
+  CROSS JOIN LATERAL (
+    VALUES
+      ('market.orderbook_age_at_frame_close', {market_orderbook_age}),
+      ('market.frame_persist_lag', {market_persist_lag})
+  ) AS s(metric, value)
+  WHERE m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND m.orderbook_timestamp_ms IS NOT NULL
+    AND $__timeFilter(m.ts)
+),
+controller AS (
+  SELECT
+    {_approx_step_time_alias_sql(step_source)},
+    {controller_metric_prefix} || s.metric AS metric,
+    {value_expr} AS value
+  FROM mm_events e
+  CROSS JOIN LATERAL (
+    VALUES
+      ('frame.age_at_strategy', e.payload #>> ARRAY['frame','frame_age_ms'], 'ms'),
+      ('frame.global_lag', e.payload #>> ARRAY['frame','global_lag_ms'], 'ms'),
+      ('strategy.clean', e.payload #>> ARRAY['optimizer','timing','clean_ms'], 'ms'),
+      ('strategy.decide_total', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms'),
+      ('strategy.optimizer_sample_draw', e.payload #>> ARRAY['optimizer','timing','sample_draw_sec'], 'sec'),
+      ('strategy.optimizer_train_loop', e.payload #>> ARRAY['optimizer','timing','train_sec'], 'sec'),
+      ('strategy.optimizer_total', e.payload #>> ARRAY['optimizer','timing','total_sec'], 'sec'),
+      ('strategy.risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),
+      ('strategy.publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),
+      ('execution.sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),
+      ('controller.total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')
+  ) AS s(metric, raw_value, unit)
+  WHERE {_diagnostics_filter()}
+)
+SELECT "time", metric, value
+FROM market
+WHERE value IS NOT NULL
+UNION ALL
+SELECT "time", metric, value
+FROM controller
+WHERE value IS NOT NULL
+ORDER BY 1, 2"""
+
+
+def _optimizer_substage_profile_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
+    value_expr = _pipeline_value_ms_sql("s.raw_value", "s.unit")
+    return f"""SELECT
+  {_approx_step_time_alias_sql(step_source)},
+  {metric_prefix} || s.metric AS metric,
+  {value_expr} AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('sample_draw', e.payload #>> ARRAY['optimizer','timing','sample_draw_sec'], 'sec'),
+    ('train_loop', e.payload #>> ARRAY['optimizer','timing','train_sec'], 'sec'),
+    ('optimizer_total', e.payload #>> ARRAY['optimizer','timing','total_sec'], 'sec'),
+    ('decision_wrapper', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms')
+) AS s(metric, raw_value, unit)
+WHERE {_diagnostics_filter()}
+  AND {value_expr} IS NOT NULL
+ORDER BY 1, 2"""
+
+
+def _slowest_frames_sql() -> str:
+    controller_total = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','controller_total_ms']", "'ms'")
+    decide = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','decide_ms']", "'ms'")
+    optimizer_total = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','total_sec']", "'sec'")
+    train_loop = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','train_sec']", "'sec'")
+    execute = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','execute_ms']", "'ms'")
+    frame_age = _pipeline_value_ms_sql("e.payload #>> ARRAY['frame','frame_age_ms']", "'ms'")
+    return f"""SELECT
+  e.ts,
+  e.actor_id,
+  e.exchange,
+  e.symbol,
+  e.payload->>'frame_id' AS frame_id,
+  e.payload->>'decision_id' AS decision_id,
+  {controller_total} AS controller_total_ms,
+  {decide} AS decide_ms,
+  {optimizer_total} AS optimizer_total_ms,
+  {train_loop} AS optimizer_train_loop_ms,
+  {execute} AS execution_sync_ms,
+  {frame_age} AS frame_age_ms,
+  COALESCE(e.payload->'warnings', '[]'::jsonb) AS warnings
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+ORDER BY COALESCE({controller_total}, 0.0) DESC, e.ts DESC
+LIMIT 50"""
+
+
+def _pipeline_value_ms_sql(value_expr: str, unit_expr: str) -> str:
+    numeric = _numeric_sql(value_expr, default="NULL")
+    return f"""CASE
+  WHEN {numeric} IS NULL THEN NULL
+  WHEN lower(trim(COALESCE({unit_expr}, 'ms'))) = 'sec' THEN ({numeric}) * 1000.0
+  ELSE ({numeric})
+END"""
+
+
 def _model_nll_step_sql() -> str:
     nll = _numeric_sql("m.value->>'nll'", default="NULL")
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
@@ -2991,6 +3103,71 @@ def controller_health() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-controller-health", "MM Observability v2 / 02 Frame And Controller Health", panels, tags=["controller"])
 
 
+def pipeline_time_profile() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            "End-to-end frame latency profile. The main chart uses persisted frame/controller diagnostics; raw adapter receive lag comes from Prometheus because raw market events are intentionally not persisted by default.",
+            y=0,
+        ),
+        _panel(
+            2,
+            "End-to-end pipeline latency / frame",
+            "timeseries",
+            PG_DS,
+            _pipeline_profile_sql(),
+            x=0,
+            y=3,
+            w=24,
+            h=10,
+            unit="ms",
+        ),
+        _panel(
+            3,
+            "Raw feed receive lag latest",
+            "timeseries",
+            PROM_DS,
+            'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}",kind="orderbook"})',
+            x=0,
+            y=13,
+            w=12,
+            unit="ms",
+            legend="{{exchange}} {{symbol}} {{kind}}",
+        ),
+        _panel(
+            4,
+            "Optimizer substage latency / frame",
+            "timeseries",
+            PG_DS,
+            _optimizer_substage_profile_sql(),
+            x=12,
+            y=13,
+            w=12,
+            unit="ms",
+        ),
+        _panel(
+            5,
+            "Slowest recent frames",
+            "table",
+            PG_DS,
+            _slowest_frames_sql(),
+            x=0,
+            y=21,
+            w=24,
+            h=9,
+            fmt="table",
+            unit="ms",
+        ),
+    ]
+    return _dashboard(
+        "mm-obs-v2-pipeline-time-profile",
+        "MM Observability v2 / 02B Pipeline Time Profile",
+        panels,
+        tags=["pipeline", "latency"],
+    )
+
+
 def model_quality() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Model NLL and latest model scores emitted from `ControllerDiagnostics.models`.", y=0),
@@ -4848,6 +5025,7 @@ def dashboards() -> list[dict[str, Any]]:
         market_data_quality(),
         orderbook_depth(),
         controller_health(),
+        pipeline_time_profile(),
         model_quality(),
         model_parameters(),
         optimizer_diagnostics(),

@@ -11,6 +11,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     model_parameters,
     model_quality,
     orderbook_depth,
+    pipeline_time_profile,
     portfolio_pnl,
     risk_execution,
     runtime_overview,
@@ -168,6 +169,55 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     vars_by_name = {var["name"]: var for var in dashboard["templating"]["list"]}
     assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"
     assert vars_by_name["target_frame_event_id"]["label"] == "Target frame"
+
+
+def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None:
+    dashboard = pipeline_time_profile()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert dashboard["uid"] == "mm-obs-v2-pipeline-time-profile"
+    assert dashboard["title"] == "MM Observability v2 / 02B Pipeline Time Profile"
+
+    expected_titles = {
+        "End-to-end pipeline latency / frame",
+        "Raw feed receive lag latest",
+        "Optimizer substage latency / frame",
+        "Slowest recent frames",
+    }
+    assert expected_titles.issubset(panels_by_title)
+
+    pipeline_sql = panels_by_title["End-to-end pipeline latency / frame"]["targets"][0]["rawSql"]
+    assert "mm_market_facts" in pipeline_sql
+    assert "market.orderbook_age_at_frame_close" in pipeline_sql
+    assert "market.frame_persist_lag" in pipeline_sql
+    assert "strategy.clean" in pipeline_sql
+    assert "strategy.decide_total" in pipeline_sql
+    assert "strategy.optimizer_sample_draw" in pipeline_sql
+    assert "strategy.optimizer_train_loop" in pipeline_sql
+    assert "strategy.optimizer_total" in pipeline_sql
+    assert "strategy.risk" in pipeline_sql
+    assert "strategy.publish" in pipeline_sql
+    assert "execution.sync" in pipeline_sql
+    assert "controller.total" in pipeline_sql
+    assert "e.payload #>> ARRAY['optimizer','timing'" in pipeline_sql
+
+    raw_panel = panels_by_title["Raw feed receive lag latest"]
+    assert raw_panel["targets"][0]["datasource"]["type"] == "prometheus"
+    assert "mm_raw_market_ingest_lag_latest_ms" in raw_panel["targets"][0]["expr"]
+    assert 'kind="orderbook"' in raw_panel["targets"][0]["expr"]
+
+    optimizer_sql = panels_by_title["Optimizer substage latency / frame"]["targets"][0]["rawSql"]
+    assert "sample_draw_sec" in optimizer_sql
+    assert "train_sec" in optimizer_sql
+    assert "total_sec" in optimizer_sql
+    assert "decide_ms" in optimizer_sql
+
+    slow_sql = panels_by_title["Slowest recent frames"]["targets"][0]["rawSql"]
+    assert "controller_total_ms" in slow_sql
+    assert "ORDER BY COALESCE" in slow_sql
+    assert "LIMIT 50" in slow_sql
+
+    assert pipeline_time_profile()["uid"] in {dashboard["uid"] for dashboard in dashboards()}
 
 
 def test_postgres_queries_use_empty_safe_multiselect_filters() -> None:
