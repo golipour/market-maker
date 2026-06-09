@@ -8,31 +8,16 @@ from mm.core.interfaces.order_validation import AbstractVenueOrderLimitSource
 from mm.core.interfaces.market_data import PublicMarketDataAdapter
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.exchanges.capabilities import (
+    EXCHANGE_CAPABILITIES,
     RequestedTransportMode,
+    get_exchange_capabilities,
     resolve_private_state_mode,
     resolve_public_market_transport,
 )
-from mm.exchanges.bitpin import BitpinMarketDataAdapter
-from mm.exchanges.bitpin.order_adapter import BitpinRestOrderCommandAdapter
-from mm.exchanges.bitpin.private_state import (
-    BitpinRestPrivateStateAdapter,
-    BitpinWebSocketPrivateStateAdapter,
-)
-from mm.exchanges.nobitex import NobitexMarketDataAdapter
-from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
-from mm.execution.order_validation import NoOpVenueOrderLimitSource
-from mm.exchanges.nobitex.order_adapter import NobitexRestOrderCommandAdapter
-from mm.exchanges.shared.venue_limits_trade_stats import TradeStatsVenueOrderLimitSource
-from mm.exchanges.tabdeal import TabdealMarketDataAdapter
-from mm.exchanges.tabdeal.order_adapter import TabdealRestOrderCommandAdapter
-from mm.exchanges.tabdeal.private_state import (
-    TabdealRestPrivateStateAdapter,
-    TabdealWebSocketPrivateStateAdapter,
-)
-from mm.exchanges.wallex.order_adapter import WallexRestOrderCommandAdapter
+from mm.exchanges.registry import get_exchange_registration, registered_exchanges
 from mm.exchanges.shared.provider_adapter import TransportMode
-from mm.exchanges.wallex import WallexMarketDataAdapter
-from mm.exchanges.wallex.private_state import WallexRestPrivateStateAdapter
+from mm.exchanges.shared.venue_limits_trade_stats import TradeStatsVenueOrderLimitSource
+from mm.execution.order_validation import NoOpVenueOrderLimitSource
 
 
 PublicMarketDataMode = RequestedTransportMode | str
@@ -95,42 +80,16 @@ def select_public_market_data_adapter(
 ) -> PublicMarketDataAdapterSelection:
     exchange_key = exchange.lower().strip()
     requested_mode = str(mode).lower().strip()
+    get_exchange_capabilities(exchange_key)
+    registration = get_exchange_registration(exchange_key)
     transport = resolve_public_market_transport(exchange_key, requested_mode)
-    if exchange_key == "nobitex":
-        adapter = NobitexMarketDataAdapter(
-            symbol,
-            mode=transport,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
-        )
-    elif exchange_key == "wallex":
-        adapter = WallexMarketDataAdapter(
-            symbol,
-            mode=transport,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
-        )
-    elif exchange_key == "tabdeal":
-        adapter = TabdealMarketDataAdapter(
-            symbol,
-            mode=transport,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
-        )
-    elif exchange_key == "bitpin":
-        adapter = BitpinMarketDataAdapter(
-            symbol,
-            mode=transport,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
-        )
-    else:
-        raise ValueError(f"unsupported exchange: {exchange}")
-
+    adapter = registration.build_market_data(
+        symbol,
+        transport=transport,
+        depth_limit=depth_limit,
+        trades_limit=trades_limit,
+        poll_interval_ms=poll_interval_ms,
+    )
     return PublicMarketDataAdapterSelection(
         exchange=exchange_key,
         symbol=symbol,
@@ -167,52 +126,15 @@ def select_private_state_adapter(
 ) -> PrivateStateAdapterSelection:
     exchange_key = exchange.lower().strip()
     requested_mode = str(mode).lower().strip()
+    get_exchange_capabilities(exchange_key)
+    registration = get_exchange_registration(exchange_key)
     selected_mode = resolve_private_state_mode(exchange_key, requested_mode)
-    if exchange_key == "nobitex":
-        if selected_mode != "rest":
-            raise ValueError(f"{exchange_key} private state mode is not implemented yet: {selected_mode}")
-        adapter = NobitexRestPrivateStateAdapter(
-            symbol,
-            api_token=api_token,
-            poll_interval_ms=poll_interval_ms,
-        )
-    elif exchange_key == "wallex":
-        if selected_mode != "rest":
-            raise ValueError(f"{exchange_key} private state mode is not implemented yet: {selected_mode}")
-        adapter = WallexRestPrivateStateAdapter(
-            symbol,
-            api_token=api_token,
-            poll_interval_ms=poll_interval_ms,
-        )
-    elif exchange_key == "tabdeal":
-        if selected_mode == "websocket":
-            adapter = TabdealWebSocketPrivateStateAdapter(
-                symbol,
-                api_token=api_token,
-                poll_interval_ms=poll_interval_ms,
-            )
-        else:
-            adapter = TabdealRestPrivateStateAdapter(
-                symbol,
-                api_token=api_token,
-                poll_interval_ms=poll_interval_ms,
-            )
-    elif exchange_key == "bitpin":
-        if selected_mode == "websocket":
-            adapter = BitpinWebSocketPrivateStateAdapter(
-                symbol,
-                api_token=api_token,
-                poll_interval_ms=poll_interval_ms,
-            )
-        else:
-            adapter = BitpinRestPrivateStateAdapter(
-                symbol,
-                api_token=api_token,
-                poll_interval_ms=poll_interval_ms,
-            )
-    else:
-        raise ValueError(f"unsupported exchange: {exchange}")
-
+    adapter = registration.build_private_state(
+        symbol,
+        selected_mode=selected_mode,
+        api_token=api_token,
+        poll_interval_ms=poll_interval_ms,
+    )
     return PrivateStateAdapterSelection(
         exchange=exchange_key,
         symbol=symbol,
@@ -240,33 +162,12 @@ def select_order_command_adapter(
 ) -> OrderCommandAdapterSelection:
     exchange_key = exchange.lower().strip()
     capabilities = resolve_order_command_transport(exchange_key)
-    max_concurrency = max(1, int(placement_max_concurrency))
-    if exchange_key == "nobitex":
-        adapter = NobitexRestOrderCommandAdapter(
-            symbol,
-            api_token=api_token,
-            max_concurrency=max_concurrency,
-        )
-    elif exchange_key == "wallex":
-        adapter = WallexRestOrderCommandAdapter(
-            symbol,
-            api_token=api_token,
-            max_concurrency=max_concurrency,
-        )
-    elif exchange_key == "tabdeal":
-        adapter = TabdealRestOrderCommandAdapter(
-            symbol,
-            api_token=api_token,
-            max_concurrency=max_concurrency,
-        )
-    elif exchange_key == "bitpin":
-        adapter = BitpinRestOrderCommandAdapter(
-            symbol,
-            api_token=api_token,
-            max_concurrency=max_concurrency,
-        )
-    else:
-        raise ValueError(f"unsupported exchange for REST order commands: {exchange_key!r}")
+    registration = get_exchange_registration(exchange_key)
+    adapter = registration.build_order_command(
+        symbol,
+        api_token=api_token,
+        max_concurrency=max(1, int(placement_max_concurrency)),
+    )
     return OrderCommandAdapterSelection(
         exchange=exchange_key,
         symbol=symbol,
@@ -275,22 +176,25 @@ def select_order_command_adapter(
     )
 
 
-_TRADE_STATS_LIMIT_EXCHANGES = frozenset({"nobitex", "wallex", "bitpin", "kucoin", "binance", "tabdeal"})
-
-
 def select_venue_order_limit_source(exchange: str) -> AbstractVenueOrderLimitSource:
-    """Venue min base / min notional for float ``Order`` validation before REST (see ``trade_stats``)."""
+    """Venue min base / min notional for float ``Order`` validation before REST."""
 
     exchange_key = exchange.lower().strip()
-    if exchange_key in _TRADE_STATS_LIMIT_EXCHANGES:
+    registration = get_exchange_registration(exchange_key)
+    if registration.uses_trade_stats_limits:
         return TradeStatsVenueOrderLimitSource(exchange_key)
     return NoOpVenueOrderLimitSource()
 
 
 def resolve_order_command_transport(exchange: str) -> str:
-    from mm.exchanges.capabilities import get_exchange_capabilities
-
     capabilities = get_exchange_capabilities(exchange).order_commands
     if capabilities.place_rest and capabilities.cancel_rest:
         return "rest"
     raise ValueError(f"{exchange} does not support complete REST order commands")
+
+
+def supported_exchanges() -> tuple[str, ...]:
+    """Exchanges with both capability metadata and adapter registration."""
+
+    capability_names = set(EXCHANGE_CAPABILITIES)
+    return tuple(name for name in registered_exchanges() if name in capability_names)

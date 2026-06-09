@@ -260,33 +260,32 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 12. Exchange Capability And Factory Code Is Centralized
+### 12. Exchange Capabilities And Registration Still Split
 
-Severity: Low to Medium
+Severity: Low
 
-Adding an exchange requires edits in `mm/exchanges/factory.py`, `capabilities.py`, wire files, adapters, and likely trade-stats sources.
+Adapter construction now goes through `mm/exchanges/registry.py` with one `registration.py` per exchange package. `mm/exchanges/factory.py` only resolves capabilities, looks up the registration, and builds the adapter.
 
-Impact: This is manageable for four exchanges but becomes a maintenance bottleneck as exchanges grow.
+Impact: Adding an exchange still requires a new package registration module, capability metadata in `capabilities.py`, wire files, and adapters. The factory if/elif chains are gone.
 
 Recommendation:
 
-- Introduce a registry pattern where exchange packages self-register adapters and capabilities.
-- Keep factory validation, but avoid long if/elif chains.
+- Keep capability metadata and adapter registration co-located per exchange when new venues are added.
+- Consider merging capability declarations into each exchange `registration.py` if the split becomes annoying.
 
-### 13. No Clear Schema Versioning Beyond Envelope Version
+### 13. Remaining Event Payloads Still Mix Dicts And Dataclasses
 
 Severity: Medium
 
-The envelope has `schema` and `version`, but individual payloads are mostly dataclasses or dicts without independent schema versions.
+Execution lifecycle and snapshot events, joint target books, and replay checks now use versioned payload builders in `mm/core/payload_schema.py`. Router, order manager, and strategy-runner execution failure paths publish only through those builders.
 
-Impact: Dashboard SQL and replay readers can break when payload fields change. JSONB queries already include defensive casts, indicating payload instability.
+Impact: Execution replay and persistence contracts are clearer, but strategy decisions, diagnostics, market events, and private snapshots still use mixed dataclass/dict shapes without dedicated builders.
 
 Recommendation:
 
-- Add event-specific schema versions.
-- Define typed payload schemas for high-value events.
-- Add migration tests for dashboards and replay.
-- Keep old fields until dashboards are migrated.
+- Add typed payload builders for the next highest-value events: `StrategyDecision`, `ControllerDiagnostics`, and private snapshots.
+- Keep `payload_schema` and `payload_version` on every durable high-value event.
+- Add replay/persistence contract tests as each event family is migrated.
 
 ### 14. Secrets And Local Compose Defaults Need Production Hardening
 
@@ -426,8 +425,7 @@ Priority recommendations:
 
 ### Priority 3: Maintainability And DX
 
-- Add event-specific schema versions.
-- Introduce an exchange adapter registry.
+- Add typed payload builders for strategy decisions, diagnostics, and private snapshots.
 - Generate dashboard queries from stable schema helpers where possible.
 - Document one-bot-per-process deployment explicitly.
 - Extend replay fidelity into full frame re-simulation through strategy/risk/execution when a deterministic offline harness is needed.

@@ -77,12 +77,12 @@ The example config in `mm/configs/market_maker.runtime.example.json` uses Redis 
 
 ### Exchange Adapters
 
-`mm/exchanges/factory.py` selects adapters for Nobitex, Wallex, Tabdeal, and Bitpin:
+`mm/exchanges/registry.py` holds one registration per supported exchange (`nobitex`, `wallex`, `tabdeal`, `bitpin`). Each package exposes adapter builders in its own `registration.py`. `mm/exchanges/factory.py` resolves capabilities, looks up the registration, and constructs:
 
 - public market data: REST or websocket, resolved through exchange capabilities,
 - private state: REST for Nobitex and Wallex; REST or websocket for Tabdeal and Bitpin,
 - order commands: REST only,
-- venue limits: pulled from trade-stats exchange info where supported.
+- venue limits: pulled from trade-stats exchange info where registration enables it.
 
 The public market-data adapter contract is `AbstractMarketDataAdapter`:
 
@@ -190,7 +190,7 @@ The strategy pipeline requires a `JointStrategyFrame` with a ledger. If no ledge
 
 When decision compute exceeds `decision_timeout_ms`, or a previous timed-out optimizer call is still running, the runner publishes a `ControllerFallback` event with `fallback_policy="hold_current_orders"`. It does not publish a new target book or approved action for that frame, so existing exchange orders are left unchanged.
 
-For each processed frame, the runner assigns deterministic lineage IDs: `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`. `StrategyDecision`, `ControllerDiagnostics`, `JointTargetBook`, venue target-book payloads, execution sync events, and router request/accepted/failed events carry these IDs. This lets replay and incident analysis follow frame -> decision -> target book -> execution without inferring relationships from timestamp/topic proximity.
+For each processed frame, the runner assigns deterministic lineage IDs: `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`. `StrategyDecision`, `ControllerDiagnostics`, `JointTargetBook`, venue target-book payloads, execution sync events, and router request/accepted/failed events carry these IDs. Execution lifecycle and snapshot bus payloads are built only through versioned helpers in `mm/core/payload_schema.py` (`mm.execution_lifecycle` v1 and `mm.execution_snapshot` v1). This lets replay and incident analysis follow frame -> decision -> target book -> execution without inferring relationships from timestamp/topic proximity.
 
 `MpcStrategyEngine` depends on a strategy-level optimizer backend protocol rather than the concrete tensor optimizer directly. The default backend wraps the existing `MonteCarloMPCTensorBatched` controller, while tests or future worker-process implementations can inject another backend that provides `optimize(state)`, model handles, optimizer diagnostics, and optional global sigmoid action.
 

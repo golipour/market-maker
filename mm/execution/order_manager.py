@@ -9,7 +9,14 @@ from typing import Any
 from mm.bus.base import AbstractEventBus
 from mm.core.adapters.joint import _order_to_target_order
 from mm.core.events import to_jsonable
-from mm.core.payload_schema import execution_lifecycle_event
+from mm.core.payload_schema import (
+    cancel_actor_orders_requested_event,
+    cancel_all_requested_event,
+    cancel_orders_accepted_event,
+    execution_snapshot_event,
+    execution_sync_completed_event,
+    execution_sync_requested_event,
+)
 from mm.execution.target_book import ExecutionPlan
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
@@ -60,8 +67,6 @@ class ExecutionSnapshot:
     execution_plan_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
-        from mm.core.payload_schema import execution_snapshot_event
-
         return execution_snapshot_event(
             exchange=self.exchange,
             timestamp_ms=self.timestamp_ms,
@@ -127,8 +132,7 @@ class OrderManager(AbstractOrderManager):
         timestamp_ms = self.clock_ms()
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "ExecutionSyncRequested",
+            execution_sync_requested_event(
                 exchange=self.exchange,
                 actor_id=_single_action_attr(actions, "actor_id"),
                 symbol=_single_action_symbol(actions),
@@ -189,8 +193,7 @@ class OrderManager(AbstractOrderManager):
         target_count = len(target.orders)
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "ExecutionSyncRequested",
+            execution_sync_requested_event(
                 exchange=self.exchange,
                 actor_id=target.actor_id,
                 symbol=target.symbol,
@@ -249,8 +252,7 @@ class OrderManager(AbstractOrderManager):
             return
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "CancelActorOrdersRequested",
+            cancel_actor_orders_requested_event(
                 exchange=self.exchange,
                 actor_id=actor,
                 reason=reason,
@@ -272,8 +274,7 @@ class OrderManager(AbstractOrderManager):
             )
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "CancelOrdersAccepted",
+            cancel_orders_accepted_event(
                 exchange=self.exchange,
                 actor_id=actor,
                 order_ids=order_ids,
@@ -380,8 +381,7 @@ class OrderManager(AbstractOrderManager):
             return
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "CancelAllRequested",
+            cancel_all_requested_event(
                 exchange=self.exchange,
                 reason=reason,
                 count=len(order_ids),
@@ -402,8 +402,7 @@ class OrderManager(AbstractOrderManager):
             )
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "CancelOrdersAccepted",
+            cancel_orders_accepted_event(
                 exchange=self.exchange,
                 order_ids=order_ids,
                 timestamp_ms=self.clock_ms(),
@@ -633,8 +632,7 @@ class OrderManager(AbstractOrderManager):
         timestamp_ms = self.clock_ms()
         await self._publish(
             "execution:orders",
-            execution_lifecycle_event(
-                "ExecutionSyncCompleted",
+            execution_sync_completed_event(
                 exchange=self.exchange,
                 actor_id=actor_id,
                 symbol=symbol,
@@ -652,7 +650,7 @@ class OrderManager(AbstractOrderManager):
                 pending_place_count=len(self._pending_places),
                 pending_cancel_count=len(self._pending_cancels),
                 pending_max_age_ms=self._pending_max_age_ms(timestamp_ms),
-                latency_ms=max(0.0, float(latency_ms)),
+                latency_ms=latency_ms,
                 timestamp_ms=timestamp_ms,
             ),
         )

@@ -547,10 +547,9 @@ class StrategyRunner:
     ) -> None:
         if self.bus is None:
             return
-        from mm.core.payload_schema import execution_lifecycle_event
+        from mm.core.payload_schema import execution_sync_failed_event
 
-        payload = execution_lifecycle_event(
-            "ExecutionSyncFailed",
+        payload = execution_sync_failed_event(
             actor_id=self.config.actor_id,
             exchange=ctx.frame.local.exchange,
             symbol=ctx.frame.local.symbol,
@@ -561,11 +560,9 @@ class StrategyRunner:
             target_book_id=ctx.decision.target_book_id if ctx.decision is not None else "",
             error=message.split(":", 1)[0],
             message=message,
-            retryable=True,
             timestamp_ms=int(time.time() * 1000),
+            latency_ms=latency_ms,
         )
-        if latency_ms is not None:
-            payload["latency_ms"] = max(0.0, float(latency_ms))
         log_event("execution_sync_failed", payload)
         await self.bus.publish("execution:errors", payload)
 

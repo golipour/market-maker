@@ -12,6 +12,12 @@ from mm.exchanges.capabilities import (
     validate_private_state_mode,
     validate_public_market_transport,
 )
+from mm.exchanges.registry import (
+    ExchangeRegistration,
+    get_exchange_registration,
+    register_exchange,
+    registered_exchanges,
+)
 from mm.exchanges.factory import (
     OrderCommandAdapterSelection,
     PrivateStateAdapterSelection,
@@ -30,6 +36,7 @@ from mm.exchanges.instrument_wire import (
 )
 
 __all__ = [
+    "ExchangeRegistration",
     "EXCHANGE_CAPABILITIES",
     "ExchangeCapabilities",
     "OrderCommandCapabilities",
@@ -45,6 +52,9 @@ __all__ = [
     "build_public_market_data_adapter",
     "build_instrument_wire",
     "get_exchange_capabilities",
+    "get_exchange_registration",
+    "register_exchange",
+    "registered_exchanges",
     "InstrumentWireProfile",
     "merge_wallet_balances_raw",
     "resolve_private_state_mode",

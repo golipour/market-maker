@@ -8,7 +8,17 @@ from typing import Any
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
-from mm.core.payload_schema import execution_lifecycle_event
+from mm.core.payload_schema import (
+    cancel_orders_accepted_event,
+    cancel_orders_failed_event,
+    cancel_orders_requested_event,
+    execution_lineage_fields,
+    execution_order_summary,
+    order_validation_rejected_event,
+    place_orders_accepted_event,
+    place_orders_failed_event,
+    place_orders_requested_event,
+)
 from mm.execution.target_book import CommandRejection, ExecutionPlan, RouterResult
 from mm.exchanges.shared.provider_adapter import now_ms
 from mm.observability import counter_inc, log_event
@@ -42,18 +52,23 @@ class OrderRouter:
         failed_cancels: list[str] = []
         placed: list[tuple[str, Order]] = []
         failed_places: list[CommandRejection] = []
+        lineage = execution_lineage_fields(
+            frame_id=plan.frame_id,
+            decision_id=plan.decision_id,
+            target_book_id=plan.target_book_id,
+            execution_plan_id=plan.execution_plan_id,
+        )
 
         cancel_ids = [command.exchange_order_id for command in plan.cancel]
         if cancel_ids:
             await self._publish(
                 "execution:orders",
-                execution_lifecycle_event(
-                    "CancelOrdersRequested",
+                cancel_orders_requested_event(
                     exchange=self.exchange,
                     order_ids=cancel_ids,
                     policy=plan.policy,
-                    **_lineage_payload(plan),
                     timestamp_ms=self.clock_ms(),
+                    **lineage,
                 ),
             )
             try:
@@ -61,12 +76,11 @@ class OrderRouter:
                 cancelled.extend(cancel_ids)
                 await self._publish(
                     "execution:orders",
-                    execution_lifecycle_event(
-                        "CancelOrdersAccepted",
+                    cancel_orders_accepted_event(
                         exchange=self.exchange,
                         order_ids=cancel_ids,
-                        **_lineage_payload(plan),
                         timestamp_ms=self.clock_ms(),
+                        **lineage,
                     ),
                 )
             except Exception as exc:
@@ -74,14 +88,13 @@ class OrderRouter:
                 self._observe_adapter_failure(plan, operation="cancel_orders", exc=exc)
                 await self._publish(
                     "execution:orders",
-                    execution_lifecycle_event(
-                        "CancelOrdersFailed",
+                    cancel_orders_failed_event(
                         exchange=self.exchange,
                         order_ids=cancel_ids,
                         error=type(exc).__name__,
                         message=str(exc),
-                        **_lineage_payload(plan),
                         timestamp_ms=self.clock_ms(),
+                        **lineage,
                     ),
                 )
                 if plan.policy == "replace":
@@ -94,13 +107,12 @@ class OrderRouter:
             orders = [command.order for command in plan.place]
             await self._publish(
                 "execution:orders",
-                execution_lifecycle_event(
-                    "PlaceOrdersRequested",
+                place_orders_requested_event(
                     exchange=self.exchange,
-                    orders=[_order_summary(order) for order in orders],
+                    orders=[execution_order_summary(order) for order in orders],
                     policy=plan.policy,
-                    **_lineage_payload(plan),
                     timestamp_ms=self.clock_ms(),
+                    **lineage,
                 ),
             )
             try:
@@ -117,14 +129,13 @@ class OrderRouter:
                 )
                 await self._publish(
                     "execution:orders",
-                    execution_lifecycle_event(
-                        "PlaceOrdersFailed",
+                    place_orders_failed_event(
                         exchange=self.exchange,
-                        orders=[_order_summary(command.order) for command in plan.place],
+                        orders=[execution_order_summary(command.order) for command in plan.place],
                         error=type(exc).__name__,
                         message=str(exc),
-                        **_lineage_payload(plan),
                         timestamp_ms=self.clock_ms(),
+                        **lineage,
                     ),
                 )
             else:
@@ -134,27 +145,25 @@ class OrderRouter:
                     placed.append((order_id, command.order))
                     accepted_orders.append(
                         {
-                            **_order_summary(command.order),
+                            **execution_order_summary(command.order),
                             "exchange_order_id": order_id,
                         }
                     )
                 await self._publish(
                     "execution:orders",
-                    execution_lifecycle_event(
-                        "PlaceOrdersAccepted",
+                    place_orders_accepted_event(
                         exchange=self.exchange,
                         order_ids=order_ids,
                         orders=accepted_orders,
-                        **_lineage_payload(plan),
                         timestamp_ms=timestamp_ms,
+                        **lineage,
                     ),
                 )
 
         for rejection in plan.rejected:
             await self._publish(
                 "execution:orders",
-                execution_lifecycle_event(
-                    "OrderValidationRejected",
+                order_validation_rejected_event(
                     exchange=self.exchange,
                     symbol=rejection.order.symbol,
                     reason=rejection.reason,
@@ -162,8 +171,8 @@ class OrderRouter:
                     price=float(rejection.order.price),
                     qty=float(rejection.order.qty),
                     stage=rejection.stage,
-                    **_lineage_payload(plan),
                     timestamp_ms=self.clock_ms(),
+                    **lineage,
                 ),
             )
 
@@ -201,24 +210,3 @@ class OrderRouter:
                 "retryable": True,
             },
         )
-
-
-def _order_summary(order: Order) -> dict[str, Any]:
-    return {
-        "exchange": order.exchange,
-        "symbol": order.symbol,
-        "side": order.side,
-        "price": order.price,
-        "qty": order.qty,
-        "order_type": order.order_type,
-        "client_order_id": order.client_order_id,
-    }
-
-
-def _lineage_payload(plan: ExecutionPlan) -> dict[str, str]:
-    return {
-        "frame_id": plan.frame_id,
-        "decision_id": plan.decision_id,
-        "target_book_id": plan.target_book_id,
-        "execution_plan_id": plan.execution_plan_id,
-    }
