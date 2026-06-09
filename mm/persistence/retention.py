@@ -38,6 +38,17 @@ class RetentionPolicy:
     spool_archive_days: int | None = 7
     spool_failed_days: int | None = 30
 
+    def as_dict(self) -> dict[str, int | None]:
+        return {
+            "events_days": self.events_days,
+            "facts_days": self.facts_days,
+            "latest_state_days": self.latest_state_days,
+            "admin_audit_days": self.admin_audit_days,
+            "parquet_days": self.parquet_days,
+            "spool_archive_days": self.spool_archive_days,
+            "spool_failed_days": self.spool_failed_days,
+        }
+
     def __post_init__(self) -> None:
         for name, value in (
             ("events_days", self.events_days),

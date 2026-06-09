@@ -14,6 +14,7 @@ from mm.core.models.instrument import (
     merge_instrument_spec,
 )
 from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
+from mm.persistence.retention import RetentionPolicy, retention_policy_from_mapping
 
 SourceRole = Literal["local", "global"]
 NeutralVenueRole = Literal["local", "global"]
@@ -193,6 +194,7 @@ class PersistenceRuntimeConfig:
     topics: tuple[str, ...] = ()
     batch_size: int = 100
     flush_interval_ms: int = 1000
+    retention: RetentionPolicy = field(default_factory=RetentionPolicy)
 
     def resolved_database_url(self) -> str | None:
         if self.database_url:
@@ -708,6 +710,7 @@ class MarketMakerRuntimeConfig:
                 "effective_topics": self.effective_persistence_topics,
                 "uses_default_topics": not bool(self.persistence.topics),
                 "batch_size": self.persistence.batch_size,
+                "retention": self.persistence.retention.as_dict(),
             },
             "observability": {
                 "service_name": self.observability.service_name,
@@ -1215,6 +1218,7 @@ def _persistence_from_mapping(payload: Any) -> PersistenceRuntimeConfig:
         topics=topics_tuple,
         batch_size=max(1, int(payload.get("batch_size", 100))),
         flush_interval_ms=max(50, int(payload.get("flush_interval_ms", 1000))),
+        retention=retention_policy_from_mapping(payload.get("retention")),
     )
 
 

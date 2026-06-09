@@ -91,7 +91,6 @@ Recommendation:
 
 - Add versioned payload builders for incremental private balance/open-order deltas.
 - Persist large orderbook/trade snapshots at lower frequency or in a dedicated time-series store when raw market history is needed at scale.
-- Add retention policies per topic and table.
 - Keep using payload/envelope byte metrics to rank remaining high-cost topics before further compaction.
 
 ### 2. Postgres Persistence Spool Has Recovery Tooling But Needs Operations Policy
@@ -102,25 +101,25 @@ Severity: Medium
 
 `mm.tools.reingest_postgres_spool` can now scan failed JSONL spool records, decode their original envelopes, write them through the same Postgres writer path, and archive successfully reingested files. Reingest is idempotent because persisted events and typed fact tables use conflict keys.
 
-Impact: Connection churn and immediate batch loss are no longer the main bottlenecks. During sustained database outages, events are preserved locally and recoverable after Postgres returns. The remaining risk is operational: retention, cleanup, and runbook ownership need to be explicit so spool directories do not grow silently.
+Impact: Connection churn and immediate batch loss are no longer the main bottlenecks. During sustained database outages, events are preserved locally and recoverable after Postgres returns. Spool retention is now configurable through `persistence.retention` and applied by `python -m mm.tools.apply_retention`.
 
 Recommendation:
 
-- Add retention and cleanup rules for failed and successfully reingested spool files.
-- Document when operators should run spool reingest and how to verify row counts.
+- Run `apply_retention` on a schedule in production.
+- Document when operators should run spool reingest before archived spool files expire.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 3. Parquet Storage Still Needs Retention And Small-File Lifecycle Policies
+### 3. Parquet Storage Still Needs Small-File Compaction Beyond Date Retention
 
-Severity: Low to Medium
+Severity: Low
 
-`ParquetEventWriter` writes immutable part files with one compact `envelope_json` plus typed nullable columns for high-value market, controller, optimizer, target-book, and execution fields. Archival compaction already drops redundant trade lists and zero balances while keeping interval features.
+`ParquetEventWriter` writes immutable part files with one compact `envelope_json` plus typed nullable columns for high-value market, controller, optimizer, target-book, and execution fields. Archival compaction already drops redundant trade lists and zero balances while keeping interval features. `apply_retention` can delete whole `event_date=YYYY-MM-DD` partitions older than `persistence.retention.parquet_days`.
 
-Impact: Live archival writes are append-like and object-store friendly. Remaining scaling risks are small-file growth, long-term retention policy, and raw orderbook/debug payload storage inside `envelope_json`.
+Impact: Live archival writes are append-like and object-store friendly. Remaining scaling risks are many small part files within retained dates and raw orderbook/debug payload storage inside `envelope_json`.
 
 Recommendation:
 
-- Add retention/compaction policy for old partitions.
+- Consider offline compaction of small part files inside retained date partitions when scan volume grows.
 - Consider separate columnar datasets for very large raw snapshots when typed envelope columns are not enough.
 
 ### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment
@@ -371,8 +370,7 @@ At one bot and a low interval, this is workable. At many symbols, venues, and st
 Priority recommendations:
 
 1. Add versioned payload builders for incremental private balance/open-order deltas.
-2. Define topic retention and persistence tiering.
-3. Store large orderbook/trade data separately from controller events when raw market history is needed at scale.
+2. Store large orderbook/trade data separately from controller events when raw market history is needed at scale.
 4. Keep full diagnostics configurable and sampled in production.
 5. Use payload and envelope byte metrics to rank remaining high-cost topics.
 
@@ -390,12 +388,12 @@ These items are in code and covered by focused tests; they are no longer open ro
 - Persisted market-data replay adapter (`mm/ingestion/replay_adapter.py`)
 - Typed Postgres fact tables and Parquet typed columns
 - Persistence compaction, Postgres connection reuse, failed-batch spool, and spool reingest
+- Retention/tiering policies and `python -m mm.tools.apply_retention` (`mm/persistence/retention.py`)
 - Observability v2 dashboards and common Prometheus metrics (`mm_frame_age_ms`, persistence queue depth/write latency, controller diagnostics bridge)
 
 ### Priority 1: Scalability And Runtime Pressure
 
 - Add versioned payload builders for incremental private balance/open-order deltas.
-- Add retention and tiering policies for `mm_events`, typed fact tables, Parquet partitions, and spool directories.
 - Add per-topic subscriber queue depth/lag metrics and bounded backpressure policy on the in-memory bus.
 - Run interval scheduler callbacks concurrently with bounded concurrency and missed-deadline metrics.
 

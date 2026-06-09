@@ -497,6 +497,8 @@ It compacts persisted market events by dropping raw trade lists after interval s
 
 Failed Postgres spool files can be reingested with `python -m mm.tools.reingest_postgres_spool --database-url "$MM_DATABASE_URL"`. The tool scans failed JSONL spool records, decodes their original envelopes, writes them through the same Postgres writer path, and archives successfully reingested files. Inserts remain idempotent because the base event table uses `event_id` conflict handling and the typed fact tables use matching conflict keys.
 
+Retention and tiering live in `mm/persistence/retention.py` and are configured under `persistence.retention` in the runtime JSON. Default tiers are: `mm_events` 14 days, typed fact tables 90 days, `mm_latest_state` retained until explicitly configured, `admin_audit_log` 365 days, Parquet `event_date=*` partitions 90 days, reingested spool archives 7 days, and failed spool JSONL files 30 days. Apply them with `python -m mm.tools.apply_retention --config mm/configs/market_maker.runtime.example.json --dry-run` or by passing `--database-url`, `--parquet-root`, and `--spool-dir` directly. Postgres cleanup deletes rows older than each tier cutoff by `ts` or `updated_at`. Parquet cleanup removes whole date partitions. Spool cleanup deletes aged `.jsonl` files by file mtime.
+
 `ParquetEventWriter` writes partitioned Parquet rows under:
 
 ```
@@ -592,6 +594,6 @@ The repository contains 56 unit test files under `tests/unit`. The tests cover:
 - private state reconciler,
 - observability dashboards and subscriber behavior,
 - Postgres latest-state deduplication,
-- replay, lineage fidelity checks, offline frame simulation, and parquet writing.
+- replay, lineage fidelity checks, offline frame simulation, retention/tiering, and parquet writing.
 
 The test suite is broad for unit-level behavior. The codebase does not show a dedicated end-to-end exchange simulator or load/stress test harness in the inspected files.

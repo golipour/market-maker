@@ -743,6 +743,7 @@ def _single_execution_fact_row(fake: "_FakePsycopg2") -> tuple:
 class _FakeCursor:
     def __init__(self, conn: "_FakeConnection") -> None:
         self.conn = conn
+        self.rowcount = 0
 
     def __enter__(self):
         return self
@@ -750,9 +751,18 @@ class _FakeCursor:
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
 
-    def execute(self, sql: str) -> None:
+    def execute(self, sql: str, params: Any = None) -> None:
         if "CREATE TABLE" in sql:
             self.conn.ddl_count += 1
+            return
+        self.conn.execute_calls.append({"sql": sql, "params": params})
+        if sql.startswith("DELETE FROM"):
+            self.rowcount = 1
+
+    def fetchone(self) -> tuple[Any, ...]:
+        if self.conn.fetchone_results:
+            return self.conn.fetchone_results.pop(0)
+        return (0,)
 
 
 class _FakeConnection:
@@ -763,6 +773,8 @@ class _FakeConnection:
         self.rollback_count = 0
         self.close_count = 0
         self.ddl_count = 0
+        self.execute_calls: list[dict] = []
+        self.fetchone_results: list[tuple[Any, ...]] = []
         self.execute_values_calls: list[dict] = []
 
     def cursor(self) -> _FakeCursor:

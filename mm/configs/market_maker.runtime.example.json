@@ -290,7 +290,17 @@
     "database_url_env": "MM_DATABASE_URL",
     "parquet_root_env": "MM_PARQUET_ROOT",
     "batch_size": 100,
-    "flush_interval_ms": 1000
+    "flush_interval_ms": 1000,
+    "retention": {
+      "_comment": "Applied by python -m mm.tools.apply_retention on a schedule. null disables a tier.",
+      "events_days": 14,
+      "facts_days": 90,
+      "latest_state_days": null,
+      "admin_audit_days": 365,
+      "parquet_days": 90,
+      "spool_archive_days": 7,
+      "spool_failed_days": 30
+    }
   },
   "observability": {
     "service_name": "market-maker",
