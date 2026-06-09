@@ -410,7 +410,7 @@ Priority recommendations:
 5. Continue materializing dashboard facts into typed tables; current coverage includes market intervals, action-pipeline stages, order lifecycle, target-book intent, model scores, optimizer objectives, and optimizer objective components.
 6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
 7. Keep full diagnostics configurable and sampled in production.
-8. Expand replay/simulation contracts beyond lineage into full strategy-state reconstruction.
+8. Extend replay from state reconstruction into full simulation/backtest fidelity checks.
 
 ## Prioritized Roadmap
 
@@ -431,4 +431,4 @@ Priority recommendations:
 - Introduce an exchange adapter registry.
 - Generate dashboard queries from stable schema helpers where possible.
 - Document one-bot-per-process deployment explicitly.
-- Add end-to-end replay/simulation tests around frame -> decision -> risk -> execution.
+- Add end-to-end simulation/backtest tests around frame -> decision -> risk -> execution.
