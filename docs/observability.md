@@ -150,6 +150,8 @@ Before writing `mm_events`, Postgres persistence compacts market-event trade lis
 
 `ParquetEventWriter` stores compact archival envelopes in immutable part files. It omits the redundant `payload_json` copy and keeps one compact `envelope_json` for replay. It also writes typed nullable columns for common market, controller, optimizer, target-book, and execution fields so offline scans do not need to parse JSON for the usual analytics paths. The archival writer compacts market-event trade lists after interval summaries are available, compacts joint-frame embedded ledgers, compacts controller-diagnostics action-pipeline order/rejection arrays, and removes zero private balances while preserving counts. Live writes do not rewrite existing Parquet files; large deployments should compact small part files offline if needed.
 
+Replay helpers group persisted envelopes by `frame_id` and expose decision, diagnostics, target-book, and execution event chains. Contract tests cover the lineage path and the distinction between pending optimistic order changes and confirmed live orders.
+
 Default persistence topics include market events, joint frames, ledger snapshots,
 strategy actions, strategy decisions, controller diagnostics, target books,
 execution events, execution state, and private state for local/global venues.

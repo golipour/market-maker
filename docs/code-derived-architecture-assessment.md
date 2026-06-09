@@ -96,7 +96,7 @@ Recommendation:
 - Persist large snapshots at lower frequency or only by explicit topic selection.
 - Store orderbooks and raw trades in normalized append tables, compressed columnar partitions, or a dedicated time-series store when raw market history is needed.
 - Store diagnostics in typed tables for common panels.
-- Use references for repeated structures. The runtime now carries `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`; replay contracts should verify those links end to end.
+- Use references for repeated structures. The runtime now carries `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`, and replay contract tests verify those links end to end.
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
@@ -408,7 +408,7 @@ Priority recommendations:
 5. Continue materializing dashboard facts into typed tables; current coverage includes market intervals, action-pipeline stages, order lifecycle, target-book intent, model scores, optimizer objectives, and optimizer objective components.
 6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
 7. Keep full diagnostics configurable and sampled in production.
-8. Add replay contracts that verify lineage IDs and the reduced event model can reconstruct required state.
+8. Expand replay/simulation contracts beyond lineage into full strategy-state reconstruction.
 
 ## Prioritized Roadmap
 

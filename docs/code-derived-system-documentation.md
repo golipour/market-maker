@@ -507,6 +507,8 @@ Typed Parquet columns cover market top-of-book/depth/flow facts, controller stat
 
 If pyarrow is unavailable, it falls back to JSONL files in the same partition layout.
 
+`mm/persistence/replay.py` can read Parquet or JSONL rows back into event envelopes and group replayed events by explicit lineage IDs. `read_lineage_chains()` returns one chain per `frame_id`, separating decisions, diagnostics, target books, execution events, and other linked events. Replay contract tests verify that persisted rows can reconstruct decision -> target book -> execution call chains and can distinguish pending optimistic execution changes from confirmed live orders.
+
 `RedisStreamsBus` writes compact envelopes to Redis streams named from topics. It compacts zero balances and private snapshots before stream writing. Local subscribers receive the original in-process object, while remote stream messages are decoded to envelope payloads and forwarded through `subscribe()`/`subscribe_queue()`. Each bus instance tags its own stream writes and skips them in its stream forwarder to avoid duplicate same-process delivery.
 
 ## 7. Observability
