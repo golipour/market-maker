@@ -737,6 +737,143 @@ def joint_ledger_snapshot_event(joint: Any) -> dict[str, Any]:
     return payload
 
 
+def joint_ledger_snapshot_from_payload(payload: Any) -> Any:
+    """Parse a versioned joint ledger payload back into ``JointLedgerSnapshot``."""
+
+    from mm.core.models.ledger import JointLedgerSnapshot, LedgerFreshness
+
+    if isinstance(payload, JointLedgerSnapshot):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected joint ledger payload dict, got {type(payload)!r}")
+    assert_payload_schema(payload, JOINT_LEDGER_SNAPSHOT_SCHEMA, JOINT_LEDGER_SNAPSHOT_VERSION)
+    global_payload = payload.get("global")
+    return JointLedgerSnapshot(
+        local=venue_ledger_snapshot_from_payload(payload["local"]),
+        global_=venue_ledger_snapshot_from_payload(global_payload) if isinstance(global_payload, dict) else None,
+        reference_price=float(payload.get("reference_price") or 0.0),
+        consolidated_base_inventory=float(payload.get("consolidated_base_inventory") or 0.0),
+        consolidated_quote_wealth=float(payload.get("consolidated_quote_wealth") or 0.0),
+        created_at_ms=int(payload.get("created_at_ms") or 0),
+        freshness=_ledger_freshness_from_payload(payload.get("freshness")),
+    )
+
+
+def venue_ledger_snapshot_from_payload(payload: Any) -> Any:
+    """Parse a versioned venue ledger payload back into ``VenueLedger``."""
+
+    from mm.core.models.ledger import VenueLedger
+
+    if isinstance(payload, VenueLedger):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected venue ledger payload dict, got {type(payload)!r}")
+    assert_payload_schema(payload, VENUE_LEDGER_SNAPSHOT_SCHEMA, VENUE_LEDGER_SNAPSHOT_VERSION)
+    exchange = str(payload["exchange"])
+    timestamp_ms = int(payload.get("last_snapshot_ms") or payload.get("last_private_event_ms") or 0)
+    balances = {
+        str(asset): _private_balance_from_payload(row, exchange=exchange, timestamp_ms=timestamp_ms)
+        for asset, row in dict(payload.get("balances") or {}).items()
+    }
+    live_orders = {
+        str(order_id): _private_open_order_from_payload(
+            row,
+            exchange=exchange,
+            fallback_order_id=str(order_id),
+            timestamp_ms=timestamp_ms,
+        )
+        for order_id, row in dict(payload.get("live_orders") or {}).items()
+    }
+    return VenueLedger(
+        exchange=exchange,
+        symbol=str(payload["symbol"]),
+        base_asset=str(payload["base_asset"]),
+        quote_asset=str(payload["quote_asset"]),
+        balances=balances,
+        live_orders=live_orders,
+        locked_base=float(payload.get("locked_base") or 0.0),
+        locked_quote=float(payload.get("locked_quote") or 0.0),
+        available_base=float(payload.get("available_base") or 0.0),
+        available_quote=float(payload.get("available_quote") or 0.0),
+        last_private_event_ms=int(payload.get("last_private_event_ms") or 0),
+        last_snapshot_ms=int(payload.get("last_snapshot_ms") or 0),
+    )
+
+
+def joint_target_book_from_payload(payload: Any) -> Any:
+    """Parse a versioned joint target-book payload back into ``JointTargetBook``."""
+
+    from mm.core.models.target_book import JointTargetBook, LiquiditySourcingMode
+
+    if isinstance(payload, JointTargetBook):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected joint target-book payload dict, got {type(payload)!r}")
+    assert_payload_schema(payload, JOINT_TARGET_BOOK_SCHEMA, JOINT_TARGET_BOOK_VERSION)
+    global_payload = payload.get("global")
+    mode = str(payload.get("mode") or "single_venue")
+    if mode not in {"single_venue", "liquidity_sourcing"}:
+        mode = "single_venue"
+    return JointTargetBook(
+        actor_id=str(payload.get("actor_id") or ""),
+        local=venue_target_book_from_payload(payload["local"]),
+        global_=venue_target_book_from_payload(global_payload) if isinstance(global_payload, dict) else None,
+        mode=mode,  # type: ignore[arg-type]
+        diagnostics=dict(payload.get("diagnostics") or {}),
+        frame_id=str(payload.get("frame_id") or ""),
+        decision_id=str(payload.get("decision_id") or ""),
+        target_book_id=str(payload.get("target_book_id") or ""),
+    )
+
+
+def venue_target_book_from_payload(payload: Any) -> Any:
+    """Parse a versioned venue target-book payload back into ``VenueTargetBook``."""
+
+    from mm.core.models.target_book import VenueTargetBook
+
+    if isinstance(payload, VenueTargetBook):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected venue target-book payload dict, got {type(payload)!r}")
+    assert_payload_schema(payload, VENUE_TARGET_BOOK_SCHEMA, VENUE_TARGET_BOOK_VERSION)
+    policy = str(payload.get("policy") or "reconcile")
+    if policy not in {"reconcile", "replace"}:
+        policy = "reconcile"
+    return VenueTargetBook(
+        exchange=str(payload["exchange"]),
+        symbol=str(payload["symbol"]),
+        actor_id=str(payload.get("actor_id") or ""),
+        orders=tuple(target_order_from_payload(row) for row in payload.get("orders") or ()),
+        policy=policy,  # type: ignore[arg-type]
+        frame_id=str(payload.get("frame_id") or ""),
+        decision_id=str(payload.get("decision_id") or ""),
+        target_book_id=str(payload.get("target_book_id") or ""),
+        execution_plan_id=str(payload.get("execution_plan_id") or ""),
+    )
+
+
+def target_order_from_payload(row: Any) -> Any:
+    """Parse a versioned target-order payload back into ``TargetOrder``."""
+
+    from mm.core.models.target_book import TargetOrder
+
+    if isinstance(row, TargetOrder):
+        return row
+    if not isinstance(row, dict):
+        raise TypeError(f"expected target-order payload dict, got {type(row)!r}")
+    if row.get("payload_schema") == TARGET_ORDER_SCHEMA:
+        assert_payload_schema(row, TARGET_ORDER_SCHEMA, TARGET_ORDER_VERSION)
+    return TargetOrder(
+        exchange=str(row["exchange"]),
+        symbol=str(row["symbol"]),
+        side=str(row["side"]),
+        price=float(row["price"]),
+        qty=float(row["qty"]),
+        order_type=str(row.get("order_type") or "limit"),
+        tags=tuple(str(tag) for tag in row.get("tags") or ()),
+    )
+
+
 def _private_balance_payload(balance: Any) -> dict[str, Any]:
     return {
         "exchange": balance.exchange,
@@ -838,3 +975,19 @@ def _ledger_freshness_payload(freshness: Any) -> dict[str, Any]:
         "global_market_age_ms": freshness.global_market_age_ms,
         "ledger_fresh": freshness.ledger_fresh,
     }
+
+
+def _ledger_freshness_from_payload(payload: Any) -> Any:
+    from mm.core.models.ledger import LedgerFreshness
+
+    if isinstance(payload, LedgerFreshness):
+        return payload
+    if not isinstance(payload, dict):
+        return LedgerFreshness()
+    return LedgerFreshness(
+        local_private_age_ms=payload.get("local_private_age_ms"),
+        global_private_age_ms=payload.get("global_private_age_ms"),
+        local_market_age_ms=payload.get("local_market_age_ms"),
+        global_market_age_ms=payload.get("global_market_age_ms"),
+        ledger_fresh=bool(payload.get("ledger_fresh", True)),
+    )

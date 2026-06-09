@@ -425,6 +425,7 @@ Priority recommendations:
 ### Priority 3: Maintainability And DX
 
 - Add versioned payload builders for `MarketEvent` and incremental private deltas.
+- Introduce an exchange adapter registry.
 - Generate dashboard queries from stable schema helpers where possible.
 - Document one-bot-per-process deployment explicitly.
-- Extend replay fidelity into full frame re-simulation through strategy/risk/execution when a deterministic offline harness is needed.
+- Add deterministic full MPC replay from persisted frames when optimizer outputs must be bit-for-bit reproduced across processes.

@@ -26,7 +26,7 @@ from mm.core.models.ledger import VenueLedger
 from mm.core.models.target_book import VenueTargetBook
 from mm.execution.plan import ExecutionSyncReport
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
-from mm.execution.planner import select_planner
+from mm.execution.planning import plan_venue_target_book
 from mm.execution.reporting import execution_plan_to_sync_report
 from mm.execution.reconcile import ReconcileConfig
 from mm.execution.rules_gateway import ExchangeRulesGateway
@@ -525,9 +525,12 @@ class OrderManager(AbstractOrderManager):
             quote_asset="",
             live_orders=dict(self._live_orders),
         )
-        planner = select_planner(target.policy)
-        raw_plan = planner.plan(target, ledger, config=self._reconcile_config)
-        validated_plan = self._rules_gateway.validate(raw_plan)
+        validated_plan = plan_venue_target_book(
+            target,
+            ledger,
+            rules_gateway=self._rules_gateway,
+            reconcile_config=self._reconcile_config,
+        )
         return ExecutionPlan(
             exchange=validated_plan.exchange,
             symbol=validated_plan.symbol,
@@ -539,8 +542,7 @@ class OrderManager(AbstractOrderManager):
             rejected=validated_plan.rejected,
             diagnostics={
                 **validated_plan.diagnostics,
-                "planned_place_count": len(raw_plan.place),
-                "planned_place_orders": tuple(command.order for command in raw_plan.place),
+                "planned_place_orders": tuple(command.order for command in validated_plan.place),
             },
             frame_id=validated_plan.frame_id,
             decision_id=validated_plan.decision_id,
