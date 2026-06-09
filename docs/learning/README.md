@@ -28,12 +28,14 @@ discusses. The best rhythm is:
 | [01 - Root README](01-root-readme.md) | `README.md` | The top-level README is the front door of many real projects. It tells you what the system is, where the real docs live, and how the app starts. |
 | [02 - Docs README](02-docs-readme.md) | `docs/README.md` | A documentation index teaches you how the project wants to be navigated. |
 | [03 - Architecture Overview](03-architecture-overview.md) | `docs/architecture.md` | The architecture doc teaches the main layers, responsibilities, and contracts before we enter implementation code. |
+| [04 - Runtime Topics](04-runtime-topics.md) | `mm/core/topics.py` | First real code lesson: constants, Protocols, dataclasses, properties, static methods, f-strings, and centralized contracts. |
+| [05 - Runtime Config Part 1](05-runtime-config-part-1.md) | `mm/runtime/config.py` | How real apps define typed config objects, normalize inputs, validate values, read environment variables, and build defaults. |
 
 ## Suggested next files
 
-After lesson 3, a good order is:
+After lesson 5, a good order is:
 
-1. `docs/data-flow.md` - learn how data moves through the application.
-2. `requirements.txt` - learn how dependencies are declared.
-3. `docker-compose.yml` - learn how real apps run supporting services.
-4. `mm/runtime/__main__.py` and `mm/runtime/config.py` - learn how the Python program starts and reads configuration.
+1. More of `mm/runtime/config.py` - learn mapping JSON into config objects.
+2. `mm/bus/base.py` and `mm/bus/memory.py` - learn interfaces and async implementations.
+3. `mm/runtime/engine.py` - learn how components are wired together.
+4. `mm/application/strategy_runner.py` - learn the main decision orchestration pipeline.
