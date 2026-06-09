@@ -91,6 +91,8 @@ class ExecutionSyncReport:
     venue_rejection_counts: dict[str, int] = field(default_factory=dict)
     cancel_count: int = 0
     placed: bool = False
+    cancel_ms: float = 0.0
+    place_ms: float = 0.0
 
     def merge(self, other: ExecutionSyncReport) -> ExecutionSyncReport:
         merged_rejections = dict(self.venue_rejection_counts)
@@ -106,6 +108,8 @@ class ExecutionSyncReport:
             venue_rejection_counts=merged_rejections,
             cancel_count=self.cancel_count + other.cancel_count,
             placed=self.placed or other.placed,
+            cancel_ms=self.cancel_ms + other.cancel_ms,
+            place_ms=self.place_ms + other.place_ms,
         )
 
 
@@ -214,6 +218,8 @@ def filter_execution_sync_report(
         venue_rejection_counts=dict(limit_valid.rejection_counts),
         cancel_count=canceled.order_count,
         placed=report.placed,
+        cancel_ms=report.cancel_ms,
+        place_ms=report.place_ms,
     )
 
 

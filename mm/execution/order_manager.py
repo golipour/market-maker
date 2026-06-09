@@ -211,8 +211,12 @@ class OrderManager(AbstractOrderManager):
         accepted_orders: list[Order] = []
         placed = False
         live_snapshot = dict(self._live_orders)
+        router_cancel_ms = 0.0
+        router_place_ms = 0.0
         if plan.cancel or plan.place:
             router_result = await self._router.execute(plan)
+            router_cancel_ms = router_result.cancel_ms
+            router_place_ms = router_result.place_ms
             accepted_orders = [order for _, order in router_result.placed]
             placed = bool(router_result.placed)
             self._apply_router_result(
@@ -226,6 +230,8 @@ class OrderManager(AbstractOrderManager):
             live_orders=live_snapshot,
             placed=placed,
             accepted_orders=accepted_orders,
+            cancel_ms=router_cancel_ms,
+            place_ms=router_place_ms,
         )
         await self._publish_sync_completed(
             report,
@@ -418,8 +424,12 @@ class OrderManager(AbstractOrderManager):
             accepted_orders: list[Order] = []
             placed = False
             live_snapshot = dict(self._live_orders)
+            router_cancel_ms = 0.0
+            router_place_ms = 0.0
             if execute and (plan.cancel or plan.place):
                 router_result = await self._router.execute(plan)
+                router_cancel_ms = router_result.cancel_ms
+                router_place_ms = router_result.place_ms
                 accepted_orders = [order for _, order in router_result.placed]
                 placed = bool(router_result.placed)
                 self._apply_router_result(action, plan, router_result)
@@ -429,6 +439,8 @@ class OrderManager(AbstractOrderManager):
                 live_orders=live_snapshot,
                 placed=placed,
                 accepted_orders=accepted_orders,
+                cancel_ms=router_cancel_ms,
+                place_ms=router_place_ms,
             )
             combined = combined.merge(partial)
         return combined
@@ -653,6 +665,8 @@ class OrderManager(AbstractOrderManager):
                 pending_cancel_count=len(self._pending_cancels),
                 pending_max_age_ms=self._pending_max_age_ms(timestamp_ms),
                 latency_ms=latency_ms,
+                cancel_latency_ms=float(report.cancel_ms),
+                place_latency_ms=float(report.place_ms),
                 timestamp_ms=timestamp_ms,
             ),
         )

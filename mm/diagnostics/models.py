@@ -92,6 +92,8 @@ class FrameDiagnostics:
     global_status: str = "disabled"
     global_lag_ms: int | None = None
     frame_age_ms: int | None = None
+    frame_created_at_ms: int | None = None
+    local_orderbook_timestamp_ms: int | None = None
     local_private_age_ms: int | None = None
     global_private_age_ms: int | None = None
     sync_status: dict[str, Any] = field(default_factory=dict)

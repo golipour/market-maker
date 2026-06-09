@@ -228,6 +228,8 @@ async def test_order_router_cancel_before_place_for_replace_policy() -> None:
     assert len(adapter.placed) == 1
     assert result.cancelled_ids == ("live-1",)
     assert len(result.placed) == 1
+    assert result.cancel_ms >= 0.0
+    assert result.place_ms >= 0.0
 
     event_types = []
     while not events.empty():

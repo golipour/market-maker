@@ -126,3 +126,5 @@ class RouterResult:
     placed: tuple[tuple[str, Order], ...] = ()
     failed_cancel_ids: tuple[str, ...] = ()
     failed_places: tuple[CommandRejection, ...] = ()
+    cancel_ms: float = 0.0
+    place_ms: float = 0.0

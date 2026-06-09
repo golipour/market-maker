@@ -281,6 +281,12 @@ class DecisionContext:
                 if self.frame.created_at_ms > 0
                 else None
             ),
+            frame_created_at_ms=(
+                int(self.frame.created_at_ms)
+                if self.frame.created_at_ms > 0
+                else None
+            ),
+            local_orderbook_timestamp_ms=int(self.frame.local.orderbook.timestamp_ms),
             local_private_age_ms=self._local_private_age_ms(),
             global_private_age_ms=self._global_private_age_ms(),
             sync_status=(

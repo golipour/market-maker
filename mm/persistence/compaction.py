@@ -9,6 +9,21 @@ from mm.core.events import EventEnvelope, to_jsonable
 
 PersistenceSink = Literal["postgres", "parquet"]
 
+# Stages whose per-order price/qty rows are kept (slimmed) for Grafana depth/stem panels.
+_ACTION_PIPELINE_SLIM_ORDER_STAGES = frozenset(
+    {
+        "ladder",
+        "capped",
+        "target_book",
+        "risk_approved_target",
+        "planned_cancel",
+        "planned_place",
+        "rules_valid",
+        "router_accepted",
+        "kept",
+    }
+)
+
 
 def compact_envelope_for_persistence(
     envelope: EventEnvelope,
@@ -129,7 +144,10 @@ def _compact_controller_diagnostics_payload(payload: dict[str, Any]) -> dict[str
     changed = False
     for stage, stage_payload in pipeline.items():
         if isinstance(stage_payload, dict):
-            compacted_stage, stage_changed = _compact_action_pipeline_stage(stage_payload)
+            compacted_stage, stage_changed = _compact_action_pipeline_stage(
+                stage_payload,
+                stage_name=str(stage),
+            )
             compacted_pipeline[str(stage)] = compacted_stage
             changed = changed or stage_changed
         else:
@@ -142,7 +160,11 @@ def _compact_controller_diagnostics_payload(payload: dict[str, Any]) -> dict[str
     return out
 
 
-def _compact_action_pipeline_stage(stage: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def _compact_action_pipeline_stage(
+    stage: dict[str, Any],
+    *,
+    stage_name: str,
+) -> tuple[dict[str, Any], bool]:
     out = dict(stage)
     changed = False
     orders = out.get("orders")
@@ -153,7 +175,10 @@ def _compact_action_pipeline_stage(stage: dict[str, Any]) -> tuple[dict[str, Any
         out["orders_sample"] = [_sample_order(order) for order in orders[:2] if isinstance(order, dict)]
         out["orders_compacted_count"] = len(orders)
         out["orders_compacted"] = True
-        out["orders"] = []
+        if stage_name in _ACTION_PIPELINE_SLIM_ORDER_STAGES:
+            out["orders"] = [_sample_order(order) for order in orders if isinstance(order, dict)]
+        else:
+            out["orders"] = []
         changed = True
     rejections = out.get("rejections")
     if isinstance(rejections, list) and rejections:

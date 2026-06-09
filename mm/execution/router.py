@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -59,8 +60,12 @@ class OrderRouter:
             execution_plan_id=plan.execution_plan_id,
         )
 
+        cancel_ms = 0.0
+        place_ms = 0.0
+
         cancel_ids = [command.exchange_order_id for command in plan.cancel]
         if cancel_ids:
+            cancel_started_ns = time.monotonic_ns()
             await self._publish(
                 "execution:orders",
                 cancel_orders_requested_event(
@@ -97,13 +102,19 @@ class OrderRouter:
                         **lineage,
                     ),
                 )
+                cancel_ms = (time.monotonic_ns() - cancel_started_ns) / 1_000_000
                 if plan.policy == "replace":
                     return RouterResult(
                         cancelled_ids=tuple(cancelled),
                         failed_cancel_ids=tuple(failed_cancels),
+                        cancel_ms=cancel_ms,
+                        place_ms=place_ms,
                     )
+            else:
+                cancel_ms = (time.monotonic_ns() - cancel_started_ns) / 1_000_000
 
         if plan.place:
+            place_started_ns = time.monotonic_ns()
             orders = [command.order for command in plan.place]
             await self._publish(
                 "execution:orders",
@@ -118,6 +129,7 @@ class OrderRouter:
             try:
                 order_ids = await self.command_adapter.place_orders(orders)
             except Exception as exc:
+                place_ms = (time.monotonic_ns() - place_started_ns) / 1_000_000
                 self._observe_adapter_failure(plan, operation="place_orders", exc=exc)
                 failed_places.extend(
                     CommandRejection(
@@ -159,6 +171,7 @@ class OrderRouter:
                         **lineage,
                     ),
                 )
+                place_ms = (time.monotonic_ns() - place_started_ns) / 1_000_000
 
         for rejection in plan.rejected:
             await self._publish(
@@ -181,6 +194,8 @@ class OrderRouter:
             placed=tuple(placed),
             failed_cancel_ids=tuple(failed_cancels),
             failed_places=tuple(failed_places),
+            cancel_ms=cancel_ms,
+            place_ms=place_ms,
         )
 
     async def _publish(self, topic_prefix: str, event: dict[str, Any]) -> None:

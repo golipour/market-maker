@@ -606,6 +606,18 @@ def _jsonb_array_or_empty_sql(expr: str) -> str:
 END"""
 
 
+def _action_pipeline_orders_array_sql(stage: str, *, field: str = "orders") -> str:
+    """Prefer full stage orders; fall back to persisted samples for legacy rows."""
+
+    orders_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', '{field}']"
+    sample_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', 'orders_sample']"
+    return f"""CASE
+  WHEN jsonb_typeof({orders_expr}) = 'array' AND jsonb_array_length({orders_expr}) > 0 THEN {orders_expr}
+  WHEN jsonb_typeof({sample_expr}) = 'array' AND jsonb_array_length({sample_expr}) > 0 THEN {sample_expr}
+  ELSE '[]'::jsonb
+END"""
+
+
 def _jsonb_object_or_empty_sql(expr: str) -> str:
     return f"""CASE
   WHEN jsonb_typeof({expr}) = 'object' THEN {expr}
@@ -1099,6 +1111,8 @@ controller AS (
       ('strategy.optimizer_total', e.payload #>> ARRAY['optimizer','timing','total_sec'], 'sec'),
       ('strategy.risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),
       ('strategy.publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),
+      ('execution.cancel', e.payload #>> ARRAY['optimizer','timing','cancel_ms'], 'ms'),
+      ('execution.place', e.payload #>> ARRAY['optimizer','timing','place_ms'], 'ms'),
       ('execution.sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),
       ('controller.total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')
   ) AS s(metric, raw_value, unit)
@@ -1141,6 +1155,8 @@ def _slowest_frames_sql() -> str:
     optimizer_total = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','total_sec']", "'sec'")
     train_loop = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','train_sec']", "'sec'")
     execute = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','execute_ms']", "'ms'")
+    cancel = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','cancel_ms']", "'ms'")
+    place = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','place_ms']", "'ms'")
     frame_age = _pipeline_value_ms_sql("e.payload #>> ARRAY['frame','frame_age_ms']", "'ms'")
     return f"""SELECT
   e.ts,
@@ -1153,6 +1169,8 @@ def _slowest_frames_sql() -> str:
   {decide} AS decide_ms,
   {optimizer_total} AS optimizer_total_ms,
   {train_loop} AS optimizer_train_loop_ms,
+  {cancel} AS execution_cancel_ms,
+  {place} AS execution_place_ms,
   {execute} AS execution_sync_ms,
   {frame_age} AS frame_age_ms,
   COALESCE(e.payload->'warnings', '[]'::jsonb) AS warnings
@@ -1169,6 +1187,102 @@ def _pipeline_value_ms_sql(value_expr: str, unit_expr: str) -> str:
   WHEN lower(trim(COALESCE({unit_expr}, 'ms'))) = 'sec' THEN ({numeric}) * 1000.0
   ELSE ({numeric})
 END"""
+
+
+def _pipeline_frames_cte_sql() -> str:
+    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
+    t_end = _numeric_sql("e.payload->>'t_end_ms'")
+    controller_end = _numeric_sql("e.payload->>'created_at_ms'")
+    frame_created = _numeric_sql("e.payload #>> ARRAY['frame','frame_created_at_ms']")
+    orderbook_ts = f"""COALESCE(
+  {_numeric_sql("e.payload #>> ARRAY['frame','local_orderbook_timestamp_ms']")},
+  m.orderbook_timestamp_ms
+)"""
+    clean = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','clean_ms']", "'ms'")
+    decide = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','decide_ms']", "'ms'")
+    risk = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','risk_ms']", "'ms'")
+    publish = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','publish_ms']", "'ms'")
+    cancel = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','cancel_ms']", "'ms'")
+    place = _pipeline_value_ms_sql("e.payload #>> ARRAY['optimizer','timing','place_ms']", "'ms'")
+    controller_total = _pipeline_value_ms_sql(
+        "e.payload #>> ARRAY['optimizer','timing','controller_total_ms']",
+        "'ms'",
+    )
+    metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
+    return f"""frames AS (
+  SELECT
+    {_approx_step_time_alias_sql(step_source)} AS "time",
+    {metric_prefix} AS metric_prefix,
+    {t_end} AS t_end_ms,
+    {orderbook_ts} AS orderbook_timestamp_ms,
+    {frame_created} AS frame_created_at_ms,
+    {controller_end} AS controller_end_ms,
+    {controller_total} AS controller_total_ms,
+    {clean} AS clean_ms,
+    {decide} AS decide_ms,
+    {risk} AS risk_ms,
+    {publish} AS publish_ms,
+    {cancel} AS cancel_ms,
+    {place} AS place_ms
+  FROM mm_events e
+  LEFT JOIN mm_market_facts m
+    ON m.exchange = e.exchange
+   AND m.symbol = e.symbol
+   AND m.t_end_ms = ({t_end})::bigint
+  WHERE {_diagnostics_filter()}
+)"""
+
+
+def _pipeline_cumulative_profile_sql(*, anchor: str) -> str:
+    strategy_start = "(f.controller_end_ms - f.controller_total_ms)"
+    stage_sum = (
+        f"{strategy_start} + "
+        "COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + "
+        "COALESCE(f.risk_ms, 0) + COALESCE(f.publish_ms, 0)"
+    )
+    if anchor == "orderbook":
+        anchor_filter = "f.orderbook_timestamp_ms IS NOT NULL"
+        offset = "f.orderbook_timestamp_ms"
+        milestones = f"""
+      ('+orderbook.ref', 0.0),
+      ('+frame_close', f.t_end_ms - f.orderbook_timestamp_ms),
+      ('+frame_assembled', f.frame_created_at_ms - f.orderbook_timestamp_ms),
+      ('+strategy_start', {strategy_start} - f.orderbook_timestamp_ms),
+      ('+after_clean', {strategy_start} + COALESCE(f.clean_ms, 0) - f.orderbook_timestamp_ms),
+      ('+after_decide', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - f.orderbook_timestamp_ms),
+      ('+after_risk', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - f.orderbook_timestamp_ms),
+      ('+after_publish', {stage_sum} - f.orderbook_timestamp_ms),
+      ('+after_cancel', {stage_sum} + COALESCE(f.cancel_ms, 0) - f.orderbook_timestamp_ms),
+      ('+after_place', {stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - f.orderbook_timestamp_ms),
+      ('+pipeline_end', f.controller_end_ms - f.orderbook_timestamp_ms)"""
+    elif anchor == "t_end":
+        anchor_filter = "f.t_end_ms IS NOT NULL"
+        offset = "f.t_end_ms"
+        milestones = f"""
+      ('+frame_close.ref', 0.0),
+      ('+frame_assembled', f.frame_created_at_ms - f.t_end_ms),
+      ('+strategy_start', {strategy_start} - f.t_end_ms),
+      ('+after_clean', {strategy_start} + COALESCE(f.clean_ms, 0) - f.t_end_ms),
+      ('+after_decide', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - f.t_end_ms),
+      ('+after_risk', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - f.t_end_ms),
+      ('+after_publish', {stage_sum} - f.t_end_ms),
+      ('+after_cancel', {stage_sum} + COALESCE(f.cancel_ms, 0) - f.t_end_ms),
+      ('+after_place', {stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - f.t_end_ms),
+      ('+pipeline_end', f.controller_end_ms - f.t_end_ms)"""
+    else:
+        raise ValueError(f"unknown cumulative pipeline anchor: {anchor}")
+    return f"""WITH {_pipeline_frames_cte_sql()}
+SELECT
+  f."time",
+  f.metric_prefix || s.metric AS metric,
+  s.value AS value
+FROM frames f
+CROSS JOIN LATERAL (
+  VALUES{milestones}
+) AS s(metric, value)
+WHERE {anchor_filter}
+  AND s.value IS NOT NULL
+ORDER BY 1, 2"""
 
 
 def _model_nll_step_sql() -> str:
@@ -2329,8 +2443,8 @@ def _latest_action_pipeline_stage_orders_sql(
     qty = _numeric_sql("o.value->>'qty'")
     axis_price = _numeric_sql("axis_o.value->>'price'", default="NULL")
     axis_qty = _numeric_sql("axis_o.value->>'qty'")
-    orders_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', '{field}']"
-    axis_orders_expr = "l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']"
+    orders_expr = _action_pipeline_orders_array_sql(stage, field=field)
+    axis_orders_expr = _action_pipeline_orders_array_sql("ladder")
     venue_gates_expr = "l.payload #> ARRAY['execution_gates', 'venue_gates']"
     reason_filter = ""
     if reason is not None:
@@ -2383,7 +2497,7 @@ orders AS (
          {qty} AS value
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    {_jsonb_array_or_empty_sql(orders_expr)}
+    {orders_expr}
   ) AS o(value)
   WHERE {side} IN ('bid', 'ask')
     AND {price} IS NOT NULL{reason_filter}{role_filter}
@@ -2393,7 +2507,7 @@ axis_points AS (
          {axis_qty} AS value
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    {_jsonb_array_or_empty_sql(axis_orders_expr)}
+    {axis_orders_expr}
   ) AS axis_o(value)
   WHERE {axis_price} IS NOT NULL{axis_role_filter}
 ),
@@ -2441,7 +2555,7 @@ def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str) -> str:
     side = _side_sql("o.value->>'side'")
     price = _numeric_sql("o.value->>'price'", default="NULL")
     qty = _numeric_sql("o.value->>'qty'")
-    orders_expr = f"l.payload #> ARRAY['action_pipeline', '{stage}', 'orders']"
+    orders_expr = _action_pipeline_orders_array_sql(stage)
     venue_gates_expr = "l.payload #> ARRAY['execution_gates', 'venue_gates']"
     clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
     state_mid_path = "global_mid" if role == "global" else "mid"
@@ -2498,7 +2612,7 @@ bid_levels AS (
          {qty} AS qty
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    {_jsonb_array_or_empty_sql(orders_expr)}
+    {orders_expr}
   ) AS o(value)
   WHERE {side} = 'bid'
     AND {price} IS NOT NULL
@@ -2511,7 +2625,7 @@ ask_levels AS (
          {qty} AS qty
   FROM latest l
   CROSS JOIN LATERAL jsonb_array_elements(
-    {_jsonb_array_or_empty_sql(orders_expr)}
+    {orders_expr}
   ) AS o(value)
   WHERE {side} = 'ask'
     AND {price} IS NOT NULL
@@ -3108,7 +3222,11 @@ def pipeline_time_profile() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "End-to-end frame latency profile. The main chart uses persisted frame/controller diagnostics; raw adapter receive lag comes from Prometheus because raw market events are intentionally not persisted by default.",
+            "Per-frame stage durations plus cumulative milestone offsets. "
+            "The cumulative charts reconstruct pipeline output times from diagnostics timings; "
+            "orderbook-relative milestones use local `orderbook_timestamp_ms`, "
+            "frame-relative milestones use local `t_end_ms`. "
+            "Raw adapter receive lag stays on Prometheus because raw market events are not persisted by default.",
             y=0,
         ),
         _panel(
@@ -3124,13 +3242,37 @@ def pipeline_time_profile() -> dict[str, Any]:
             unit="ms",
         ),
         _panel(
+            6,
+            "Cumulative pipeline offset vs orderbook timestamp",
+            "timeseries",
+            PG_DS,
+            _pipeline_cumulative_profile_sql(anchor="orderbook"),
+            x=0,
+            y=13,
+            w=24,
+            h=10,
+            unit="ms",
+        ),
+        _panel(
+            7,
+            "Cumulative pipeline offset vs frame close (t_end_ms)",
+            "timeseries",
+            PG_DS,
+            _pipeline_cumulative_profile_sql(anchor="t_end"),
+            x=0,
+            y=23,
+            w=24,
+            h=10,
+            unit="ms",
+        ),
+        _panel(
             3,
             "Raw feed receive lag latest",
             "timeseries",
             PROM_DS,
             'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}",kind="orderbook"})',
             x=0,
-            y=13,
+            y=33,
             w=12,
             unit="ms",
             legend="{{exchange}} {{symbol}} {{kind}}",
@@ -3142,7 +3284,7 @@ def pipeline_time_profile() -> dict[str, Any]:
             PG_DS,
             _optimizer_substage_profile_sql(),
             x=12,
-            y=13,
+            y=33,
             w=12,
             unit="ms",
         ),
@@ -3153,7 +3295,7 @@ def pipeline_time_profile() -> dict[str, Any]:
             PG_DS,
             _slowest_frames_sql(),
             x=0,
-            y=21,
+            y=41,
             w=24,
             h=9,
             fmt="table",

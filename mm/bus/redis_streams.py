@@ -17,7 +17,11 @@ from mm.bus.delivery import (
     record_subscriber_queue_metrics,
 )
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
-from mm.core.payload_schema import market_event_event, private_state_snapshot_event
+from mm.core.payload_schema import (
+    PRIVATE_STATE_SNAPSHOT_TYPE,
+    market_event_event,
+    private_state_snapshot_event,
+)
 from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.observability.event_payloads import observe_envelope, observe_runtime_event
 

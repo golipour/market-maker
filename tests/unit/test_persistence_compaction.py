@@ -225,13 +225,14 @@ def test_compaction_summarizes_controller_diagnostics_action_pipeline_orders() -
     assert compacted.payload["action_pipeline_compacted"] is True
     assert target["order_count"] == 10
     assert target["buy_qty"] == 5.0
-    assert target["orders"] == []
+    assert len(target["orders"]) == 10
     assert target["orders_compacted_count"] == 10
     assert target["orders_compacted"] is True
     assert target["buy_count"] == 10
     assert target["orders_digest"]
+    assert target["orders"][0]["price"] == 100.0
+    assert "client_order_id" not in target["orders"][0]
     assert target["orders_sample"][0]["price"] == 100.0
-    assert "client_order_id" not in target["orders_sample"][0]
     assert rules["rejection_counts"] == {"rules_min_notional": 4}
     assert rules["rejections"] == []
     assert rules["rejections_compacted_count"] == 4

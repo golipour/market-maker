@@ -23,6 +23,8 @@ def execution_plan_to_sync_report(
     live_orders: Mapping[str, OpenOrder],
     placed: bool = False,
     accepted_orders: Sequence[Order] = (),
+    cancel_ms: float = 0.0,
+    place_ms: float = 0.0,
 ) -> ExecutionSyncReport:
     """Map a venue execution plan onto the ``ExecutionSyncReport`` funnel."""
 
@@ -64,6 +66,8 @@ def execution_plan_to_sync_report(
         venue_rejection_counts=rejection_counts,
         cancel_count=len(plan.cancel),
         placed=placed,
+        cancel_ms=max(0.0, float(cancel_ms)),
+        place_ms=max(0.0, float(place_ms)),
     )
 
 

@@ -22,7 +22,7 @@
         "mode": "rest",
         "depth_limit": 100,
         "trades_limit": 200,
-        "poll_interval_ms": 1000
+        "poll_interval_ms": 2000
       },
       "private": {
         "_comment": "Private state credentials. Execution is controlled by the strategy preset, not by this block.",
@@ -47,7 +47,7 @@
         "mode": "rest",
         "depth_limit": 200,
         "trades_limit": 200,
-        "poll_interval_ms": 1000
+        "poll_interval_ms": 2000
       },
       "private": {
         "_options": {
@@ -70,7 +70,7 @@
         "mode": "rest",
         "depth_limit": 200,
         "trades_limit": 200,
-        "poll_interval_ms": 1000
+        "poll_interval_ms": 2000
       },
       "private": {
         "_options": {
@@ -92,7 +92,7 @@
         "mode": "rest",
         "depth_limit": 200,
         "trades_limit": 200,
-        "poll_interval_ms": 1000
+        "poll_interval_ms": 2000
       },
       "private": {
         "_options": {
@@ -271,8 +271,8 @@
       "_comment": "One runtime config currently starts one bot. quoting_exchange is where maker quotes are placed; liquidity_exchange is the second book and optional liquidity-source venue.",
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
-      "quoting_exchange": "nobitex",
-      "liquidity_exchange": "nobitex"
+      "quoting_exchange": "wallex",
+      "liquidity_exchange": "wallex"
     }
   },
   "bus": {

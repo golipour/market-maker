@@ -110,6 +110,37 @@ async def test_redis_streams_bus_records_stream_envelope_size() -> None:
 
 
 @pytest.mark.asyncio
+async def test_redis_streams_bus_compacts_dict_private_snapshot_payload() -> None:
+    writes = []
+
+    class FakeRedis:
+        async def xadd(self, stream, fields, **kwargs):
+            writes.append((stream, fields, kwargs))
+
+        async def aclose(self):
+            pass
+
+    bus = RedisStreamsBus(stream_prefix="test")
+    bus._redis = FakeRedis()
+    queue = bus.subscribe_queue("private:state:nobitex:snapshot")
+    snapshot = PrivateStateSnapshot(
+        exchange="nobitex",
+        timestamp_ms=1,
+        balances={"USDT": Balance("nobitex", "USDT", 100.0, 0.0, 100.0, 1)},
+        open_orders={},
+    )
+    payload = snapshot.as_payload()
+
+    await bus.publish("private:state:nobitex:snapshot", payload)
+
+    delivered = await queue.get()
+    assert delivered is payload
+    assert writes
+    assert writes[0][0] == "test.private.state.nobitex.snapshot"
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_bus_skips_zero_balance_stream_writes() -> None:
     writes = []
 

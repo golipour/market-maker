@@ -421,6 +421,8 @@ class StrategyRunner:
                     )
             ctx.record_stage_latency("execute", _elapsed_ms(execute_started))
             if execution_report is not None:
+                ctx.record_stage_latency("cancel", float(execution_report.cancel_ms))
+                ctx.record_stage_latency("place", float(execution_report.place_ms))
                 ctx.apply_execution_to_pipeline(execution_report, executed=sync_executed)
 
             if self.bus is not None:

@@ -141,7 +141,7 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
         assert role_sql in sql
         if "action ladder depth" in title:
             assert "jsonb_typeof" in sql
-            assert "ELSE '[]'::jsonb" in sql
+            assert "orders_sample" in sql
 
     expected = {
         "Local marginal ladder": (0, 27, "ladder", "WHERE role = 'local'"),
@@ -180,6 +180,8 @@ def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None
 
     expected_titles = {
         "End-to-end pipeline latency / frame",
+        "Cumulative pipeline offset vs orderbook timestamp",
+        "Cumulative pipeline offset vs frame close (t_end_ms)",
         "Raw feed receive lag latest",
         "Optimizer substage latency / frame",
         "Slowest recent frames",
@@ -197,9 +199,23 @@ def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None
     assert "strategy.optimizer_total" in pipeline_sql
     assert "strategy.risk" in pipeline_sql
     assert "strategy.publish" in pipeline_sql
+    assert "execution.cancel" in pipeline_sql
+    assert "execution.place" in pipeline_sql
     assert "execution.sync" in pipeline_sql
     assert "controller.total" in pipeline_sql
     assert "e.payload #>> ARRAY['optimizer','timing'" in pipeline_sql
+
+    orderbook_sql = panels_by_title["Cumulative pipeline offset vs orderbook timestamp"]["targets"][0]["rawSql"]
+    assert "+orderbook.ref" in orderbook_sql
+    assert "+frame_close" in orderbook_sql
+    assert "+after_cancel" in orderbook_sql
+    assert "+after_place" in orderbook_sql
+    assert "local_orderbook_timestamp_ms" in orderbook_sql
+
+    t_end_sql = panels_by_title["Cumulative pipeline offset vs frame close (t_end_ms)"]["targets"][0]["rawSql"]
+    assert "+frame_close.ref" in t_end_sql
+    assert "+frame_assembled" in t_end_sql
+    assert "+pipeline_end" in t_end_sql
 
     raw_panel = panels_by_title["Raw feed receive lag latest"]
     assert raw_panel["targets"][0]["datasource"]["type"] == "prometheus"
