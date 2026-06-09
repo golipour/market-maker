@@ -4,7 +4,8 @@ import asyncio
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.execution import Fill
-from mm.core.models.private import OpenOrder, OrderUpdate, PrivateStateSnapshot
+from mm.core.payload_schema import private_state_snapshot_from_payload
+from mm.core.models.private import OpenOrder, OrderUpdate
 from mm.execution.order_manager import OrderManager
 
 
@@ -37,8 +38,10 @@ class ExecutionStateReconciler:
 
     async def _listen_snapshot(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:snapshot"):
-            if isinstance(event, PrivateStateSnapshot):
-                snapshot = self.manager.apply_private_snapshot(event)
+            if isinstance(event, dict):
+                snapshot = self.manager.apply_private_snapshot(
+                    private_state_snapshot_from_payload(event)
+                )
                 await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_open_orders(self) -> None:

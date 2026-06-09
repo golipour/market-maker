@@ -186,6 +186,18 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "open_order_count": len(event.open_orders),
             "open_order_ids": sorted(event.open_orders)[:10],
         }
+    if isinstance(event, dict) and event.get("type") == "PrivateStateSnapshot":
+        balances = event.get("balances") or {}
+        open_orders = event.get("open_orders") or {}
+        return {
+            "type": "PrivateStateSnapshot",
+            "exchange": event.get("exchange"),
+            "timestamp_ms": event.get("timestamp_ms"),
+            "balance_assets": sorted(balances),
+            "balance_count": event.get("balance_count", len(balances)),
+            "open_order_count": event.get("open_order_count", len(open_orders)),
+            "open_order_ids": sorted(open_orders)[:10],
+        }
     if isinstance(event, Balance):
         return {
             "type": "Balance",

@@ -9,6 +9,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
+from mm.core.payload_schema import PRIVATE_STATE_SNAPSHOT_TYPE, private_state_snapshot_event
 from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.observability.event_payloads import observe_envelope, observe_runtime_event
 
@@ -189,20 +190,25 @@ def _compact_stream_event(topic: str, event: Any) -> Any | None:
         if _balance_is_zero(event):
             return None
         return event
-    if topic.endswith(":snapshot") and isinstance(event, PrivateStateSnapshot):
-        balances = {
-            asset: balance
-            for asset, balance in event.balances.items()
-            if not _balance_is_zero(balance)
-        }
-        return {
-            "type": "PrivateStateSnapshotSummary",
-            "exchange": event.exchange,
-            "timestamp_ms": event.timestamp_ms,
-            "balance_count": len(event.balances),
-            "nonzero_balance_count": len(balances),
-            "balances": balances,
-            "open_order_count": len(event.open_orders),
-            "open_orders": event.open_orders,
-        }
+    if topic.endswith(":snapshot"):
+        snapshot = event
+        if isinstance(event, dict) and event.get("type") == PRIVATE_STATE_SNAPSHOT_TYPE:
+            from mm.core.payload_schema import private_state_snapshot_from_payload
+
+            snapshot = private_state_snapshot_from_payload(event)
+        if isinstance(snapshot, PrivateStateSnapshot):
+            filtered = PrivateStateSnapshot(
+                exchange=snapshot.exchange,
+                timestamp_ms=snapshot.timestamp_ms,
+                balances={
+                    asset: balance
+                    for asset, balance in snapshot.balances.items()
+                    if not _balance_is_zero(balance)
+                },
+                open_orders=snapshot.open_orders,
+            )
+            payload = private_state_snapshot_event(filtered)
+            payload["balance_count"] = len(snapshot.balances)
+            payload["nonzero_balance_count"] = len(filtered.balances)
+            return payload
     return event

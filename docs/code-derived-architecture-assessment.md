@@ -275,16 +275,16 @@ Recommendation:
 
 ### 13. Remaining Event Payloads Still Mix Dicts And Dataclasses
 
-Severity: Low to Medium
+Severity: Low
 
-Execution lifecycle/snapshot events, joint target books, `StrategyDecision`, and `ControllerDiagnostics` now publish through versioned builders in `mm/core/payload_schema.py` (`payload_schema` + `payload_version` on every payload). Replay fidelity checks cover execution lifecycle coherence.
+Execution, target-book, strategy-decision, controller-diagnostics, private-snapshot, and ledger-snapshot events now publish through versioned builders in `mm/core/payload_schema.py`. Private snapshot bus topics publish versioned dict payloads; consumers parse them with `private_state_snapshot_from_payload()`.
 
-Impact: The highest-volume controller and decision events now share the same schema contract as execution and target-book events. Market events, private snapshots, and ledger snapshots still use mixed dataclass/dict shapes without dedicated builders.
+Impact: The main durable runtime event families now share one schema contract. Market events and incremental private balance/open-order deltas still use typed structs on the bus without versioned payload builders.
 
 Recommendation:
 
-- Add typed payload builders for private snapshots and ledger snapshots next.
-- Add replay/persistence contract tests as each remaining event family is migrated.
+- Add versioned payload builders for `MarketEvent` and incremental private deltas if those topics become durable at scale.
+- Extend replay fidelity checks to cover private/ledger snapshot schema validation where useful.
 
 ### 14. Secrets And Local Compose Defaults Need Production Hardening
 
@@ -424,7 +424,7 @@ Priority recommendations:
 
 ### Priority 3: Maintainability And DX
 
-- Add typed payload builders for private snapshots and ledger snapshots.
+- Add versioned payload builders for `MarketEvent` and incremental private deltas.
 - Generate dashboard queries from stable schema helpers where possible.
 - Document one-bot-per-process deployment explicitly.
 - Extend replay fidelity into full frame re-simulation through strategy/risk/execution when a deterministic offline harness is needed.

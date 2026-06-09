@@ -8,8 +8,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
-from mm.core.wallet import make_balance
-from mm.core.models.private import Balance, PrivateStateSnapshot
+from mm.core.payload_schema import private_state_snapshot_from_payload
 from mm.persistence.replay import read_envelopes
 
 
@@ -55,36 +54,10 @@ def market_event_from_payload(payload: Any) -> MarketEvent | None:
         return None
 
 
-def private_snapshot_from_payload(payload: Any) -> PrivateStateSnapshot | None:
-    if isinstance(payload, PrivateStateSnapshot):
-        return payload
-    if not isinstance(payload, dict):
-        return None
+def private_snapshot_from_payload(payload: Any):
     try:
-        ex = str(payload["exchange"])
-        ts = int(payload["timestamp_ms"])
-        balances_raw = payload.get("balances") or {}
-        balances: dict[str, Balance] = {}
-        for asset, row in balances_raw.items():
-            akey = str(asset)
-            if isinstance(row, Balance):
-                balances[akey] = row
-            elif isinstance(row, dict):
-                balances[akey] = make_balance(
-                    exchange=str(row.get("exchange", ex)),
-                    asset=str(row.get("asset", akey)),
-                    free=float(row.get("free", 0.0)),
-                    locked=float(row.get("locked", 0.0)),
-                    timestamp_ms=int(row.get("timestamp_ms", ts)),
-                    total=float(row["total"]) if row.get("total") is not None else None,
-                )
-        return PrivateStateSnapshot(
-            exchange=ex,
-            timestamp_ms=ts,
-            balances=balances,
-            open_orders={},
-        )
-    except (KeyError, TypeError, ValueError):
+        return private_state_snapshot_from_payload(payload)
+    except (TypeError, ValueError):
         return None
 
 
@@ -152,7 +125,7 @@ class ReplayMarketDataAdapter:
             elif topic.startswith("private:state:") and topic.endswith(":snapshot"):
                 snap = private_snapshot_from_payload(envelope.payload)
                 if snap is not None:
-                    await self.bus.publish(topic, snap)
+                    await self.bus.publish(topic, snap.as_payload())
                     n_private += 1
             if self.pace_ms:
                 await asyncio.sleep(self.pace_ms / 1000.0)

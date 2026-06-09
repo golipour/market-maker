@@ -27,6 +27,18 @@ CONTROLLER_DIAGNOSTICS_SCHEMA = "mm.controller_diagnostics"
 CONTROLLER_DIAGNOSTICS_VERSION = 1
 CONTROLLER_DIAGNOSTICS_TYPE = "ControllerDiagnostics"
 
+PRIVATE_STATE_SNAPSHOT_SCHEMA = "mm.private_state_snapshot"
+PRIVATE_STATE_SNAPSHOT_VERSION = 1
+PRIVATE_STATE_SNAPSHOT_TYPE = "PrivateStateSnapshot"
+
+VENUE_LEDGER_SNAPSHOT_SCHEMA = "mm.venue_ledger_snapshot"
+VENUE_LEDGER_SNAPSHOT_VERSION = 1
+VENUE_LEDGER_SNAPSHOT_TYPE = "VenueLedgerSnapshot"
+
+JOINT_LEDGER_SNAPSHOT_SCHEMA = "mm.joint_ledger_snapshot"
+JOINT_LEDGER_SNAPSHOT_VERSION = 1
+JOINT_LEDGER_SNAPSHOT_TYPE = "JointLedgerSnapshot"
+
 
 def stamped(schema: str, version: int, **fields: Any) -> dict[str, Any]:
     return {"payload_schema": schema, "payload_version": version, **fields}
@@ -622,4 +634,207 @@ def _controller_risk_payload(risk: Any) -> dict[str, Any]:
         "exposure_before": dict(risk.exposure_before),
         "exposure_after": dict(risk.exposure_after),
         "limits": dict(risk.limits),
+    }
+
+
+def private_state_snapshot_event(snapshot: Any) -> dict[str, Any]:
+    """Build a versioned private exchange snapshot bus payload."""
+
+    return stamped(
+        PRIVATE_STATE_SNAPSHOT_SCHEMA,
+        PRIVATE_STATE_SNAPSHOT_VERSION,
+        type=PRIVATE_STATE_SNAPSHOT_TYPE,
+        exchange=snapshot.exchange,
+        timestamp_ms=int(snapshot.timestamp_ms),
+        balances={
+            asset: _private_balance_payload(balance)
+            for asset, balance in snapshot.balances.items()
+        },
+        open_orders={
+            order_id: _private_open_order_payload(open_order)
+            for order_id, open_order in snapshot.open_orders.items()
+        },
+    )
+
+
+def private_state_snapshot_from_payload(payload: Any) -> Any:
+    """Parse a versioned private snapshot payload back into ``PrivateStateSnapshot``."""
+
+    from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
+    from mm.core.models.execution import Order
+
+    if isinstance(payload, PrivateStateSnapshot):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected private snapshot payload dict, got {type(payload)!r}")
+    assert_payload_schema(payload, PRIVATE_STATE_SNAPSHOT_SCHEMA, PRIVATE_STATE_SNAPSHOT_VERSION)
+    exchange = str(payload["exchange"])
+    timestamp_ms = int(payload["timestamp_ms"])
+    balances: dict[str, Balance] = {}
+    for asset, row in dict(payload.get("balances") or {}).items():
+        balances[str(asset)] = _private_balance_from_payload(row, exchange=exchange, timestamp_ms=timestamp_ms)
+    open_orders: dict[str, OpenOrder] = {}
+    for order_id, row in dict(payload.get("open_orders") or {}).items():
+        open_orders[str(order_id)] = _private_open_order_from_payload(
+            row,
+            exchange=exchange,
+            fallback_order_id=str(order_id),
+            timestamp_ms=timestamp_ms,
+        )
+    return PrivateStateSnapshot(
+        exchange=exchange,
+        timestamp_ms=timestamp_ms,
+        balances=balances,
+        open_orders=open_orders,
+    )
+
+
+def venue_ledger_snapshot_event(ledger: Any) -> dict[str, Any]:
+    """Build a versioned venue ledger snapshot bus payload."""
+
+    return stamped(
+        VENUE_LEDGER_SNAPSHOT_SCHEMA,
+        VENUE_LEDGER_SNAPSHOT_VERSION,
+        type=VENUE_LEDGER_SNAPSHOT_TYPE,
+        exchange=ledger.exchange,
+        symbol=ledger.symbol,
+        base_asset=ledger.base_asset,
+        quote_asset=ledger.quote_asset,
+        balances={
+            asset: _private_balance_payload(balance)
+            for asset, balance in ledger.balances.items()
+        },
+        live_orders={
+            order_id: _private_open_order_payload(open_order)
+            for order_id, open_order in ledger.live_orders.items()
+        },
+        locked_base=float(ledger.locked_base),
+        locked_quote=float(ledger.locked_quote),
+        available_base=float(ledger.available_base),
+        available_quote=float(ledger.available_quote),
+        last_private_event_ms=int(ledger.last_private_event_ms),
+        last_snapshot_ms=int(ledger.last_snapshot_ms),
+    )
+
+
+def joint_ledger_snapshot_event(joint: Any) -> dict[str, Any]:
+    """Build a versioned joint ledger snapshot bus payload."""
+
+    payload = stamped(
+        JOINT_LEDGER_SNAPSHOT_SCHEMA,
+        JOINT_LEDGER_SNAPSHOT_VERSION,
+        type=JOINT_LEDGER_SNAPSHOT_TYPE,
+        local=venue_ledger_snapshot_event(joint.local),
+        reference_price=float(joint.reference_price),
+        consolidated_base_inventory=float(joint.consolidated_base_inventory),
+        consolidated_quote_wealth=float(joint.consolidated_quote_wealth),
+        created_at_ms=int(joint.created_at_ms),
+        freshness=_ledger_freshness_payload(joint.freshness),
+    )
+    payload["global"] = (
+        venue_ledger_snapshot_event(joint.global_) if joint.global_ is not None else None
+    )
+    return payload
+
+
+def _private_balance_payload(balance: Any) -> dict[str, Any]:
+    return {
+        "exchange": balance.exchange,
+        "asset": balance.asset,
+        "free": float(balance.free),
+        "locked": float(balance.locked),
+        "total": float(balance.total),
+        "timestamp_ms": int(balance.timestamp_ms),
+    }
+
+
+def _private_open_order_payload(open_order: Any) -> dict[str, Any]:
+    order = open_order.order
+    return {
+        "exchange_order_id": open_order.exchange_order_id,
+        "actor_id": open_order.actor_id,
+        "remaining_qty": float(open_order.remaining_qty),
+        "filled_qty": float(open_order.filled_qty),
+        "status": open_order.status,
+        "timestamp_ms": int(open_order.timestamp_ms),
+        "order": {
+            "exchange": order.exchange,
+            "symbol": order.symbol,
+            "side": order.side,
+            "price": float(order.price),
+            "qty": float(order.qty),
+            "order_type": order.order_type,
+            "client_order_id": order.client_order_id,
+        },
+    }
+
+
+def _private_balance_from_payload(
+    row: Any,
+    *,
+    exchange: str,
+    timestamp_ms: int,
+) -> Any:
+    from mm.core.models.private import Balance
+
+    if isinstance(row, Balance):
+        return row
+    if not isinstance(row, dict):
+        raise TypeError(f"expected balance payload dict, got {type(row)!r}")
+    asset = str(row.get("asset") or "")
+    total = row.get("total")
+    return Balance(
+        exchange=str(row.get("exchange") or exchange),
+        asset=asset,
+        free=float(row.get("free") or 0.0),
+        locked=float(row.get("locked") or 0.0),
+        total=float(total if total is not None else float(row.get("free") or 0.0) + float(row.get("locked") or 0.0)),
+        timestamp_ms=int(row.get("timestamp_ms") or timestamp_ms),
+    )
+
+
+def _private_open_order_from_payload(
+    row: Any,
+    *,
+    exchange: str,
+    fallback_order_id: str,
+    timestamp_ms: int,
+) -> Any:
+    from mm.core.models.execution import Order
+    from mm.core.models.private import OpenOrder
+
+    if isinstance(row, OpenOrder):
+        return row
+    if not isinstance(row, dict):
+        raise TypeError(f"expected open-order payload dict, got {type(row)!r}")
+    order_row = row.get("order")
+    if not isinstance(order_row, dict):
+        raise ValueError("open-order payload requires nested order dict")
+    order = Order(
+        exchange=str(order_row.get("exchange") or exchange),
+        symbol=str(order_row["symbol"]),
+        side=str(order_row["side"]),
+        price=float(order_row["price"]),
+        qty=float(order_row["qty"]),
+        order_type=str(order_row.get("order_type") or "limit"),
+        client_order_id=order_row.get("client_order_id"),
+    )
+    return OpenOrder(
+        exchange_order_id=str(row.get("exchange_order_id") or fallback_order_id),
+        actor_id=row.get("actor_id"),
+        order=order,
+        remaining_qty=float(row.get("remaining_qty") or 0.0),
+        filled_qty=float(row.get("filled_qty") or 0.0),
+        status=str(row.get("status") or "open"),
+        timestamp_ms=int(row.get("timestamp_ms") or timestamp_ms),
+    )
+
+
+def _ledger_freshness_payload(freshness: Any) -> dict[str, Any]:
+    return {
+        "local_private_age_ms": freshness.local_private_age_ms,
+        "global_private_age_ms": freshness.global_private_age_ms,
+        "local_market_age_ms": freshness.local_market_age_ms,
+        "global_market_age_ms": freshness.global_market_age_ms,
+        "ledger_fresh": freshness.ledger_fresh,
     }

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from mm.core.payload_schema import joint_ledger_snapshot_event, venue_ledger_snapshot_event
 from mm.core.models.private import Balance, OpenOrder
 
 
@@ -26,49 +27,7 @@ class VenueLedger:
     last_snapshot_ms: int = 0
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-            "base_asset": self.base_asset,
-            "quote_asset": self.quote_asset,
-            "balances": {
-                asset: {
-                    "exchange": balance.exchange,
-                    "asset": balance.asset,
-                    "free": float(balance.free),
-                    "locked": float(balance.locked),
-                    "total": float(balance.total),
-                    "timestamp_ms": int(balance.timestamp_ms),
-                }
-                for asset, balance in self.balances.items()
-            },
-            "live_orders": {
-                order_id: {
-                    "exchange_order_id": open_order.exchange_order_id,
-                    "actor_id": open_order.actor_id,
-                    "remaining_qty": float(open_order.remaining_qty),
-                    "filled_qty": float(open_order.filled_qty),
-                    "status": open_order.status,
-                    "timestamp_ms": int(open_order.timestamp_ms),
-                    "order": {
-                        "exchange": open_order.order.exchange,
-                        "symbol": open_order.order.symbol,
-                        "side": open_order.order.side,
-                        "price": float(open_order.order.price),
-                        "qty": float(open_order.order.qty),
-                        "order_type": open_order.order.order_type,
-                        "client_order_id": open_order.order.client_order_id,
-                    },
-                }
-                for order_id, open_order in self.live_orders.items()
-            },
-            "locked_base": float(self.locked_base),
-            "locked_quote": float(self.locked_quote),
-            "available_base": float(self.available_base),
-            "available_quote": float(self.available_quote),
-            "last_private_event_ms": int(self.last_private_event_ms),
-            "last_snapshot_ms": int(self.last_snapshot_ms),
-        }
+        return venue_ledger_snapshot_event(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,12 +63,4 @@ class JointLedgerSnapshot:
     freshness: LedgerFreshness = field(default_factory=LedgerFreshness)
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "local": self.local.as_payload(),
-            "global": self.global_.as_payload() if self.global_ is not None else None,
-            "reference_price": float(self.reference_price),
-            "consolidated_base_inventory": float(self.consolidated_base_inventory),
-            "consolidated_quote_wealth": float(self.consolidated_quote_wealth),
-            "created_at_ms": int(self.created_at_ms),
-            "freshness": self.freshness.as_payload(),
-        }
+        return joint_ledger_snapshot_event(self)

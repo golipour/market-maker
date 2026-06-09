@@ -4,6 +4,8 @@ import pytest
 
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
 from mm.core.models.execution import Action, Order
+from mm.core.models.ledger import JointLedgerSnapshot, LedgerFreshness, VenueLedger
+from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyDecision
 from mm.core.payload_schema import (
     CONTROLLER_DIAGNOSTICS_SCHEMA,
@@ -12,12 +14,22 @@ from mm.core.payload_schema import (
     EXECUTION_LIFECYCLE_VERSION,
     EXECUTION_SNAPSHOT_SCHEMA,
     EXECUTION_SNAPSHOT_VERSION,
+    JOINT_LEDGER_SNAPSHOT_SCHEMA,
+    JOINT_LEDGER_SNAPSHOT_VERSION,
+    JOINT_LEDGER_SNAPSHOT_TYPE,
     JOINT_TARGET_BOOK_SCHEMA,
     JOINT_TARGET_BOOK_VERSION,
+    PRIVATE_STATE_SNAPSHOT_SCHEMA,
+    PRIVATE_STATE_SNAPSHOT_VERSION,
+    PRIVATE_STATE_SNAPSHOT_TYPE,
     STRATEGY_DECISION_SCHEMA,
     STRATEGY_DECISION_VERSION,
     STRATEGY_DECISION_TYPE,
+    VENUE_LEDGER_SNAPSHOT_SCHEMA,
+    VENUE_LEDGER_SNAPSHOT_VERSION,
+    VENUE_LEDGER_SNAPSHOT_TYPE,
     TARGET_ORDER_SCHEMA,
+    private_state_snapshot_from_payload,
     TARGET_ORDER_VERSION,
     VENUE_TARGET_BOOK_SCHEMA,
     VENUE_TARGET_BOOK_VERSION,
@@ -190,6 +202,57 @@ def test_strategy_decision_payload_is_versioned() -> None:
 
     assert payload["type"] == STRATEGY_DECISION_TYPE
     assert_payload_schema(payload, STRATEGY_DECISION_SCHEMA, STRATEGY_DECISION_VERSION)
+
+
+def test_private_state_snapshot_round_trips_through_versioned_payload() -> None:
+    order = Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="cid-1")
+    open_order = OpenOrder(
+        exchange_order_id="ex-1",
+        actor_id="actor-1",
+        order=order,
+        remaining_qty=0.5,
+        filled_qty=0.0,
+        status="open",
+        timestamp_ms=2_000,
+    )
+    snapshot = PrivateStateSnapshot(
+        exchange="nobitex",
+        timestamp_ms=2_000,
+        balances={"IRT": Balance("nobitex", "IRT", 1_000.0, 0.0, 1_000.0, 2_000)},
+        open_orders={"ex-1": open_order},
+    )
+
+    payload = snapshot.as_payload()
+
+    assert payload["type"] == PRIVATE_STATE_SNAPSHOT_TYPE
+    assert_payload_schema(payload, PRIVATE_STATE_SNAPSHOT_SCHEMA, PRIVATE_STATE_SNAPSHOT_VERSION)
+    restored = private_state_snapshot_from_payload(payload)
+    assert restored.exchange == "nobitex"
+    assert restored.open_orders["ex-1"].order.price == 100.0
+
+
+def test_ledger_snapshot_payloads_are_versioned() -> None:
+    venue = VenueLedger(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        available_quote=1_000.0,
+    )
+    joint = JointLedgerSnapshot(
+        local=venue,
+        reference_price=100.0,
+        created_at_ms=2_000,
+        freshness=LedgerFreshness(ledger_fresh=True),
+    )
+
+    venue_payload = venue.as_payload()
+    joint_payload = joint.as_payload()
+
+    assert venue_payload["type"] == VENUE_LEDGER_SNAPSHOT_TYPE
+    assert_payload_schema(venue_payload, VENUE_LEDGER_SNAPSHOT_SCHEMA, VENUE_LEDGER_SNAPSHOT_VERSION)
+    assert joint_payload["type"] == JOINT_LEDGER_SNAPSHOT_TYPE
+    assert_payload_schema(joint_payload, JOINT_LEDGER_SNAPSHOT_SCHEMA, JOINT_LEDGER_SNAPSHOT_VERSION)
 
 
 def test_controller_diagnostics_payload_is_versioned() -> None:

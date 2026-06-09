@@ -12,6 +12,7 @@ from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
+from mm.core.payload_schema import private_state_snapshot_from_payload
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.ledger.models import (
     LedgerConsistencyDiagnostic,
@@ -214,12 +215,13 @@ class PortfolioLedgerService:
     async def _listen_snapshot(self, exchange: str) -> None:
         try:
             async for event in self.bus.subscribe(f"private:state:{exchange}:snapshot"):
-                if not isinstance(event, PrivateStateSnapshot):
+                if not isinstance(event, dict):
                     continue
+                snapshot = private_state_snapshot_from_payload(event)
                 machine = self._machine_for_exchange(exchange)
                 if machine is None:
                     continue
-                machine.apply_snapshot(event)
+                machine.apply_snapshot(snapshot)
                 await self._publish_after_update(exchange)
         except asyncio.CancelledError:
             raise

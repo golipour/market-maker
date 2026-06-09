@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import InstrumentSpec
 from mm.core.models.ledger import VenueLedger
+from mm.core.payload_schema import private_state_snapshot_from_payload
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.ledger.state_machine import VenueLedgerStateMachine
 
@@ -21,6 +22,8 @@ def apply_ledger_event(
 
     if isinstance(event, PrivateStateSnapshot):
         return machine.apply_snapshot(event)
+    if isinstance(event, dict):
+        return machine.apply_snapshot(private_state_snapshot_from_payload(event))
     if isinstance(event, Balance):
         return machine.apply_balance(event)
     if isinstance(event, OpenOrder):

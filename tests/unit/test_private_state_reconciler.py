@@ -14,8 +14,13 @@ from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 from mm.exchanges.wallex import private_rest as wallex_private_rest
 from mm.exchanges.wallex.private_state import WallexRestPrivateStateAdapter
+from mm.core.payload_schema import private_state_snapshot_from_payload
 from mm.private_state.reconciler import PrivateStateReconciler
 from mm.private_state.store import PrivateStateStore
+
+
+def _bus_snapshot(event) -> PrivateStateSnapshot:
+    return private_state_snapshot_from_payload(event)
 
 
 class FakePrivateStateAdapter(AbstractPrivateStateAdapter):
@@ -114,7 +119,7 @@ async def test_private_state_reconciler_publishes_snapshot_and_open_orders() -> 
 
     try:
         await reconciler.start()
-        initial = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        initial = _bus_snapshot(await asyncio.wait_for(snapshots.get(), timeout=1.0))
         assert initial.balances["BTC"].free == 1.0
         assert "IRT" in initial.balances
         assert initial.balances["IRT"].free == 0.0
@@ -131,7 +136,7 @@ async def test_private_state_reconciler_publishes_snapshot_and_open_orders() -> 
         )
         await adapter.open_orders.put(order)
         seen = await asyncio.wait_for(open_orders.get(), timeout=1.0)
-        updated = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        updated = _bus_snapshot(await asyncio.wait_for(snapshots.get(), timeout=1.0))
 
         assert seen.exchange_order_id == "o1"
         assert updated.open_orders["o1"].order.price == 100.0
@@ -484,9 +489,9 @@ async def test_rest_polling_reconciler_uses_unified_snapshot_poll() -> None:
 
     try:
         await reconciler.start()
-        first = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        first = _bus_snapshot(await asyncio.wait_for(snapshots.get(), timeout=1.0))
         assert first.balances["BTC"].free == pytest.approx(0.25)
-        second = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        second = _bus_snapshot(await asyncio.wait_for(snapshots.get(), timeout=1.0))
         assert second.balances["BTC"].free == pytest.approx(0.25)
         assert adapter.snapshot_calls >= 2
         with pytest.raises(asyncio.TimeoutError):
@@ -625,7 +630,7 @@ async def test_rest_polling_reconciler_keeps_last_snapshot_on_fetch_failure() ->
 
     try:
         await reconciler.start()
-        first = await asyncio.wait_for(snapshots.get(), timeout=1.0)
+        first = _bus_snapshot(await asyncio.wait_for(snapshots.get(), timeout=1.0))
         assert first.balances["BTC"].free == pytest.approx(0.25)
 
         error = await asyncio.wait_for(errors.get(), timeout=1.0)

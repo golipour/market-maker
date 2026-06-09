@@ -129,7 +129,9 @@ async def test_execution_reconciler_mirrors_private_open_orders() -> None:
         )
         await bus.publish(
             "private:state:nobitex:snapshot",
-            PrivateStateSnapshot("nobitex", 1200, balances={}, open_orders={"real-1": order}),
+            PrivateStateSnapshot(
+                "nobitex", 1200, balances={}, open_orders={"real-1": order}
+            ).as_payload(),
         )
 
         snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)

@@ -80,5 +80,10 @@ class PrivateStateSnapshot:
     balances: dict[str, Balance] = field(default_factory=dict)
     open_orders: dict[str, OpenOrder] = field(default_factory=dict)
 
+    def as_payload(self) -> dict:
+        from mm.core.payload_schema import private_state_snapshot_event
+
+        return private_state_snapshot_event(self)
+
 
 PrivateEvent = Balance | OpenOrder | OrderUpdate

@@ -158,7 +158,7 @@ class PrivateStateReconciler:
             raise
 
     async def _publish_snapshot(self, snapshot: PrivateStateSnapshot) -> None:
-        await self._publish(f"private:state:{self.exchange}:snapshot", snapshot)
+        await self._publish(f"private:state:{self.exchange}:snapshot", snapshot.as_payload())
 
     async def _publish_adapter_error(self, source: str, exc: Exception) -> None:
         publish_errors = getattr(self.adapter, "_publish_error", None)
