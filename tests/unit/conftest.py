@@ -154,3 +154,9 @@ def joint_frame_for_input(
         created_at_ms=created_at_ms,
         input_frame=frame,
     )
+
+
+def market_event_payload(event: MarketEvent) -> dict[str, Any]:
+    from mm.core.payload_schema import market_event_event
+
+    return market_event_event(event)

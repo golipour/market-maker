@@ -6,9 +6,10 @@ import json
 import pytest
 
 from mm.bus.factory import build_event_bus
-from mm.core.events import envelope_event
+from mm.core.events import decode_envelope, envelope_event
 from mm.core.models.market import MarketEvent, RawOrderbook
-from mm.ingestion.replay_adapter import ReplayMarketDataAdapter, market_event_from_payload
+from mm.core.payload_schema import market_event_event, market_event_from_payload
+from mm.ingestion.replay_adapter import ReplayMarketDataAdapter
 from mm.runtime.config import BusRuntimeConfig
 
 
@@ -38,10 +39,8 @@ def _minimal_market_event() -> MarketEvent:
 
 def test_market_event_from_payload_round_trip_dict() -> None:
     ev = _minimal_market_event()
-    from mm.core.events import to_jsonable
-
-    d = to_jsonable(ev)
-    out = market_event_from_payload(d)
+    payload = market_event_event(ev)
+    out = market_event_from_payload(payload)
     assert out is not None
     assert out.exchange == ev.exchange
     assert out.t_end_ms == ev.t_end_ms
@@ -50,7 +49,7 @@ def test_market_event_from_payload_round_trip_dict() -> None:
 @pytest.mark.asyncio
 async def test_replay_adapter_publishes_market_topic(tmp_path) -> None:
     topic = "market:events:nobitex:BTC_IRT:1000"
-    env = envelope_event(topic, _minimal_market_event())
+    env = envelope_event(topic, market_event_event(_minimal_market_event()))
     path = tmp_path / "replay.jsonl"
     path.write_text(json.dumps(env.as_dict(), ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -61,5 +60,6 @@ async def test_replay_adapter_publishes_market_topic(tmp_path) -> None:
     assert n_m == 1
     assert n_p == 0
     got = await asyncio.wait_for(queue.get(), timeout=2.0)
-    assert isinstance(got, MarketEvent)
-    assert got.symbol == "BTC_IRT"
+    parsed = market_event_from_payload(got)
+    assert parsed is not None
+    assert parsed.symbol == "BTC_IRT"

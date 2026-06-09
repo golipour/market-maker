@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
+from mm.core.payload_schema import market_event_event
 from mm.aggregation.builder import MarketEventBuilder
-from mm.aggregation.scheduler import IntervalScheduler
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.market_data import AbstractMarketDataAdapter
+from mm.aggregation.scheduler import IntervalScheduler
 from mm.ingestion.orderbook import OrderbookManager
 from mm.ingestion.trade_buffer import RollingTradeBuffer
 
@@ -61,7 +62,7 @@ class SymbolEngine:
             except LookupError:
                 return
             topic = f"market:events:{self.exchange}:{self.symbol}:{interval_ms}"
-            await self.bus.publish(topic, event)
+            await self.bus.publish(topic, market_event_event(event))
 
         for interval_ms in intervals_ms:
             scheduler.register(interval_ms, publish_event)

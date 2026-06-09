@@ -15,6 +15,7 @@ from typing import Any
 from mm.core.models.execution import Action, Fill
 from mm.core.models.instrument import SymbolBinding, build_instrument_spec, instrument_contract
 from mm.core.models.market import MarketEvent, RawOrderbook, RawTrade
+from mm.core.payload_schema import MARKET_EVENT_TYPE, market_event_event, market_event_from_payload
 from mm.core.wallet import balance_event_payload
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
@@ -129,6 +130,10 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "unit_policy": "prices/vwap/microprice=quote_per_base, volumes=base, notionals=quote",
             **book_health,
         }
+    if isinstance(event, dict) and event.get("type") == MARKET_EVENT_TYPE:
+        parsed = market_event_from_payload(event)
+        if parsed is not None:
+            return _summarize_event(parsed)
     if isinstance(event, StrategyInputFrame):
         local_book_health = summarize_book_health(event.local.orderbook)
         global_book_health = (

@@ -1,0 +1,363 @@
+"""Retention and tiering policies for Postgres, Parquet, and persistence spool data."""
+
+from __future__ import annotations
+
+import re
+import shutil
+import time
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+_EVENT_DATE_RE = re.compile(r"^event_date=(\d{4}-\d{2}-\d{2})$")
+
+POSTGRES_EVENTS_TABLE = "mm_events"
+POSTGRES_FACT_TABLES: tuple[str, ...] = (
+    "mm_market_facts",
+    "mm_action_stage_facts",
+    "mm_execution_facts",
+    "mm_target_order_facts",
+    "mm_model_score_facts",
+    "mm_optimizer_facts",
+    "mm_optimizer_component_facts",
+)
+POSTGRES_LATEST_STATE_TABLE = "mm_latest_state"
+POSTGRES_ADMIN_AUDIT_TABLE = "admin_audit_log"
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionPolicy:
+    """Age-based retention tiers for persisted runtime data."""
+
+    events_days: int | None = 14
+    facts_days: int | None = 90
+    latest_state_days: int | None = None
+    admin_audit_days: int | None = 365
+    parquet_days: int | None = 90
+    spool_archive_days: int | None = 7
+    spool_failed_days: int | None = 30
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("events_days", self.events_days),
+            ("facts_days", self.facts_days),
+            ("latest_state_days", self.latest_state_days),
+            ("admin_audit_days", self.admin_audit_days),
+            ("parquet_days", self.parquet_days),
+            ("spool_archive_days", self.spool_archive_days),
+            ("spool_failed_days", self.spool_failed_days),
+        ):
+            if value is not None and int(value) <= 0:
+                raise ValueError(f"{name} must be positive when set")
+
+
+@dataclass(frozen=True, slots=True)
+class PostgresTableRetentionResult:
+    table: str
+    tier: str
+    retention_days: int
+    rows_affected: int
+
+
+@dataclass(frozen=True, slots=True)
+class PostgresRetentionResult:
+    tables: tuple[PostgresTableRetentionResult, ...] = ()
+
+    @property
+    def rows_affected(self) -> int:
+        return sum(item.rows_affected for item in self.tables)
+
+
+@dataclass(frozen=True, slots=True)
+class ParquetRetentionResult:
+    partitions_removed: int = 0
+    files_removed: int = 0
+    bytes_removed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SpoolRetentionResult:
+    files_removed: int = 0
+    bytes_removed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionResult:
+    postgres: PostgresRetentionResult = field(default_factory=PostgresRetentionResult)
+    parquet: ParquetRetentionResult = field(default_factory=ParquetRetentionResult)
+    spool: SpoolRetentionResult = field(default_factory=SpoolRetentionResult)
+    dry_run: bool = False
+
+
+def retention_policy_from_mapping(payload: Any) -> RetentionPolicy:
+    if not isinstance(payload, dict):
+        return RetentionPolicy()
+    return RetentionPolicy(
+        events_days=_optional_positive_int(payload.get("events_days"), default=14),
+        facts_days=_optional_positive_int(payload.get("facts_days"), default=90),
+        latest_state_days=_optional_positive_int(payload.get("latest_state_days")),
+        admin_audit_days=_optional_positive_int(payload.get("admin_audit_days"), default=365),
+        parquet_days=_optional_positive_int(payload.get("parquet_days"), default=90),
+        spool_archive_days=_optional_positive_int(payload.get("spool_archive_days"), default=7),
+        spool_failed_days=_optional_positive_int(payload.get("spool_failed_days"), default=30),
+    )
+
+
+def apply_retention(
+    policy: RetentionPolicy,
+    *,
+    database_url: str | None = None,
+    parquet_root: str | Path | None = None,
+    spool_dir: str | Path = "persistence_spool/postgres",
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> RetentionResult:
+    """Apply configured retention tiers to available persistence stores."""
+
+    current = now or datetime.now(timezone.utc)
+    postgres = PostgresRetentionResult()
+    if database_url:
+        postgres = apply_postgres_retention(
+            database_url,
+            policy,
+            now=current,
+            dry_run=dry_run,
+        )
+    parquet = ParquetRetentionResult()
+    if parquet_root is not None:
+        parquet = apply_parquet_retention(
+            parquet_root,
+            policy,
+            now=current,
+            dry_run=dry_run,
+        )
+    spool = apply_spool_retention(
+        spool_dir,
+        policy,
+        now=current,
+        dry_run=dry_run,
+    )
+    return RetentionResult(
+        postgres=postgres,
+        parquet=parquet,
+        spool=spool,
+        dry_run=dry_run,
+    )
+
+
+def apply_postgres_retention(
+    database_url: str,
+    policy: RetentionPolicy,
+    *,
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> PostgresRetentionResult:
+    import psycopg2
+
+    current = now or datetime.now(timezone.utc)
+    tiers: list[tuple[str, str, str, int]] = []
+    if policy.events_days is not None:
+        tiers.append(("events", POSTGRES_EVENTS_TABLE, "ts", policy.events_days))
+    if policy.facts_days is not None:
+        for table in POSTGRES_FACT_TABLES:
+            tiers.append(("facts", table, "ts", policy.facts_days))
+    if policy.latest_state_days is not None:
+        tiers.append(
+            ("latest_state", POSTGRES_LATEST_STATE_TABLE, "updated_at", policy.latest_state_days)
+        )
+    if policy.admin_audit_days is not None:
+        tiers.append(("admin_audit", POSTGRES_ADMIN_AUDIT_TABLE, "ts", policy.admin_audit_days))
+
+    results: list[PostgresTableRetentionResult] = []
+    if not tiers:
+        return PostgresRetentionResult()
+
+    conn = psycopg2.connect(database_url)
+    try:
+        with conn.cursor() as cur:
+            for tier, table, ts_column, retention_days in tiers:
+                cutoff = current - timedelta(days=int(retention_days))
+                rows = _postgres_delete_before(
+                    cur,
+                    table=table,
+                    ts_column=ts_column,
+                    cutoff=cutoff,
+                    dry_run=dry_run,
+                )
+                results.append(
+                    PostgresTableRetentionResult(
+                        table=table,
+                        tier=tier,
+                        retention_days=int(retention_days),
+                        rows_affected=rows,
+                    )
+                )
+        if not dry_run:
+            conn.commit()
+        else:
+            conn.rollback()
+    finally:
+        conn.close()
+    return PostgresRetentionResult(tables=tuple(results))
+
+
+def apply_parquet_retention(
+    parquet_root: str | Path,
+    policy: RetentionPolicy,
+    *,
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> ParquetRetentionResult:
+    if policy.parquet_days is None:
+        return ParquetRetentionResult()
+
+    root = Path(parquet_root).expanduser()
+    if not root.exists():
+        return ParquetRetentionResult()
+
+    current = (now or datetime.now(timezone.utc)).date()
+    cutoff_date = current - timedelta(days=int(policy.parquet_days))
+    partitions_removed = 0
+    files_removed = 0
+    bytes_removed = 0
+
+    for path in sorted(root.iterdir()):
+        if not path.is_dir():
+            continue
+        match = _EVENT_DATE_RE.match(path.name)
+        if match is None:
+            continue
+        partition_date = date.fromisoformat(match.group(1))
+        if partition_date >= cutoff_date:
+            continue
+        partition_bytes = _tree_size(path)
+        partition_files = sum(1 for child in path.rglob("*") if child.is_file())
+        if dry_run:
+            partitions_removed += 1
+            files_removed += partition_files
+            bytes_removed += partition_bytes
+            continue
+        shutil.rmtree(path)
+        partitions_removed += 1
+        files_removed += partition_files
+        bytes_removed += partition_bytes
+
+    return ParquetRetentionResult(
+        partitions_removed=partitions_removed,
+        files_removed=files_removed,
+        bytes_removed=bytes_removed,
+    )
+
+
+def apply_spool_retention(
+    spool_dir: str | Path,
+    policy: RetentionPolicy,
+    *,
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> SpoolRetentionResult:
+    root = Path(spool_dir).expanduser()
+    if not root.exists():
+        return SpoolRetentionResult()
+
+    current = now or datetime.now(timezone.utc)
+    files_removed = 0
+    bytes_removed = 0
+    archive_root = root / "reingested"
+
+    for path in sorted(root.rglob("*.jsonl")):
+        if not path.is_file():
+            continue
+        in_archive = _is_inside(path, archive_root)
+        retention_days = policy.spool_archive_days if in_archive else policy.spool_failed_days
+        if retention_days is None:
+            continue
+        age_seconds = current.timestamp() - path.stat().st_mtime
+        if age_seconds <= int(retention_days) * 86_400:
+            continue
+        size = path.stat().st_size
+        if dry_run:
+            files_removed += 1
+            bytes_removed += size
+            continue
+        path.unlink()
+        files_removed += 1
+        bytes_removed += size
+        if in_archive:
+            _remove_empty_parents(path.parent, stop=root)
+
+    return SpoolRetentionResult(files_removed=files_removed, bytes_removed=bytes_removed)
+
+
+def _postgres_delete_before(
+    cursor: Any,
+    *,
+    table: str,
+    ts_column: str,
+    cutoff: datetime,
+    dry_run: bool,
+) -> int:
+    _assert_known_postgres_table(table)
+    _assert_known_postgres_ts_column(ts_column)
+    if dry_run:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {ts_column} < %s",
+            (cutoff,),
+        )
+        row = cursor.fetchone()
+        return int(row[0] if row else 0)
+    cursor.execute(
+        f"DELETE FROM {table} WHERE {ts_column} < %s",
+        (cutoff,),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def _assert_known_postgres_table(table: str) -> None:
+    allowed = {
+        POSTGRES_EVENTS_TABLE,
+        POSTGRES_LATEST_STATE_TABLE,
+        POSTGRES_ADMIN_AUDIT_TABLE,
+        *POSTGRES_FACT_TABLES,
+    }
+    if table not in allowed:
+        raise ValueError(f"unsupported postgres retention table: {table!r}")
+
+
+def _assert_known_postgres_ts_column(column: str) -> None:
+    if column not in {"ts", "updated_at"}:
+        raise ValueError(f"unsupported postgres retention timestamp column: {column!r}")
+
+
+def _optional_positive_int(value: Any, *, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, str) and not value.strip():
+        return default
+    days = int(value)
+    if days <= 0:
+        raise ValueError("retention day values must be positive")
+    return days
+
+
+def _tree_size(path: Path) -> int:
+    return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
+
+
+def _is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _remove_empty_parents(path: Path, *, stop: Path) -> None:
+    current = path
+    while current != stop and current.exists():
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent

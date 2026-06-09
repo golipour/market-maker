@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from mm.core.events import envelope_event
+from mm.core.payload_schema import market_event_event
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.persistence.parquet_writer import ParquetEventWriter
@@ -99,7 +100,7 @@ def test_parquet_writer_compacts_archival_market_trades(tmp_path) -> None:
         microprice=100.5,
     )
 
-    writer._write_batch([envelope_event("market:events:nobitex:BTC_IRT:1000", event)])
+    writer._write_batch([envelope_event("market:events:nobitex:BTC_IRT:1000", market_event_event(event))])
 
     [row] = _parquet_rows(tmp_path)
     assert row["best_bid"] == 100.0

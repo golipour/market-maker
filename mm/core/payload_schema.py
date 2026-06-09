@@ -39,6 +39,10 @@ JOINT_LEDGER_SNAPSHOT_SCHEMA = "mm.joint_ledger_snapshot"
 JOINT_LEDGER_SNAPSHOT_VERSION = 1
 JOINT_LEDGER_SNAPSHOT_TYPE = "JointLedgerSnapshot"
 
+MARKET_EVENT_SCHEMA = "mm.market_event"
+MARKET_EVENT_VERSION = 1
+MARKET_EVENT_TYPE = "MarketEvent"
+
 
 def stamped(schema: str, version: int, **fields: Any) -> dict[str, Any]:
     return {"payload_schema": schema, "payload_version": version, **fields}
@@ -69,6 +73,153 @@ def execution_snapshot_event(**fields: Any) -> dict[str, Any]:
         type="ExecutionSnapshot",
         **fields,
     )
+
+
+def market_event_event(event: Any) -> dict[str, Any]:
+    """Build a versioned ``MarketEvent`` bus payload."""
+
+    from mm.core.models.market import MarketEvent
+
+    if isinstance(event, dict):
+        if event.get("payload_schema") == MARKET_EVENT_SCHEMA:
+            assert_payload_schema(event, MARKET_EVENT_SCHEMA, MARKET_EVENT_VERSION)
+            return dict(event)
+        parsed = market_event_from_payload(event)
+        if parsed is not None:
+            event = parsed
+    if not isinstance(event, MarketEvent):
+        raise TypeError(f"expected MarketEvent, got {type(event)!r}")
+    return stamped(
+        MARKET_EVENT_SCHEMA,
+        MARKET_EVENT_VERSION,
+        type=MARKET_EVENT_TYPE,
+        exchange=event.exchange,
+        symbol=event.symbol,
+        interval_ms=int(event.interval_ms),
+        t_start_ms=int(event.t_start_ms),
+        t_end_ms=int(event.t_end_ms),
+        orderbook=_raw_orderbook_payload(event.orderbook),
+        trades=[_raw_trade_payload(trade) for trade in event.trades],
+        buy_volume=float(event.buy_volume),
+        sell_volume=float(event.sell_volume),
+        vwap=float(event.vwap),
+        imbalance=float(event.imbalance),
+        microprice=float(event.microprice),
+    )
+
+
+def market_event_from_payload(payload: Any) -> Any | None:
+    """Parse a versioned ``MarketEvent`` payload back into a domain struct."""
+
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("payload_schema") != MARKET_EVENT_SCHEMA:
+        return None
+    try:
+        assert_payload_schema(payload, MARKET_EVENT_SCHEMA, MARKET_EVENT_VERSION)
+        orderbook = _raw_orderbook_from_payload(payload["orderbook"])
+        trades = tuple(
+            trade
+            for trade in (_raw_trade_from_payload(row) for row in payload.get("trades") or ())
+            if trade is not None
+        )
+        return MarketEvent(
+            exchange=str(payload["exchange"]),
+            symbol=str(payload["symbol"]),
+            interval_ms=int(payload["interval_ms"]),
+            t_start_ms=int(payload["t_start_ms"]),
+            t_end_ms=int(payload["t_end_ms"]),
+            orderbook=orderbook,
+            trades=trades,
+            buy_volume=float(payload.get("buy_volume") or 0.0),
+            sell_volume=float(payload.get("sell_volume") or 0.0),
+            vwap=float(payload.get("vwap") or 0.0),
+            imbalance=float(payload.get("imbalance") or 0.0),
+            microprice=float(payload.get("microprice") or 0.0),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _raw_orderbook_payload(orderbook: Any) -> dict[str, Any]:
+    return {
+        "exchange": orderbook.exchange,
+        "symbol": orderbook.symbol,
+        "timestamp_ms": int(orderbook.timestamp_ms),
+        "bids": [_price_level_payload(level) for level in orderbook.bids],
+        "asks": [_price_level_payload(level) for level in orderbook.asks],
+        "is_snapshot": bool(orderbook.is_snapshot),
+    }
+
+
+def _price_level_payload(level: Any) -> dict[str, Any]:
+    return {"price": float(level.price), "qty": float(level.qty)}
+
+
+def _raw_trade_payload(trade: Any) -> dict[str, Any]:
+    return {
+        "trade_id": trade.trade_id,
+        "timestamp_ms": int(trade.timestamp_ms),
+        "price": float(trade.price),
+        "qty": float(trade.qty),
+        "side": str(trade.side),
+        "exchange": str(trade.exchange),
+        "symbol": str(trade.symbol),
+    }
+
+
+def _raw_orderbook_from_payload(payload: Any) -> Any:
+    from mm.core.models.market import PriceLevel, RawOrderbook
+
+    if isinstance(payload, RawOrderbook):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"expected orderbook payload dict, got {type(payload)!r}")
+    return RawOrderbook(
+        exchange=str(payload["exchange"]),
+        symbol=str(payload["symbol"]),
+        timestamp_ms=int(payload["timestamp_ms"]),
+        bids=_price_levels_from_payload(payload.get("bids")),
+        asks=_price_levels_from_payload(payload.get("asks")),
+        is_snapshot=bool(payload.get("is_snapshot", True)),
+    )
+
+
+def _price_levels_from_payload(levels: Any) -> tuple[Any, ...]:
+    from mm.core.models.market import PriceLevel
+
+    if not levels:
+        return ()
+    out: list[PriceLevel] = []
+    for row in levels:
+        if isinstance(row, PriceLevel):
+            out.append(row)
+        elif isinstance(row, dict):
+            out.append(PriceLevel(price=float(row["price"]), qty=float(row["qty"])))
+    return tuple(out)
+
+
+def _raw_trade_from_payload(row: Any) -> Any | None:
+    from mm.core.models.market import RawTrade
+
+    if isinstance(row, RawTrade):
+        return row
+    if not isinstance(row, dict):
+        return None
+    try:
+        return RawTrade(
+            trade_id=row.get("trade_id"),
+            timestamp_ms=int(row["timestamp_ms"]),
+            price=float(row["price"]),
+            qty=float(row["qty"]),
+            side=str(row["side"]),
+            exchange=str(row["exchange"]),
+            symbol=str(row["symbol"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def execution_lineage_fields(

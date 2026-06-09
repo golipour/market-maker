@@ -263,7 +263,7 @@ def _event_for(exchange: str, symbol: str, *, t_start_ms: int, t_end_ms: int) ->
         symbol=symbol,
         timestamp_ms=t_end_ms,
         bids=(PriceLevel(100.0, 1.0),),
-        asks=(PriceLevel(101.0, 1.0)),
+        asks=(PriceLevel(101.0, 1.0),),
         is_snapshot=True,
     )
     return MarketEvent(

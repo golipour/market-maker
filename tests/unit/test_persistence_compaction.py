@@ -5,6 +5,7 @@ from mm.core.models.execution import Order
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
 from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
+from mm.core.payload_schema import assert_payload_schema, market_event_event
 from mm.persistence.compaction import compact_envelope_for_persistence
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig
 from tests.unit.conftest import joint_frame_for_input
@@ -68,9 +69,11 @@ def _private_snapshot() -> PrivateStateSnapshot:
 
 
 def test_postgres_compaction_drops_market_trades_but_keeps_interval_features() -> None:
-    envelope = envelope_event("market:events:nobitex:BTC_IRT:1000", _market_event())
+    envelope = envelope_event("market:events:nobitex:BTC_IRT:1000", market_event_event(_market_event()))
 
     compacted = compact_envelope_for_persistence(envelope, sink="postgres")
+
+    assert_payload_schema(compacted.payload, "mm.market_event", 1)
 
     assert compacted.payload["trades"] == []
     assert compacted.payload["trades_compacted"] is True

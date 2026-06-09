@@ -13,7 +13,7 @@ from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.payload_schema import joint_ledger_snapshot_from_payload, joint_target_book_from_payload
-from mm.ingestion.replay_adapter import market_event_from_payload
+from mm.core.payload_schema import market_event_from_payload
 from mm.persistence.replay import (
     ReplayFidelityViolation,
     ReplayFrameState,

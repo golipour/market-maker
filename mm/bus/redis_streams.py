@@ -9,7 +9,7 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
-from mm.core.payload_schema import PRIVATE_STATE_SNAPSHOT_TYPE, private_state_snapshot_event
+from mm.core.payload_schema import market_event_event, private_state_snapshot_event
 from mm.core.models.private import Balance, PrivateStateSnapshot
 from mm.observability.event_payloads import observe_envelope, observe_runtime_event
 
@@ -186,6 +186,13 @@ def _balance_is_zero(balance: Balance) -> bool:
 
 
 def _compact_stream_event(topic: str, event: Any) -> Any | None:
+    if topic.startswith("market:events:"):
+        from mm.core.payload_schema import market_event_from_payload
+
+        parsed = market_event_from_payload(event)
+        if parsed is not None:
+            return market_event_event(parsed)
+        return None
     if topic.endswith(":balances") and isinstance(event, Balance):
         if _balance_is_zero(event):
             return None

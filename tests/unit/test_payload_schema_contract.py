@@ -19,30 +19,71 @@ from mm.core.payload_schema import (
     JOINT_LEDGER_SNAPSHOT_TYPE,
     JOINT_TARGET_BOOK_SCHEMA,
     JOINT_TARGET_BOOK_VERSION,
+    MARKET_EVENT_SCHEMA,
+    MARKET_EVENT_VERSION,
     PRIVATE_STATE_SNAPSHOT_SCHEMA,
     PRIVATE_STATE_SNAPSHOT_VERSION,
     PRIVATE_STATE_SNAPSHOT_TYPE,
     STRATEGY_DECISION_SCHEMA,
     STRATEGY_DECISION_VERSION,
     STRATEGY_DECISION_TYPE,
+    TARGET_ORDER_SCHEMA,
+    TARGET_ORDER_VERSION,
     VENUE_LEDGER_SNAPSHOT_SCHEMA,
     VENUE_LEDGER_SNAPSHOT_VERSION,
     VENUE_LEDGER_SNAPSHOT_TYPE,
-    TARGET_ORDER_SCHEMA,
-    private_state_snapshot_from_payload,
-    TARGET_ORDER_VERSION,
     VENUE_TARGET_BOOK_SCHEMA,
     VENUE_TARGET_BOOK_VERSION,
     assert_payload_schema,
     execution_lifecycle_event,
     execution_snapshot_event,
     joint_target_book_event,
+    market_event_event,
+    market_event_from_payload,
+    private_state_snapshot_from_payload,
 )
 from mm.diagnostics.models import CONTROLLER_DIAGNOSTICS_TYPE, ControllerDiagnostics
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.execution.router import OrderRouter
 from mm.execution.target_book import CancelCommand, ExecutionPlan, PlaceCommand
 from tests.unit.test_execution_manager import FakeOrderCommandAdapter
+
+
+from tests.unit.conftest import joint_frame_for_input
+
+
+def test_market_event_payload_is_versioned_and_round_trips() -> None:
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+
+    event = MarketEvent(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=1000,
+        t_end_ms=2000,
+        orderbook=RawOrderbook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            timestamp_ms=2000,
+            bids=(PriceLevel(100.0, 1.0),),
+            asks=(PriceLevel(101.0, 2.0),),
+            is_snapshot=True,
+        ),
+        trades=(),
+        buy_volume=0.1,
+        sell_volume=0.2,
+        vwap=100.66,
+        imbalance=-0.1,
+        microprice=100.5,
+    )
+    payload = market_event_event(event)
+
+    assert_payload_schema(payload, MARKET_EVENT_SCHEMA, MARKET_EVENT_VERSION)
+    round_tripped = market_event_from_payload(payload)
+    assert round_tripped is not None
+    assert round_tripped.exchange == event.exchange
+    assert round_tripped.t_end_ms == event.t_end_ms
+    assert round_tripped.orderbook.bids[0].price == 100.0
 
 
 def test_target_book_models_emit_versioned_payloads() -> None:

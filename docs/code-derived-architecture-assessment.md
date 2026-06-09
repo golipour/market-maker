@@ -89,7 +89,7 @@ Impact: Postgres and Parquet storage growth is lower after persistence compactio
 
 Recommendation:
 
-- Add versioned payload builders for `MarketEvent` and incremental private balance/open-order deltas.
+- Add versioned payload builders for incremental private balance/open-order deltas.
 - Persist large orderbook/trade snapshots at lower frequency or in a dedicated time-series store when raw market history is needed at scale.
 - Add retention policies per topic and table.
 - Keep using payload/envelope byte metrics to rank remaining high-cost topics before further compaction.
@@ -248,11 +248,11 @@ Recommendation: Keep capability metadata and adapter registration co-located per
 
 Severity: Low
 
-Execution, target-book, strategy-decision, controller-diagnostics, private-snapshot, and ledger-snapshot events publish through versioned builders in `mm/core/payload_schema.py`. Offline replay parses them back through `*_from_payload()` helpers. `MarketEvent` and incremental private balance/open-order deltas still use typed structs on the bus without versioned payload builders.
+Execution, target-book, strategy-decision, controller-diagnostics, private-snapshot, ledger-snapshot, and market-event bus payloads publish through versioned builders in `mm/core/payload_schema.py`. `SymbolEngine` publishes `mm.market_event` v1 payloads; frame assembly parses them back into domain structs at the queue boundary. Incremental private balance/open-order deltas still use typed structs on the bus without versioned payload builders.
 
 Recommendation:
 
-- Add versioned payload builders for `MarketEvent` and incremental private deltas if those topics become durable at scale.
+- Add versioned payload builders for incremental private balance/open-order deltas if those topics become durable at scale.
 - Extend replay fidelity checks to cover private/ledger snapshot schema validation where useful.
 
 ### 14. Secrets And Local Compose Defaults Need Production Hardening
@@ -370,7 +370,7 @@ At one bot and a low interval, this is workable. At many symbols, venues, and st
 
 Priority recommendations:
 
-1. Add versioned payload builders for `MarketEvent` and incremental private deltas.
+1. Add versioned payload builders for incremental private balance/open-order deltas.
 2. Define topic retention and persistence tiering.
 3. Store large orderbook/trade data separately from controller events when raw market history is needed at scale.
 4. Keep full diagnostics configurable and sampled in production.
@@ -383,7 +383,7 @@ Priority recommendations:
 These items are in code and covered by focused tests; they are no longer open roadmap work:
 
 - Exchange adapter registry (`mm/exchanges/registry.py`, per-exchange `registration.py`)
-- Versioned payload builders for execution lifecycle, execution snapshots, target books, strategy decisions, controller diagnostics, private snapshots, and ledger snapshots (`mm/core/payload_schema.py`)
+- Versioned payload builders for execution lifecycle, execution snapshots, target books, strategy decisions, controller diagnostics, private snapshots, ledger snapshots, and market events (`mm.market_event` v1).
 - Lineage IDs and replay reconstruction (`mm/persistence/replay.py`)
 - Replay lifecycle fidelity checks (`verify_lineage_fidelity()`)
 - Offline frame replay through strategy/risk/execution planning (`mm/application/frame_simulator.py`, `mm/persistence/frame_replay.py`)
@@ -394,7 +394,7 @@ These items are in code and covered by focused tests; they are no longer open ro
 
 ### Priority 1: Scalability And Runtime Pressure
 
-- Add versioned payload builders for `MarketEvent` and incremental private balance/open-order deltas.
+- Add versioned payload builders for incremental private balance/open-order deltas.
 - Add retention and tiering policies for `mm_events`, typed fact tables, Parquet partitions, and spool directories.
 - Add per-topic subscriber queue depth/lag metrics and bounded backpressure policy on the in-memory bus.
 - Run interval scheduler callbacks concurrently with bounded concurrency and missed-deadline metrics.

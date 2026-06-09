@@ -23,6 +23,7 @@ from mm.runtime.config import (
     PrivateRuntimeConfig,
 )
 from tests.unit.test_strategy_pipeline import _event_for, market_event
+from tests.unit.conftest import market_event_payload
 
 
 def _runtime_config(*, global_: bool = True) -> MarketMakerRuntimeConfig:
@@ -87,8 +88,8 @@ async def test_joint_frame_assembler_publishes_joint_topic() -> None:
         await global_private_queue.put(_private_snapshot("wallex"))
         global_event = _event_for("wallex", "BTC_IRT", t_start_ms=1000, t_end_ms=2000)
         local_event = market_event()
-        await global_queue.put(global_event)
-        await local_queue.put(local_event)
+        await global_queue.put(market_event_payload(global_event))
+        await local_queue.put(market_event_payload(local_event))
 
         joint_frame = await asyncio.wait_for(joint_queue.get(), timeout=1.0)
     finally:

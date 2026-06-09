@@ -8,6 +8,7 @@ import pytest
 from mm.bus.memory import InMemoryBus
 from mm.core.interfaces.market_data import AbstractMarketDataAdapter
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
+from mm.core.payload_schema import market_event_event
 from mm.ingestion.orderbook import OrderbookManager
 from mm.runtime.pipeline import build_symbol_engine
 
@@ -100,17 +101,20 @@ async def test_symbol_engine_publishes_raw_and_market_events():
             t_start_ms=1000,
             t_end_ms=2000,
         )
-        await bus.publish("market:events:nobitex:BTC_IRT:1000", event)
+        await bus.publish("market:events:nobitex:BTC_IRT:1000", market_event_event(event))
         seen = await asyncio.wait_for(event_queue.get(), timeout=1.0)
 
-        assert isinstance(seen, MarketEvent)
-        assert seen.exchange == "nobitex"
-        assert seen.symbol == "BTC_IRT"
-        assert seen.buy_volume == 0.5
-        assert seen.sell_volume == 0.25
-        assert seen.vwap == pytest.approx((101.0 * 0.5 + 100.0 * 0.25) / 0.75)
-        assert seen.imbalance == pytest.approx((2.0 - 4.0) / 6.0)
-        assert seen.microprice == pytest.approx((100.0 * 4.0 + 101.0 * 2.0) / 6.0)
+        from mm.core.payload_schema import market_event_from_payload
+
+        parsed = market_event_from_payload(seen)
+        assert parsed is not None
+        assert parsed.exchange == "nobitex"
+        assert parsed.symbol == "BTC_IRT"
+        assert parsed.buy_volume == 0.5
+        assert parsed.sell_volume == 0.25
+        assert parsed.vwap == pytest.approx((101.0 * 0.5 + 100.0 * 0.25) / 0.75)
+        assert parsed.imbalance == pytest.approx((2.0 - 4.0) / 6.0)
+        assert parsed.microprice == pytest.approx((100.0 * 4.0 + 101.0 * 2.0) / 6.0)
     finally:
         await engine.stop()
 

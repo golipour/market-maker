@@ -12,6 +12,7 @@ from mm.core.payload_schema import (
     JOINT_LEDGER_SNAPSHOT_VERSION,
     JOINT_TARGET_BOOK_SCHEMA,
     JOINT_TARGET_BOOK_VERSION,
+    market_event_event,
     execution_lifecycle_event,
     joint_ledger_snapshot_event,
     stamped,
@@ -154,33 +155,7 @@ def _persisted_rows_from_simulation(simulated, joint, market) -> list[dict]:
     rows.append(
         _row(
             f"market:events:{market.exchange}:{market.symbol}:{market.interval_ms}",
-            {
-                "type": "MarketEvent",
-                **{
-                    key: getattr(market, key)
-                    for key in (
-                        "exchange",
-                        "symbol",
-                        "interval_ms",
-                        "t_start_ms",
-                        "t_end_ms",
-                        "buy_volume",
-                        "sell_volume",
-                        "vwap",
-                        "imbalance",
-                        "microprice",
-                    )
-                },
-                "orderbook": {
-                    "exchange": market.orderbook.exchange,
-                    "symbol": market.orderbook.symbol,
-                    "timestamp_ms": market.orderbook.timestamp_ms,
-                    "bids": [{"price": 100.0, "qty": 5.0}],
-                    "asks": [{"price": 101.0, "qty": 4.0}],
-                    "is_snapshot": True,
-                },
-                "trades": [],
-            },
+            market_event_event(market),
         )
     )
     assert joint.ledger is not None

@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Callable
+from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.strategy import GlobalMarketStatus, StrategyInputFrame
+from mm.core.payload_schema import market_event_from_payload
 from mm.exchanges.shared.provider_adapter import now_ms
 
 
@@ -70,7 +72,7 @@ class StrategyInputFrameAssembler:
         self._tasks.clear()
 
     async def next_frame(self) -> StrategyInputFrame:
-        local = await self.local_queue.get()
+        local = _require_market_event(await self.local_queue.get())
         return await self.build_frame(local)
 
     async def build_frame(self, local: MarketEvent) -> StrategyInputFrame:
@@ -102,7 +104,7 @@ class StrategyInputFrameAssembler:
             return
         try:
             while not self._stopped.is_set():
-                self._global_events.append(await self.global_queue.get())
+                self._global_events.append(_require_market_event(await self.global_queue.get()))
         except asyncio.CancelledError:
             raise
 
@@ -121,7 +123,7 @@ class StrategyInputFrameAssembler:
         if self.global_queue is not None:
             while True:
                 try:
-                    self._global_events.append(self.global_queue.get_nowait())
+                    self._global_events.append(_require_market_event(self.global_queue.get_nowait()))
                 except asyncio.QueueEmpty:
                     break
         if self.local_private_queue is not None:
@@ -157,3 +159,10 @@ class StrategyInputFrameAssembler:
         if global_lag_ms > self.max_global_lag_ms:
             return None, "stale", global_lag_ms
         return global_event, "ready", global_lag_ms
+
+
+def _require_market_event(event: Any) -> MarketEvent:
+    parsed = market_event_from_payload(event)
+    if parsed is None:
+        raise TypeError(f"expected versioned MarketEvent payload, got {type(event)!r}")
+    return parsed
