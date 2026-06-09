@@ -133,7 +133,7 @@ def summarize_event(event: Any) -> dict[str, Any]:
     if isinstance(event, dict) and event.get("type") == MARKET_EVENT_TYPE:
         parsed = market_event_from_payload(event)
         if parsed is not None:
-            return _summarize_event(parsed)
+            return summarize_event(parsed)
     if isinstance(event, StrategyInputFrame):
         local_book_health = summarize_book_health(event.local.orderbook)
         global_book_health = (
