@@ -100,18 +100,20 @@ Recommendation:
 - Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
 - Add retention policies per topic.
 
-### 2. Postgres Persistence Spool Needs Reingest Tooling
+### 2. Postgres Persistence Spool Has Recovery Tooling But Needs Operations Policy
 
 Severity: Medium
 
 `PostgresEventWriter` now keeps a reusable psycopg2 connection across batches, drops/reconnects after write or readiness failures, retries failed batches with bounded backoff, and spills exhausted batches to local JSONL files.
 
-Impact: Connection churn and immediate batch loss are no longer the main bottlenecks. During sustained database outages, events are preserved locally for later recovery, but operators still need explicit tooling or a runbook to reingest spooled JSONL files into Postgres.
+`mm.tools.reingest_postgres_spool` can now scan failed JSONL spool records, decode their original envelopes, write them through the same Postgres writer path, and archive successfully reingested files. Reingest is idempotent because persisted events and typed fact tables use conflict keys.
+
+Impact: Connection churn and immediate batch loss are no longer the main bottlenecks. During sustained database outages, events are preserved locally and recoverable after Postgres returns. The remaining risk is operational: retention, cleanup, and runbook ownership need to be explicit so spool directories do not grow silently.
 
 Recommendation:
 
-- Add a replay/reingest command for `persistence_spool/postgres` files.
-- Add retention and cleanup rules for successfully reingested spool files.
+- Add retention and cleanup rules for failed and successfully reingested spool files.
+- Document when operators should run spool reingest and how to verify row counts.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
 ### 3. Parquet Storage Still Needs Columnar Lifecycle Policies
