@@ -39,25 +39,25 @@ class ExecutionStateReconciler:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:snapshot"):
             if isinstance(event, PrivateStateSnapshot):
                 snapshot = self.manager.apply_private_snapshot(event)
-                await self.bus.publish(f"execution:state:{self.exchange}", snapshot)
+                await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_open_orders(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:open_orders"):
             if isinstance(event, OpenOrder):
                 snapshot = self.manager.apply_open_order(event)
-                await self.bus.publish(f"execution:state:{self.exchange}", snapshot)
+                await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_order_updates(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:order_updates"):
             if isinstance(event, OrderUpdate):
                 snapshot = self.manager.apply_order_update(event)
-                await self.bus.publish(f"execution:state:{self.exchange}", snapshot)
+                await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_fills(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:fills"):
             if isinstance(event, Fill):
                 snapshot = self.manager.apply_fill(event)
-                await self.bus.publish(f"execution:state:{self.exchange}", snapshot)
+                await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_cancel_all(self) -> None:
         topics = (f"execution:cancel_all:{self.exchange}", "execution:cancel_all:all")

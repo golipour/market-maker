@@ -3,6 +3,17 @@ from __future__ import annotations
 import json
 
 from mm.core.events import envelope_event
+from mm.core.payload_schema import (
+    EXECUTION_LIFECYCLE_SCHEMA,
+    EXECUTION_LIFECYCLE_VERSION,
+    EXECUTION_SNAPSHOT_SCHEMA,
+    EXECUTION_SNAPSHOT_VERSION,
+    JOINT_TARGET_BOOK_SCHEMA,
+    JOINT_TARGET_BOOK_VERSION,
+    execution_lifecycle_event,
+    execution_snapshot_event,
+    stamped,
+)
 from mm.persistence.replay import read_lineage_chains
 
 
@@ -325,5 +336,17 @@ def test_replay_state_reconstructs_cancel_and_failure_outcomes(tmp_path) -> None
 
 
 def _row(topic: str, payload: dict) -> dict:
-    envelope = envelope_event(topic, payload)
+    envelope = envelope_event(topic, _versioned_payload(payload))
     return {"envelope_json": envelope.as_dict()}
+
+
+def _versioned_payload(payload: dict) -> dict:
+    event_type = payload.get("type")
+    fields = {key: value for key, value in payload.items() if key != "type"}
+    if event_type == "JointTargetBook":
+        return stamped(JOINT_TARGET_BOOK_SCHEMA, JOINT_TARGET_BOOK_VERSION, type=event_type, **fields)
+    if event_type == "ExecutionSnapshot":
+        return execution_snapshot_event(**fields)
+    if event_type:
+        return execution_lifecycle_event(str(event_type), **fields)
+    return payload

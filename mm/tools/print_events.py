@@ -236,32 +236,24 @@ def summarize_event(event: Any) -> dict[str, Any]:
             "timestamp_ms": event.timestamp_ms,
             "unit_policy": "price=quote_per_base, qty=base",
         }
-    if isinstance(event, ExecutionSnapshot):
-        live_orders = sorted(event.live_orders.values(), key=lambda item: item.exchange_order_id)
+    if isinstance(event, dict) and event.get("type") == "ExecutionSnapshot":
+        live_orders = event.get("live_orders") or {}
+        live_order_ids = list(live_orders)[:10]
         return {
             "type": "ExecutionSnapshot",
-            "exchange": event.exchange,
-            "timestamp_ms": event.timestamp_ms,
-            "live_order_count": event.live_order_count,
-            "pending_place_count": event.pending_place_count,
-            "pending_cancel_count": event.pending_cancel_count,
-            "pending_max_age_ms": event.pending_max_age_ms,
-            "live_order_ids": [item.exchange_order_id for item in live_orders[:10]],
-            "live_orders": [
-                {
-                    "exchange_order_id": item.exchange_order_id,
-                    "actor_id": item.actor_id,
-                    "symbol": item.order.symbol,
-                    "side": item.order.side,
-                    "price": item.order.price,
-                    "remaining_qty": item.remaining_qty,
-                    "filled_qty": item.filled_qty,
-                    "status": item.status,
-                }
-                for item in live_orders[:5]
-            ],
+            "payload_schema": event.get("payload_schema"),
+            "payload_version": event.get("payload_version"),
+            "exchange": event.get("exchange"),
+            "timestamp_ms": event.get("timestamp_ms"),
+            "live_order_count": event.get("live_order_count"),
+            "pending_place_count": event.get("pending_place_count"),
+            "pending_cancel_count": event.get("pending_cancel_count"),
+            "pending_max_age_ms": event.get("pending_max_age_ms"),
+            "live_order_ids": live_order_ids,
             "note": "execution state is mirrored from private exchange state; print_events does not place or cancel orders",
         }
+    if isinstance(event, ExecutionSnapshot):
+        return _summarize_event(event.as_payload())
     if isinstance(event, Action):
         return {
             "type": "StrategyAction",

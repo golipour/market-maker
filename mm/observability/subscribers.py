@@ -98,6 +98,9 @@ class RuntimeObservabilitySubscriber:
                 self._observe_execution_sync_requested(event)
                 self._observe_execution_event(topic, event)
                 return
+            if kind == "ExecutionSnapshot":
+                self._observe_execution_snapshot_dict(event)
+                return
             if kind.startswith(("Execution", "Place", "Cancel")):
                 self._observe_execution_event(topic, event)
                 if kind.endswith("Error") or "error" in event:

@@ -5,6 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from mm.core.payload_schema import (
+    JOINT_TARGET_BOOK_SCHEMA,
+    JOINT_TARGET_BOOK_VERSION,
+    TARGET_ORDER_SCHEMA,
+    TARGET_ORDER_VERSION,
+    VENUE_TARGET_BOOK_SCHEMA,
+    VENUE_TARGET_BOOK_VERSION,
+    stamped,
+)
+
 ExecutionPolicy = Literal["reconcile", "replace"]
 LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 
@@ -22,15 +32,17 @@ class TargetOrder:
     tags: tuple[str, ...] = ()
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-            "side": self.side,
-            "price": float(self.price),
-            "qty": float(self.qty),
-            "order_type": self.order_type,
-            "tags": list(self.tags),
-        }
+        return stamped(
+            TARGET_ORDER_SCHEMA,
+            TARGET_ORDER_VERSION,
+            exchange=self.exchange,
+            symbol=self.symbol,
+            side=self.side,
+            price=float(self.price),
+            qty=float(self.qty),
+            order_type=self.order_type,
+            tags=list(self.tags),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,17 +60,19 @@ class VenueTargetBook:
     execution_plan_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-            "actor_id": self.actor_id,
-            "frame_id": self.frame_id,
-            "decision_id": self.decision_id,
-            "target_book_id": self.target_book_id,
-            "execution_plan_id": self.execution_plan_id,
-            "orders": [order.as_payload() for order in self.orders],
-            "policy": self.policy,
-        }
+        return stamped(
+            VENUE_TARGET_BOOK_SCHEMA,
+            VENUE_TARGET_BOOK_VERSION,
+            exchange=self.exchange,
+            symbol=self.symbol,
+            actor_id=self.actor_id,
+            frame_id=self.frame_id,
+            decision_id=self.decision_id,
+            target_book_id=self.target_book_id,
+            execution_plan_id=self.execution_plan_id,
+            orders=[order.as_payload() for order in self.orders],
+            policy=self.policy,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,13 +89,16 @@ class JointTargetBook:
     target_book_id: str = ""
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "actor_id": self.actor_id,
-            "frame_id": self.frame_id,
-            "decision_id": self.decision_id,
-            "target_book_id": self.target_book_id,
-            "local": self.local.as_payload(),
-            "global": self.global_.as_payload() if self.global_ is not None else None,
-            "mode": self.mode,
-            "diagnostics": dict(self.diagnostics),
-        }
+        payload = stamped(
+            JOINT_TARGET_BOOK_SCHEMA,
+            JOINT_TARGET_BOOK_VERSION,
+            actor_id=self.actor_id,
+            frame_id=self.frame_id,
+            decision_id=self.decision_id,
+            target_book_id=self.target_book_id,
+            local=self.local.as_payload(),
+            mode=self.mode,
+            diagnostics=dict(self.diagnostics),
+        )
+        payload["global"] = self.global_.as_payload() if self.global_ is not None else None
+        return payload

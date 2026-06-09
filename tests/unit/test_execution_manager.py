@@ -9,7 +9,13 @@ from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Action, Fill, Order
 from mm.core.models.private import OpenOrder, PrivateStateSnapshot
 from mm.core.models.target_book import TargetOrder, VenueTargetBook
-from mm.execution.order_manager import ExecutionSnapshot, OrderManager
+from mm.core.payload_schema import (
+    EXECUTION_LIFECYCLE_SCHEMA,
+    EXECUTION_LIFECYCLE_VERSION,
+    EXECUTION_SNAPSHOT_SCHEMA,
+    EXECUTION_SNAPSHOT_VERSION,
+)
+from mm.execution.order_manager import OrderManager
 from mm.execution.reconciler import ExecutionStateReconciler
 
 
@@ -55,6 +61,8 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
     snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)
 
     assert requested["type"] == "ExecutionSyncRequested"
+    assert requested["payload_schema"] == EXECUTION_LIFECYCLE_SCHEMA
+    assert requested["payload_version"] == EXECUTION_LIFECYCLE_VERSION
     assert placed["type"] == "PlaceOrdersRequested"
     assert accepted["type"] == "PlaceOrdersAccepted"
     assert accepted["orders"][0]["side"] == "buy"
@@ -63,12 +71,13 @@ async def test_order_manager_places_and_publishes_execution_snapshot() -> None:
     assert completed["accepted_count"] == 1
     assert completed["pending_place_count"] == 1
     assert completed["target_count"] == 1
-    assert isinstance(snapshot, ExecutionSnapshot)
+    assert snapshot["type"] == "ExecutionSnapshot"
+    assert snapshot["payload_schema"] == EXECUTION_SNAPSHOT_SCHEMA
+    assert snapshot["payload_version"] == EXECUTION_SNAPSHOT_VERSION
     assert commands.placed[0].price == 100.0
-    assert snapshot.live_order_count == 0
-    assert snapshot.pending_place_count == 1
-    assert snapshot.pending_places["ex-1"].order is not None
-    assert snapshot.pending_places["ex-1"].order.qty == 0.5
+    assert snapshot["live_order_count"] == 0
+    assert snapshot["pending_place_count"] == 1
+    assert snapshot["pending_places"]["ex-1"]["order"]["qty"] == 0.5
 
     await manager.sync(
         [
@@ -124,8 +133,9 @@ async def test_execution_reconciler_mirrors_private_open_orders() -> None:
         )
 
         snapshot = await asyncio.wait_for(state_queue.get(), timeout=1.0)
-        assert isinstance(snapshot, ExecutionSnapshot)
-        assert snapshot.live_orders["real-1"].order.price == 101.0
+        assert snapshot["type"] == "ExecutionSnapshot"
+        assert snapshot["payload_schema"] == EXECUTION_SNAPSHOT_SCHEMA
+        assert snapshot["live_orders"]["real-1"]["order"]["price"] == 101.0
 
         await bus.publish(
             "private:state:nobitex:fills",
@@ -143,7 +153,7 @@ async def test_execution_reconciler_mirrors_private_open_orders() -> None:
         )
 
         filled = await asyncio.wait_for(state_queue.get(), timeout=1.0)
-        assert filled.live_order_count == 0
+        assert filled["live_order_count"] == 0
     finally:
         await reconciler.stop()
 
@@ -191,9 +201,10 @@ async def test_venue_target_sync_publishes_execution_snapshot() -> None:
     assert completed["target_book_id"] == "target-1"
     assert completed["execution_plan_id"] == "plan-1"
     assert report.accepted.order_count == 1
-    assert isinstance(snapshot, ExecutionSnapshot)
-    assert snapshot.live_order_count == 0
-    assert snapshot.pending_place_count == 1
+    assert snapshot["type"] == "ExecutionSnapshot"
+    assert snapshot["payload_schema"] == EXECUTION_SNAPSHOT_SCHEMA
+    assert snapshot["live_order_count"] == 0
+    assert snapshot["pending_place_count"] == 1
 
 
 @pytest.mark.asyncio

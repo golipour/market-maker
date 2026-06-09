@@ -8,6 +8,8 @@ from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.adapters.joint import _order_to_target_order
+from mm.core.events import to_jsonable
+from mm.core.payload_schema import execution_lifecycle_event
 from mm.execution.target_book import ExecutionPlan
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
@@ -52,6 +54,29 @@ class ExecutionSnapshot:
     pending_max_age_ms: int = 0
     pending_places: dict[str, PendingOrderChange] = field(default_factory=dict)
     pending_cancels: dict[str, PendingOrderChange] = field(default_factory=dict)
+    frame_id: str = ""
+    decision_id: str = ""
+    target_book_id: str = ""
+    execution_plan_id: str = ""
+
+    def as_payload(self) -> dict[str, Any]:
+        from mm.core.payload_schema import execution_snapshot_event
+
+        return execution_snapshot_event(
+            exchange=self.exchange,
+            timestamp_ms=self.timestamp_ms,
+            live_order_count=self.live_order_count,
+            live_orders=to_jsonable(self.live_orders),
+            pending_place_count=self.pending_place_count,
+            pending_cancel_count=self.pending_cancel_count,
+            pending_max_age_ms=self.pending_max_age_ms,
+            pending_places=to_jsonable(self.pending_places),
+            pending_cancels=to_jsonable(self.pending_cancels),
+            frame_id=self.frame_id,
+            decision_id=self.decision_id,
+            target_book_id=self.target_book_id,
+            execution_plan_id=self.execution_plan_id,
+        )
 
 
 class OrderManager(AbstractOrderManager):
@@ -102,15 +127,15 @@ class OrderManager(AbstractOrderManager):
         timestamp_ms = self.clock_ms()
         await self._publish(
             "execution:orders",
-            {
-                "type": "ExecutionSyncRequested",
-                "exchange": self.exchange,
-                "actor_id": _single_action_attr(actions, "actor_id"),
-                "symbol": _single_action_symbol(actions),
-                "action_count": len(actions),
-                "target_count": target_count,
-                "timestamp_ms": timestamp_ms,
-            },
+            execution_lifecycle_event(
+                "ExecutionSyncRequested",
+                exchange=self.exchange,
+                actor_id=_single_action_attr(actions, "actor_id"),
+                symbol=_single_action_symbol(actions),
+                action_count=len(actions),
+                target_count=target_count,
+                timestamp_ms=timestamp_ms,
+            ),
         )
         combined = ExecutionSyncReport()
         for action in actions:
@@ -164,19 +189,19 @@ class OrderManager(AbstractOrderManager):
         target_count = len(target.orders)
         await self._publish(
             "execution:orders",
-            {
-                "type": "ExecutionSyncRequested",
-                "exchange": self.exchange,
-                "actor_id": target.actor_id,
-                "symbol": target.symbol,
-                "action_count": 1,
-                "target_count": target_count,
-                "frame_id": target.frame_id,
-                "decision_id": target.decision_id,
-                "target_book_id": target.target_book_id,
-                "execution_plan_id": target.execution_plan_id,
-                "timestamp_ms": self.clock_ms(),
-            },
+            execution_lifecycle_event(
+                "ExecutionSyncRequested",
+                exchange=self.exchange,
+                actor_id=target.actor_id,
+                symbol=target.symbol,
+                action_count=1,
+                target_count=target_count,
+                frame_id=target.frame_id,
+                decision_id=target.decision_id,
+                target_book_id=target.target_book_id,
+                execution_plan_id=target.execution_plan_id,
+                timestamp_ms=self.clock_ms(),
+            ),
         )
         plan = self._plan_for_venue_target(target)
         scoped_desired = [self._target_order_to_order(order) for order in target.orders]
@@ -224,14 +249,14 @@ class OrderManager(AbstractOrderManager):
             return
         await self._publish(
             "execution:orders",
-            {
-                "type": "CancelActorOrdersRequested",
-                "exchange": self.exchange,
-                "actor_id": actor,
-                "reason": reason,
-                "count": len(order_ids),
-                "timestamp_ms": self.clock_ms(),
-            },
+            execution_lifecycle_event(
+                "CancelActorOrdersRequested",
+                exchange=self.exchange,
+                actor_id=actor,
+                reason=reason,
+                count=len(order_ids),
+                timestamp_ms=self.clock_ms(),
+            ),
         )
         await self.command_adapter.cancel_orders(order_ids)
         timestamp_ms = self.clock_ms()
@@ -247,13 +272,13 @@ class OrderManager(AbstractOrderManager):
             )
         await self._publish(
             "execution:orders",
-            {
-                "type": "CancelOrdersAccepted",
-                "exchange": self.exchange,
-                "actor_id": actor,
-                "order_ids": order_ids,
-                "timestamp_ms": self.clock_ms(),
-            },
+            execution_lifecycle_event(
+                "CancelOrdersAccepted",
+                exchange=self.exchange,
+                actor_id=actor,
+                order_ids=order_ids,
+                timestamp_ms=self.clock_ms(),
+            ),
         )
         await self._publish_snapshot()
 
@@ -355,13 +380,13 @@ class OrderManager(AbstractOrderManager):
             return
         await self._publish(
             "execution:orders",
-            {
-                "type": "CancelAllRequested",
-                "exchange": self.exchange,
-                "reason": reason,
-                "count": len(order_ids),
-                "timestamp_ms": self.clock_ms(),
-            },
+            execution_lifecycle_event(
+                "CancelAllRequested",
+                exchange=self.exchange,
+                reason=reason,
+                count=len(order_ids),
+                timestamp_ms=self.clock_ms(),
+            ),
         )
         await self._router.command_adapter.cancel_orders(order_ids)
         timestamp_ms = self.clock_ms()
@@ -377,12 +402,12 @@ class OrderManager(AbstractOrderManager):
             )
         await self._publish(
             "execution:orders",
-            {
-                "type": "CancelOrdersAccepted",
-                "exchange": self.exchange,
-                "order_ids": order_ids,
-                "timestamp_ms": self.clock_ms(),
-            },
+            execution_lifecycle_event(
+                "CancelOrdersAccepted",
+                exchange=self.exchange,
+                order_ids=order_ids,
+                timestamp_ms=self.clock_ms(),
+            ),
         )
         await self._publish_snapshot()
 
@@ -590,7 +615,7 @@ class OrderManager(AbstractOrderManager):
         )
 
     async def _publish_snapshot(self) -> None:
-        await self._publish("execution:state", self.snapshot())
+        await self._publish("execution:state", self.snapshot().as_payload())
 
     async def _publish_sync_completed(
         self,
@@ -608,28 +633,28 @@ class OrderManager(AbstractOrderManager):
         timestamp_ms = self.clock_ms()
         await self._publish(
             "execution:orders",
-            {
-                "type": "ExecutionSyncCompleted",
-                "exchange": self.exchange,
-                "actor_id": actor_id,
-                "symbol": symbol,
-                "target_count": int(target_count),
-                "frame_id": frame_id,
-                "decision_id": decision_id,
-                "target_book_id": target_book_id,
-                "execution_plan_id": execution_plan_id,
-                "keep_count": int(report.kept.order_count),
-                "cancel_count": int(report.cancel_count),
-                "place_count": int(report.to_place.order_count),
-                "accepted_count": int(report.accepted.order_count),
-                "rejected_count": int(sum(report.venue_rejection_counts.values())),
-                "placed": bool(report.placed),
-                "pending_place_count": len(self._pending_places),
-                "pending_cancel_count": len(self._pending_cancels),
-                "pending_max_age_ms": self._pending_max_age_ms(timestamp_ms),
-                "latency_ms": max(0.0, float(latency_ms)),
-                "timestamp_ms": timestamp_ms,
-            },
+            execution_lifecycle_event(
+                "ExecutionSyncCompleted",
+                exchange=self.exchange,
+                actor_id=actor_id,
+                symbol=symbol,
+                target_count=int(target_count),
+                frame_id=frame_id,
+                decision_id=decision_id,
+                target_book_id=target_book_id,
+                execution_plan_id=execution_plan_id,
+                keep_count=int(report.kept.order_count),
+                cancel_count=int(report.cancel_count),
+                place_count=int(report.to_place.order_count),
+                accepted_count=int(report.accepted.order_count),
+                rejected_count=int(sum(report.venue_rejection_counts.values())),
+                placed=bool(report.placed),
+                pending_place_count=len(self._pending_places),
+                pending_cancel_count=len(self._pending_cancels),
+                pending_max_age_ms=self._pending_max_age_ms(timestamp_ms),
+                latency_ms=max(0.0, float(latency_ms)),
+                timestamp_ms=timestamp_ms,
+            ),
         )
 
     async def _publish(self, topic_prefix: str, event) -> None:

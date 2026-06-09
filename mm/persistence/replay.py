@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from mm.core.events import EventEnvelope, decode_envelope
+from mm.core.payload_schema import (
+    EXECUTION_LIFECYCLE_SCHEMA,
+    EXECUTION_LIFECYCLE_VERSION,
+    EXECUTION_SNAPSHOT_SCHEMA,
+    EXECUTION_SNAPSHOT_VERSION,
+    JOINT_TARGET_BOOK_SCHEMA,
+    JOINT_TARGET_BOOK_VERSION,
+    assert_payload_schema,
+)
 
 
 def read_event_rows(path: str | Path) -> Iterator[dict[str, Any]]:
@@ -192,9 +201,12 @@ def reconstruct_lineage_state(chain: ReplayLineageChain) -> ReplayFrameState:
     latest_decision = _latest_payload(chain.decisions)
     latest_diagnostics = _latest_payload(chain.diagnostics)
     latest_target_book = _latest_payload(chain.target_books)
+    if latest_target_book is not None:
+        assert_payload_schema(latest_target_book, JOINT_TARGET_BOOK_SCHEMA, JOINT_TARGET_BOOK_VERSION)
 
     for envelope in chain.target_books:
         payload = _dict_payload(envelope)
+        assert_payload_schema(payload, JOINT_TARGET_BOOK_SCHEMA, JOINT_TARGET_BOOK_VERSION)
         for plan_id, venue_payload in _venue_target_payloads(payload):
             plan = mutable_plans.setdefault(plan_id, _MutableExecutionPlanState(plan_id))
             plan.exchange = str(venue_payload.get("exchange") or plan.exchange or "")
@@ -289,6 +301,10 @@ class _MutableExecutionPlanState:
     latest_snapshot: dict[str, Any] | None = None
 
     def apply(self, event_type: str, payload: dict[str, Any]) -> None:
+        if event_type == "ExecutionSnapshot":
+            assert_payload_schema(payload, EXECUTION_SNAPSHOT_SCHEMA, EXECUTION_SNAPSHOT_VERSION)
+        else:
+            assert_payload_schema(payload, EXECUTION_LIFECYCLE_SCHEMA, EXECUTION_LIFECYCLE_VERSION)
         if event_type == "PlaceOrdersRequested":
             self.place_requested_orders.extend(_tuple_of_dicts(payload.get("orders")))
         elif event_type == "PlaceOrdersAccepted":

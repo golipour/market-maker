@@ -384,16 +384,17 @@ class StrategyRunner:
 
             await self._publish_decision(decision, executed_orders=executed_orders)
             if decision.joint_target_book is not None:
+                from mm.core.payload_schema import joint_target_book_event
+
                 await self._publish(
                     self.config.normalized_target_books_topic,
-                    {
-                        "type": "JointTargetBook",
-                        **decision.joint_target_book.as_payload(),
-                        "exchange": frame.local.exchange,
-                        "symbol": frame.local.symbol,
-                        "t_end_ms": frame.local.t_end_ms,
-                        "frame_step": self._frame_step,
-                    },
+                    joint_target_book_event(
+                        decision.joint_target_book,
+                        exchange=frame.local.exchange,
+                        symbol=frame.local.symbol,
+                        t_end_ms=frame.local.t_end_ms,
+                        frame_step=self._frame_step,
+                    ),
                 )
             for action in approved:
                 await self._publish(self.config.normalized_action_topic, action)
@@ -546,21 +547,23 @@ class StrategyRunner:
     ) -> None:
         if self.bus is None:
             return
-        payload = {
-            "type": "ExecutionSyncFailed",
-            "actor_id": self.config.actor_id,
-            "exchange": ctx.frame.local.exchange,
-            "symbol": ctx.frame.local.symbol,
-            "t_end_ms": ctx.frame.t_end_ms,
-            "frame_step": ctx.frame_step,
-            "frame_id": ctx.frame.frame_id,
-            "decision_id": ctx.decision.decision_id if ctx.decision is not None else "",
-            "target_book_id": ctx.decision.target_book_id if ctx.decision is not None else "",
-            "error": message.split(":", 1)[0],
-            "message": message,
-            "retryable": True,
-            "timestamp_ms": int(time.time() * 1000),
-        }
+        from mm.core.payload_schema import execution_lifecycle_event
+
+        payload = execution_lifecycle_event(
+            "ExecutionSyncFailed",
+            actor_id=self.config.actor_id,
+            exchange=ctx.frame.local.exchange,
+            symbol=ctx.frame.local.symbol,
+            t_end_ms=ctx.frame.t_end_ms,
+            frame_step=ctx.frame_step,
+            frame_id=ctx.frame.frame_id,
+            decision_id=ctx.decision.decision_id if ctx.decision is not None else "",
+            target_book_id=ctx.decision.target_book_id if ctx.decision is not None else "",
+            error=message.split(":", 1)[0],
+            message=message,
+            retryable=True,
+            timestamp_ms=int(time.time() * 1000),
+        )
         if latency_ms is not None:
             payload["latency_ms"] = max(0.0, float(latency_ms))
         log_event("execution_sync_failed", payload)

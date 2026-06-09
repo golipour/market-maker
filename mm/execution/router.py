@@ -8,6 +8,7 @@ from typing import Any
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.execution import AbstractOrderCommandAdapter
 from mm.core.models.execution import Order
+from mm.core.payload_schema import execution_lifecycle_event
 from mm.execution.target_book import CommandRejection, ExecutionPlan, RouterResult
 from mm.exchanges.shared.provider_adapter import now_ms
 from mm.observability import counter_inc, log_event
@@ -46,42 +47,42 @@ class OrderRouter:
         if cancel_ids:
             await self._publish(
                 "execution:orders",
-                {
-                    "type": "CancelOrdersRequested",
-                    "exchange": self.exchange,
-                    "order_ids": cancel_ids,
-                    "policy": plan.policy,
+                execution_lifecycle_event(
+                    "CancelOrdersRequested",
+                    exchange=self.exchange,
+                    order_ids=cancel_ids,
+                    policy=plan.policy,
                     **_lineage_payload(plan),
-                    "timestamp_ms": self.clock_ms(),
-                },
+                    timestamp_ms=self.clock_ms(),
+                ),
             )
             try:
                 await self.command_adapter.cancel_orders(cancel_ids)
                 cancelled.extend(cancel_ids)
                 await self._publish(
                     "execution:orders",
-                    {
-                        "type": "CancelOrdersAccepted",
-                        "exchange": self.exchange,
-                        "order_ids": cancel_ids,
+                    execution_lifecycle_event(
+                        "CancelOrdersAccepted",
+                        exchange=self.exchange,
+                        order_ids=cancel_ids,
                         **_lineage_payload(plan),
-                        "timestamp_ms": self.clock_ms(),
-                    },
+                        timestamp_ms=self.clock_ms(),
+                    ),
                 )
             except Exception as exc:
                 failed_cancels.extend(cancel_ids)
                 self._observe_adapter_failure(plan, operation="cancel_orders", exc=exc)
                 await self._publish(
                     "execution:orders",
-                    {
-                        "type": "CancelOrdersFailed",
-                        "exchange": self.exchange,
-                        "order_ids": cancel_ids,
-                        "error": type(exc).__name__,
-                        "message": str(exc),
+                    execution_lifecycle_event(
+                        "CancelOrdersFailed",
+                        exchange=self.exchange,
+                        order_ids=cancel_ids,
+                        error=type(exc).__name__,
+                        message=str(exc),
                         **_lineage_payload(plan),
-                        "timestamp_ms": self.clock_ms(),
-                    },
+                        timestamp_ms=self.clock_ms(),
+                    ),
                 )
                 if plan.policy == "replace":
                     return RouterResult(
@@ -93,14 +94,14 @@ class OrderRouter:
             orders = [command.order for command in plan.place]
             await self._publish(
                 "execution:orders",
-                {
-                    "type": "PlaceOrdersRequested",
-                    "exchange": self.exchange,
-                    "orders": [_order_summary(order) for order in orders],
-                    "policy": plan.policy,
+                execution_lifecycle_event(
+                    "PlaceOrdersRequested",
+                    exchange=self.exchange,
+                    orders=[_order_summary(order) for order in orders],
+                    policy=plan.policy,
                     **_lineage_payload(plan),
-                    "timestamp_ms": self.clock_ms(),
-                },
+                    timestamp_ms=self.clock_ms(),
+                ),
             )
             try:
                 order_ids = await self.command_adapter.place_orders(orders)
@@ -116,15 +117,15 @@ class OrderRouter:
                 )
                 await self._publish(
                     "execution:orders",
-                    {
-                        "type": "PlaceOrdersFailed",
-                        "exchange": self.exchange,
-                        "orders": [_order_summary(command.order) for command in plan.place],
-                        "error": type(exc).__name__,
-                        "message": str(exc),
+                    execution_lifecycle_event(
+                        "PlaceOrdersFailed",
+                        exchange=self.exchange,
+                        orders=[_order_summary(command.order) for command in plan.place],
+                        error=type(exc).__name__,
+                        message=str(exc),
                         **_lineage_payload(plan),
-                        "timestamp_ms": self.clock_ms(),
-                    },
+                        timestamp_ms=self.clock_ms(),
+                    ),
                 )
             else:
                 timestamp_ms = self.clock_ms()
@@ -139,31 +140,31 @@ class OrderRouter:
                     )
                 await self._publish(
                     "execution:orders",
-                    {
-                        "type": "PlaceOrdersAccepted",
-                        "exchange": self.exchange,
-                        "order_ids": order_ids,
-                        "orders": accepted_orders,
+                    execution_lifecycle_event(
+                        "PlaceOrdersAccepted",
+                        exchange=self.exchange,
+                        order_ids=order_ids,
+                        orders=accepted_orders,
                         **_lineage_payload(plan),
-                        "timestamp_ms": timestamp_ms,
-                    },
+                        timestamp_ms=timestamp_ms,
+                    ),
                 )
 
         for rejection in plan.rejected:
             await self._publish(
                 "execution:orders",
-                {
-                    "type": "OrderValidationRejected",
-                    "exchange": self.exchange,
-                    "symbol": rejection.order.symbol,
-                    "reason": rejection.reason,
-                    "side": rejection.order.side,
-                    "price": float(rejection.order.price),
-                    "qty": float(rejection.order.qty),
-                    "stage": rejection.stage,
+                execution_lifecycle_event(
+                    "OrderValidationRejected",
+                    exchange=self.exchange,
+                    symbol=rejection.order.symbol,
+                    reason=rejection.reason,
+                    side=rejection.order.side,
+                    price=float(rejection.order.price),
+                    qty=float(rejection.order.qty),
+                    stage=rejection.stage,
                     **_lineage_payload(plan),
-                    "timestamp_ms": self.clock_ms(),
-                },
+                    timestamp_ms=self.clock_ms(),
+                ),
             )
 
         return RouterResult(
