@@ -19,6 +19,14 @@ EXECUTION_LIFECYCLE_VERSION = 1
 EXECUTION_SNAPSHOT_SCHEMA = "mm.execution_snapshot"
 EXECUTION_SNAPSHOT_VERSION = 1
 
+STRATEGY_DECISION_SCHEMA = "mm.strategy_decision"
+STRATEGY_DECISION_VERSION = 1
+STRATEGY_DECISION_TYPE = "StrategyDecision"
+
+CONTROLLER_DIAGNOSTICS_SCHEMA = "mm.controller_diagnostics"
+CONTROLLER_DIAGNOSTICS_VERSION = 1
+CONTROLLER_DIAGNOSTICS_TYPE = "ControllerDiagnostics"
+
 
 def stamped(schema: str, version: int, **fields: Any) -> dict[str, Any]:
     return {"payload_schema": schema, "payload_version": version, **fields}
@@ -439,3 +447,179 @@ def joint_target_book_event(book: Any, **metadata: Any) -> dict[str, Any]:
     """Build a versioned JointTargetBook bus payload from a model instance."""
 
     return {"type": "JointTargetBook", **book.as_payload(), **metadata}
+
+
+def strategy_decision_event(
+    decision: Any,
+    *,
+    executed_orders: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a versioned ``StrategyDecision`` bus payload."""
+
+    executed = list(executed_orders if executed_orders is not None else ())
+    fields: dict[str, Any] = {
+        "type": STRATEGY_DECISION_TYPE,
+        "actor_id": decision.actor_id,
+        "exchange": decision.exchange,
+        "symbol": decision.symbol,
+        "t_end_ms": decision.t_end_ms,
+        "frame_id": decision.frame_id,
+        "decision_id": decision.decision_id,
+        "target_book_id": decision.target_book_id,
+        "observe_only": decision.observe_only,
+        "frame_step": decision.frame_step,
+        "action_start_after_steps": decision.action_start_after_steps,
+        "live_execution_skipped_warmup": decision.live_execution_skipped_warmup,
+        "global_status": decision.global_status,
+        "has_global": decision.has_global,
+        "mid": decision.mid,
+        "local_buy_vwap": decision.local_buy_vwap,
+        "local_sell_vwap": decision.local_sell_vwap,
+        "global_buy_vwap": decision.global_buy_vwap,
+        "global_sell_vwap": decision.global_sell_vwap,
+        "inventory": decision.inventory,
+        "cash": decision.cash,
+        "buy_volume": decision.buy_volume,
+        "sell_volume": decision.sell_volume,
+        "order_count": decision.order_count,
+        "orders": list(decision.orders),
+        "joint_target_book": (
+            decision.joint_target_book.as_payload()
+            if decision.joint_target_book is not None
+            else None
+        ),
+        "ladder_orders": list(decision.ladder_orders),
+        "executed_orders": executed,
+        "local_price_model": decision.model_updates.local_price,
+        "local_market_flow_model": decision.model_updates.local_market_flow,
+        "global_market_flow_model": decision.model_updates.global_market_flow,
+        "global_price_model": decision.model_updates.global_price,
+        "optimizer": decision.diagnostics.optimizer,
+        "continuous_action_depth": decision.diagnostics.continuous_action_depth,
+        "orderbook_grid": decision.diagnostics.orderbook_grid,
+        "latency_ms": decision.latency_ms,
+        "unit_policy": decision.diagnostics.unit_policy,
+        "decision_hash": decision.decision_hash,
+    }
+    if decision.economics:
+        fields["economics"] = dict(decision.economics)
+    return stamped(STRATEGY_DECISION_SCHEMA, STRATEGY_DECISION_VERSION, **fields)
+
+
+def controller_diagnostics_event(diagnostics: Any) -> dict[str, Any]:
+    """Build a versioned ``ControllerDiagnostics`` bus payload."""
+
+    return stamped(
+        CONTROLLER_DIAGNOSTICS_SCHEMA,
+        CONTROLLER_DIAGNOSTICS_VERSION,
+        type=CONTROLLER_DIAGNOSTICS_TYPE,
+        actor_id=diagnostics.actor_id,
+        exchange=diagnostics.exchange,
+        symbol=diagnostics.symbol,
+        t_end_ms=diagnostics.t_end_ms,
+        frame_step=diagnostics.frame_step,
+        created_at_ms=diagnostics.created_at_ms,
+        run_id=diagnostics.run_id,
+        frame_id=diagnostics.frame_id,
+        decision_id=diagnostics.decision_id,
+        target_book_id=diagnostics.target_book_id,
+        frame=_controller_frame_payload(diagnostics.frame),
+        state=_controller_state_payload(diagnostics.state),
+        models={
+            name: _controller_model_score_payload(score)
+            for name, score in diagnostics.models.items()
+        },
+        optimizer=_controller_optimizer_payload(diagnostics.optimizer),
+        action_pipeline=_controller_action_pipeline_payload(diagnostics.action_pipeline),
+        risk=_controller_risk_payload(diagnostics.risk),
+        execution_gates={
+            "executed": diagnostics.execution_gates.executed,
+            "blocked_reasons": list(diagnostics.execution_gates.blocked_reasons),
+            "venue_gates": dict(diagnostics.execution_gates.venue_gates),
+        },
+        warnings=list(diagnostics.warnings),
+        cleared_orderbook=dict(diagnostics.cleared_orderbook),
+        global_cleared_orderbook=dict(diagnostics.global_cleared_orderbook),
+    )
+
+
+def _controller_frame_payload(frame: Any) -> dict[str, Any]:
+    return {
+        "global_status": frame.global_status,
+        "global_lag_ms": frame.global_lag_ms,
+        "frame_age_ms": frame.frame_age_ms,
+        "local_private_age_ms": frame.local_private_age_ms,
+        "global_private_age_ms": frame.global_private_age_ms,
+        "sync_status": dict(frame.sync_status),
+    }
+
+
+def _controller_state_payload(state: Any) -> dict[str, Any]:
+    return {
+        "mid": state.mid,
+        "local_inventory": state.local_inventory,
+        "local_cash": state.local_cash,
+        "global_inventory": state.global_inventory,
+        "global_cash": state.global_cash,
+        "local_buy_vwap": state.local_buy_vwap,
+        "local_sell_vwap": state.local_sell_vwap,
+        "global_buy_vwap": state.global_buy_vwap,
+        "global_sell_vwap": state.global_sell_vwap,
+        "local_base_wallet": dict(state.local_base_wallet),
+        "local_quote_wallet": dict(state.local_quote_wallet),
+        "global_base_wallet": dict(state.global_base_wallet),
+        "global_quote_wallet": dict(state.global_quote_wallet),
+        "local_wealth": state.local_wealth,
+        "global_wealth": state.global_wealth,
+    }
+
+
+def _controller_model_score_payload(score: Any) -> dict[str, Any]:
+    return {
+        "model": score.model,
+        "kind": score.kind,
+        "updated": score.updated,
+        "skip_reason": score.skip_reason,
+        "observation": dict(score.observation),
+        "params_before": dict(score.params_before),
+        "params_after": dict(score.params_after),
+        "log_likelihood": score.log_likelihood,
+        "nll": score.nll,
+        "standardized_residual": score.standardized_residual,
+    }
+
+
+def _controller_optimizer_payload(optimizer: Any) -> dict[str, Any]:
+    return {
+        "config": dict(optimizer.config),
+        "timing": dict(optimizer.timing),
+        "objective": dict(optimizer.objective),
+        "action": dict(optimizer.action),
+        "gradients": dict(optimizer.gradients),
+        "rollout": dict(optimizer.rollout),
+    }
+
+
+def _controller_action_pipeline_payload(pipeline: Any) -> dict[str, Any]:
+    return {
+        "continuous": dict(pipeline.continuous),
+        "ladder": dict(pipeline.ladder),
+        "capped": dict(pipeline.capped),
+        "target_book": dict(pipeline.target_book),
+        "risk_approved_target": dict(pipeline.risk_approved_target),
+        "planned_cancel": dict(pipeline.planned_cancel),
+        "planned_place": dict(pipeline.planned_place),
+        "rules_valid": dict(pipeline.rules_valid),
+        "router_accepted": dict(pipeline.router_accepted),
+        "kept": dict(pipeline.kept),
+    }
+
+
+def _controller_risk_payload(risk: Any) -> dict[str, Any]:
+    return {
+        "approved": risk.approved,
+        "rejection_counts": dict(risk.rejection_counts),
+        "exposure_before": dict(risk.exposure_before),
+        "exposure_after": dict(risk.exposure_after),
+        "limits": dict(risk.limits),
+    }

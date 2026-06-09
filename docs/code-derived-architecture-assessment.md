@@ -275,17 +275,16 @@ Recommendation:
 
 ### 13. Remaining Event Payloads Still Mix Dicts And Dataclasses
 
-Severity: Medium
+Severity: Low to Medium
 
-Execution lifecycle and snapshot events, joint target books, and replay checks now use versioned payload builders in `mm/core/payload_schema.py`. Router, order manager, and strategy-runner execution failure paths publish only through those builders.
+Execution lifecycle/snapshot events, joint target books, `StrategyDecision`, and `ControllerDiagnostics` now publish through versioned builders in `mm/core/payload_schema.py` (`payload_schema` + `payload_version` on every payload). Replay fidelity checks cover execution lifecycle coherence.
 
-Impact: Execution replay and persistence contracts are clearer, but strategy decisions, diagnostics, market events, and private snapshots still use mixed dataclass/dict shapes without dedicated builders.
+Impact: The highest-volume controller and decision events now share the same schema contract as execution and target-book events. Market events, private snapshots, and ledger snapshots still use mixed dataclass/dict shapes without dedicated builders.
 
 Recommendation:
 
-- Add typed payload builders for the next highest-value events: `StrategyDecision`, `ControllerDiagnostics`, and private snapshots.
-- Keep `payload_schema` and `payload_version` on every durable high-value event.
-- Add replay/persistence contract tests as each event family is migrated.
+- Add typed payload builders for private snapshots and ledger snapshots next.
+- Add replay/persistence contract tests as each remaining event family is migrated.
 
 ### 14. Secrets And Local Compose Defaults Need Production Hardening
 
@@ -425,7 +424,7 @@ Priority recommendations:
 
 ### Priority 3: Maintainability And DX
 
-- Add typed payload builders for strategy decisions, diagnostics, and private snapshots.
+- Add typed payload builders for private snapshots and ledger snapshots.
 - Generate dashboard queries from stable schema helpers where possible.
 - Document one-bot-per-process deployment explicitly.
 - Extend replay fidelity into full frame re-simulation through strategy/risk/execution when a deterministic offline harness is needed.

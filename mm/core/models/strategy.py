@@ -7,6 +7,7 @@ from mm.core.models.execution import Action
 from mm.core.models.market import MarketEvent
 from mm.core.models.private import PrivateStateSnapshot
 from mm.core.models.target_book import JointTargetBook
+from mm.core.payload_schema import strategy_decision_event
 from mm.execution.plan import ActionPipelineReport
 
 GlobalMarketStatus = Literal["disabled", "ready", "missing", "stale"]
@@ -106,46 +107,4 @@ class StrategyDecision:
     def as_payload(self, *, executed_orders: tuple[dict[str, Any], ...] | None = None) -> dict[str, Any]:
         """JSON-friendly event payload for the runtime bus and persistence."""
 
-        return {
-            "type": "StrategyDecision",
-            "actor_id": self.actor_id,
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-            "t_end_ms": self.t_end_ms,
-            "frame_id": self.frame_id,
-            "decision_id": self.decision_id,
-            "target_book_id": self.target_book_id,
-            "observe_only": self.observe_only,
-            "frame_step": self.frame_step,
-            "action_start_after_steps": self.action_start_after_steps,
-            "live_execution_skipped_warmup": self.live_execution_skipped_warmup,
-            "global_status": self.global_status,
-            "has_global": self.has_global,
-            "mid": self.mid,
-            "local_buy_vwap": self.local_buy_vwap,
-            "local_sell_vwap": self.local_sell_vwap,
-            "global_buy_vwap": self.global_buy_vwap,
-            "global_sell_vwap": self.global_sell_vwap,
-            "inventory": self.inventory,
-            "cash": self.cash,
-            "buy_volume": self.buy_volume,
-            "sell_volume": self.sell_volume,
-            "order_count": self.order_count,
-            "orders": list(self.orders),
-            "joint_target_book": (
-                self.joint_target_book.as_payload() if self.joint_target_book is not None else None
-            ),
-            "ladder_orders": list(self.ladder_orders),
-            "executed_orders": list(executed_orders if executed_orders is not None else ()),
-            "local_price_model": self.model_updates.local_price,
-            "local_market_flow_model": self.model_updates.local_market_flow,
-            "global_market_flow_model": self.model_updates.global_market_flow,
-            "global_price_model": self.model_updates.global_price,
-            "optimizer": self.diagnostics.optimizer,
-            "continuous_action_depth": self.diagnostics.continuous_action_depth,
-            "orderbook_grid": self.diagnostics.orderbook_grid,
-            "latency_ms": self.latency_ms,
-            "unit_policy": self.diagnostics.unit_policy,
-            "decision_hash": self.decision_hash,
-            **({"economics": dict(self.economics)} if self.economics else {}),
-        }
+        return strategy_decision_event(self, executed_orders=executed_orders)

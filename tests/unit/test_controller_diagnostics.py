@@ -12,11 +12,12 @@ from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.models.execution import Action, Order
 from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
-from mm.diagnostics.models import (
-    CONTROLLER_DIAGNOSTICS_TYPE,
+from mm.core.payload_schema import (
+    CONTROLLER_DIAGNOSTICS_SCHEMA,
     CONTROLLER_DIAGNOSTICS_VERSION,
-    ControllerDiagnostics,
+    assert_payload_schema,
 )
+from mm.diagnostics.models import CONTROLLER_DIAGNOSTICS_TYPE, ControllerDiagnostics
 from mm.execution.memory import RecordingOrderManager
 from mm.risk.engine import PassThroughRiskEngine
 from mm.runtime.config import (
@@ -83,7 +84,7 @@ def test_controller_diagnostics_payload_has_stable_shape() -> None:
     payload = diagnostics.as_payload()
 
     assert payload["type"] == CONTROLLER_DIAGNOSTICS_TYPE
-    assert payload["version"] == CONTROLLER_DIAGNOSTICS_VERSION
+    assert_payload_schema(payload, CONTROLLER_DIAGNOSTICS_SCHEMA, CONTROLLER_DIAGNOSTICS_VERSION)
     assert payload["actor_id"] == "mpc-controller"
     assert payload["exchange"] == "nobitex"
     assert payload["symbol"] == "BTC_IRT"
@@ -128,7 +129,11 @@ def test_controller_diagnostics_envelope_round_trips() -> None:
     assert decoded.exchange == "nobitex"
     assert decoded.symbol == "BTC_IRT"
     assert decoded.actor_id == "mpc-controller"
-    assert decoded.payload["version"] == CONTROLLER_DIAGNOSTICS_VERSION
+    assert_payload_schema(
+        decoded.payload,
+        CONTROLLER_DIAGNOSTICS_SCHEMA,
+        CONTROLLER_DIAGNOSTICS_VERSION,
+    )
     json.dumps(decoded.payload)
 
 
@@ -195,7 +200,11 @@ async def test_strategy_runner_publishes_diagnostics_on_controller_error(
     assert approved == []
     diagnostics = await diag_queue.get()
     assert diagnostics["type"] == CONTROLLER_DIAGNOSTICS_TYPE
-    assert diagnostics["version"] == CONTROLLER_DIAGNOSTICS_VERSION
+    assert_payload_schema(
+        diagnostics,
+        CONTROLLER_DIAGNOSTICS_SCHEMA,
+        CONTROLLER_DIAGNOSTICS_VERSION,
+    )
     assert diagnostics["frame_step"] == 1
     assert diagnostics["run_id"] == "run-test"
     assert any("mpc blew up" in w for w in diagnostics["warnings"])

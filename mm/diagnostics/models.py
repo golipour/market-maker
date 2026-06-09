@@ -7,8 +7,11 @@ from typing import Any
 
 from mm.core.models.market import RawOrderbook
 
-CONTROLLER_DIAGNOSTICS_TYPE = "ControllerDiagnostics"
-CONTROLLER_DIAGNOSTICS_VERSION = 1
+from mm.core.payload_schema import (
+    CONTROLLER_DIAGNOSTICS_TYPE,
+    CONTROLLER_DIAGNOSTICS_VERSION,
+    controller_diagnostics_event,
+)
 
 
 def orderbook_snapshot_payload(book: RawOrderbook | None) -> dict[str, Any]:
@@ -155,113 +158,4 @@ class ControllerDiagnostics:
     global_cleared_orderbook: dict[str, Any] = field(default_factory=dict)
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "type": CONTROLLER_DIAGNOSTICS_TYPE,
-            "version": CONTROLLER_DIAGNOSTICS_VERSION,
-            "actor_id": self.actor_id,
-            "exchange": self.exchange,
-            "symbol": self.symbol,
-            "t_end_ms": self.t_end_ms,
-            "frame_step": self.frame_step,
-            "created_at_ms": self.created_at_ms,
-            "run_id": self.run_id,
-            "frame_id": self.frame_id,
-            "decision_id": self.decision_id,
-            "target_book_id": self.target_book_id,
-            "frame": _frame_payload(self.frame),
-            "state": _state_payload(self.state),
-            "models": {name: _model_score_payload(score) for name, score in self.models.items()},
-            "optimizer": _optimizer_payload(self.optimizer),
-            "action_pipeline": _action_pipeline_payload(self.action_pipeline),
-            "risk": _risk_payload(self.risk),
-            "execution_gates": {
-                "executed": self.execution_gates.executed,
-                "blocked_reasons": list(self.execution_gates.blocked_reasons),
-                "venue_gates": dict(self.execution_gates.venue_gates),
-            },
-            "warnings": list(self.warnings),
-            "cleared_orderbook": dict(self.cleared_orderbook),
-            "global_cleared_orderbook": dict(self.global_cleared_orderbook),
-        }
-
-
-def _frame_payload(frame: FrameDiagnostics) -> dict[str, Any]:
-    return {
-        "global_status": frame.global_status,
-        "global_lag_ms": frame.global_lag_ms,
-        "frame_age_ms": frame.frame_age_ms,
-        "local_private_age_ms": frame.local_private_age_ms,
-        "global_private_age_ms": frame.global_private_age_ms,
-        "sync_status": dict(frame.sync_status),
-    }
-
-
-def _state_payload(state: StateDiagnostics) -> dict[str, Any]:
-    return {
-        "mid": state.mid,
-        "local_inventory": state.local_inventory,
-        "local_cash": state.local_cash,
-        "global_inventory": state.global_inventory,
-        "global_cash": state.global_cash,
-        "local_buy_vwap": state.local_buy_vwap,
-        "local_sell_vwap": state.local_sell_vwap,
-        "global_buy_vwap": state.global_buy_vwap,
-        "global_sell_vwap": state.global_sell_vwap,
-        "local_base_wallet": dict(state.local_base_wallet),
-        "local_quote_wallet": dict(state.local_quote_wallet),
-        "global_base_wallet": dict(state.global_base_wallet),
-        "global_quote_wallet": dict(state.global_quote_wallet),
-        "local_wealth": state.local_wealth,
-        "global_wealth": state.global_wealth,
-    }
-
-
-def _model_score_payload(score: ModelScore) -> dict[str, Any]:
-    return {
-        "model": score.model,
-        "kind": score.kind,
-        "updated": score.updated,
-        "skip_reason": score.skip_reason,
-        "observation": dict(score.observation),
-        "params_before": dict(score.params_before),
-        "params_after": dict(score.params_after),
-        "log_likelihood": score.log_likelihood,
-        "nll": score.nll,
-        "standardized_residual": score.standardized_residual,
-    }
-
-
-def _optimizer_payload(optimizer: OptimizerDiagnostics) -> dict[str, Any]:
-    return {
-        "config": dict(optimizer.config),
-        "timing": dict(optimizer.timing),
-        "objective": dict(optimizer.objective),
-        "action": dict(optimizer.action),
-        "gradients": dict(optimizer.gradients),
-        "rollout": dict(optimizer.rollout),
-    }
-
-
-def _action_pipeline_payload(pipeline: ActionPipelineDiagnostics) -> dict[str, Any]:
-    return {
-        "continuous": dict(pipeline.continuous),
-        "ladder": dict(pipeline.ladder),
-        "capped": dict(pipeline.capped),
-        "target_book": dict(pipeline.target_book),
-        "risk_approved_target": dict(pipeline.risk_approved_target),
-        "planned_cancel": dict(pipeline.planned_cancel),
-        "planned_place": dict(pipeline.planned_place),
-        "rules_valid": dict(pipeline.rules_valid),
-        "router_accepted": dict(pipeline.router_accepted),
-        "kept": dict(pipeline.kept),
-    }
-
-
-def _risk_payload(risk: RiskDiagnostics) -> dict[str, Any]:
-    return {
-        "approved": risk.approved,
-        "rejection_counts": dict(risk.rejection_counts),
-        "exposure_before": dict(risk.exposure_before),
-        "exposure_after": dict(risk.exposure_after),
-        "limits": dict(risk.limits),
-    }
+        return controller_diagnostics_event(self)

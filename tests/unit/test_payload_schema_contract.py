@@ -3,13 +3,20 @@ from __future__ import annotations
 import pytest
 
 from mm.core.models.target_book import JointTargetBook, TargetOrder, VenueTargetBook
+from mm.core.models.execution import Action, Order
+from mm.core.models.strategy import StrategyDecision
 from mm.core.payload_schema import (
+    CONTROLLER_DIAGNOSTICS_SCHEMA,
+    CONTROLLER_DIAGNOSTICS_VERSION,
     EXECUTION_LIFECYCLE_SCHEMA,
     EXECUTION_LIFECYCLE_VERSION,
     EXECUTION_SNAPSHOT_SCHEMA,
     EXECUTION_SNAPSHOT_VERSION,
     JOINT_TARGET_BOOK_SCHEMA,
     JOINT_TARGET_BOOK_VERSION,
+    STRATEGY_DECISION_SCHEMA,
+    STRATEGY_DECISION_VERSION,
+    STRATEGY_DECISION_TYPE,
     TARGET_ORDER_SCHEMA,
     TARGET_ORDER_VERSION,
     VENUE_TARGET_BOOK_SCHEMA,
@@ -19,9 +26,9 @@ from mm.core.payload_schema import (
     execution_snapshot_event,
     joint_target_book_event,
 )
+from mm.diagnostics.models import CONTROLLER_DIAGNOSTICS_TYPE, ControllerDiagnostics
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.execution.router import OrderRouter
-from mm.core.models.execution import Order
 from mm.execution.target_book import CancelCommand, ExecutionPlan, PlaceCommand
 from tests.unit.test_execution_manager import FakeOrderCommandAdapter
 
@@ -165,3 +172,35 @@ def test_execution_snapshot_helper_sets_type() -> None:
     payload = execution_snapshot_event(exchange="nobitex", timestamp_ms=1_000, live_order_count=0, live_orders={})
     assert payload["type"] == "ExecutionSnapshot"
     assert_payload_schema(payload, EXECUTION_SNAPSHOT_SCHEMA, EXECUTION_SNAPSHOT_VERSION)
+
+
+def test_strategy_decision_payload_is_versioned() -> None:
+    decision = StrategyDecision(
+        actor_id="actor-1",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        t_end_ms=2_000,
+        frame_step=1,
+        action=Action(actor_id="actor-1", orders=()),
+        frame_id="frame-1",
+        decision_id="decision-1",
+        target_book_id="target-1",
+    )
+    payload = decision.as_payload()
+
+    assert payload["type"] == STRATEGY_DECISION_TYPE
+    assert_payload_schema(payload, STRATEGY_DECISION_SCHEMA, STRATEGY_DECISION_VERSION)
+
+
+def test_controller_diagnostics_payload_is_versioned() -> None:
+    payload = ControllerDiagnostics(
+        actor_id="actor-1",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        t_end_ms=2_000,
+        frame_step=1,
+        created_at_ms=1_500,
+    ).as_payload()
+
+    assert payload["type"] == CONTROLLER_DIAGNOSTICS_TYPE
+    assert_payload_schema(payload, CONTROLLER_DIAGNOSTICS_SCHEMA, CONTROLLER_DIAGNOSTICS_VERSION)
