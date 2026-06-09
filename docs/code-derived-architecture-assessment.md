@@ -18,13 +18,13 @@ The system has a strong domain-oriented shape for a low-frequency market maker. 
 The main architectural risks are:
 
 - the runtime is still effectively a single in-process bot orchestration model,
-- private state, ledger, execution, and persistence duplicate payloads heavily,
-- Postgres dashboards depend on expensive JSONB queries over large event payloads,
-- Parquet persistence stores JSON strings rather than typed columnar facts,
-- the MPC path can become CPU/GPU expensive as optimizer settings scale,
+- large market-event and optimizer-debug payloads still dominate storage and bus fan-out,
 - execution has a visible pending-confirmation window between router acceptance and private exchange truth,
-- Prometheus alert rules exist, but notification routing is not provisioned,
-- some state wiring has edge-case gaps.
+- the interval scheduler and in-memory bus still lack production-grade backpressure and concurrency controls,
+- the MPC path can become CPU/GPU expensive as optimizer settings scale,
+- some state wiring has edge-case gaps around global frame alignment under jitter.
+
+Most of the earlier persistence, replay, schema, and observability hardening work is already in code: typed Postgres fact tables, Parquet typed columns, lineage IDs, offline frame replay, versioned payload builders for execution/target-book/decision/diagnostics/private/ledger events, exchange adapter registry, Postgres spool recovery, and Observability v2 dashboards.
 
 ## Strengths
 
@@ -66,39 +66,33 @@ The controller publishes stage timings, model scores, optimizer objective snapsh
 
 Impact: The system is far more debuggable than a black-box strategy loop.
 
-Recommendation: Convert the most important diagnostics into typed, versioned schemas and materialized metrics/tables.
+Recommendation: Convert the most important diagnostics into typed, versioned schemas and materialized metrics/tables. Common controller, execution, target-book, model-score, and optimizer facts are already materialized; remaining work is mainly full optimizer debug payloads and market-event orderbook/trade blobs.
 
 ## Significant Issues And Recommendations
 
 ### 1. Event Payload Duplication Will Grow Quickly
 
-Severity: High
+Severity: Medium
 
-A single private REST poll can publish:
+A single private REST poll can still publish a full private snapshot, ledger venue snapshot, joint ledger snapshot, execution state snapshots, and diagnostics that embed action/risk/execution stage orders. Market events on the live bus still embed the full orderbook snapshot and all interval trades.
 
-- a full private snapshot,
-- a ledger venue snapshot,
-- a joint ledger snapshot,
-- execution state snapshots,
-- diagnostics that embed action/risk/execution stage orders.
+Much of the earlier duplication problem is already mitigated in durable storage:
 
-REST private polling now publishes one authoritative private snapshot per poll instead of fanning the same snapshot out again as per-balance and per-open-order events. Incremental balance/open-order topics remain for stream-style adapters and real deltas. Market events on the live bus embed the full orderbook snapshot and all interval trades. Persistence now compacts some already-summarized content before saving: market trades are replaced by trade count/timestamps while retaining interval features, and persisted joint frames replace embedded ledger detail with a summary/reference because `ledger:snapshot` is persisted separately. Strategy decisions, model parameters, optimizer action snapshots, and stage reports still repeat related decision context in multiple durable events.
+- REST private polling publishes one authoritative private snapshot per poll.
+- Persistence compacts market trades, joint-frame ledgers, and controller action-pipeline arrays before saving.
+- Typed Postgres fact tables cover market intervals, action-pipeline stages, execution lifecycle, target-book intent, model scores, and optimizer objectives/components.
+- Lineage IDs (`frame_id`, `decision_id`, `target_book_id`, `execution_plan_id`) link durable events, with replay fidelity checks and offline frame replay in `mm/persistence/replay.py` and `mm/persistence/frame_replay.py`.
 
-Persisted controller diagnostics now also compact repeated `action_pipeline` order and rejection arrays into counts, side counts, stable digests, and small samples. This keeps live in-process diagnostics rich for runtime debugging while preventing every durable `ControllerDiagnostics` row from storing the same stage-order payloads already represented by target-book, decision, risk, and execution events. Postgres persistence materializes these action-pipeline summaries into `mm_action_stage_facts`, so common stage dashboards no longer need to walk diagnostics JSONB. Execution lifecycle events are materialized into `mm_execution_facts`, including confirmed versus pending state kind. Target-book intent orders are materialized into `mm_target_order_facts`. Model score and optimizer objective/timing/component facts are also materialized into typed tables. Remaining durable duplication is concentrated in strategy decisions, full optimizer debug payloads, full orderbook snapshots, and opaque JSON payload storage.
-
-Event serialization also recursively converts rich Python objects through `to_jsonable()`, including dataclasses, msgspec structs, dicts, lists, NumPy scalars, and arrays. That keeps publication flexible, but it means deep object graphs are repeatedly normalized into JSON-compatible structures on bus and persistence paths.
+Remaining durable duplication is concentrated in strategy decisions, full optimizer debug payloads, full orderbook snapshots inside `MarketEvent`, and opaque JSON in `mm_events.payload` for replay/debug paths.
 
 Impact: Postgres and Parquet storage growth is lower after persistence compaction, but will still be dominated by repeated JSON payloads as volume grows. Dashboard queries over `mm_events.payload` will slow down as data grows. Bandwidth and memory pressure increase with every new subscriber because in-memory bus fan-out copies large event objects into queues.
 
 Recommendation:
 
-- Split event classes into facts, snapshots, and diagnostics.
-- Persist large snapshots at lower frequency or only by explicit topic selection.
-- Store orderbooks and raw trades in normalized append tables, compressed columnar partitions, or a dedicated time-series store when raw market history is needed.
-- Store diagnostics in typed tables for common panels.
-- Use references for repeated structures. The runtime now carries `frame_id`, `decision_id`, `target_book_id`, and per-venue `execution_plan_id`, and replay contract tests verify those links end to end.
-- Use the existing `mm_event_payload_*` and `mm_event_envelope_*` metrics to rank topics by bus and persistence byte cost before choosing compaction targets.
-- Add retention policies per topic.
+- Add versioned payload builders for `MarketEvent` and incremental private balance/open-order deltas.
+- Persist large orderbook/trade snapshots at lower frequency or in a dedicated time-series store when raw market history is needed at scale.
+- Add retention policies per topic and table.
+- Keep using payload/envelope byte metrics to rank remaining high-cost topics before further compaction.
 
 ### 2. Postgres Persistence Spool Has Recovery Tooling But Needs Operations Policy
 
@@ -116,21 +110,18 @@ Recommendation:
 - Document when operators should run spool reingest and how to verify row counts.
 - Add metrics for reconnect count, connection errors, write rows/sec, and commit latency.
 
-### 3. Parquet Storage Still Needs Columnar Lifecycle Policies
+### 3. Parquet Storage Still Needs Retention And Small-File Lifecycle Policies
 
-Severity: Medium
+Severity: Low to Medium
 
-`ParquetEventWriter` now writes immutable part files and no longer reads, concatenates, and rewrites the existing hourly Parquet file during live writes.
+`ParquetEventWriter` writes immutable part files with one compact `envelope_json` plus typed nullable columns for high-value market, controller, optimizer, target-book, and execution fields. Archival compaction already drops redundant trade lists and zero balances while keeping interval features.
 
-The row schema now stores one compact `envelope_json` instead of both `payload_json` and `envelope_json`. For archival Parquet rows it compacts data that has already been summarized or integrated: `MarketEvent.trades` are replaced by trade counts/timestamps while retaining interval features such as buy/sell volume and VWAP, and zero private balances are removed while retaining balance counts. Parquet rows also include typed nullable columns for high-value market, controller, optimizer, target-book, and execution fields, so common offline scans no longer need to deserialize JSON.
-
-Impact: Live archival writes are now append-like and object-store friendly, archival byte volume is lower than before, and common analytics can use typed columns. Remaining scaling risks are small-file growth, raw orderbook/debug payload storage, and the fact that long-form facts such as per-objective components are still better represented by separate datasets when scan volume grows.
+Impact: Live archival writes are append-like and object-store friendly. Remaining scaling risks are small-file growth, long-term retention policy, and raw orderbook/debug payload storage inside `envelope_json`.
 
 Recommendation:
 
-- Compact offline if needed.
-- Partition by date/hour/topic/event_type/exchange/symbol.
-- Add separate columnar datasets for very large raw snapshots or long-form facts when typed envelope columns are not enough.
+- Add retention/compaction policy for old partitions.
+- Consider separate columnar datasets for very large raw snapshots when typed envelope columns are not enough.
 
 ### 4. Strategy Frame Assembly Can Lose Or Delay Global Alignment
 
@@ -181,39 +172,24 @@ Recommendation:
 
 ### 7. Alert Notification Routing Is Not Provisioned
 
-Severity: Medium to High operational risk
+Severity: Low for local development, Medium for unattended production
 
-Prometheus alert rules are now provisioned in `docker/prometheus/market_maker_alerts.yml` and mounted by the local Compose stack. They cover target down, stale market data, high ingest/frame lag, stale private/ledger readiness, execution sync failures, router failures, stale pending order confirmations, validation rejection spikes, persistence errors, kill switch, and observe-only state.
+Prometheus alert rules are provisioned in the local Compose stack, but no Alertmanager or Grafana contact-point routing is configured. This is an operations gap, not a runtime architecture blocker.
 
-Impact: Prometheus can evaluate and display firing alerts, but no Alertmanager, Grafana contact point, notification policy, escalation route, or on-call receiver is provisioned. Operators still need to watch Prometheus/Grafana manually unless they add local notification routing.
+Recommendation: Add notification routing only when moving to unattended production operation.
 
-Recommendation:
+### 8. Observability Still Mixes Typed Facts With JSONB Debug Paths
 
-- Add Alertmanager or Grafana-managed contact points and notification policies.
-- Route critical execution, market-data, persistence, and kill-switch alerts to an operator channel.
-- Add log-derived Loki alerts for events that are not yet Prometheus metrics, such as sustained `LedgerOrderManagerMismatch` events and Loki ingestion failures.
-- Tune thresholds per deployment interval and venue.
+Severity: Low to Medium
 
-### 8. Observability Depends Too Heavily On JSONB Event Queries
+Typed Postgres fact tables and Observability v2 dashboards now cover the common market, action-pipeline, execution-lifecycle, target-order, model-quality, and optimizer-objective paths. `mm_events` remains the replay/debug event log, and some deep debugging panels still inspect full parameter dictionaries, gradients, rollout internals, and raw payload details.
 
-Severity: Medium
-
-Most Grafana panels query `mm_events.payload` with JSONB extraction, lateral JSON expansion, regex numeric casts, and generated time buckets.
-
-Postgres persistence now creates typed side tables for common dashboard facts. `mm_market_facts` materializes `MarketEvent` interval data into normal columns for top-of-book, mid, spread, microprice, VWAP, interval flow, imbalance, trade count, depth level counts, and timestamps. `mm_action_stage_facts` materializes `ControllerDiagnostics.action_pipeline` stage summaries into normal columns for counts, side counts, quantities, notionals, rejection counts, compacted counts, order/rejection digests, and lineage IDs. `mm_execution_facts` materializes sync, place, cancel, validation rejection, fill, and execution snapshot events into normal columns for lifecycle, success, confirmed/pending state, order ids, quantities, fees, status, error, latency, and lineage IDs. `mm_target_order_facts` materializes `JointTargetBook` order intent into normal columns for actor, mode, venue role, exchange, symbol, policy, side, price, quantity, notional, order type, tags, and lineage IDs. `mm_model_score_facts` materializes model quality and update-skip facts. `mm_optimizer_facts` and `mm_optimizer_component_facts` materialize optimizer timing, objective values, improvement, best expected reward/return fields, objective components, and lineage IDs. `mm_events` remains the replay/debug event log.
-
-There are also two dashboard generations: older `Market Maker` dashboards and a newer `MM Observability v2` set. That breadth is helpful for local debugging, but can become dashboard sprawl without a stronger fleet/drilldown hierarchy and shared template variables.
-
-Impact: The market-data, action-pipeline, execution-lifecycle, target-order, model-quality, and optimizer-objective dashboard paths can now avoid repeated JSONB extraction for common panels. The remaining expensive paths are less common debugging panels that inspect full parameter dictionaries, gradients, rollout internals, and raw payload details. Operators may also have too many narrowly focused dashboards to navigate during incidents.
+Impact: Common operational dashboards no longer need repeated JSONB extraction. Remaining cost is concentrated in debug/incident panels and very large optimizer payloads.
 
 Recommendation:
 
-- Materialize common metrics to typed tables or hypertables.
-- Add generated columns for common JSON paths.
-- Add indexes for event_type plus common fields.
-- Use Prometheus for high-cardinality operational counters only where labels are bounded.
-- Use Postgres for lower-cardinality business analytics and latest state.
 - Keep Grafana organized around fleet overview, drilldown dashboards, and incident dashboards with shared `$run_id`, `$exchange`, and `$symbol` variables.
+- Add generated columns or materialized views only for debug panels that are still slow in practice.
 
 ### 9. Custom Metrics Registry Has Limited Production Features
 
@@ -260,26 +236,19 @@ Recommendation:
 - If multi-bot in one process is desired, refactor runtime components around bot instances and shared adapter pools.
 - If many symbols share a venue and model family, evaluate multi-symbol batching only after measuring process-level memory, adapter connection, and optimizer costs.
 
-### 12. Exchange Capabilities And Registration Still Split
+### 12. Exchange Adapter Registry
+
+Severity: Positive
+
+Adapter construction goes through `mm/exchanges/registry.py` with one `registration.py` per exchange package. `mm/exchanges/factory.py` resolves capabilities, looks up the registration, and builds the adapter. Tests in `tests/unit/test_exchange_registry.py` verify all supported exchanges register market-data, private-state, and order-command builders.
+
+Recommendation: Keep capability metadata and adapter registration co-located per exchange when new venues are added.
+
+### 13. Remaining Event Payloads Still Mix Structs And Unversioned Dicts
 
 Severity: Low
 
-Adapter construction now goes through `mm/exchanges/registry.py` with one `registration.py` per exchange package. `mm/exchanges/factory.py` only resolves capabilities, looks up the registration, and builds the adapter.
-
-Impact: Adding an exchange still requires a new package registration module, capability metadata in `capabilities.py`, wire files, and adapters. The factory if/elif chains are gone.
-
-Recommendation:
-
-- Keep capability metadata and adapter registration co-located per exchange when new venues are added.
-- Consider merging capability declarations into each exchange `registration.py` if the split becomes annoying.
-
-### 13. Remaining Event Payloads Still Mix Dicts And Dataclasses
-
-Severity: Low
-
-Execution, target-book, strategy-decision, controller-diagnostics, private-snapshot, and ledger-snapshot events now publish through versioned builders in `mm/core/payload_schema.py`. Private snapshot bus topics publish versioned dict payloads; consumers parse them with `private_state_snapshot_from_payload()`.
-
-Impact: The main durable runtime event families now share one schema contract. Market events and incremental private balance/open-order deltas still use typed structs on the bus without versioned payload builders.
+Execution, target-book, strategy-decision, controller-diagnostics, private-snapshot, and ledger-snapshot events publish through versioned builders in `mm/core/payload_schema.py`. Offline replay parses them back through `*_from_payload()` helpers. `MarketEvent` and incremental private balance/open-order deltas still use typed structs on the bus without versioned payload builders.
 
 Recommendation:
 
@@ -401,31 +370,43 @@ At one bot and a low interval, this is workable. At many symbols, venues, and st
 
 Priority recommendations:
 
-1. Define topic retention and persistence tiering.
-2. Use payload and envelope byte metrics to rank high-cost topics and event types.
-3. Store large orderbook/trade data separately from controller events.
-4. Replace repeated snapshots with deltas plus periodic snapshots.
-5. Continue materializing dashboard facts into typed tables; current coverage includes market intervals, action-pipeline stages, order lifecycle, target-book intent, model scores, optimizer objectives, and optimizer objective components.
-6. Move high-frequency operational metrics and market-data time series to Prometheus, a dedicated time-series database, or typed columnar storage instead of Postgres JSONB.
-7. Keep full diagnostics configurable and sampled in production.
+1. Add versioned payload builders for `MarketEvent` and incremental private deltas.
+2. Define topic retention and persistence tiering.
+3. Store large orderbook/trade data separately from controller events when raw market history is needed at scale.
+4. Keep full diagnostics configurable and sampled in production.
+5. Use payload and envelope byte metrics to rank remaining high-cost topics.
 
 ## Prioritized Roadmap
 
-### Priority 1: Scalability
+### Already Implemented
 
-- Add per-topic subscriber queue depth and lag metrics.
-- Evaluate a time-series database alongside SQL for high-volume market data, execution latency, and low-cardinality business metrics.
-- Add retention and compaction policies.
+These items are in code and covered by focused tests; they are no longer open roadmap work:
+
+- Exchange adapter registry (`mm/exchanges/registry.py`, per-exchange `registration.py`)
+- Versioned payload builders for execution lifecycle, execution snapshots, target books, strategy decisions, controller diagnostics, private snapshots, and ledger snapshots (`mm/core/payload_schema.py`)
+- Lineage IDs and replay reconstruction (`mm/persistence/replay.py`)
+- Replay lifecycle fidelity checks (`verify_lineage_fidelity()`)
+- Offline frame replay through strategy/risk/execution planning (`mm/application/frame_simulator.py`, `mm/persistence/frame_replay.py`)
+- Persisted market-data replay adapter (`mm/ingestion/replay_adapter.py`)
+- Typed Postgres fact tables and Parquet typed columns
+- Persistence compaction, Postgres connection reuse, failed-batch spool, and spool reingest
+- Observability v2 dashboards and common Prometheus metrics (`mm_frame_age_ms`, persistence queue depth/write latency, controller diagnostics bridge)
+
+### Priority 1: Scalability And Runtime Pressure
+
+- Add versioned payload builders for `MarketEvent` and incremental private balance/open-order deltas.
+- Add retention and tiering policies for `mm_events`, typed fact tables, Parquet partitions, and spool directories.
+- Add per-topic subscriber queue depth/lag metrics and bounded backpressure policy on the in-memory bus.
+- Run interval scheduler callbacks concurrently with bounded concurrency and missed-deadline metrics.
 
 ### Priority 2: Engine And Execution Quality
 
-- Add load tests for optimizer settings and multi-symbol runtime.
-- Improve global frame alignment metrics and policy.
+- Add load tests for representative optimizer settings (`n_samples`, `horizon`, `adam_epochs`) and multi-symbol frame execution.
+- Improve global frame alignment observability and policy: explicit hit/miss/stale metrics, configurable history/grace, and clearer skip/backpressure behavior.
+- Extend offline frame replay to full MPC re-simulation checks, not just execution-only replay from persisted target books.
 
-### Priority 3: Maintainability And DX
+### Priority 3: Maintainability And Deployment Clarity
 
-- Add versioned payload builders for `MarketEvent` and incremental private deltas.
-- Introduce an exchange adapter registry.
-- Generate dashboard queries from stable schema helpers where possible.
-- Document one-bot-per-process deployment explicitly.
-- Add deterministic full MPC replay from persisted frames when optimizer outputs must be bit-for-bit reproduced across processes.
+- Document one-bot-per-process as the explicit deployment model.
+- Consider merging exchange capability metadata into each exchange `registration.py` if the split becomes annoying.
+- Trim or retire legacy Grafana dashboards once Observability v2 fully covers incident/debug workflows.

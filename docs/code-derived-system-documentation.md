@@ -573,15 +573,13 @@ There are two dashboard folders:
 
 The v2 dashboards cover runtime overview, controller health, market data, optimizer diagnostics, model quality, action pipeline, risk/execution, target-order stems, orderbook depth, liquidity, portfolio/PnL, fills, execution errors, incidents, and runtime logs.
 
-Most deep trading panels query `mm_events` JSONB in Postgres. Runtime liveness and latency panels use Prometheus metrics. Log dashboards use Loki.
-
-No Grafana alert rule provisioning was found in code.
+Most common operational panels use typed Postgres fact tables or Prometheus metrics. Deep debug panels and replay still use `mm_events` JSONB. Prometheus alert rules are provisioned locally; notification routing is not.
 
 ## 8. Testing Surface
 
 The repository contains 56 unit test files under `tests/unit`. The tests cover:
 
-- exchange payload normalization and contracts,
+- exchange adapter registry and payload-schema contracts,
 - runtime config and migration contracts,
 - Redis Streams bus,
 - orderbook grids and reference VWAPs,
