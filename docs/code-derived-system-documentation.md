@@ -21,7 +21,7 @@ The main runtime builder is `mm/runtime/engine.py`. The command-line entrypoint 
 
 The runtime is built around an `AbstractEventBus` interface:
 
-- `InMemoryBus` provides in-process fan-out through `asyncio.Queue`.
+- `InMemoryBus` provides in-process fan-out through bounded tracked subscriber queues with configurable backpressure (`block`, `drop_oldest`, `drop_newest`).
 - `RedisStreamsBus` writes compact event envelopes to Redis Streams, fans out original typed objects to local subscribers, and forwards new stream messages from other bus instances into normal subscribers.
 
 Most runtime components communicate through topic names rather than direct calls. The one major exception is the strategy pipeline, which directly owns the `MpcStrategyEngine`, risk engine, and order-manager map.
@@ -121,7 +121,7 @@ All strategy-facing prices are quote-per-base floats and all quantities are base
 - top-level imbalance,
 - microprice.
 
-`IntervalScheduler` aligns callbacks to wall-clock interval boundaries. A slow callback blocks later callbacks in the same scheduler loop because callbacks are awaited sequentially.
+`IntervalScheduler` aligns callbacks to wall-clock interval boundaries. Due callbacks for one or more intervals run with bounded concurrency (`scheduler.max_concurrency`, default 8). Callback latency and missed-deadline counters are exported when a callback exceeds its interval budget.
 
 ### Frame Assembly
 
@@ -533,7 +533,9 @@ If pyarrow is unavailable, it falls back to JSONL files in the same partition la
 - placement/cancel accepted counts,
 - live order counts and quantities by side,
 - placement failures, fill counts and quantities,
+- bus subscriber queue depth, lag, blocked publish latency, and dropped events,
 - persistence queue depth and write latency,
+- scheduler callback latency and missed-deadline totals,
 - event payload and envelope bytes by topic, event type, and pipeline stage,
 - runtime errors.
 
@@ -594,6 +596,6 @@ The repository contains 56 unit test files under `tests/unit`. The tests cover:
 - private state reconciler,
 - observability dashboards and subscriber behavior,
 - Postgres latest-state deduplication,
-- replay, lineage fidelity checks, offline frame simulation, retention/tiering, and parquet writing.
+- bus backpressure, scheduler concurrency, replay, lineage fidelity checks, offline frame simulation, retention/tiering, and parquet writing.
 
 The test suite is broad for unit-level behavior. The codebase does not show a dedicated end-to-end exchange simulator or load/stress test harness in the inspected files.

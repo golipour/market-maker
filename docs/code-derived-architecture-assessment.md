@@ -137,19 +137,18 @@ Recommendation:
 - Make history size and grace policy configurable.
 - Add backpressure or skip policies for slow global feeds.
 
-### 5. Scheduler Awaits Callbacks Sequentially
+### 5. Scheduler Missed Deadlines Under Heavy Workloads
 
-Severity: Medium
+Severity: Low to Medium
 
-`IntervalScheduler.run()` awaits each registered callback before advancing. If one callback stalls, all interval tasks behind it stall.
+`IntervalScheduler` now runs due callbacks with bounded concurrency (`scheduler.max_concurrency`, default 8) and records callback latency plus missed-deadline counters when a callback exceeds its interval budget. Different intervals that fire on the same tick also run in parallel.
 
-Impact: More symbols, venues, or expensive callbacks will increase timing skew and missed intervals.
+Impact: Slow callbacks no longer block unrelated callbacks on the same tick, but a single hot callback can still miss its own interval budget and leave work unfinished before the next fire.
 
 Recommendation:
 
-- Run interval callbacks concurrently with bounded concurrency.
-- Record callback execution time and missed-deadline count.
-- Consider one scheduler per symbol/venue or a timing wheel with independent tasks.
+- Tune `scheduler.max_concurrency` per deployment.
+- Consider one scheduler per symbol/venue only if missed-deadline rates remain high after tuning.
 
 ### 6. Optimizer Runtime Cost Can Dominate The Decision Loop
 
@@ -204,20 +203,18 @@ Recommendation:
 - Add process CPU, memory, open file descriptors, thread count, and event-loop lag.
 - Add explicit stale-series zeroing for label sets that disappear.
 
-### 10. Event Bus And Persistence Backpressure Are Underdeveloped
+### 10. Event Bus Backpressure Is Local-Process Only
 
-Severity: Medium
+Severity: Low to Medium
 
-In-memory bus publishes by awaiting each subscriber queue put. The default queue size is unbounded unless configured. Persistence queues are bounded, but consumers block publishing when queues fill.
+`InMemoryBus` and local Redis Streams fan-out now use bounded subscriber queues by default (`bus.max_queue_size=1024`) with explicit backpressure policies (`block`, `drop_oldest`, `drop_newest`). They publish per-topic subscriber queue depth, lag, blocked-publish latency, and dropped-event counters.
 
-Impact: A slow subscriber can increase latency or memory use. High event volume can block core runtime paths.
+Impact: Slow in-process subscribers are now observable and bounded, but remote Redis consumers and persistence writers still need their own queue/backpressure policies.
 
 Recommendation:
 
-- Define per-topic backpressure policy: block, drop, sample, or spill.
-- Add subscriber lag and queue-depth metrics per topic.
-- Separate critical trading paths from observability/persistence paths.
-- Use bounded queues by default in production.
+- Tune `bus.max_queue_size` and `bus.backpressure_policy` per deployment.
+- Keep observability/persistence consumers fast enough that `block` remains safe for trading paths.
 
 ### 11. Runtime Scaling Is One Bot Per Process
 
@@ -390,12 +387,14 @@ These items are in code and covered by focused tests; they are no longer open ro
 - Persistence compaction, Postgres connection reuse, failed-batch spool, and spool reingest
 - Retention/tiering policies and `python -m mm.tools.apply_retention` (`mm/persistence/retention.py`)
 - Observability v2 dashboards and common Prometheus metrics (`mm_frame_age_ms`, persistence queue depth/write latency, controller diagnostics bridge)
+- Bounded bus backpressure with subscriber queue depth/lag metrics (`mm/bus/delivery.py`, `bus.max_queue_size`, `bus.backpressure_policy`)
+- Concurrent interval scheduler with callback latency and missed-deadline metrics (`scheduler.max_concurrency`)
 
 ### Priority 1: Scalability And Runtime Pressure
 
 - Add versioned payload builders for incremental private balance/open-order deltas.
-- Add per-topic subscriber queue depth/lag metrics and bounded backpressure policy on the in-memory bus.
-- Run interval scheduler callbacks concurrently with bounded concurrency and missed-deadline metrics.
+- Wire retention execution into normal runtime/ops workflows and validate tier settings under real data volume.
+- Tune and validate bus backpressure defaults under real subscriber load.
 
 ### Priority 2: Engine And Execution Quality
 

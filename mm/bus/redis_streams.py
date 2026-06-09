@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import time
 import uuid
 from collections import defaultdict
@@ -8,6 +9,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
+from mm.bus.delivery import (
+    BusBackpressurePolicy,
+    TrackedSubscriberQueue,
+    create_subscriber_queue,
+    deliver_to_subscriber,
+    record_subscriber_queue_metrics,
+)
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.payload_schema import market_event_event, private_state_snapshot_event
 from mm.core.models.private import Balance, PrivateStateSnapshot
@@ -30,23 +38,36 @@ class RedisStreamsBus(AbstractEventBus):
         maxlen: int | None = 100_000,
         read_block_ms: int = 1_000,
         run_id: str = "",
+        max_queue_size: int = 1024,
+        backpressure_policy: BusBackpressurePolicy = "block",
     ):
         self.url = url
         self.stream_prefix = stream_prefix.strip(":") or "mm"
         self.maxlen = maxlen
         self.read_block_ms = max(1, int(read_block_ms))
         self.run_id = run_id
+        self._max_queue_size = int(max_queue_size)
+        self._backpressure_policy = backpressure_policy
         self._instance_id = uuid.uuid4().hex
         self._redis: Any | None = None
         self._closed = False
         self._forward_tasks: set[asyncio.Task] = set()
-        self._subscribers: dict[str, list[asyncio.Queue[Any]]] = defaultdict(list)
+        self._subscribers: dict[str, list[TrackedSubscriberQueue]] = defaultdict(list)
+        self._subscriber_ids = itertools.count(1)
         self._last_error_log_monotonic: dict[tuple[str, str], float] = {}
 
     async def publish(self, topic: str, event: Any) -> None:
         observe_runtime_event(topic, event, stage="bus_publish")
-        for queue in list(self._subscribers.get(topic, ())):
-            await queue.put(event)
+        subscribers = list(self._subscribers.get(topic, ()))
+        for queue in subscribers:
+            await deliver_to_subscriber(
+                queue,
+                event,
+                max_queue_size=self._max_queue_size,
+                policy=self._backpressure_policy,
+            )
+        if subscribers:
+            record_subscriber_queue_metrics(subscribers)
         stream_event = _compact_stream_event(topic, event)
         if stream_event is None:
             return
@@ -69,13 +90,17 @@ class RedisStreamsBus(AbstractEventBus):
                 break
         return out
 
-    def subscribe_queue(self, topic: str) -> asyncio.Queue[Any]:
+    def subscribe_queue(self, topic: str) -> TrackedSubscriberQueue:
         queue = self._subscribe_local_queue(topic)
         self._track_forward_task(asyncio.create_task(self._forward_remote_stream(topic, queue)))
         return queue
 
-    def _subscribe_local_queue(self, topic: str) -> asyncio.Queue[Any]:
-        queue: asyncio.Queue[Any] = asyncio.Queue()
+    def _subscribe_local_queue(self, topic: str) -> TrackedSubscriberQueue:
+        queue = create_subscriber_queue(
+            topic,
+            f"subscriber-{next(self._subscriber_ids)}",
+            max_queue_size=self._max_queue_size,
+        )
         self._subscribers[topic].append(queue)
         return queue
 
@@ -130,13 +155,19 @@ class RedisStreamsBus(AbstractEventBus):
         self._forward_tasks.add(task)
         task.add_done_callback(self._forward_tasks.discard)
 
-    async def _forward_remote_stream(self, topic: str, queue: asyncio.Queue[Any]) -> None:
+    async def _forward_remote_stream(self, topic: str, queue: TrackedSubscriberQueue) -> None:
         while not self._closed:
             try:
                 async for envelope in self.subscribe_envelopes(topic, start_id="$"):
                     if getattr(envelope, "source", "") == self._source:
                         continue
-                    await queue.put(envelope.payload)
+                    await deliver_to_subscriber(
+                        queue,
+                        envelope.payload,
+                        max_queue_size=self._max_queue_size,
+                        policy=self._backpressure_policy,
+                    )
+                    record_subscriber_queue_metrics([queue])
                 if not self._closed:
                     await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
             except asyncio.CancelledError:

@@ -158,7 +158,7 @@ async def build_runtime_components(
             },
         )
     runtime_bus = bus or build_event_bus(config.bus, run_id=config.observability.run_id)
-    scheduler = IntervalScheduler(WallClock())
+    scheduler = IntervalScheduler(WallClock(), max_concurrency=config.scheduler.max_concurrency)
     public_selections: dict[SourceRole, PublicMarketDataAdapterSelection] = {}
     engines: dict[SourceRole, SymbolEngine] = {}
 

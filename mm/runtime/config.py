@@ -23,6 +23,7 @@ ReferenceVenueRole = Literal["global", "local"]
 QuoteVenueRole = Literal["quoting", "liquidity"]
 QuoteAnchorMode = Literal["quoting_mid", "liquidity_mid", "liquidity_weighted_mid"]
 BusKind = Literal["memory", "redis_streams"]
+BusBackpressurePolicy = Literal["block", "drop_oldest", "drop_newest"]
 FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
 
 
@@ -159,6 +160,17 @@ class PrivateRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SchedulerRuntimeConfig:
+    """Interval scheduler concurrency and timing behavior."""
+
+    max_concurrency: int = 8
+
+    def __post_init__(self) -> None:
+        if self.max_concurrency < 1:
+            raise ValueError("scheduler.max_concurrency must be >= 1")
+
+
+@dataclass(frozen=True, slots=True)
 class BusRuntimeConfig:
     """Runtime bus selection.
 
@@ -173,13 +185,16 @@ class BusRuntimeConfig:
     consumer_name: str = "runtime"
     max_stream_length: int | None = 100_000
     read_block_ms: int = 1_000
-    max_queue_size: int = 0
+    max_queue_size: int = 1024
+    backpressure_policy: BusBackpressurePolicy = "block"
 
     def __post_init__(self) -> None:
         if self.kind not in ("memory", "redis_streams"):
             raise ValueError("bus.kind must be 'memory' or 'redis_streams'")
         if self.max_queue_size < 0:
             raise ValueError("bus.max_queue_size must be non-negative")
+        if self.backpressure_policy not in ("block", "drop_oldest", "drop_newest"):
+            raise ValueError("bus.backpressure_policy must be block, drop_oldest, or drop_newest")
         if self.max_stream_length is not None and self.max_stream_length <= 0:
             raise ValueError("bus.max_stream_length must be positive or null")
 
@@ -516,6 +531,7 @@ class MarketMakerRuntimeConfig:
     interval_ms: int = 5000
     max_global_lag_ms: int = 2000
     global_grace_ms: int = 250
+    scheduler: SchedulerRuntimeConfig = field(default_factory=SchedulerRuntimeConfig)
     local_private: PrivateRuntimeConfig | None = None
     global_private: PrivateRuntimeConfig | None = None
     controller: ControllerRuntimeConfig | None = None
@@ -700,6 +716,11 @@ class MarketMakerRuntimeConfig:
                 "consumer_group": self.bus.consumer_group,
                 "consumer_name": self.bus.consumer_name,
                 "max_stream_length": self.bus.max_stream_length,
+                "max_queue_size": self.bus.max_queue_size,
+                "backpressure_policy": self.bus.backpressure_policy,
+            },
+            "scheduler": {
+                "max_concurrency": self.scheduler.max_concurrency,
             },
             "persistence": {
                 "enabled": self.persistence.enabled,
@@ -825,6 +846,7 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         bus=_bus_from_mapping(payload.get("bus")),
         persistence=_persistence_from_mapping(payload.get("persistence")),
         observability=_observability_from_mapping(payload.get("observability")),
+        scheduler=_scheduler_from_mapping(payload.get("scheduler")),
         bot=bot,
     )
 
@@ -1193,7 +1215,16 @@ def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
         consumer_name=str(payload.get("consumer_name", "runtime")),
         max_stream_length=int(max_stream_length) if max_stream_length is not None else None,
         read_block_ms=int(payload.get("read_block_ms", 1000)),
-        max_queue_size=int(payload.get("max_queue_size", 0)),
+        max_queue_size=int(payload.get("max_queue_size", 1024)),
+        backpressure_policy=str(payload.get("backpressure_policy", "block")),  # type: ignore[arg-type]
+    )
+
+
+def _scheduler_from_mapping(payload: Any) -> SchedulerRuntimeConfig:
+    if not isinstance(payload, dict):
+        return SchedulerRuntimeConfig()
+    return SchedulerRuntimeConfig(
+        max_concurrency=int(payload.get("max_concurrency", 8)),
     )
 
 
