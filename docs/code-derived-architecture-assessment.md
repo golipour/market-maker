@@ -18,13 +18,13 @@ The system has a strong domain-oriented shape for a low-frequency market maker. 
 The main architectural risks are:
 
 - the runtime is still effectively a single in-process bot orchestration model,
-- large market-event and optimizer-debug payloads still dominate storage and bus fan-out,
+- large market-event orderbook/trade blobs and optimizer-debug payloads still dominate storage and bus fan-out,
 - execution has a visible pending-confirmation window between router acceptance and private exchange truth,
-- the interval scheduler and in-memory bus still lack production-grade backpressure and concurrency controls,
 - the MPC path can become CPU/GPU expensive as optimizer settings scale,
-- some state wiring has edge-case gaps around global frame alignment under jitter.
+- global frame alignment still lacks dedicated hit/miss/stale metrics and full runtime-config exposure for history/grace tuning,
+- retention and backpressure policies exist but are not yet validated under sustained production load.
 
-Most of the earlier persistence, replay, schema, and observability hardening work is already in code: typed Postgres fact tables, Parquet typed columns, lineage IDs, offline frame replay, versioned payload builders for execution/target-book/decision/diagnostics/private/ledger events, exchange adapter registry, Postgres spool recovery, and Observability v2 dashboards.
+Most scalability hardening from the earlier roadmap is already in code: versioned payload builders (including `mm.market_event` v1), exchange adapter registry, lineage replay and fidelity checks, offline frame simulation, typed Postgres/Parquet facts, retention tiers with `apply_retention`, bounded bus backpressure with subscriber queue depth/lag metrics, and concurrent interval scheduling with missed-deadline metrics.
 
 ## Strengths
 
@@ -126,16 +126,15 @@ Recommendation:
 
 Severity: Medium
 
-The global frame assembler keeps a bounded deque and waits up to `global_grace_ms` for exact matching `t_end_ms`. It selects the latest global event with `t_end_ms <= local.t_end_ms`.
+The global frame assembler keeps a bounded deque (`global_history_size`, default 128) and waits up to `global_grace_ms` (runtime-configurable) for exact matching `t_end_ms`. It selects the latest global event with `t_end_ms <= local.t_end_ms` and marks status `disabled`, `missing`, `stale`, or `ready`.
 
-Impact: At low frequency this is simple and reasonable. At scale, jitter, missed intervals, or scheduler delays can create persistent stale/missing global status. The bounded history can also drop relevant global events when event rates or delays increase.
+Impact: At low frequency this is simple and reasonable. At scale, jitter, missed intervals, or scheduler delays can create persistent stale/missing global status. `global_history_size` is still code-default only (not exposed in runtime JSON), and there are no dedicated Prometheus counters for alignment hit/miss/stale outcomes.
 
 Recommendation:
 
-- Add explicit sequence/window ids for interval events.
-- Track global alignment hit rate and lag distribution.
-- Make history size and grace policy configurable.
-- Add backpressure or skip policies for slow global feeds.
+- Expose `global_history_size` in runtime config.
+- Add explicit alignment metrics: ready/missing/stale counts and `global_lag_ms` distribution.
+- Add explicit sequence/window ids for interval events if alignment errors persist after tuning.
 
 ### 5. Scheduler Missed Deadlines Under Heavy Workloads
 
@@ -289,6 +288,8 @@ System/runtime metrics:
 - controller/optimizer timing,
 - order sync latency,
 - persistence queue depth and write latency,
+- bus subscriber queue depth, lag, blocked-publish latency, and dropped-event counters,
+- scheduler callback latency and missed-deadline totals,
 - runtime errors from observed event topics.
 
 Logs and traces:
@@ -308,7 +309,7 @@ Logs and traces:
 - No websocket reconnect counters per exchange.
 - No REST polling success/failure latency histograms by adapter endpoint.
 - No order adapter rate-limit metrics.
-- No subscriber queue lag by topic beyond writer queue depth.
+- No dedicated global-alignment hit/miss/stale Prometheus counters (only `global_status` in diagnostics payloads).
 - No database table size, write throughput, or dashboard query latency metrics.
 - No clear SLO dashboards for "decision freshness", "execution freshness", or "data freshness".
 - No explicit trace spans for full frame -> decision -> risk -> execution lifecycle.
@@ -390,20 +391,20 @@ These items are in code and covered by focused tests; they are no longer open ro
 - Bounded bus backpressure with subscriber queue depth/lag metrics (`mm/bus/delivery.py`, `bus.max_queue_size`, `bus.backpressure_policy`)
 - Concurrent interval scheduler with callback latency and missed-deadline metrics (`scheduler.max_concurrency`)
 
-### Priority 1: Scalability And Runtime Pressure
+### Priority 1: Remaining Schema And Storage Gaps
 
-- Add versioned payload builders for incremental private balance/open-order deltas.
-- Wire retention execution into normal runtime/ops workflows and validate tier settings under real data volume.
-- Tune and validate bus backpressure defaults under real subscriber load.
+- Add versioned payload builders for incremental private balance/open-order deltas (the last major unversioned bus event family).
+- Schedule `apply_retention` in production ops and validate tier cutoffs against real table/partition growth.
+- Consider separating large orderbook/trade history from controller events when raw market retention is required at scale.
 
-### Priority 2: Engine And Execution Quality
+### Priority 2: Engine Quality And Replay Fidelity
 
 - Add load tests for representative optimizer settings (`n_samples`, `horizon`, `adam_epochs`) and multi-symbol frame execution.
-- Improve global frame alignment observability and policy: explicit hit/miss/stale metrics, configurable history/grace, and clearer skip/backpressure behavior.
-- Extend offline frame replay to full MPC re-simulation checks, not just execution-only replay from persisted target books.
+- Add a persisted full-frame replay test that runs `replay_and_compare_persisted_frame(..., execution_only=False)` and compares MPC target books, not just execution-only replay from persisted target books.
+- Expose `global_history_size` in runtime config and add global-alignment Prometheus counters (ready/missing/stale + lag distribution).
 
-### Priority 3: Maintainability And Deployment Clarity
+### Priority 3: Deployment And Cleanup
 
-- Document one-bot-per-process as the explicit deployment model.
-- Consider merging exchange capability metadata into each exchange `registration.py` if the split becomes annoying.
+- Document one-bot-per-process as the explicit deployment model (partially stated in `docs/configuration.md`; needs a short dedicated deployment section).
 - Trim or retire legacy Grafana dashboards once Observability v2 fully covers incident/debug workflows.
+- Consider merging exchange capability metadata into each exchange `registration.py` if the split becomes annoying.
