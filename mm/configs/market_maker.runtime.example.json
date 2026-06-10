@@ -37,7 +37,7 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.0015
+        "maker_fee": 0.000015
       }
     },
     "tabdeal": {
@@ -139,7 +139,7 @@
           "_comment": "Execution policy for the quoting exchange selected by the bot.",
           "_options": {"planner": ["reconcile", "replace"]},
           "enabled": true,
-          "planner": "reconcile",
+          "planner": "replace",
           "max_orders_per_side": 10
         },
         "liquidity": {
@@ -155,7 +155,7 @@
         "dry_run": false,
         "execution_after_steps": 10,
         "_comment_negative_objective_action": "When best risk_adjusted_return < 0: optimizer_action=keep optimizer output, floor_action=per-side floors (default), zero_action=no quotes.",
-        "negative_objective_action": "zero_action",
+        "negative_objective_action": "floor_action",
         "decision_timeout_ms": 3000,
         "placement_timeout_ms": 7000,
         "placement_max_concurrency": 32,

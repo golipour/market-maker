@@ -211,11 +211,29 @@ def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None
     assert "+after_cancel" in orderbook_sql
     assert "+after_place" in orderbook_sql
     assert "local_orderbook_timestamp_ms" in orderbook_sql
+    assert "controller_start_ms" in orderbook_sql
+    assert "f.controller_start_ms + COALESCE(f.controller_total_ms, 0)" in orderbook_sql
+    assert "f.controller_start_ms - f.controller_total_ms" not in orderbook_sql
+    assert "LPAD(s.pipeline_order::text, 2, '0')" in orderbook_sql
+    assert "ORDER BY 1, s.pipeline_order" in orderbook_sql
+    assert 'AS "time" AS "time"' not in orderbook_sql
+    orderbook_panel = panels_by_title["Cumulative pipeline offset vs orderbook timestamp"]
+    assert orderbook_panel["options"]["legend"]["sortBy"] == "Name"
+    assert orderbook_panel["options"]["legend"]["sortDesc"] is False
 
     t_end_sql = panels_by_title["Cumulative pipeline offset vs frame close (t_end_ms)"]["targets"][0]["rawSql"]
     assert "+frame_close.ref" in t_end_sql
     assert "+frame_assembled" in t_end_sql
     assert "+pipeline_end" in t_end_sql
+    assert "controller_start_ms" in t_end_sql
+    assert "f.controller_start_ms + COALESCE(f.controller_total_ms, 0)" in t_end_sql
+    assert "f.controller_start_ms - f.controller_total_ms" not in t_end_sql
+    assert "LPAD(s.pipeline_order::text, 2, '0')" in t_end_sql
+    assert "ORDER BY 1, s.pipeline_order" in t_end_sql
+    assert 'AS "time" AS "time"' not in t_end_sql
+    t_end_panel = panels_by_title["Cumulative pipeline offset vs frame close (t_end_ms)"]
+    assert t_end_panel["options"]["legend"]["sortBy"] == "Name"
+    assert t_end_panel["options"]["legend"]["sortDesc"] is False
 
     raw_panel = panels_by_title["Raw feed receive lag latest"]
     assert raw_panel["targets"][0]["datasource"]["type"] == "prometheus"

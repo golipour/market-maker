@@ -1192,7 +1192,7 @@ END"""
 def _pipeline_frames_cte_sql() -> str:
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     t_end = _numeric_sql("e.payload->>'t_end_ms'")
-    controller_end = _numeric_sql("e.payload->>'created_at_ms'")
+    controller_start = _numeric_sql("e.payload->>'created_at_ms'")
     frame_created = _numeric_sql("e.payload #>> ARRAY['frame','frame_created_at_ms']")
     orderbook_ts = f"""COALESCE(
   {_numeric_sql("e.payload #>> ARRAY['frame','local_orderbook_timestamp_ms']")},
@@ -1211,12 +1211,12 @@ def _pipeline_frames_cte_sql() -> str:
     metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
     return f"""frames AS (
   SELECT
-    {_approx_step_time_alias_sql(step_source)} AS "time",
+    {_approx_step_time_alias_sql(step_source)},
     {metric_prefix} AS metric_prefix,
     {t_end} AS t_end_ms,
     {orderbook_ts} AS orderbook_timestamp_ms,
     {frame_created} AS frame_created_at_ms,
-    {controller_end} AS controller_end_ms,
+    {controller_start} AS controller_start_ms,
     {controller_total} AS controller_total_ms,
     {clean} AS clean_ms,
     {decide} AS decide_ms,
@@ -1233,56 +1233,142 @@ def _pipeline_frames_cte_sql() -> str:
 )"""
 
 
+def _pipeline_cumulative_milestones(
+    *,
+    anchor: str,
+    strategy_start: str,
+    stage_sum: str,
+    pipeline_end: str,
+) -> tuple[str, list[tuple[int, str, str]]]:
+    if anchor == "orderbook":
+        anchor_filter = "f.orderbook_timestamp_ms IS NOT NULL"
+        anchor_ms = "f.orderbook_timestamp_ms"
+        rows: list[tuple[int, str, str]] = [
+            (1, "+orderbook.ref", "0.0"),
+            (2, "+frame_close", f"f.t_end_ms - {anchor_ms}"),
+            (3, "+frame_assembled", f"f.frame_created_at_ms - {anchor_ms}"),
+            (4, "+strategy_start", f"{strategy_start} - {anchor_ms}"),
+            (5, "+after_clean", f"{strategy_start} + COALESCE(f.clean_ms, 0) - {anchor_ms}"),
+            (
+                6,
+                "+after_decide",
+                f"{strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - {anchor_ms}",
+            ),
+            (
+                7,
+                "+after_risk",
+                f"{strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - {anchor_ms}",
+            ),
+            (8, "+after_publish", f"{stage_sum} - {anchor_ms}"),
+            (9, "+after_cancel", f"{stage_sum} + COALESCE(f.cancel_ms, 0) - {anchor_ms}"),
+            (
+                10,
+                "+after_place",
+                f"{stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - {anchor_ms}",
+            ),
+            (11, "+pipeline_end", f"{pipeline_end} - {anchor_ms}"),
+        ]
+    elif anchor == "t_end":
+        anchor_filter = "f.t_end_ms IS NOT NULL"
+        anchor_ms = "f.t_end_ms"
+        rows = [
+            (1, "+frame_close.ref", "0.0"),
+            (2, "+frame_assembled", f"f.frame_created_at_ms - {anchor_ms}"),
+            (3, "+strategy_start", f"{strategy_start} - {anchor_ms}"),
+            (4, "+after_clean", f"{strategy_start} + COALESCE(f.clean_ms, 0) - {anchor_ms}"),
+            (
+                5,
+                "+after_decide",
+                f"{strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - {anchor_ms}",
+            ),
+            (
+                6,
+                "+after_risk",
+                f"{strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - {anchor_ms}",
+            ),
+            (7, "+after_publish", f"{stage_sum} - {anchor_ms}"),
+            (8, "+after_cancel", f"{stage_sum} + COALESCE(f.cancel_ms, 0) - {anchor_ms}"),
+            (
+                9,
+                "+after_place",
+                f"{stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - {anchor_ms}",
+            ),
+            (10, "+pipeline_end", f"{pipeline_end} - {anchor_ms}"),
+        ]
+    else:
+        raise ValueError(f"unknown cumulative pipeline anchor: {anchor}")
+    return anchor_filter, rows
+
+
 def _pipeline_cumulative_profile_sql(*, anchor: str) -> str:
-    strategy_start = "(f.controller_end_ms - f.controller_total_ms)"
+    # Diagnostics created_at_ms is captured when StrategyRunner opens DecisionContext,
+    # i.e. strategy pipeline start. Stage timings are monotonic deltas from that point.
+    strategy_start = "f.controller_start_ms"
+    pipeline_end = "(f.controller_start_ms + COALESCE(f.controller_total_ms, 0))"
     stage_sum = (
         f"{strategy_start} + "
         "COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + "
         "COALESCE(f.risk_ms, 0) + COALESCE(f.publish_ms, 0)"
     )
-    if anchor == "orderbook":
-        anchor_filter = "f.orderbook_timestamp_ms IS NOT NULL"
-        offset = "f.orderbook_timestamp_ms"
-        milestones = f"""
-      ('+orderbook.ref', 0.0),
-      ('+frame_close', f.t_end_ms - f.orderbook_timestamp_ms),
-      ('+frame_assembled', f.frame_created_at_ms - f.orderbook_timestamp_ms),
-      ('+strategy_start', {strategy_start} - f.orderbook_timestamp_ms),
-      ('+after_clean', {strategy_start} + COALESCE(f.clean_ms, 0) - f.orderbook_timestamp_ms),
-      ('+after_decide', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - f.orderbook_timestamp_ms),
-      ('+after_risk', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - f.orderbook_timestamp_ms),
-      ('+after_publish', {stage_sum} - f.orderbook_timestamp_ms),
-      ('+after_cancel', {stage_sum} + COALESCE(f.cancel_ms, 0) - f.orderbook_timestamp_ms),
-      ('+after_place', {stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - f.orderbook_timestamp_ms),
-      ('+pipeline_end', f.controller_end_ms - f.orderbook_timestamp_ms)"""
-    elif anchor == "t_end":
-        anchor_filter = "f.t_end_ms IS NOT NULL"
-        offset = "f.t_end_ms"
-        milestones = f"""
-      ('+frame_close.ref', 0.0),
-      ('+frame_assembled', f.frame_created_at_ms - f.t_end_ms),
-      ('+strategy_start', {strategy_start} - f.t_end_ms),
-      ('+after_clean', {strategy_start} + COALESCE(f.clean_ms, 0) - f.t_end_ms),
-      ('+after_decide', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) - f.t_end_ms),
-      ('+after_risk', {strategy_start} + COALESCE(f.clean_ms, 0) + COALESCE(f.decide_ms, 0) + COALESCE(f.risk_ms, 0) - f.t_end_ms),
-      ('+after_publish', {stage_sum} - f.t_end_ms),
-      ('+after_cancel', {stage_sum} + COALESCE(f.cancel_ms, 0) - f.t_end_ms),
-      ('+after_place', {stage_sum} + COALESCE(f.cancel_ms, 0) + COALESCE(f.place_ms, 0) - f.t_end_ms),
-      ('+pipeline_end', f.controller_end_ms - f.t_end_ms)"""
-    else:
-        raise ValueError(f"unknown cumulative pipeline anchor: {anchor}")
+    anchor_filter, rows = _pipeline_cumulative_milestones(
+        anchor=anchor,
+        strategy_start=strategy_start,
+        stage_sum=stage_sum,
+        pipeline_end=pipeline_end,
+    )
+    milestones = ",\n      ".join(
+        f"({pipeline_order}, '{metric}', {value_expr})"
+        for pipeline_order, metric, value_expr in rows
+    )
     return f"""WITH {_pipeline_frames_cte_sql()}
 SELECT
   f."time",
-  f.metric_prefix || s.metric AS metric,
+  f.metric_prefix || LPAD(s.pipeline_order::text, 2, '0') || ' ' || s.metric AS metric,
   s.value AS value
 FROM frames f
 CROSS JOIN LATERAL (
-  VALUES{milestones}
-) AS s(metric, value)
+  VALUES
+      {milestones}
+) AS s(pipeline_order, metric, value)
 WHERE {anchor_filter}
   AND s.value IS NOT NULL
-ORDER BY 1, 2"""
+ORDER BY 1, s.pipeline_order"""
+
+
+def _pipeline_cumulative_panel(
+    id_: int,
+    title: str,
+    expr: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 24,
+    h: int = 10,
+) -> dict[str, Any]:
+    panel = _panel(
+        id_,
+        title,
+        "timeseries",
+        PG_DS,
+        expr,
+        x=x,
+        y=y,
+        w=w,
+        h=h,
+        unit="ms",
+    )
+    panel["options"] = {
+        "legend": {
+            "calcs": [],
+            "displayMode": "list",
+            "placement": "bottom",
+            "showLegend": True,
+            "sortBy": "Name",
+            "sortDesc": False,
+        },
+        "tooltip": {"mode": "multi", "sort": "asc"},
+    }
+    return panel
 
 
 def _model_nll_step_sql() -> str:
@@ -3223,9 +3309,10 @@ def pipeline_time_profile() -> dict[str, Any]:
             1,
             "Scope",
             "Per-frame stage durations plus cumulative milestone offsets. "
-            "The cumulative charts reconstruct pipeline output times from diagnostics timings; "
-            "orderbook-relative milestones use local `orderbook_timestamp_ms`, "
-            "frame-relative milestones use local `t_end_ms`. "
+            "Cumulative charts anchor at local orderbook timestamp or frame close (`t_end_ms`) and plot "
+            "when each milestone occurred relative to that anchor. "
+            "Strategy milestones start at diagnostics `created_at_ms` (StrategyRunner entry) and add "
+            "monotonic stage timings; `+pipeline_end` is `created_at_ms + controller_total_ms`. "
             "Raw adapter receive lag stays on Prometheus because raw market events are not persisted by default.",
             y=0,
         ),
@@ -3241,29 +3328,19 @@ def pipeline_time_profile() -> dict[str, Any]:
             h=10,
             unit="ms",
         ),
-        _panel(
+        _pipeline_cumulative_panel(
             6,
             "Cumulative pipeline offset vs orderbook timestamp",
-            "timeseries",
-            PG_DS,
             _pipeline_cumulative_profile_sql(anchor="orderbook"),
             x=0,
             y=13,
-            w=24,
-            h=10,
-            unit="ms",
         ),
-        _panel(
+        _pipeline_cumulative_panel(
             7,
             "Cumulative pipeline offset vs frame close (t_end_ms)",
-            "timeseries",
-            PG_DS,
             _pipeline_cumulative_profile_sql(anchor="t_end"),
             x=0,
             y=23,
-            w=24,
-            h=10,
-            unit="ms",
         ),
         _panel(
             3,
