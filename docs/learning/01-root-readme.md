@@ -43,7 +43,7 @@ docker compose up -d          # optional: Postgres, Redis, Grafana stack
 python -m mm.runtime --config mm/configs/market_maker.runtime.example.json
 ```
 
-Use `controller.observe_only: true` in JSON until you intend to place live orders.
+Use `controller.dry_run: true` in JSON until you intend to place live orders.
 ````
 
 ## Line 1: the project name
@@ -270,7 +270,7 @@ without actually placing live orders.
 This README later warns:
 
 ```md
-Use `controller.observe_only: true` in JSON until you intend to place live orders.
+Use `controller.dry_run: true` in JSON until you intend to place live orders.
 ```
 
 This is a safety pattern. Many production systems have similar switches:
@@ -577,10 +577,10 @@ startup.
 ## Line 24: safety warning
 
 ```md
-Use `controller.observe_only: true` in JSON until you intend to place live orders.
+Use `controller.dry_run: true` in JSON until you intend to place live orders.
 ```
 
-The backticks around `controller.observe_only: true` create inline code
+The backticks around `controller.dry_run: true` create inline code
 formatting.
 
 This is used for:
@@ -649,7 +649,7 @@ Configuration style:
 section.key: value
 ```
 
-In this README, `controller.observe_only: true` means the `observe_only` setting
+In this README, `controller.dry_run: true` means the `dry_run` setting
 inside the `controller` part of the JSON config.
 
 ## How a senior programmer reads this README
@@ -676,6 +676,6 @@ Before moving to the next lesson, answer these in your own words:
 
 1. What is the difference between raw market data and an interval market event?
 2. Why might a project use an event bus instead of direct function calls?
-3. Why is `observe_only` a good default for a trading runtime?
+3. Why is `dry_run` a good default for a trading runtime?
 4. What does `python -m mm.runtime --config ...` tell you about the project
    structure?

@@ -66,8 +66,8 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
     base = {
         "enabled": True,
         "actor_id": "test-runner",
-        "observe_only": False,
-        "action_start_after_steps": 0,
+        "dry_run": False,
+        "execution_after_steps": 0,
         "decision_timeout_ms": 0,
         "placement_timeout_ms": 50,
         "risk": RiskRuntimeConfig(enabled=True),
@@ -977,7 +977,7 @@ async def test_joint_frame_uses_ledger_live_orders_for_clean_frame(
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
-        config=_runner_config(observe_only=True),
+        config=_runner_config(dry_run=True),
         binding=runtime.binding,
         frame_queue=asyncio.Queue(),
         order_managers={},

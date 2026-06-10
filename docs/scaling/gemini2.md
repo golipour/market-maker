@@ -66,7 +66,7 @@ The platform is inherently cloud-native ready.
 
 * **Metrics & Tracing:** The system already utilizes Prometheus metrics, OTLP traces, structured JSON logs, and a Docker Compose stack with Grafana, Loki, and Tempo.
 * **Kubernetes Adaptation:** Instead of relying on the custom in-process Prometheus text registry on port 8000, simply configure Kubernetes ServiceMonitors to scrape these endpoints across all your strategy worker pods.
-* **Control Plane:** The `RuntimeControlPlane` currently consumes `admin:commands` to handle kill switches, pausing, and observe-only modes, publishing state to `admin:events`. By decoupling the FastAPI server from the worker nodes, you can broadcast these commands via Redis Streams to manage your entire fleet centrally.
+* **Control Plane:** The `RuntimeControlPlane` currently consumes `admin:commands` to handle kill switches, pausing, and dry-run modes, publishing state to `admin:events`. By decoupling the FastAPI server from the worker nodes, you can broadcast these commands via Redis Streams to manage your entire fleet centrally.
 
 ---
 

@@ -432,10 +432,10 @@ class MpcStrategyEngine:
             frame_step=frame_step,
             action=action,
             joint_target_book=joint_target_book,
-            observe_only=self.config.observe_only,
-            action_start_after_steps=self.config.action_start_after_steps,
+            dry_run=self.config.dry_run,
+            execution_after_steps=self.config.execution_after_steps,
             live_execution_skipped_warmup=(
-                not self.config.observe_only and frame_step <= self.config.action_start_after_steps
+                not self.config.dry_run and frame_step <= self.config.execution_after_steps
             ),
             global_status=frame.global_status,
             has_global=frame.has_global,

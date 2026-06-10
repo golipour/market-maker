@@ -477,7 +477,7 @@ publicly offering obviously distressed prices.
    private-state latency allow it.
 2. Set nonzero reconcile tolerances:
    `price_tol_bps` and `qty_tol_rel`.
-3. Increase `action_start_after_steps` only for warmup, not as a hardening tool.
+3. Increase `execution_after_steps` only for warmup, not as a hardening tool.
 4. Keep `fixed_mc_samples` only when reproducibility is more important than
    stochastic robustness. For live trading, evaluate `fixed_mc_samples=false`
    after diagnostics are stable.

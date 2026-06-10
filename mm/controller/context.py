@@ -573,7 +573,7 @@ def execution_blocked_reasons(
     config: ControllerRuntimeConfig,
     frame_step: int,
     approved: list[Action],
-    observe_only_control: bool,
+    dry_run_control: bool,
     local_manager_present: bool,
 ) -> list[str]:
     """Derive why live execution did not run (mirrors ``StrategyRunner._should_execute_live``)."""
@@ -581,11 +581,11 @@ def execution_blocked_reasons(
     reasons: list[str] = []
     if not approved:
         reasons.append("no_approved_actions")
-    if config.observe_only:
-        reasons.append("observe_only_config")
-    if observe_only_control:
-        reasons.append("observe_only_control")
-    if frame_step <= config.action_start_after_steps:
+    if config.dry_run:
+        reasons.append("dry_run_config")
+    if dry_run_control:
+        reasons.append("dry_run_control")
+    if frame_step <= config.execution_after_steps:
         reasons.append("warmup")
     if not local_manager_present:
         reasons.append("no_manager")

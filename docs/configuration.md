@@ -130,7 +130,7 @@ Without token, private reconciler is skipped and **no live orders** on that exch
 | `execution.liquidity` | Planner/caps for the liquidity exchange; live enablement is derived from `liquidity_sourcing.mode == "live"` |
 | `controller` | MPC controller config, including risk/models/optimizer |
 | `planner` | `reconcile` (keep within tolerance) or `replace` (cancel-all then place) |
-| `observe_only` | Per-venue dry-run override |
+| `observe_only` | Per-venue dry-run override under `execution.quoting` / `execution.liquidity` |
 | `max_order_qty` | Source-venue size cap (global venue) |
 | `max_quote_distance` | Max quote spread from mid for global quotes |
 
@@ -143,8 +143,8 @@ does not set `reference_price_source`; it is derived internally from
 ```json
 "controller": {
   "enabled": true,
-  "observe_only": false,
-  "action_start_after_steps": 10,
+  "dry_run": false,
+  "execution_after_steps": 10,
   "actor_id": "mpc-controller",
   "max_orders_per_side": 5,
   "risk": {
@@ -220,8 +220,8 @@ compute the quote anchor.
 
 | Field | Safety |
 |-------|--------|
-| `observe_only: true` | Decisions published; **no** live order sync |
-| `action_start_after_steps` | MPC runs from frame 1; sync only after N frames |
+| `dry_run: true` | Decisions published; **no** live order sync |
+| `execution_after_steps` | MPC runs from frame 1; sync only after N frames |
 | `max_orders_per_side` | Strategy cap before target book: max bid levels and max ask levels kept |
 | `risk.engine` | `net_delta` (default): target-book transition against ledger |
 | `risk.local` / `risk.global` | Same per-venue hard collateral and freshness gates |

@@ -471,8 +471,8 @@ Panels:
 
 6. Execution gate blocks:
    - stacked time series by reason:
-     - `observe_only_config`
-     - `observe_only_control`
+     - `dry_run_config`
+     - `dry_run_control`
      - `warmup`
      - `no_manager`
      - `no_approved_actions`
@@ -698,7 +698,7 @@ Do not include order ids, trace ids, or client ids as Prometheus labels.
 
 - existing `StrategyDecision` schema remains compatible
 - removed optimizer config names are rejected with clear errors
-- observe-only never routes live orders
+- dry-run never routes live orders
 - diagnostics publish even when optimizer raises
 
 ## Migration Strategy

@@ -51,5 +51,5 @@ Pricing relies fundamentally on the "VWAP Depth". The absolute inventory (plus g
 ## Operational Behavior and Configuration
 
 - **Configuration Files**: Runtime profiles are strictly defined in JSON (e.g., `ControllerRuntimeConfig`, `ExecutionRuntimeConfig`).
-- **Warmup**: The system has an `action_start_after_steps` configuration, enforcing a mandatory observation-only period to allow EWMA/price models to stabilize before firing live orders.
-- **Observe Only**: A master kill-switch (`observe_only: true`) enables dry-run execution where decisions are fully simulated but no network requests to exchanges are made.
+- **Warmup**: The system has an `execution_after_steps` configuration, enforcing a mandatory observation-only period to allow EWMA/price models to stabilize before firing live orders.
+- **Dry run**: A master kill-switch (`dry_run: true`) enables dry-run execution where decisions are fully simulated but no network requests to exchanges are made.

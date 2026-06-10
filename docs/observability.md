@@ -78,7 +78,7 @@ Metrics:
 Alert rules:
 
 - Prometheus loads source-controlled rules from `docker/prometheus/market_maker_alerts.yml`.
-- The local rule set covers target reachability, stale market data, ingest lag, frame age, stale private/ledger readiness, execution sync failures, router failures, stale pending order confirmations, validation rejection spikes, persistence errors, kill switch, and observe-only state.
+- The local rule set covers target reachability, stale market data, ingest lag, frame age, stale private/ledger readiness, execution sync failures, router failures, stale pending order confirmations, validation rejection spikes, persistence errors, kill switch, and dry-run state.
 - The local Compose stack evaluates alerts but does not provision Alertmanager or Grafana contact points. Production deployments should add notification routing and tune thresholds to the configured strategy interval and venue behavior.
 
 Logs:
@@ -241,7 +241,7 @@ Events are the durable source of truth. They should answer:
 | `ExecutionSnapshot` | `execution:state:{exchange}` | Current private-confirmed live orders plus pending place/cancel counts |
 | private snapshots/fills/balances | `private:state:{exchange}:...` | Exchange-confirmed private state |
 | `JointLedgerSnapshot` | `ledger:snapshot` | Consolidated portfolio state |
-| `RuntimeControlState` | `admin:events` | Kill switch, observe-only, pause state |
+| `RuntimeControlState` | `admin:events` | Kill switch, dry-run, pause state |
 
 ### Proposed new or expanded events
 
@@ -271,7 +271,7 @@ lifecycle, such as persistence flushes, adapter requests, or admin commands.
 | Command | Current telemetry / behavior |
 |---------|------------------------------|
 | `kill_switch` | Sets control-plane state, emits `mm_kill_switch_state`, logs `admin_command_applied`, and is synchronized into the risk engine by `StrategyRunner` |
-| `observe_only` | Sets control-plane state, emits `mm_observe_only_state`, logs `admin_command_applied`, and blocks live execution gates |
+| `dry_run` | Sets control-plane state, emits `mm_dry_run_state`, logs `admin_command_applied`, and blocks live execution gates |
 | `cancel_all` | Publishes cancel request events on execution cancel topics |
 | `cancel_actor_orders` | Publishes actor-scoped cancel request events for the requested exchange |
 | `pause` / `resume` | Updates actor pause state and publishes it; consumers must explicitly enforce it |
@@ -283,8 +283,8 @@ Recommended additions:
 - Persist admin command requests and resulting `RuntimeControlState` in `admin_audit_log`.
 - Add `mm_admin_commands_total{command,status}` rather than only `command`.
 - Add structured logs for rejected or malformed admin commands.
-- Show kill switch, observe-only, and pause state on the runtime overview dashboard.
-- Alert on kill switch enabled and on observe-only enabled during an intended live run.
+- Show kill switch, dry-run, and pause state on the runtime overview dashboard.
+- Alert on kill switch enabled and on dry-run enabled during an intended live run.
 
 ## Metrics plan
 
@@ -366,12 +366,12 @@ Recommended stage values:
 | `mm_risk_limit` | gauge | `actor_id`, `exchange`, `symbol`, `field` | risk config | Configured limits |
 | `mm_execution_gate_block_total` | counter | `actor_id`, `exchange`, `symbol`, `reason` | execution gates | Live execution blocks |
 | `mm_kill_switch_state` | gauge | none or `actor_id` | control plane / risk | Kill switch state |
-| `mm_observe_only_state` | gauge | none or `actor_id` | control plane | Admin observe-only state |
+| `mm_dry_run_state` | gauge | none or `actor_id` | control plane | Admin dry-run state |
 
 Recommended gate reasons:
 
-- `observe_only_config`
-- `observe_only_control`
+- `dry_run_config`
+- `dry_run_control`
 - `warmup`
 - `no_order_manager`
 - `no_approved_actions`
@@ -899,7 +899,7 @@ defaults assume `interval_ms = 10000`.
 | Order validation rejects spike | `rate(mm_order_validation_rejected_total[5m]) > threshold` | warning | Check min qty/notional, rounding, config |
 | Risk reject spike | `rate(mm_risk_reject_total[5m]) > threshold` | warning | Inspect risk dashboard |
 | Kill switch enabled | `mm_kill_switch_state == 1` | critical/info depending intent | Confirm operator action |
-| Observe-only enabled while expected live | `mm_observe_only_state == 1` or config observe-only true | warning | Confirm deployment mode |
+| Dry-run enabled while expected live | `mm_dry_run_state == 1` or config dry-run true | warning | Confirm deployment mode |
 | Persistence errors | `rate(mm_persistence_errors_total[5m]) > 0` | warning/critical | Check Postgres/Parquet sink |
 | Persistence backlog | `mm_persistence_queue_depth > batch_size * 5` | warning | Increase DB capacity or batch settings |
 | Drawdown | session drawdown exceeds configured threshold | critical | Trigger safety review / kill switch |
@@ -1136,7 +1136,7 @@ Before live operation:
   - `target_books_topic`
   - `ledger_topic`
 - `ControllerDiagnostics` exists for every controller frame, including controller errors.
-- Observe-only and kill-switch states are visible.
+- Dry-run and kill-switch states are visible.
 - No telemetry setup failures appear in logs.
 
 ## Inspecting without Grafana

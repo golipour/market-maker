@@ -18,7 +18,7 @@ class AdminCommand(BaseModel):
     command: str = Field(
         ...,
         pattern=(
-            "^(pause|resume|kill_switch|cancel_all|observe_only|reload_risk|"
+            "^(pause|resume|kill_switch|cancel_all|dry_run|observe_only|reload_risk|"
             "pause_local|resume_local|pause_global|resume_global|cancel_actor_orders)$"
         ),
     )

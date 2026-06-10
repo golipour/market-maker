@@ -120,8 +120,8 @@ def _minimal_config() -> ControllerRuntimeConfig:
     return ControllerRuntimeConfig(
         enabled=True,
         actor_id="test-runner",
-        observe_only=False,
-        action_start_after_steps=0,
+        dry_run=False,
+        execution_after_steps=0,
         risk=RiskRuntimeConfig(enabled=True),
         optimizer={
             "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},

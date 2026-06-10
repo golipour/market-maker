@@ -152,8 +152,8 @@
       "controller": {
         "_comment": "MPC controller settings for any bot using this preset. Bot id becomes actor_id unless actor_id is set here.",
         "enabled": true,
-        "observe_only": false,
-        "action_start_after_steps": 10,
+        "dry_run": false,
+        "execution_after_steps": 10,
         "decision_timeout_ms": 3000,
         "placement_timeout_ms": 7000,
         "placement_max_concurrency": 32,

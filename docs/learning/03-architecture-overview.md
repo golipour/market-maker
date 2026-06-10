@@ -302,7 +302,7 @@ Keep domain math separate from wire/API formatting.
 ### 4. Observe by default
 
 ```md
-`controller.observe_only` defaults to `true`; live sync is explicit.
+`controller.dry_run` defaults to `true`; live sync is explicit.
 ```
 
 This is a safety principle. The system should not place real orders unless the

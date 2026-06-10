@@ -257,7 +257,7 @@ flowchart TD
 | `decide` | Builds MPC `State` from **clean** book; optimizer; ladder orders (`qty_step`, spreads, …) |
 | Risk | Kill switch, stale data (`now - t_end_ms`), per-order `max_inventory` |
 | Publish | `strategy:decisions` (payload dict), `strategy:actions` (`Action`), optional `risk:events` |
-| Execute gates | `observe_only` (JSON + control plane), `action_start_after_steps`, manager exists |
+| Execute gates | `dry_run` (JSON + control plane), `execution_after_steps`, manager exists |
 | Route | Split actions by exchange; `OrderManager.sync` |
 
 See [Controller & execution](controller-and-execution.md) for constraint tables.

@@ -433,7 +433,7 @@ async def run(args: argparse.Namespace) -> None:
         private_contract["execution"] = {
             "enabled": True,
             "order_command_transport": "rest",
-            "print_events_mode": "observe_only",
+            "print_events_mode": "dry_run",
             "safety": "does not place or cancel orders unless an actor calls OrderManager.sync",
             "live_orders": "ExecutionSnapshot mirrors private open orders for own-order subtraction and execution recovery",
         }

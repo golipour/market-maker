@@ -382,7 +382,7 @@ class RuntimeObservabilitySubscriber:
                     "t_end_ms": payload.get("t_end_ms"),
                     "order_count": payload.get("order_count"),
                     "latency_ms": payload.get("latency_ms"),
-                    "observe_only": payload.get("observe_only"),
+                    "dry_run": payload.get("dry_run", payload.get("observe_only")),
                     "decision_hash": payload.get("decision_hash"),
                 },
             )

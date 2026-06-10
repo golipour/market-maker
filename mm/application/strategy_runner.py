@@ -325,8 +325,8 @@ class StrategyRunner:
                 )
 
             publish_started = time.monotonic_ns()
-            observe_only_control = (
-                self.control_plane is not None and self.control_plane.state.observe_only
+            dry_run_control = (
+                self.control_plane is not None and self.control_plane.state.dry_run
             )
             venue_gates = compute_venue_execution_gates(
                 config=self.config,
@@ -351,7 +351,7 @@ class StrategyRunner:
                 config=self.config,
                 frame_step=self._frame_step,
                 approved=approved,
-                observe_only_control=observe_only_control,
+                dry_run_control=dry_run_control,
                 local_manager_present=self.order_managers.get(self._last_local_exchange) is not None,
             )
             if executed:

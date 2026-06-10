@@ -32,7 +32,7 @@ sequenceDiagram
   SR->>RISK: validate_frame
   RISK-->>SR: approved actions
   SR->>BUS: strategy:decisions, strategy:actions
-  alt not observe_only and past warmup
+  alt not dry_run and past warmup
     SR->>OM: route_actions(approved)
     OM->>EX: place_orders / cancel_orders
     OM->>BUS: execution:orders / execution:state
@@ -97,7 +97,7 @@ Details: [Mechanisms — execution](mechanisms.md#phase-4--execution-ordermanage
 |------------|------|
 | `RuntimeObservabilitySubscriber` | Metrics, logs, traces |
 | `PostgresEventWriter` / `ParquetEventWriter` | Durable `mm_events` |
-| `RuntimeControlPlane` | Admin kill_switch / observe_only |
+| `RuntimeControlPlane` | Admin kill_switch / dry_run |
 
 Details: [Mechanisms — bus & persistence](mechanisms.md#event-bus-delivery) · [Observability](observability.md)
 

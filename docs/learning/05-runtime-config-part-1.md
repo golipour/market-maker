@@ -27,7 +27,7 @@ Configuration lets the same code run in different modes:
 
 - local development vs production-like runtime
 - in-memory bus vs Redis Streams
-- observe-only vs live execution
+- dry-run vs live execution
 - one exchange vs two exchanges
 - Postgres persistence enabled vs disabled
 

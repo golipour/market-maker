@@ -483,7 +483,7 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
         config=ControllerRuntimeConfig(
             enabled=True,
             actor_id="test-runner",
-            observe_only=True,
+            dry_run=True,
             risk=RiskRuntimeConfig(enabled=True),
             optimizer={
                 "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},

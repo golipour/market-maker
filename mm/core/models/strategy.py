@@ -73,8 +73,8 @@ class StrategyDecision:
     frame_step: int
     action: Action
     joint_target_book: JointTargetBook | None = None
-    observe_only: bool = True
-    action_start_after_steps: int = 0
+    dry_run: bool = True
+    execution_after_steps: int = 0
     live_execution_skipped_warmup: bool = False
     global_status: GlobalMarketStatus = "disabled"
     has_global: bool = False

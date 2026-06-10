@@ -89,7 +89,7 @@ def test_example_runtime_config_loads() -> None:
     assert config.controller is not None
     assert config.controller.enabled is True
     assert config.controller.actor_id == "mpc-controller"
-    assert config.controller.action_start_after_steps == 10
+    assert config.controller.execution_after_steps == 10
     assert config.controller.execution_model == {
         "kind": "real",
         "local_maker_fee": 0.0015,

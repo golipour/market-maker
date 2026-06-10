@@ -21,4 +21,4 @@ docker compose up -d          # optional: Postgres, Redis, Grafana stack
 python -m mm.runtime --config mm/configs/market_maker.runtime.example.json
 ```
 
-Use `controller.observe_only: true` in JSON until you intend to place live orders.
+Use `controller.dry_run: true` in JSON until you intend to place live orders.

@@ -60,8 +60,8 @@ def _minimal_config(*, actor_id: str = "test-runner") -> ControllerRuntimeConfig
     return ControllerRuntimeConfig(
         enabled=True,
         actor_id=actor_id,
-        observe_only=True,
-        action_start_after_steps=0,
+        dry_run=True,
+        execution_after_steps=0,
         risk=RiskRuntimeConfig(enabled=True),
         optimizer={
             "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
@@ -250,7 +250,7 @@ async def test_strategy_runner_publishes_diagnostics_on_success(monkeypatch: pyt
     assert diagnostics["type"] == CONTROLLER_DIAGNOSTICS_TYPE
     assert diagnostics["state"]["mid"] == 100.0
     assert diagnostics["state"]["local_inventory"] == 5.0
-    assert "observe_only_config" in diagnostics["execution_gates"]["blocked_reasons"]
+    assert "dry_run_config" in diagnostics["execution_gates"]["blocked_reasons"]
 
 
 def test_decision_context_maps_frame_fields() -> None:
@@ -359,8 +359,8 @@ def test_optimizer_diagnostics_include_execution_model_config() -> None:
     config = ControllerRuntimeConfig(
         enabled=True,
         actor_id="test-runner",
-        observe_only=True,
-        action_start_after_steps=0,
+        dry_run=True,
+        execution_after_steps=0,
         risk=RiskRuntimeConfig(enabled=True),
         execution_model={
             "kind": "real",

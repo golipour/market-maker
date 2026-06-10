@@ -205,8 +205,8 @@ def test_compute_venue_execution_gates_independent_local_and_global() -> None:
         config=ControllerRuntimeConfig(
             enabled=True,
             actor_id="test-runner",
-            observe_only=False,
-            action_start_after_steps=0,
+            dry_run=False,
+            execution_after_steps=0,
         ),
         execution=ExecutionRuntimeConfig(
             local=VenueExecutionConfig(planner="reconcile"),
@@ -248,8 +248,8 @@ def test_replace_empty_book_can_sync_to_cancel_existing_orders() -> None:
         config=ControllerRuntimeConfig(
             enabled=True,
             actor_id="test-runner",
-            observe_only=False,
-            action_start_after_steps=0,
+            dry_run=False,
+            execution_after_steps=0,
         ),
         execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
@@ -286,8 +286,8 @@ async def test_route_joint_target_book_syncs_empty_replace_book() -> None:
             config=ControllerRuntimeConfig(
                 enabled=True,
                 actor_id="test-runner",
-                observe_only=False,
-                action_start_after_steps=0,
+                dry_run=False,
+                execution_after_steps=0,
             ),
             execution=ExecutionRuntimeConfig(local=VenueExecutionConfig(planner="replace")),
             liquidity_sourcing=LiquiditySourcingRuntimeConfig(),
@@ -321,8 +321,8 @@ def test_global_stale_market_blocks_only_global_gate() -> None:
         config=ControllerRuntimeConfig(
             enabled=True,
             actor_id="test-runner",
-            observe_only=False,
-            action_start_after_steps=0,
+            dry_run=False,
+            execution_after_steps=0,
         ),
         execution=ExecutionRuntimeConfig(),
         liquidity_sourcing=LiquiditySourcingRuntimeConfig(
@@ -413,8 +413,8 @@ async def test_strategy_runner_routes_both_venues_when_live(
         config=ControllerRuntimeConfig(
             enabled=True,
             actor_id="test-runner",
-            observe_only=False,
-            action_start_after_steps=0,
+            dry_run=False,
+            execution_after_steps=0,
             risk=RiskRuntimeConfig(enabled=True),
             optimizer={
                 "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},

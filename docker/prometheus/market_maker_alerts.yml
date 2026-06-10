@@ -112,11 +112,11 @@ groups:
           description: "Runtime control plane reports kill_switch=true."
 
       - alert: MarketMakerObserveOnlyEnabled
-        expr: mm_observe_only_state == 1
+        expr: mm_dry_run_state == 1
         for: 5m
         labels:
           severity: warning
           component: control
         annotations:
           summary: "Market maker observe-only mode is enabled"
-          description: "Runtime control plane reports observe_only=true for more than 5 minutes."
+          description: "Runtime control plane reports dry_run=true for more than 5 minutes."

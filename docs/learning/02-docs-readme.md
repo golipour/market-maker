@@ -41,7 +41,7 @@ Backticks mean inline code or literal text. Use them for exact names:
 - folders: `mm/`
 - files: `docker-compose.yml`
 - classes: `StrategyRunner`
-- config keys: `controller.observe_only`
+- config keys: `controller.dry_run`
 - commands: `python -m mm.runtime`
 
 Common practice:

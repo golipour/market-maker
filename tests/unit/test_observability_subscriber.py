@@ -65,7 +65,7 @@ def test_observability_subscriber_emits_controller_diagnostics_metrics() -> None
         ),
         execution_gates=ExecutionGateDiagnostics(
             executed=False,
-            blocked_reasons=("observe_only_config",),
+            blocked_reasons=("dry_run_config",),
         ),
     ).as_payload()
 
@@ -80,7 +80,7 @@ def test_observability_subscriber_emits_controller_diagnostics_metrics() -> None
     assert 'mm_model_score_skipped_total{actor_id="obs-test-controller",exchange="nobitex",model="flow",reason="missing_previous_frame",symbol="BTC_IRT"} 1.0' in text
     assert 'mm_action_stage_orders{actor_id="obs-test-controller",exchange="nobitex",side="all",stage="ladder",symbol="BTC_IRT"} 2.0' in text
     assert 'mm_risk_approved{actor_id="obs-test-controller",exchange="nobitex",symbol="BTC_IRT"} 0.0' in text
-    assert 'reason="observe_only_config"' in text
+    assert 'reason="dry_run_config"' in text
 
 
 def test_observability_subscriber_clears_sync_pending_on_completion_or_failure() -> None:

@@ -37,7 +37,7 @@ StrategyInputFrame
 | Trading context | `trading_context` | Live orders from managers; `TradingState` for risk |
 | Strategy | `MpcStrategyEngine.decide` | MPC optimize, raw ladder, strategy cap, target book |
 | Risk | `NetDeltaRiskEngine` | Kill switch, staleness, collateral, inventory, target-book transition |
-| Execution gates | `compute_venue_execution_gates` | observe_only, warmup, control plane, manager present, venue readiness |
+| Execution gates | `compute_venue_execution_gates` | dry_run, warmup, control plane, manager present, venue readiness |
 | Venue sync | `OrderManager` | Target-book diff into keep/cancel/place commands |
 | Venue rules | `ExchangeRulesGateway` | Tick/lot rounding plus min qty/min notional validation |
 | Router | `OrderRouter` | Cancel then place via exchange adapter |
@@ -90,9 +90,9 @@ After risk, live sync is computed per venue. A venue may sync when:
 | Gate | Source |
 |------|--------|
 | Actionable approved venue target book | Risk output |
-| `not controller.observe_only` | JSON |
-| `not control_plane.state.observe_only` | Admin command |
-| `frame_step > action_start_after_steps` | JSON warm-up |
+| `not controller.dry_run` | JSON |
+| `not control_plane.state.dry_run` | Admin command |
+| `frame_step > execution_after_steps` | JSON warm-up |
 | `OrderManager` exists for that exchange | Token + `enable_execution` |
 
 ## OrderManager (venue layer)

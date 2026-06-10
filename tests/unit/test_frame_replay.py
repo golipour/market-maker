@@ -69,8 +69,8 @@ def _simulator() -> FrameSimulator:
     controller = ControllerRuntimeConfig(
         enabled=True,
         actor_id="test-runner",
-        observe_only=False,
-        action_start_after_steps=0,
+        dry_run=False,
+        execution_after_steps=0,
         decision_timeout_ms=0,
         risk=RiskRuntimeConfig(enabled=True),
         optimizer={

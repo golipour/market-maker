@@ -41,6 +41,34 @@ def _normalize_quote_venue(value: Any, *, field_name: str) -> QuoteVenueRole:
     return venue  # type: ignore[return-value]
 
 
+def _bool_config_key(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    legacy_key: str | None = None,
+    default: bool,
+) -> bool:
+    if key in payload:
+        return bool(payload[key])
+    if legacy_key is not None and legacy_key in payload:
+        return bool(payload[legacy_key])
+    return default
+
+
+def _int_config_key(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    legacy_key: str | None = None,
+    default: int = 0,
+) -> int:
+    if key in payload:
+        return int(payload[key])
+    if legacy_key is not None and legacy_key in payload:
+        return int(payload[legacy_key])
+    return default
+
+
 def _normalize_quote_anchor_mode(value: Any) -> QuoteAnchorMode:
     mode = str(value or "liquidity_weighted_mid").strip().lower()
     if mode not in ("quoting_mid", "liquidity_mid", "liquidity_weighted_mid"):
@@ -458,15 +486,15 @@ class ControllerRuntimeConfig:
     Consumes ``StrategyInputFrame`` and publishes ``StrategyDecision`` payloads and ``Action``.
     Observe-only by default: enable execution in config when placing live orders is intended.
 
-    ``action_start_after_steps``: MPC runs every frame, but ``OrderManager.sync`` waits until
-    ``frame_step > action_start_after_steps``.
+    ``execution_after_steps``: MPC runs every frame, but ``OrderManager.sync`` waits until
+    ``frame_step > execution_after_steps``.
     """
 
     enabled: bool = False
     actor_id: str = "mpc-controller"
-    observe_only: bool = True
+    dry_run: bool = True
     # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
-    action_start_after_steps: int = 0
+    execution_after_steps: int = 0
     # Max wall time for live order sync per frame; keeps diagnostics cadence within interval_ms.
     placement_timeout_ms: int = 3000
     # Max wall time for MPC decision compute per frame; timeout falls back to holding current orders.
@@ -1378,8 +1406,20 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
     return ControllerRuntimeConfig(
         enabled=bool(payload.get("enabled", False)),
         actor_id=str(payload.get("actor_id", "mpc-controller")),
-        observe_only=bool(payload.get("observe_only", True)),
-        action_start_after_steps=max(0, int(payload.get("action_start_after_steps", 0))),
+        dry_run=_bool_config_key(
+            payload,
+            "dry_run",
+            legacy_key="observe_only",
+            default=True,
+        ),
+        execution_after_steps=max(
+            0,
+            _int_config_key(
+                payload,
+                "execution_after_steps",
+                legacy_key="action_start_after_steps",
+            ),
+        ),
         placement_timeout_ms=max(0, int(payload.get("placement_timeout_ms", 3000))),
         decision_timeout_ms=max(0, int(payload.get("decision_timeout_ms", 3000))),
         placement_max_concurrency=max(1, int(payload.get("placement_max_concurrency", 8))),
@@ -1489,8 +1529,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
     return {
         "enabled": config.enabled,
         "actor_id": config.actor_id,
-        "observe_only": config.observe_only,
-        "action_start_after_steps": config.action_start_after_steps,
+        "dry_run": config.dry_run,
+        "execution_after_steps": config.execution_after_steps,
         "placement_timeout_ms": config.placement_timeout_ms,
         "decision_timeout_ms": config.decision_timeout_ms,
         "placement_max_concurrency": config.placement_max_concurrency,

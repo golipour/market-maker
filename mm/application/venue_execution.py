@@ -136,14 +136,14 @@ def compute_venue_execution_gates(
     """Compute independent live/observe gates for local and global venues."""
 
     global_blocked: list[str] = []
-    if config.observe_only:
-        global_blocked.append("observe_only_config")
-    observe_only_control = (
-        control_plane is not None and control_plane.state.observe_only
+    if config.dry_run:
+        global_blocked.append("dry_run_config")
+    dry_run_control = (
+        control_plane is not None and control_plane.state.dry_run
     )
-    if observe_only_control:
-        global_blocked.append("observe_only_control")
-    if frame_step <= config.action_start_after_steps:
+    if dry_run_control:
+        global_blocked.append("dry_run_control")
+    if frame_step <= config.execution_after_steps:
         global_blocked.append("warmup")
     if control_plane is not None and config.actor_id in control_plane.state.paused_actors:
         global_blocked.append("paused_actor")

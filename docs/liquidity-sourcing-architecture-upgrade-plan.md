@@ -464,7 +464,7 @@ Work:
 
 1. Add regression tests for current single-venue and primary-plus-hedge config
    loading.
-2. Add tests for `StrategyRunner` observe-only, warmup, and live gates.
+2. Add tests for `StrategyRunner` dry-run, warmup, and live gates.
 3. Add tests documenting current `OrderManager` reconcile counts and rejection
    labels.
 4. Remove legacy hedge execution paths from the runtime contract before enabling
@@ -606,7 +606,7 @@ Work:
    - command gates
 5. Add mode-aware freshness rules:
    - single venue: global market/private state optional
-   - liquidity sourcing observe-only: global market required, global private
+   - liquidity sourcing dry-run: global market required, global private
      optional if no global orders are emitted
    - liquidity sourcing live: global market and global private required when
      global target book is non-empty
@@ -695,7 +695,7 @@ Work:
 Acceptance:
 
 - A single strategy decision can produce two venue target books.
-- Each venue can be independently observe-only or live.
+- Each venue can be independently dry-run or live.
 - Global state staleness blocks global target placement without necessarily
   blocking local-only placement when configured that way.
 
@@ -705,7 +705,7 @@ Goal: handle physical capital drift outside the high-frequency decision loop.
 
 Work:
 
-1. Add a `CapitalSweeperService` in observe-only mode first.
+1. Add a `CapitalSweeperService` in dry-run mode first.
 2. Monitor ledger imbalances and publish rebalance recommendations.
 3. Add manual approval hooks before any real transfer.
 4. Track transfer state separately from trading state.
@@ -764,7 +764,7 @@ Add or update dashboards around the new concepts:
 - Execution planning: kept, canceled, planned place, rules-valid, router-accepted.
 - Joint MPC diagnostics: local/global expected fills, wealth contribution,
   capacity penalty, and inventory penalty.
-- Liquidity sourcing mode status: disabled, observe-only, global-reference-only,
+- Liquidity sourcing mode status: disabled, dry-run, global-reference-only,
   live joint quoting.
 
 The rejection taxonomy should separate:
@@ -801,7 +801,7 @@ Recommended order for real implementation:
 5. Replace order-level risk with net-delta risk.
 6. Split planner/router and keep `OrderManager` as facade.
 7. Upgrade MPC to joint-venue simulation.
-8. Enable observe-only liquidity sourcing.
+8. Enable dry-run liquidity sourcing.
 9. Enable live global target placement with strict caps.
 10. Add capital sweeper recommendations.
 
@@ -822,7 +822,7 @@ Recommended order for real implementation:
 - Latency skew can create false arbitrage. The frame should expose skew and the
   risk engine should gate or shrink target books when state is stale.
 - Replacing reactive hedge behavior with maker-style global quoting changes fill
-  risk. The first rollout should be observe-only and simulation-backed.
+  risk. The first rollout should be dry-run and simulation-backed.
 - A broader action space increases optimizer instability. Keep single-venue masks
   and diagnostics strong before optimizing four curves live.
 
@@ -832,7 +832,7 @@ The upgrade is complete when:
 
 - The code can run in single-venue mode without requiring global market or
   private state.
-- The code can run in liquidity-sourcing observe-only mode and emit local plus
+- The code can run in liquidity-sourcing dry-run mode and emit local plus
   global target books.
 - The strategy objective evaluates consolidated joint wealth without reactive
   hedge reward.

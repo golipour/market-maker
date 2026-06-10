@@ -6,7 +6,7 @@ This note reviews the current low-frequency market maker architecture and propos
 
 The runtime is a single-process async, event-bus-driven market maker. Public exchange feeds are normalized into interval `MarketEvent`s, aligned into `StrategyInputFrame`s, cleaned by subtracting own resting orders, passed into the MPC strategy engine, filtered by risk, and optionally synced to the venue through `OrderManager`.
 
-The strongest parts of the architecture are the bus-first design, typed domain models, explicit primary/hedge frame alignment, observe-only default, and the separation between strategy, risk, execution, persistence, and observability subscribers.
+The strongest parts of the architecture are the bus-first design, typed domain models, explicit primary/hedge frame alignment, dry-run default, and the separation between strategy, risk, execution, persistence, and observability subscribers.
 
 The biggest improvement opportunity is diagnostics. Important facts exist, but they are scattered across `StrategyDecision`, logs, metrics, execution events, model internals, and controller private attributes. The system needs a first-class diagnostics contract that records what the controller believed before updating models, why actions changed between stages, and what every gate/risk/venue rule did.
 
@@ -99,12 +99,12 @@ The frame still contains the exchange-visible orderbook, including the bot's own
 Current live gates are:
 
 - approved actions are non-empty
-- `controller.observe_only` is false
-- control-plane `observe_only` is false
-- warmup has passed: `frame_step > action_start_after_steps`
+- `controller.dry_run` is false
+- control-plane `dry_run` is false
+- warmup has passed: `frame_step > execution_after_steps`
 - an order manager exists for the primary exchange
 
-The current code wires control-plane `kill_switch` and `observe_only` into the runner. `paused_actors` exists in `RuntimeControlPlane`, but is not currently checked by `StrategyRunner`.
+The current code wires control-plane `kill_switch` and `dry_run` into the runner. `paused_actors` exists in `RuntimeControlPlane`, but is not currently checked by `StrategyRunner`.
 
 ### 5. MPC Strategy Engine
 
@@ -427,7 +427,7 @@ Add:
 - `mm_hedge_status_total`
 - `mm_cleaning_subtracted_qty`
 - `mm_controller_stage_latency_ms` with stage labels: `clean`, `model_score`, `model_update`, `optimize`, `discretize`, `risk`, `publish`, `execute`
-- `mm_controller_gate_block_total` with reason labels: `observe_only_config`, `observe_only_control`, `warmup`, `no_manager`, `no_approved_actions`
+- `mm_controller_gate_block_total` with reason labels: `dry_run_config`, `dry_run_control`, `warmup`, `no_manager`, `no_approved_actions`
 
 ### Action Pipeline Metrics
 
@@ -540,7 +540,7 @@ Check a single action-pipeline view:
 - venue constraints dropped orders
 - cap set to zero or too low
 - risk rejected all orders
-- observe-only/warmup/control gate blocked execution
+- dry-run/warmup/control gate blocked execution
 - no order manager was built due to missing token or `enable_execution=false`
 - execution dedupe found identical live orders
 - order validation rejected by trade stats
@@ -586,7 +586,7 @@ The MPC already optimizes continuous depth, then discretizes. Add explicit quote
 - enforce maximum quote distance
 - inventory-skew controls
 - hedge-readiness behavior: quote smaller or wider when hedge is stale/missing
-- stale private state behavior: observe-only or no quoting
+- stale private state behavior: dry-run or no quoting
 
 ### Inventory And PnL Controls
 
@@ -617,7 +617,7 @@ Improve `OrderManager` reporting:
 Hedge is currently an input to the MPC state and optional private state. Make hedge policy explicit:
 
 - `hedge_required_for_quoting`
-- `hedge_stale_action`: `quote_zero`, `widen`, `size_down`, `observe_only`
+- `hedge_stale_action`: `quote_zero`, `widen`, `size_down`, `dry_run`
 - `hedge_inventory_limit`
 - `hedge_basis_limit`
 - hedge VWAP model NLL and skip reasons

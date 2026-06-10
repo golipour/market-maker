@@ -230,8 +230,8 @@ then to order managers.
 
 Shared frame/controller blockers are copied into both venues:
 
-- `observe_only_config`
-- `observe_only_control`
+- `dry_run_config`
+- `dry_run_control`
 - `warmup`
 - `paused_actor`
 

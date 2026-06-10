@@ -60,7 +60,7 @@ Main wiring is in `mm.runtime.engine.build_runtime_components`.
 | Input frame assembler | `mm.application.frame_assembler.StrategyInputFrameAssembler` | Align local/global market and private snapshots |
 | Joint frame assembler | `mm.application.joint_frame_assembler.JointStrategyFrameAssembler` | Attach ledger/freshness and publish `JointStrategyFrame` |
 | Portfolio ledger | `mm.ledger.service.PortfolioLedgerService` | Shadow ledger from private state topics |
-| Control plane | `mm.runtime.control.RuntimeControlPlane` | Kill switch, observe-only, paused actors/venues |
+| Control plane | `mm.runtime.control.RuntimeControlPlane` | Kill switch, dry-run, paused actors/venues |
 | Strategy runner | `mm.application.strategy_runner.StrategyRunner` | Decision, risk, diagnostics, execution routing |
 | Private reconcilers | `mm.application.reconciliation_service.PrivateStateReconciler` | Normalize exchange private state |
 | Execution reconcilers | `mm.application.reconciliation_service.ExecutionStateReconciler` | Mirror private state into order managers |
@@ -97,7 +97,7 @@ Top-level structure:
 | `global_grace_ms` | Short wait for same-interval global event |
 | `local_private`, `global_private` | Private state and execution credentials |
 | `liquidity_sourcing` | `single_venue` vs `liquidity_sourcing` mode and global-order switch |
-| `execution` | Per-venue planner, observe-only, and placement caps |
+| `execution` | Per-venue planner, dry-run, and placement caps |
 | `controller` | MPC, risk, order-grid, and diagnostics settings |
 | `bus` | Memory or Redis Streams |
 | `persistence` | Postgres and/or Parquet event writers |
@@ -108,7 +108,7 @@ orders. When it is false, global target books may be produced for diagnostics,
 but `prepare_execution_joint_book()` strips global orders before routing.
 
 `execution.local.planner` defaults to `reconcile`; `execution.global.planner`
-defaults to `replace`. Both venues also support `observe_only`,
+defaults to `replace`. Both venues also support `dry_run`,
 `max_order_qty`, and `max_quote_distance`.
 
 ## Event Bus And Topics
@@ -300,11 +300,11 @@ reasons include:
 
 | Reason | Meaning |
 | --- | --- |
-| `observe_only_config` | Controller observe-only |
-| `observe_only_control` | Runtime control-plane observe-only |
-| `warmup` | `frame_step <= action_start_after_steps` |
+| `dry_run_config` | Controller dry-run |
+| `dry_run_control` | Runtime control-plane dry-run |
+| `warmup` | `frame_step <= execution_after_steps` |
 | `paused_actor` | Actor paused by control plane |
-| `venue_observe_only` | Venue-specific observe-only |
+| `venue_observe_only` | Venue-specific dry-run |
 | `venue_paused` | Venue role paused by control plane |
 | `no_manager` | No order manager for exchange |
 | `global_live_orders_disabled` | Global live switch is false |

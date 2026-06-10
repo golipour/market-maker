@@ -13,7 +13,7 @@ from mm.observability import counter_inc, gauge, log_event
 class RuntimeControlState:
     paused_actors: set[str] = field(default_factory=set)
     paused_venue_roles: set[str] = field(default_factory=set)
-    observe_only: bool = False
+    dry_run: bool = False
     kill_switch: bool = False
 
 
@@ -53,8 +53,8 @@ class RuntimeControlPlane:
             self.state.paused_actors.discard(str(actor_id))
         elif name == "kill_switch":
             self.state.kill_switch = bool(command.get("enabled", True))
-        elif name == "observe_only":
-            self.state.observe_only = bool(command.get("enabled", True))
+        elif name in ("dry_run", "observe_only"):
+            self.state.dry_run = bool(command.get("enabled", True))
         elif name == "pause_local":
             self.state.paused_venue_roles.add("local")
         elif name == "resume_local":
@@ -97,12 +97,12 @@ class RuntimeControlPlane:
             "command_id": command.get("command_id"),
             "paused_actors": sorted(self.state.paused_actors),
             "paused_venue_roles": sorted(self.state.paused_venue_roles),
-            "observe_only": self.state.observe_only,
+            "dry_run": self.state.dry_run,
             "kill_switch": self.state.kill_switch,
             "timestamp_ms": int(time.time() * 1000),
         }
         gauge("mm_kill_switch_state", 1.0 if self.state.kill_switch else 0.0, help="Runtime kill switch state")
-        gauge("mm_observe_only_state", 1.0 if self.state.observe_only else 0.0, help="Runtime observe-only state")
+        gauge("mm_dry_run_state", 1.0 if self.state.dry_run else 0.0, help="Runtime dry-run state")
         counter_inc("mm_admin_commands_total", labels={"command": str(command.get("command", ""))})
         log_event("admin_command_applied", payload)
         await self.bus.publish("admin:events", payload)

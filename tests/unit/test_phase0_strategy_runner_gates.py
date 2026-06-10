@@ -76,8 +76,8 @@ def _runner_config(**overrides: object) -> ControllerRuntimeConfig:
     base = {
         "enabled": True,
         "actor_id": "test-runner",
-        "observe_only": False,
-        "action_start_after_steps": 0,
+        "dry_run": False,
+        "execution_after_steps": 0,
         "placement_timeout_ms": 1000,
         "decision_timeout_ms": 0,
         "risk": RiskRuntimeConfig(enabled=True),
@@ -95,7 +95,7 @@ async def _run_frame(runner: StrategyRunner) -> None:
 
 
 @pytest.mark.asyncio
-async def test_strategy_runner_observe_only_config_blocks_live_sync(
+async def test_strategy_runner_dry_run_config_blocks_live_sync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -107,7 +107,7 @@ async def test_strategy_runner_observe_only_config_blocks_live_sync(
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = RecordingOrderManager(exchange="nobitex")
     runner = _runner(
-        config=_runner_config(observe_only=True),
+        config=_runner_config(dry_run=True),
         manager=manager,
         bus=bus,
     )
@@ -117,11 +117,11 @@ async def test_strategy_runner_observe_only_config_blocks_live_sync(
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
     assert diagnostics["execution_gates"]["executed"] is False
-    assert "observe_only_config" in diagnostics["execution_gates"]["blocked_reasons"]
+    assert "dry_run_config" in diagnostics["execution_gates"]["blocked_reasons"]
 
 
 @pytest.mark.asyncio
-async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
+async def test_strategy_runner_dry_run_control_plane_blocks_live_sync(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -134,10 +134,10 @@ async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
     manager = RecordingOrderManager(exchange="nobitex")
     control_plane = RuntimeControlPlane(
         bus=bus,
-        state=RuntimeControlState(observe_only=True),
+        state=RuntimeControlState(dry_run=True),
     )
     runner = _runner(
-        config=_runner_config(observe_only=False),
+        config=_runner_config(dry_run=False),
         manager=manager,
         bus=bus,
         control_plane=control_plane,
@@ -148,7 +148,7 @@ async def test_strategy_runner_observe_only_control_plane_blocks_live_sync(
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert manager.synced == []
     assert diagnostics["execution_gates"]["executed"] is False
-    assert "observe_only_control" in diagnostics["execution_gates"]["blocked_reasons"]
+    assert "dry_run_control" in diagnostics["execution_gates"]["blocked_reasons"]
 
 
 @pytest.mark.asyncio
@@ -164,7 +164,7 @@ async def test_strategy_runner_warmup_blocks_live_sync_until_threshold(
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = RecordingOrderManager(exchange="nobitex")
     runner = _runner(
-        config=_runner_config(action_start_after_steps=2),
+        config=_runner_config(execution_after_steps=2),
         manager=manager,
         bus=bus,
     )
@@ -200,7 +200,7 @@ async def test_strategy_runner_live_execution_syncs_when_gates_pass(
     diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
     manager = RecordingOrderManager(exchange="nobitex")
     runner = _runner(
-        config=_runner_config(observe_only=False, action_start_after_steps=0),
+        config=_runner_config(dry_run=False, execution_after_steps=0),
         manager=manager,
         bus=bus,
     )
@@ -227,7 +227,7 @@ async def test_strategy_runner_no_manager_blocks_live_sync(
     runtime = MarketMakerRuntimeConfig(local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
     )
     runner = StrategyRunner(
-        config=_runner_config(observe_only=False),
+        config=_runner_config(dry_run=False),
         binding=runtime.binding,
         frame_queue=asyncio.Queue(),
         order_managers={},

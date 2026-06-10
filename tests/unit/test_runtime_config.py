@@ -232,7 +232,21 @@ def test_controller_placement_settings_from_mapping() -> None:
     assert config.as_contract()["controller"]["decision_timeout_ms"] == 1200
 
 
-def test_controller_action_start_after_steps_from_mapping() -> None:
+def test_controller_execution_after_steps_from_mapping() -> None:
+    config = runtime_config_from_mapping(
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {"enabled": True, "execution_after_steps": 15},
+        )
+    )
+    assert config.controller is not None
+    assert config.controller.execution_after_steps == 15
+
+
+def test_controller_execution_after_steps_legacy_alias_from_mapping() -> None:
     config = runtime_config_from_mapping(
         _with_controller(
             _with_preset(
@@ -243,7 +257,21 @@ def test_controller_action_start_after_steps_from_mapping() -> None:
         )
     )
     assert config.controller is not None
-    assert config.controller.action_start_after_steps == 15
+    assert config.controller.execution_after_steps == 15
+
+
+def test_controller_dry_run_legacy_alias_from_mapping() -> None:
+    config = runtime_config_from_mapping(
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {"enabled": True, "observe_only": False},
+        )
+    )
+    assert config.controller is not None
+    assert config.controller.dry_run is False
 
 
 def test_persistence_topic_templates_resolve_from_interval_and_venues() -> None:
@@ -365,18 +393,18 @@ def test_controller_reconcile_defaults_when_missing() -> None:
     assert config.controller.reconcile.qty_tol_rel == 0.0
 
 
-def test_controller_action_start_after_steps_clamps_negative() -> None:
+def test_controller_execution_after_steps_clamps_negative() -> None:
     config = runtime_config_from_mapping(
         _with_controller(
             _with_preset(
                 venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
                 interval_ms=1000,
             ),
-            {"enabled": True, "action_start_after_steps": -3},
+            {"enabled": True, "execution_after_steps": -3},
         )
     )
     assert config.controller is not None
-    assert config.controller.action_start_after_steps == 0
+    assert config.controller.execution_after_steps == 0
 
 
 def test_runtime_config_rejects_invalid_global_role() -> None:

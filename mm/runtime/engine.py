@@ -151,8 +151,8 @@ async def build_runtime_components(
             {
                 "actor_id": config.controller.actor_id,
                 "enabled": config.controller.enabled,
-                "observe_only": config.controller.observe_only,
-                "action_start_after_steps": config.controller.action_start_after_steps,
+                "dry_run": config.controller.dry_run,
+                "execution_after_steps": config.controller.execution_after_steps,
                 "placement_timeout_ms": config.controller.placement_timeout_ms,
                 "placement_max_concurrency": config.controller.placement_max_concurrency,
             },

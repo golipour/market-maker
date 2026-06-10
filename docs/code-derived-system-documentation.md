@@ -60,8 +60,8 @@ Most runtime components communicate through topic names rather than direct calls
 - `ObservabilityRuntimeConfig`: metrics, JSON logs, log path, run id, and OTLP settings.
 - `LiquiditySourcingRuntimeConfig`: single venue vs liquidity sourcing mode.
 - `PricingRuntimeConfig`: quote-anchor selection and inventory-mark venue selection.
-- `ExecutionRuntimeConfig`: per-venue planner, observe-only, max order count, max size, and max quote distance.
-- `ControllerRuntimeConfig`: MPC model configs, optimizer config, orderbook grid, decision and placement timeouts, risk, reconciliation, observe-only, warmup, and topics.
+- `ExecutionRuntimeConfig`: per-venue planner, dry-run, max order count, max size, and max quote distance.
+- `ControllerRuntimeConfig`: MPC model configs, optimizer config, orderbook grid, decision and placement timeouts, risk, reconciliation, dry-run, warmup, and topics.
 - `MarketMakerRuntimeConfig`: the resolved bot runtime.
 
 `runtime_config_from_mapping()` expects one bot per config file. It resolves:
@@ -218,8 +218,8 @@ For each processed frame, the runner assigns deterministic lineage IDs: `frame_i
 
 Live execution is blocked by:
 
-- controller observe-only,
-- control-plane observe-only,
+- controller dry-run,
+- control-plane dry-run,
 - warmup steps,
 - paused actors,
 - paused venue roles,
@@ -236,12 +236,12 @@ Live execution is blocked by:
 
 - pause/resume actor,
 - kill switch,
-- observe-only mode,
+- dry-run mode,
 - pause/resume local or global venue roles,
 - request cancel actor orders,
 - request cancel all.
 
-It publishes state to `admin:events` and updates Prometheus gauges for kill switch and observe-only state.
+It publishes state to `admin:events` and updates Prometheus gauges for kill switch and dry-run state.
 
 `mm/api/admin.py` exposes a FastAPI app with health, status, config, metrics, and command endpoints. The admin app creates its own bus from environment unless injected.
 

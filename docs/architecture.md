@@ -7,7 +7,7 @@ The market maker is a **single-process async runtime** (optionally backed by **R
 1. **One decision pipeline** — `StrategyRunner` owns frame prep → MPC → risk → execution routing.
 2. **Bus-first** — Topics are the contract; multiple consumers subscribe without changing producers.
 3. **Float domain at the strategy boundary** — Mid, spreads, and quantities are floats until adapters format wire payloads.
-4. **Observe by default** — `controller.observe_only` defaults to `true`; live sync is explicit.
+4. **Dry-run by default** — `controller.dry_run` defaults to `true`; live sync is explicit.
 5. **Envelopes for durability** — Persistence wraps payloads in versioned `EventEnvelope` records.
 
 ## Layer diagram
