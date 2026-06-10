@@ -54,7 +54,12 @@ def _signed_params(params: dict[str, Any], auth: TabdealApiKeyAuth) -> dict[str,
 def _request_auth(method: str, path: str, auth: TabdealApiKeyAuth, params: dict[str, Any] | None = None) -> requests.Response:
     headers = {"X-MBX-APIKEY": auth.api_key, "Accept": "application/json"}
     signed = _signed_params(params or {}, auth)
-    return requests.request(method.upper(), f"{BASE_URL}{path}", params=signed, headers=headers, timeout=15)
+    verb = method.upper()
+    url = f"{BASE_URL}{path}"
+    # Tabdeal signs query-string params; POST/PUT must send them as form body (not ?params).
+    if verb in {"POST", "PUT"}:
+        return requests.request(verb, url, data=signed, headers=headers, timeout=15)
+    return requests.request(verb, url, params=signed, headers=headers, timeout=15)
 
 
 def _user_request(method: str, path: str, api_key: str, params: dict[str, Any] | None = None) -> requests.Response:
@@ -73,6 +78,25 @@ def _json_or_raise(response: requests.Response, path: str) -> Any:
             raise TabdealTransientError(message)
         raise RuntimeError(message)
     return response.json() if response.content else {}
+
+
+def _tabdeal_wallet_legs_from_row(row: dict[str, Any]) -> dict[str, float]:
+    """Tabdeal exposes available ``free`` and frozen ``freeze``; ``total`` is optional."""
+
+    from mm.core.wallet import wallet_legs_from_available_and_locked, wallet_legs_from_total_and_locked
+
+    locked = _safe_float(row.get("freeze", row.get("frozen", row.get("locked", 0.0))))
+    if row.get("free") is not None or row.get("available") is not None:
+        free = _safe_float(row.get("free", row.get("available", 0.0)))
+        total_raw = row.get("total", row.get("totalAsset"))
+        if total_raw is not None:
+            return wallet_legs_from_total_and_locked(_safe_float(total_raw), locked)
+        return wallet_legs_from_available_and_locked(free, locked)
+    if row.get("total") is not None or row.get("totalAsset") is not None:
+        total = _safe_float(row.get("total", row.get("totalAsset", 0.0)))
+        return wallet_legs_from_total_and_locked(total, locked)
+    free = _safe_float(row.get("balance", 0.0))
+    return wallet_legs_from_available_and_locked(free, locked)
 
 
 def get_balances(auth: TabdealApiKeyAuth | None) -> dict[str, dict[str, float]]:
@@ -106,18 +130,17 @@ def get_balances(auth: TabdealApiKeyAuth | None) -> dict[str, dict[str, float]]:
         asset = _asset_code(row)
         if not asset:
             continue
-        free = _safe_float(row.get("free", row.get("available", row.get("balance", 0.0))))
-        locked = _safe_float(row.get("freeze", row.get("frozen", row.get("locked", 0.0))))
-        total = _safe_float(row.get("total", row.get("totalAsset", free + locked)), free + locked)
+        legs = _tabdeal_wallet_legs_from_row(row)
         prev = result.get(asset)
         if prev is None:
-            result[asset] = {"free": free, "locked": locked, "total": total}
+            result[asset] = legs
         else:
-            result[asset] = {
-                "free": prev["free"] + free,
-                "locked": prev["locked"] + locked,
-                "total": prev["total"] + total,
-            }
+            from mm.core.wallet import wallet_legs_from_available_and_locked
+
+            result[asset] = wallet_legs_from_available_and_locked(
+                prev["free"] + legs["free"],
+                prev["locked"] + legs["locked"],
+            )
     from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 
     merged = merge_wallet_balances_raw("tabdeal", result)

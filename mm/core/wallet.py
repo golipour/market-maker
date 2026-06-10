@@ -12,6 +12,31 @@ from mm.core.models.private import Balance, OpenOrder, PrivateStateSnapshot
 _BALANCE_EPS = 1e-12
 
 
+def wallet_legs_from_total_and_locked(total: float, locked: float) -> dict[str, float]:
+    """Build canonical legs when the exchange reports total holdings and locked collateral."""
+
+    total_f = max(0.0, float(total))
+    locked_f = max(0.0, min(float(locked), total_f))
+    free_f = max(0.0, total_f - locked_f)
+    return {"free": free_f, "locked": locked_f, "total": total_f}
+
+
+def wallet_legs_from_available_and_locked(
+    free: float,
+    locked: float,
+    *,
+    total: float | None = None,
+) -> dict[str, float]:
+    """Build canonical legs when the exchange reports available balance and locked collateral."""
+
+    locked_f = max(0.0, float(locked))
+    if total is not None:
+        return wallet_legs_from_total_and_locked(float(total), locked_f)
+    free_f = max(0.0, float(free))
+    total_f = free_f + locked_f
+    return {"free": free_f, "locked": locked_f, "total": total_f}
+
+
 def make_balance(
     exchange: str,
     asset: str,

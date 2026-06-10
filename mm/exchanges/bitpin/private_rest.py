@@ -146,10 +146,18 @@ def get_balances(auth: BitpinAuth | None) -> dict[str, dict[str, float]]:
         asset = _asset_code(row)
         if not asset:
             continue
-        free = _safe_float(row.get("balance") or row.get("available") or row.get("free"))
         locked = _safe_float(row.get("frozen") or row.get("blocked") or row.get("locked") or row.get("freeze"))
-        total = _safe_float(row.get("total"), free + locked)
-        result[asset] = {"free": free, "locked": locked, "total": total}
+        total_raw = row.get("total")
+        if total_raw is not None:
+            from mm.core.wallet import wallet_legs_from_total_and_locked
+
+            legs = wallet_legs_from_total_and_locked(_safe_float(total_raw), locked)
+        else:
+            from mm.core.wallet import wallet_legs_from_available_and_locked
+
+            free = _safe_float(row.get("balance") or row.get("available") or row.get("free"))
+            legs = wallet_legs_from_available_and_locked(free, locked)
+        result[asset] = legs
     from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 
     return merge_wallet_balances_raw("bitpin", result)
@@ -242,7 +250,7 @@ def place_bulk_orders(orders: list[dict[str, Any]], auth: BitpinAuth | None) -> 
         return {"status": "failed", "message": "bitpin bulk orders must share one market symbol"}
     payload = [_bulk_order_payload(order) for order in orders]
     try:
-        out = _auth_post(auth, "odr/orders/bulk", payload)
+        out = _auth_post(auth, "odr/orders/bulk/", payload)
         return out if isinstance(out, dict) else {"status": "failed", "message": "missing bitpin credentials"}
     except Exception as exc:
         return {"status": "failed", "message": str(exc)}

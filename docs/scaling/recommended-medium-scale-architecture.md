@@ -96,6 +96,8 @@ Credentials should be stored as references to Kubernetes Secrets or another secr
 
 The control plane should emit existing `admin:commands` over Redis Streams for pause/resume/kill/cancel. It should also own process/pod lifecycle through a supervisor or Kubernetes deployment controller.
 
+Worker assignment should be explicit and leased. A worker should claim strategy ids from `worker_assignments`, heartbeat the lease, and release or have the control plane reassign those strategies when the lease expires. This keeps scaling simple without needing a custom Kubernetes operator on day one.
+
 ## Strategy Execution Model
 
 Use grouped strategy workers:
@@ -148,6 +150,11 @@ Three ledger views are needed:
 - Exchange ledger: actual balances, open orders, fills, and exchange truth. This is current `VenueLedgerStateMachine` territory.
 - Portfolio ledger: virtual allocations, portfolio risk budgets, and available capital per strategy/group.
 - Strategy ledger: attributed inventory, fills, PnL, and capital consumption per `actor_id`.
+
+Risk should check both views:
+
+- Virtual pre-trade risk: reject orders that exceed the strategy or portfolio allocation.
+- Physical account risk: reject orders that the actual exchange account cannot cover, even if the virtual allocation says the strategy has room.
 
 Implementation should be incremental:
 
@@ -248,6 +255,7 @@ Do after profiling:
 - Switch MPC executor from thread pool to process pool for CPU-only workloads if CPU contention is real.
 - Batch optimizer calls across strategies with compatible model/config shape.
 - Use GPU only if optimizer calls are the bottleneck and there is enough batched work to amortize GPU overhead.
+- Consider an internal optimizer service only when compute and trading I/O need independent scaling. The useful shape is a narrow `State -> Action/diagnostics` API over gRPC or an equivalent RPC boundary, backed by high-CPU or GPU nodes. Do not start here; the serialization, deployment, and failure-mode cost is not justified until local executors or batching are proven insufficient.
 - Add TimescaleDB hypertables when Postgres fact queries degrade.
 - Add MinIO/S3 archive for Parquet if local disk management becomes annoying.
 
@@ -261,6 +269,17 @@ Avoid for now:
 - One Kubernetes pod per strategy as the default.
 - Multi-cluster Kubernetes.
 - Rust/C++ rewrites before profiling.
+
+## Container Shape
+
+Use a small number of images, not one image per service:
+
+- `mm-platform`: control plane, admin API, migrations, and operational tools.
+- `mm-ingestor`: public exchange adapters, `SymbolEngine`, market-event scheduling, and market-data publishing.
+- `mm-trading-worker`: strategy runner, frame assembly, MPC, risk, private state, ledger, and order management.
+- Optional later: `mm-optimizer` only if optimizer offload is introduced after profiling.
+
+This keeps build/release management boring while still allowing independent deployments.
 
 ## Migration Roadmap
 

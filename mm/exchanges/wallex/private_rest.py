@@ -134,21 +134,21 @@ def get_balances(api_token: str | None) -> dict[str, dict[str, float]]:
             ).upper()
             if not asset:
                 continue
-            free = _safe_float(
-                row.get(
-                    "free",
-                    row.get(
-                        "available",
-                        row.get(
-                            "value",
-                            row.get("balance", 0.0),
-                        ),
-                    ),
-                )
-            )
             locked = _safe_float(row.get("locked", row.get("inOrder", row.get("hold", 0.0))))
-            total = _safe_float(row.get("total", free + locked))
-            result[asset] = {"free": free, "locked": locked, "total": total}
+            if row.get("free") is not None or row.get("available") is not None:
+                from mm.core.wallet import wallet_legs_from_available_and_locked
+
+                free = _safe_float(row.get("free", row.get("available", 0.0)))
+                total_raw = row.get("total")
+                total = _safe_float(total_raw) if total_raw is not None else None
+                legs = wallet_legs_from_available_and_locked(free, locked, total=total)
+            else:
+                from mm.core.wallet import wallet_legs_from_total_and_locked
+
+                # Wallex /v1/account/balances reports ``value`` as total wallet amount.
+                total = _safe_float(row.get("value", row.get("balance", 0.0)))
+                legs = wallet_legs_from_total_and_locked(total, locked)
+            result[asset] = legs
         if result:
             from mm.exchanges.instrument_wire import merge_wallet_balances_raw
 

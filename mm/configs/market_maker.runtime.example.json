@@ -37,7 +37,7 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.000015
+        "maker_fee": 0.0015
       }
     },
     "tabdeal": {

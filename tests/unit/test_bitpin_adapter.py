@@ -114,7 +114,7 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
         captured.append({"method": "POST", "url": url, "json": json, "headers": headers, "timeout": timeout})
         if url.endswith("/usr/authenticate/"):
             return FakeResponse({"access": "access-token", "refresh": "refresh-token"})
-        if url.endswith("/odr/orders/bulk"):
+        if url.endswith("/odr/orders/bulk/"):
             return FakeResponse({"orders": [{"id": 42, "state": "active"}]})
         return FakeResponse({"id": 42, "state": "initial"})
 
@@ -149,7 +149,7 @@ def test_bitpin_login_and_authorized_request(monkeypatch):
     assert order["orders"][0]["id"] == 42
     assert captured[0]["json"] == {"api_key": "key", "secret_key": "secret"}
     assert captured[1]["headers"]["Authorization"] == "Bearer access-token"
-    assert captured[-1]["url"].endswith("/odr/orders/bulk")
+    assert captured[-1]["url"].endswith("/odr/orders/bulk/")
     assert captured[-1]["json"] == [{
         "symbol": "USDT_IRT",
         "base_amount": "2",

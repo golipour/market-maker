@@ -172,7 +172,9 @@ def test_tabdeal_get_balances_parses_wrapped_funding_balances(monkeypatch):
     balances = private_rest.get_balances(private_rest.TabdealApiKeyAuth("key", "secret"))
 
     assert calls == ["/r/api/v1/account", "/r/api/v1/asset/get-funding-asset"]
-    assert balances["USDT"] == {"free": 2.0, "locked": 0.3, "total": 2.3}
+    assert balances["USDT"]["locked"] == 0.3
+    assert balances["USDT"]["total"] == 2.3
+    assert balances["USDT"]["free"] == pytest.approx(2.0)
 
 
 def test_tabdeal_get_balances_missing_credentials_raises():
@@ -225,10 +227,11 @@ async def test_tabdeal_private_adapter_suppresses_transient_fill_poll_errors():
 def test_tabdeal_place_limit_order_payload(monkeypatch):
     captured: dict = {}
 
-    def fake_request(method, url, params=None, headers=None, timeout=None):
+    def fake_request(method, url, params=None, data=None, headers=None, timeout=None):
         captured["method"] = method
         captured["path"] = urlparse(url).path
         captured["params"] = dict(params or {})
+        captured["data"] = dict(data or {})
 
         class FakeResponse:
             ok = True
@@ -254,9 +257,13 @@ def test_tabdeal_place_limit_order_payload(monkeypatch):
     assert out["orderId"] == 42
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/v1/order"
-    assert captured["params"]["symbol"] == "USDTIRT"
-    assert captured["params"]["side"] == "BUY"
-    assert captured["params"]["type"] == "LIMIT"
-    assert captured["params"]["quantity"] == "1.5"
-    assert captured["params"]["price"] == "100000.0"
-    assert captured["params"]["newClientOrderId"] == "client-1"
+    assert captured["params"] == {}
+    payload = captured["data"]
+    assert payload["symbol"] == "USDTIRT"
+    assert payload["side"] == "BUY"
+    assert payload["type"] == "LIMIT"
+    assert payload["quantity"] == "1.5"
+    assert payload["price"] == "100000.0"
+    assert payload["newClientOrderId"] == "client-1"
+    assert "signature" in payload
+    assert "timestamp" in payload

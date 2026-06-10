@@ -8,8 +8,22 @@ from mm.core.wallet import (
     normalize_snapshot_balances_for_open_orders,
     order_collateral_from_open_orders,
     portfolio_wealth,
+    wallet_legs_from_available_and_locked,
+    wallet_legs_from_total_and_locked,
     wallet_pair_from_snapshot,
 )
+
+
+def test_wallet_legs_from_total_and_locked() -> None:
+    legs = wallet_legs_from_total_and_locked(626.51336125, 313.82)
+    assert legs["total"] == 626.51336125
+    assert legs["locked"] == 313.82
+    assert legs["free"] == 312.69336125
+
+
+def test_wallet_legs_from_available_and_locked_with_explicit_total() -> None:
+    legs = wallet_legs_from_available_and_locked(1.5, 0.2, total=1.7)
+    assert legs == {"free": 1.5, "locked": 0.2, "total": 1.7}
 
 
 def test_make_balance_defaults_total_to_free_plus_locked() -> None:
