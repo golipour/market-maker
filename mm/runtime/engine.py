@@ -153,6 +153,7 @@ async def build_runtime_components(
                 "enabled": config.controller.enabled,
                 "dry_run": config.controller.dry_run,
                 "execution_after_steps": config.controller.execution_after_steps,
+                "negative_objective_action": config.controller.negative_objective_action,
                 "placement_timeout_ms": config.controller.placement_timeout_ms,
                 "placement_max_concurrency": config.controller.placement_max_concurrency,
             },

@@ -222,6 +222,7 @@ compute the quote anchor.
 |-------|--------|
 | `dry_run: true` | Decisions published; **no** live order sync |
 | `execution_after_steps` | MPC runs from frame 1; sync only after N frames |
+| `negative_objective_action` | When best `risk_adjusted_return` &lt; 0: `optimizer_action`, `floor_action` (default), or `zero_action` |
 | `max_orders_per_side` | Strategy cap before target book: max bid levels and max ask levels kept |
 | `risk.engine` | `net_delta` (default): target-book transition against ledger |
 | `risk.local` / `risk.global` | Same per-venue hard collateral and freshness gates |

@@ -17,6 +17,7 @@ from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.persistence.retention import RetentionPolicy, retention_policy_from_mapping
 
 SourceRole = Literal["local", "global"]
+NegativeObjectiveActionMode = Literal["optimizer_action", "floor_action", "zero_action"]
 NeutralVenueRole = Literal["local", "global"]
 LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 ReferenceVenueRole = Literal["global", "local"]
@@ -53,6 +54,12 @@ def _bool_config_key(
     if legacy_key is not None and legacy_key in payload:
         return bool(payload[legacy_key])
     return default
+
+
+def _normalize_negative_objective_action_mode(value: Any) -> NegativeObjectiveActionMode:
+    from mm.strategies.negative_objective_policy import normalize_negative_objective_action_mode
+
+    return normalize_negative_objective_action_mode(value)
 
 
 def _int_config_key(
@@ -488,6 +495,11 @@ class ControllerRuntimeConfig:
 
     ``execution_after_steps``: MPC runs every frame, but ``OrderManager.sync`` waits until
     ``frame_step > execution_after_steps``.
+
+    ``negative_objective_action``: when best risk-adjusted return is negative, choose how
+    to map the optimizer output before target-book construction — ``optimizer_action``
+    (no override), ``floor_action`` (quote at per-side minimum floors),
+    ``zero_action`` (zero quotes / pull liquidity).
     """
 
     enabled: bool = False
@@ -495,6 +507,7 @@ class ControllerRuntimeConfig:
     dry_run: bool = True
     # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
     execution_after_steps: int = 0
+    negative_objective_action: NegativeObjectiveActionMode = "floor_action"
     # Max wall time for live order sync per frame; keeps diagnostics cadence within interval_ms.
     placement_timeout_ms: int = 3000
     # Max wall time for MPC decision compute per frame; timeout falls back to holding current orders.
@@ -1315,9 +1328,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "n_components",
             "return_risk_aversion_beta",
             "objective_weight",
-            "inventory_threshold_penalty_weight",
-            "cash_threshold",
-            "inventory_threshold",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
             "quote_capacity_ratio",
@@ -1329,12 +1339,19 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "soft_fill_activation",
             "soft_fill_queue_model",
         }
+        removed_threshold_objective_keys = frozenset(
+            {
+                "inventory_threshold_penalty_weight",
+                "cash_threshold",
+                "inventory_threshold",
+                "inv_coef",
+                "inventory_target_penalty_weight",
+                "target_inv",
+                "target_inventory",
+                "target_inventory_multiplier",
+            }
+        )
         removed_venue_optimizer_aliases = {
-            "inv_coef": "inventory_threshold_penalty_weight",
-            "inventory_target_penalty_weight": "inventory_threshold_penalty_weight",
-            "target_inv": "inventory_threshold",
-            "target_inventory": "inventory_threshold",
-            "target_inventory_multiplier": "inventory_threshold",
             "soft_fill_queue_penalty": "soft_fill_queue_model",
         }
         removed_optimizer_keys = [
@@ -1351,14 +1368,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "return_risk_aversion_beta",
                 "n_components",
                 "objective_weight",
-                "inventory_threshold_penalty_weight",
-                "inv_coef",
-                "cash_threshold",
-                "inventory_threshold",
-                "inventory_target_penalty_weight",
-                "target_inventory",
-                "target_inv",
-                "target_inventory_multiplier",
+                *sorted(removed_threshold_objective_keys),
                 "quote_size_min_per_side",
                 "quote_size_max_per_side",
                 "quote_capacity_ratio",
@@ -1384,6 +1394,14 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 continue
             if not isinstance(venue_payload, dict):
                 raise ValueError(f"controller.optimizer.{venue} must be an object")
+            removed_threshold = sorted(
+                key for key in removed_threshold_objective_keys if key in venue_payload
+            )
+            if removed_threshold:
+                raise ValueError(
+                    f"removed threshold objective keys under controller.optimizer.{venue}: "
+                    f"{', '.join(removed_threshold)}"
+                )
             removed_aliases = [
                 key for key in removed_venue_optimizer_aliases if key in venue_payload
             ]
@@ -1419,6 +1437,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "execution_after_steps",
                 legacy_key="action_start_after_steps",
             ),
+        ),
+        negative_objective_action=_normalize_negative_objective_action_mode(
+            payload.get("negative_objective_action", "floor_action")
         ),
         placement_timeout_ms=max(0, int(payload.get("placement_timeout_ms", 3000))),
         decision_timeout_ms=max(0, int(payload.get("decision_timeout_ms", 3000))),
@@ -1531,6 +1552,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "actor_id": config.actor_id,
         "dry_run": config.dry_run,
         "execution_after_steps": config.execution_after_steps,
+        "negative_objective_action": config.negative_objective_action,
         "placement_timeout_ms": config.placement_timeout_ms,
         "decision_timeout_ms": config.decision_timeout_ms,
         "placement_max_concurrency": config.placement_max_concurrency,
@@ -1573,7 +1595,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "enabled": config.risk.enabled,
             "local": config.risk.local.as_dict(),
             "global": config.risk.global_.as_dict(),
-            "note": "hard gates; optimizer threshold-shortfall keys provide soft objective shaping",
+            "note": "hard gates applied after MPC proposes actions",
         },
         "reconcile": {
             **config.reconcile.as_dict(),
@@ -1588,11 +1610,6 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "inventory_threshold_penalty_weight": (
-                "soft objective penalty weight for cash/inventory shortfall below thresholds"
-            ),
-            "cash_threshold": "quote-cash threshold used by the soft shortfall penalty",
-            "inventory_threshold": "base-inventory threshold used by the soft shortfall penalty",
             "quote_size_min_per_side": "baseline venue cumulative quote depth floor per side at spread_max",
             "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
             "quote_capacity_ratio": (

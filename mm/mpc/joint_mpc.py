@@ -10,7 +10,7 @@ import numpy as np
 
 from mm.mpc.l_param import action_param_len, sigmoid_action_from_flat_raw
 from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
-from mm.mpc.reward_tensor import objective_entropic_return, objective_threshold_shortfall_penalty
+from mm.mpc.reward_tensor import objective_entropic_return
 
 
 def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
@@ -180,24 +180,14 @@ def delta_consolidated_wealth_batched(
 def joint_terminal_objective(
     local_returns: Any,
     global_returns: Any,
-    local_cash_path: Any,
-    local_inventory_path: Any,
-    global_cash_path: Any,
-    global_inventory_path: Any,
     *,
     local_return_risk_aversion_beta: float,
     global_return_risk_aversion_beta: float,
     local_objective_weight: float,
     global_objective_weight: float,
-    local_inventory_threshold_penalty_weight: float,
-    global_inventory_threshold_penalty_weight: float,
-    local_cash_threshold: float,
-    local_inventory_threshold: float,
-    global_cash_threshold: float,
-    global_inventory_threshold: float,
     global_active: float,
 ) -> tuple[Any, dict[str, Any]]:
-    """Terminal objective with venue-scoped return and inventory terms."""
+    """Terminal objective with venue-scoped risk-adjusted return terms."""
 
     import torch
 
@@ -212,32 +202,12 @@ def joint_terminal_objective(
         * float(global_objective_weight)
         * objective_entropic_return(global_returns, beta=global_return_risk_aversion_beta)
     )
-    local_pen = objective_threshold_shortfall_penalty(
-        local_cash_path,
-        local_inventory_path,
-        cash_threshold=local_cash_threshold,
-        inventory_threshold=local_inventory_threshold,
-    )
-    global_pen = objective_threshold_shortfall_penalty(
-        global_cash_path,
-        global_inventory_path,
-        cash_threshold=global_cash_threshold,
-        inventory_threshold=global_inventory_threshold,
-    )
-    term_local_threshold = -float(local_inventory_threshold_penalty_weight) * local_pen
-    term_global_threshold = (
-        -float(global_active) * float(global_inventory_threshold_penalty_weight) * global_pen
-    )
-    term_threshold = term_local_threshold + term_global_threshold
     components = {
         "risk_adjusted_return": term_local_return + term_global_return,
         "local_risk_adjusted_return": term_local_return,
         "global_risk_adjusted_return": term_global_return,
-        "threshold_shortfall_penalty": term_threshold,
-        "local_threshold_shortfall_penalty": term_local_threshold,
-        "global_threshold_shortfall_penalty": term_global_threshold,
     }
-    return term_local_return + term_global_return + term_threshold, components
+    return term_local_return + term_global_return, components
 
 
 def ob_rel_from_market_event(

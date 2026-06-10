@@ -400,10 +400,6 @@ def optimize_joint_with_diagnostics(
             total_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             total_local_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             total_global_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
-            local_cash_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
-            local_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
-            global_cash_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
-            global_inv_path = torch_mod.zeros(mpc.n_samples, mpc.horizon, dtype=dtype, device=_device)
             step_reward_0 = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             local_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             local_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -571,10 +567,6 @@ def optimize_joint_with_diagnostics(
                 cash_next = cash_t + local_cash_delta.unsqueeze(1)
                 global_inv_next = global_inv_t + global_inv_delta.unsqueeze(1)
                 global_cash_next = global_cash_t + global_cash_delta.unsqueeze(1)
-                local_cash_path[:, h] = cash_next.squeeze(1)
-                local_inv_path[:, h] = inv_next.squeeze(1)
-                global_cash_path[:, h] = global_cash_next.squeeze(1)
-                global_inv_path[:, h] = global_inv_next.squeeze(1)
 
                 if local_conditional_price:
                     local_mid_next = _mid_from_book_best_levels_batched(
@@ -740,24 +732,10 @@ def optimize_joint_with_diagnostics(
             J, components = joint_terminal_objective(
                 local_returns,
                 global_returns,
-                local_cash_path,
-                local_inv_path,
-                global_cash_path,
-                global_inv_path,
                 local_return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
                 global_return_risk_aversion_beta=global_opt.return_risk_aversion_beta,
                 local_objective_weight=local_opt.objective_weight,
                 global_objective_weight=global_opt.objective_weight,
-                local_inventory_threshold_penalty_weight=(
-                    0.0
-                ),
-                global_inventory_threshold_penalty_weight=(
-                    0.0
-                ),
-                local_cash_threshold=local_opt.cash_threshold,
-                local_inventory_threshold=local_opt.inventory_threshold,
-                global_cash_threshold=global_opt.cash_threshold,
-                global_inventory_threshold=global_opt.inventory_threshold,
                 global_active=global_mask,
             )
             J_mean_raw = torch_mod.nan_to_num(

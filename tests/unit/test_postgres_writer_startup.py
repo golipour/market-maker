@@ -210,24 +210,20 @@ def test_postgres_writer_materializes_model_and_optimizer_facts(monkeypatch: pyt
                         "value": 1.0,
                         "loss": -1.0,
                         "components": {
-                            "risk_adjusted_return": 2.0,
-                            "threshold_shortfall_penalty": -1.0,
+                            "risk_adjusted_return": 1.0,
                         },
                         "contribution_fractions": {
-                            "risk_adjusted_return": 0.67,
-                            "threshold_shortfall_penalty": 0.33,
+                            "risk_adjusted_return": 1.0,
                         },
                     },
                     "final": {
                         "value": 3.0,
                         "loss": -3.0,
                         "components": {
-                            "risk_adjusted_return": 4.0,
-                            "threshold_shortfall_penalty": -1.0,
+                            "risk_adjusted_return": 3.0,
                         },
                         "contribution_fractions": {
-                            "risk_adjusted_return": 0.8,
-                            "threshold_shortfall_penalty": 0.2,
+                            "risk_adjusted_return": 1.0,
                         },
                     },
                     "best": {
@@ -239,12 +235,10 @@ def test_postgres_writer_materializes_model_and_optimizer_facts(monkeypatch: pyt
                         "main_reward_mean": 2.5,
                         "global_reward_mean": 0.1,
                         "components": {
-                            "risk_adjusted_return": 4.5,
-                            "threshold_shortfall_penalty": -1.0,
+                            "risk_adjusted_return": 3.5,
                         },
                         "contribution_fractions": {
-                            "risk_adjusted_return": 0.82,
-                            "threshold_shortfall_penalty": 0.18,
+                            "risk_adjusted_return": 1.0,
                         },
                     },
                     "improvement": {

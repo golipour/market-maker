@@ -2,16 +2,11 @@
 Differentiable (PyTorch) reward functions that take StateTensor and ActionTensor
 and return a scalar tensor so gradients flow for training or gradient-based optimization.
 
-Terminal objective (two terms):
+Terminal objective:
   J = risk_adjusted_return
-      + threshold_shortfall_penalty
 
 where:
   risk_adjusted_return = min(R) - (1/beta) * ln(mean_i exp(-beta * (R_i - min(R))))
-  threshold_shortfall_penalty = -lambda_thr * mean_{i,t} (
-      relu(C_threshold - C_{i,t}) / C_scale
-      + relu(I_threshold - I_{i,t}) / I_scale
-  )
   R_i = horizon return per Monte Carlo path (dimensionless)
 """
 
@@ -131,71 +126,25 @@ def objective_entropic_return(returns: "Tensor", *, beta: float) -> "Tensor":
     return r_min - log_mean_exp / b
 
 
-def objective_threshold_shortfall_penalty(
-    cash_path: "Tensor",
-    inventory_path: "Tensor",
-    *,
-    cash_threshold: float,
-    inventory_threshold: float,
-) -> "Tensor":
-    """
-    One-sided normalized cash/inventory threshold shortfall penalty.
-
-    R = relu(C_threshold - C) / C_scale
-      + relu(I_threshold - I) / I_scale
-
-    The penalty is zero when both cash and inventory are above their thresholds.
-    """
-    torch = _get_torch()
-    cash = cash_path.view(cash_path.shape[0], -1)
-    inv = inventory_path.view(inventory_path.shape[0], -1)
-    cash = torch.nan_to_num(cash, nan=0.0, posinf=1e30, neginf=-1e30)
-    inv = torch.nan_to_num(inv, nan=0.0, posinf=1e30, neginf=-1e30)
-    cash_thr = torch.tensor(float(cash_threshold), dtype=cash.dtype, device=cash.device)
-    inv_thr = torch.tensor(float(inventory_threshold), dtype=inv.dtype, device=inv.device)
-    cash_scale = max(1.0, abs(float(cash_threshold)))
-    inv_scale = max(1.0, abs(float(inventory_threshold)))
-    cash_shortfall = torch.clamp(cash_thr - cash, min=0.0) / cash_scale
-    inv_shortfall = torch.clamp(inv_thr - inv, min=0.0) / inv_scale
-    return (cash_shortfall + inv_shortfall).mean()
-
-
 def terminal_objective(
     returns: "Tensor",
-    cash_path: "Tensor",
-    inventory_path: "Tensor",
     *,
     return_risk_aversion_beta: float = 1.0,
-    inventory_threshold_penalty_weight: float = 0.0,
-    cash_threshold: float = 0.0,
-    inventory_threshold: float = 0.0,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
-    Build scalar objective J from per-path returns and simulated inventory path.
+    Build scalar objective J from per-path returns.
 
     returns: (n_samples,) horizon return R_i = ΔW_i / W_0 per trajectory.
-    cash_path: (n_samples, horizon) simulated cash after each rollout step.
-    inventory_path: (n_samples, horizon) simulated inventory after each rollout step.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
         components:
             - risk_adjusted_return
-            - threshold_shortfall_penalty
     """
     torch = _get_torch()
     returns = torch.nan_to_num(returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
     term_return = objective_entropic_return(returns, beta=return_risk_aversion_beta)
-    threshold_penalty = objective_threshold_shortfall_penalty(
-        cash_path,
-        inventory_path,
-        cash_threshold=cash_threshold,
-        inventory_threshold=inventory_threshold,
-    )
-    term_threshold = -float(inventory_threshold_penalty_weight) * threshold_penalty
     components = {
         "risk_adjusted_return": term_return,
-        "threshold_shortfall_penalty": term_threshold,
     }
-    J = term_return + term_threshold
-    return J, components
+    return term_return, components

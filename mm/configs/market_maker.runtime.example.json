@@ -139,7 +139,7 @@
           "_comment": "Execution policy for the quoting exchange selected by the bot.",
           "_options": {"planner": ["reconcile", "replace"]},
           "enabled": true,
-          "planner": "replace",
+          "planner": "reconcile",
           "max_orders_per_side": 10
         },
         "liquidity": {
@@ -154,6 +154,8 @@
         "enabled": true,
         "dry_run": false,
         "execution_after_steps": 10,
+        "_comment_negative_objective_action": "When best risk_adjusted_return < 0: optimizer_action=keep optimizer output, floor_action=per-side floors (default), zero_action=no quotes.",
+        "negative_objective_action": "zero_action",
         "decision_timeout_ms": 3000,
         "placement_timeout_ms": 7000,
         "placement_max_concurrency": 32,
@@ -228,10 +230,10 @@
         "optimizer": {
           "kind": "monte_carlo_mpc_tensor_batched",
           "n_samples": 64,
-          "warm_start": false,
+          "warm_start": true,
           "fixed_mc_samples": true,
-          "horizon": 1,
-          "adam_epochs": 30,
+          "horizon": 2,
+          "adam_epochs": 10,
           "adam_lr": 1e0,
           "device": "cpu",
           "local": {
@@ -271,8 +273,8 @@
       "_comment": "One runtime config currently starts one bot. quoting_exchange is where maker quotes are placed; liquidity_exchange is the second book and optional liquidity-source venue.",
       "preset": "thin_local_liquidity_weighted_mpc",
       "symbol": "USDT_IRT",
-      "quoting_exchange": "wallex",
-      "liquidity_exchange": "wallex"
+      "quoting_exchange": "nobitex",
+      "liquidity_exchange": "nobitex"
     }
   },
   "bus": {

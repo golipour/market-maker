@@ -35,6 +35,7 @@ from mm.runtime.config import (
     LiquiditySourcingRuntimeConfig,
     PricingRuntimeConfig,
 )
+from mm.strategies.negative_objective_policy import apply_negative_objective_policy
 from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     local_constraints_from_spec,
@@ -45,9 +46,6 @@ _VENUE_OPTIMIZER_KEYS = {
     "n_components",
     "return_risk_aversion_beta",
     "objective_weight",
-    "inventory_threshold_penalty_weight",
-    "cash_threshold",
-    "inventory_threshold",
     "quote_size_min_per_side",
     "quote_size_max_per_side",
     "quote_capacity_ratio",
@@ -59,12 +57,19 @@ _VENUE_OPTIMIZER_KEYS = {
     "soft_fill_activation",
     "soft_fill_queue_model",
 }
+_REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
+    {
+        "inventory_threshold_penalty_weight",
+        "cash_threshold",
+        "inventory_threshold",
+        "inv_coef",
+        "inventory_target_penalty_weight",
+        "target_inv",
+        "target_inventory",
+        "target_inventory_multiplier",
+    }
+)
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
-    "inv_coef": "inventory_threshold_penalty_weight",
-    "inventory_target_penalty_weight": "inventory_threshold_penalty_weight",
-    "target_inv": "inventory_threshold",
-    "target_inventory": "inventory_threshold",
-    "target_inventory_multiplier": "inventory_threshold",
     "soft_fill_queue_penalty": "soft_fill_queue_model",
 }
 _FLAT_VENUE_OPTIMIZER_KEYS = _VENUE_OPTIMIZER_KEYS | set(_REMOVED_VENUE_OPTIMIZER_ALIASES)
@@ -76,6 +81,12 @@ def _venue_optimizer_config(payload: Any, *, venue: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"controller.optimizer.{venue} must be an object")
     data = dict(payload)
+    removed_threshold = sorted(key for key in _REMOVED_VENUE_OPTIMIZER_KEYS if key in data)
+    if removed_threshold:
+        raise ValueError(
+            f"removed threshold objective keys under controller.optimizer.{venue}: "
+            f"{', '.join(removed_threshold)}"
+        )
     removed = sorted(key for key in _REMOVED_VENUE_OPTIMIZER_ALIASES if key in data)
     if removed:
         replacements = ", ".join(
@@ -361,6 +372,18 @@ class MpcStrategyEngine:
         with contextlib.redirect_stdout(optimizer_stdout):
             sigmoid_action = self._optimizer_backend.optimize(state)
         optimizer_run = self._optimizer_backend.last_diagnostics
+        global_sigmoid = self._optimizer_backend.global_sigmoid_action
+        sigmoid_action, global_sigmoid, negative_objective_policy = apply_negative_objective_policy(
+            mode=self.config.negative_objective_action,
+            local_action=sigmoid_action,
+            global_action=global_sigmoid,
+            optimizer_run=optimizer_run,
+            config=self.config,
+            binding=self.binding,
+            state=state,
+            global_active=_global_active_for_frame(frame, self.liquidity_sourcing)
+            and global_sigmoid is not None,
+        )
         local_max_orders_per_side = int(
             self.execution.local.max_orders_per_side
             or self.config.max_orders_per_side
@@ -383,7 +406,6 @@ class MpcStrategyEngine:
             if self.liquidity_sourcing.enabled and self.liquidity_sourcing.mode == "liquidity_sourcing"
             else "single_venue"
         )
-        global_sigmoid = self._optimizer_backend.global_sigmoid_action
         global_event = frame.global_ if sourcing_mode == "liquidity_sourcing" else None
         global_constraints = None
         if global_event is not None and self.binding.global_ is not None:
@@ -416,12 +438,14 @@ class MpcStrategyEngine:
         if optimizer_run is not None:
             optimizer = optimizer_run.to_payload()
             optimizer["rollout"] = {**dict(optimizer.get("rollout", {})), "log": optimizer_log}
+            optimizer["negative_objective_policy"] = negative_objective_policy
         else:
             fallback = self._optimizer_backend.fallback_diagnostics
             optimizer = {
                 "kind": (self.config.optimizer or {}).get("kind", "monte_carlo_mpc_tensor_batched"),
                 "last_expected_delta_wealth": fallback.get("last_expected_delta_wealth"),
                 "last_components": fallback.get("last_components"),
+                "negative_objective_policy": negative_objective_policy,
                 "log": optimizer_log,
             }
         decision = StrategyDecision(
@@ -567,6 +591,14 @@ def _build_controller(
         raise ValueError(
             "global model config belongs directly under controller: "
             f"{', '.join(nested_global_model_keys)}"
+        )
+    removed_flat_threshold = sorted(
+        key for key in _REMOVED_VENUE_OPTIMIZER_KEYS if key in optimizer_cfg
+    )
+    if removed_flat_threshold:
+        raise ValueError(
+            "removed threshold objective keys under controller.optimizer: "
+            f"{', '.join(removed_flat_threshold)}"
         )
     flat_venue_optimizer_keys = sorted(key for key in _FLAT_VENUE_OPTIMIZER_KEYS if key in optimizer_cfg)
     if flat_venue_optimizer_keys:

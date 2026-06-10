@@ -43,18 +43,12 @@ def test_optimizer_stores_objective_params() -> None:
         flow,
         exe,
         return_risk_aversion_beta=2.0,
-        inventory_threshold_penalty_weight=4.0,
-        cash_threshold=500.0,
-        inventory_threshold=5.0,
         quote_size_min_per_side=1.0,
         quote_size_max_per_side=10.0,
         quote_capacity_ratio=0.5,
         quote_imbalance_skew_strength=0.4,
     )
     assert mpc.return_risk_aversion_beta == 2.0
-    assert mpc.inventory_threshold_penalty_weight == 4.0
-    assert mpc.cash_threshold == 500.0
-    assert mpc.inventory_threshold == 5.0
     assert mpc.quote_size_min_per_side == 1.0
     assert mpc.quote_size_max_per_side == 10.0
     assert mpc.quote_capacity_ratio == 0.5
@@ -62,26 +56,13 @@ def test_optimizer_stores_objective_params() -> None:
     assert mpc.soft_fill_queue_model == "back_of_queue"
 
 
-def test_optimizer_passes_threshold_penalty_weight_to_objective(monkeypatch) -> None:
+def test_optimizer_passes_risk_aversion_beta_to_objective(monkeypatch) -> None:
     seen: list[float] = []
 
-    def fake_terminal_objective(
-        returns,
-        cash_path,
-        inv_path,
-        *,
-        return_risk_aversion_beta,
-        inventory_threshold_penalty_weight,
-        cash_threshold,
-        inventory_threshold,
-    ):
-        del cash_path, inv_path, return_risk_aversion_beta, cash_threshold, inventory_threshold
-        seen.append(float(inventory_threshold_penalty_weight))
+    def fake_terminal_objective(returns, *, return_risk_aversion_beta):
+        seen.append(float(return_risk_aversion_beta))
         objective = returns.mean()
-        return objective, {
-            "risk_adjusted_return": objective,
-            "threshold_shortfall_penalty": objective.new_tensor(0.0),
-        }
+        return objective, {"risk_adjusted_return": objective}
 
     monkeypatch.setattr("mm.mpc.mpc_tensor_batched.terminal_objective", fake_terminal_objective)
     mpc = MonteCarloMPCTensorBatched(
@@ -95,9 +76,7 @@ def test_optimizer_passes_threshold_penalty_weight_to_objective(monkeypatch) -> 
         spread_step=1.0,
         adam_epochs=1,
         fixed_mc_samples=True,
-        inventory_threshold_penalty_weight=7.5,
-        cash_threshold=500.0,
-        inventory_threshold=5.0,
+        return_risk_aversion_beta=7.5,
         quote_size_min_per_side=1.0,
     )
 
@@ -120,21 +99,14 @@ def test_optimizer_passes_threshold_penalty_weight_to_objective(monkeypatch) -> 
 
 def test_terminal_objective_uses_clear_component_names() -> None:
     returns = torch.tensor([0.01, 0.03], dtype=torch.float64)
-    cash_path = torch.tensor([[100.0, 80.0], [100.0, 120.0]], dtype=torch.float64)
-    inv_path = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
 
     objective, components = terminal_objective(
         returns,
-        cash_path,
-        inv_path,
         return_risk_aversion_beta=5.0,
-        inventory_threshold_penalty_weight=0.5,
-        cash_threshold=90.0,
-        inventory_threshold=2.0,
     )
 
-    assert set(components) == {"risk_adjusted_return", "threshold_shortfall_penalty"}
-    assert torch.isclose(objective, sum(components.values()))
+    assert set(components) == {"risk_adjusted_return"}
+    assert torch.isclose(objective, components["risk_adjusted_return"])
 
 
 def test_effective_sigmoid_action_exposes_executable_depth() -> None:
