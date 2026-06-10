@@ -230,10 +230,10 @@
         "optimizer": {
           "kind": "monte_carlo_mpc_tensor_batched",
           "n_samples": 64,
-          "warm_start": true,
+          "warm_start": false,
           "fixed_mc_samples": true,
           "horizon": 2,
-          "adam_epochs": 10,
+          "adam_epochs": 20,
           "adam_lr": 1e0,
           "device": "cpu",
           "local": {

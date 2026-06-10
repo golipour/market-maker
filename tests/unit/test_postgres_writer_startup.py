@@ -297,8 +297,8 @@ def test_postgres_writer_materializes_model_and_optimizer_facts(monkeypatch: pyt
     assert best_return[5] == "mpc-controller"
     assert best_return[10] == 2_000
     assert best_return[11] == 12
-    assert best_return[12] == 4.5
-    assert best_return[13] == 0.82
+    assert best_return[12] == 3.5
+    assert best_return[13] == 1.0
 
 
 def test_postgres_writer_materializes_target_order_facts(monkeypatch: pytest.MonkeyPatch) -> None:
