@@ -190,13 +190,7 @@ class VenueOptimizerParams:
         if self.spread_structure is not None:
             out["spread_structure"] = self.spread_structure.as_mapping()
         if self.inventory_zone is not None:
-            out["inventory_zone"] = {
-                "q_lo": self.inventory_zone.q_lo,
-                "q_hi": self.inventory_zone.q_hi,
-                "q_min": self.inventory_zone.q_min,
-                "q_max": self.inventory_zone.q_max,
-                "p": self.inventory_zone.p,
-            }
+            out["inventory_zone"] = self.inventory_zone.as_mapping()
         if self.book_quality is not None:
             out["book_quality"] = {
                 "spread_target": self.book_quality.spread_target,

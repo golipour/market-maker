@@ -20,13 +20,22 @@ def _torch():
     return torch
 
 
+_LEGACY_INVENTORY_ZONE_POWER_KEYS = frozenset({"q_min", "q_max", "p"})
+_LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES = frozenset(
+    {"q_lo", "q_hi", "d_lo", "d_hi", "a_lo", "a_hi"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class InventoryZoneParams:
-    q_lo: float = -0.15
-    q_hi: float = 0.15
-    q_min: float = -0.45
-    q_max: float = 0.45
-    p: float = 2.0
+    """Sigmoid operational inventory zone (proposal §4.3 option B)."""
+
+    comfort_low: float = -0.15
+    comfort_high: float = 0.15
+    low_ramp_width: float = 0.05
+    high_ramp_width: float = 0.05
+    low_penalty_cap: float = 1.0
+    high_penalty_cap: float = 0.6
 
     @classmethod
     def from_mapping(cls, payload: Any) -> InventoryZoneParams | None:
@@ -34,13 +43,44 @@ class InventoryZoneParams:
             return None
         if not isinstance(payload, dict):
             raise ValueError("inventory_zone must be an object")
+        removed_power = sorted(k for k in _LEGACY_INVENTORY_ZONE_POWER_KEYS if k in payload)
+        if removed_power:
+            raise ValueError(
+                "inventory_zone power-zone keys were removed; use sigmoid zone "
+                "{comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
+                "low_penalty_cap, high_penalty_cap}: "
+                + ", ".join(removed_power)
+            )
+        removed_aliases = sorted(k for k in _LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES if k in payload)
+        if removed_aliases:
+            raise ValueError(
+                "inventory_zone keys renamed to descriptive sigmoid names "
+                "(comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
+                "low_penalty_cap, high_penalty_cap); remove: "
+                + ", ".join(removed_aliases)
+            )
+        comfort_low = float(payload.get("comfort_low", -0.15))
+        comfort_high = float(payload.get("comfort_high", 0.15))
+        if comfort_low >= comfort_high:
+            raise ValueError("inventory_zone.comfort_low must be < comfort_high")
         return cls(
-            q_lo=float(payload.get("q_lo", -0.15)),
-            q_hi=float(payload.get("q_hi", 0.15)),
-            q_min=float(payload.get("q_min", -0.45)),
-            q_max=float(payload.get("q_max", 0.45)),
-            p=max(2.0, float(payload.get("p", 2.0))),
+            comfort_low=comfort_low,
+            comfort_high=comfort_high,
+            low_ramp_width=max(1e-9, float(payload.get("low_ramp_width", 0.05))),
+            high_ramp_width=max(1e-9, float(payload.get("high_ramp_width", 0.05))),
+            low_penalty_cap=max(0.0, float(payload.get("low_penalty_cap", 1.0))),
+            high_penalty_cap=max(0.0, float(payload.get("high_penalty_cap", 0.6))),
         )
+
+    def as_mapping(self) -> dict[str, float]:
+        return {
+            "comfort_low": self.comfort_low,
+            "comfort_high": self.comfort_high,
+            "low_ramp_width": self.low_ramp_width,
+            "high_ramp_width": self.high_ramp_width,
+            "low_penalty_cap": self.low_penalty_cap,
+            "high_penalty_cap": self.high_penalty_cap,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,35 +131,32 @@ def inventory_value_fraction(
 def inventory_zone_penalty(
     q: Any,
     zone: InventoryZoneParams,
-) -> Any:
-    """Smooth zone-of-indifference penalty in [0, ~1], C¹ at band edges when p >= 2."""
+    *,
+    return_components: bool = False,
+) -> Any | tuple[Any, dict[str, Any]]:
+    """
+    Sigmoid zone-of-indifference penalty in [0, low_cap + high_cap].
+
+    Z(q) = low_penalty_cap * sigmoid((comfort_low - q) / low_ramp_width)
+         + high_penalty_cap * sigmoid((q - comfort_high) / high_ramp_width)
+    """
 
     torch = _torch()
-    q_lo = float(zone.q_lo)
-    q_hi = float(zone.q_hi)
-    q_min = float(zone.q_min)
-    q_max = float(zone.q_max)
-    p = float(zone.p)
-    eps = 1e-12
-
-    penalty = torch.zeros_like(q)
-    if q_lo > q_min + eps:
-        low_mask = q < q_lo
-        low_excess = (q_lo - q) / max(eps, q_lo - q_min)
-        penalty = penalty + torch.where(
-            low_mask,
-            low_excess**p,
-            torch.zeros_like(q),
-        )
-    if q_max > q_hi + eps:
-        high_mask = q > q_hi
-        high_excess = (q - q_hi) / max(eps, q_max - q_hi)
-        penalty = penalty + torch.where(
-            high_mask,
-            high_excess**p,
-            torch.zeros_like(q),
-        )
-    return penalty
+    d_lo = max(1e-9, float(zone.low_ramp_width))
+    d_hi = max(1e-9, float(zone.high_ramp_width))
+    low_penalty = float(zone.low_penalty_cap) * torch.sigmoid(
+        (float(zone.comfort_low) - q) / d_lo
+    )
+    high_penalty = float(zone.high_penalty_cap) * torch.sigmoid(
+        (q - float(zone.comfort_high)) / d_hi
+    )
+    total = low_penalty + high_penalty
+    if return_components:
+        return total, {
+            "inventory_zone_low_penalty": low_penalty,
+            "inventory_zone_high_penalty": high_penalty,
+        }
+    return total
 
 
 def inventory_zone_path_mean(
@@ -134,9 +171,14 @@ def inventory_zone_path_mean(
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
     q = inventory_value_fraction(inventory_path, mid_price=mid_path, wealth=wealth)
-    step_penalty = inventory_zone_penalty(q, zone)
+    step_penalty, step_components = inventory_zone_penalty(q, zone, return_components=True)
     path_mean = step_penalty.mean()
-    return path_mean, {"inventory_zone_penalty": path_mean}
+    components = {
+        "inventory_zone_penalty": path_mean,
+        "inventory_zone_low_penalty": step_components["inventory_zone_low_penalty"].mean(),
+        "inventory_zone_high_penalty": step_components["inventory_zone_high_penalty"].mean(),
+    }
+    return path_mean, components
 
 
 def _market_level_from_cumulative(cum: Any) -> Any:

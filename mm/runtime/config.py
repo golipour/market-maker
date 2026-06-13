@@ -1625,7 +1625,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
             "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
             "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
-            "inventory_zone": "comfort band {q_lo, q_hi, q_min, q_max, p} for operational inventory shaping",
+            "inventory_zone": (
+                "sigmoid comfort band {comfort_low, comfort_high, low_ramp_width, "
+                "high_ramp_width, low_penalty_cap, high_penalty_cap} for operational "
+                "inventory shaping (§4.3 option B)"
+            ),
             "book_quality": (
                 "sub-weights and targets for presence/tightness/balance/uniformity; "
                 "measure='quoted' scores only your decoded quotes (default), "

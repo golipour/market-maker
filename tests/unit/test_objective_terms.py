@@ -11,22 +11,83 @@ from mm.mpc.objective_terms import (
     book_quality_score,
     combine_soft_objective_terms,
     inventory_zone_penalty,
+    inventory_zone_path_mean,
 )
 
 
-def test_inventory_zone_penalty_is_zero_inside_comfort_band() -> None:
-    zone = InventoryZoneParams(q_lo=-0.1, q_hi=0.1, q_min=-0.5, q_max=0.5, p=2.0)
-    q = torch.tensor([-0.05, 0.0, 0.08], dtype=torch.float64)
-    penalty = inventory_zone_penalty(q, zone)
-    assert penalty.tolist() == pytest.approx([0.0, 0.0, 0.0])
+def _sigmoid_zone(**overrides: float) -> InventoryZoneParams:
+    defaults = {
+        "comfort_low": -0.1,
+        "comfort_high": 0.1,
+        "low_ramp_width": 0.02,
+        "high_ramp_width": 0.02,
+        "low_penalty_cap": 1.0,
+        "high_penalty_cap": 0.6,
+    }
+    defaults.update(overrides)
+    return InventoryZoneParams(**defaults)
 
 
-def test_inventory_zone_penalty_ramps_outside_band() -> None:
-    zone = InventoryZoneParams(q_lo=-0.1, q_hi=0.1, q_min=-0.5, q_max=0.5, p=2.0)
-    q = torch.tensor([-0.3, 0.25], dtype=torch.float64)
+def test_inventory_zone_from_mapping_rejects_power_zone_keys() -> None:
+    with pytest.raises(ValueError, match="power-zone keys were removed"):
+        InventoryZoneParams.from_mapping(
+            {"q_lo": -0.1, "q_hi": 0.1, "q_min": -0.5, "q_max": 0.5, "p": 2.0}
+        )
+
+
+def test_inventory_zone_from_mapping_rejects_legacy_sigmoid_aliases() -> None:
+    with pytest.raises(ValueError, match="keys renamed"):
+        InventoryZoneParams.from_mapping(
+            {
+                "q_lo": -0.15,
+                "q_hi": 0.15,
+                "d_lo": 0.05,
+                "d_hi": 0.05,
+                "a_lo": 1.0,
+                "a_hi": 0.6,
+            }
+        )
+
+
+def test_inventory_zone_penalty_is_near_zero_inside_comfort_band() -> None:
+    zone = _sigmoid_zone()
+    q_center = torch.tensor([0.0], dtype=torch.float64)
+    q_extreme = torch.tensor([-0.8, 0.8], dtype=torch.float64)
+    center_penalty = float(inventory_zone_penalty(q_center, zone))
+    extreme_penalty = inventory_zone_penalty(q_extreme, zone)
+    assert center_penalty < 0.02
+    assert center_penalty < float(extreme_penalty.min()) * 0.1
+
+
+def test_inventory_zone_penalty_saturates_outside_band() -> None:
+    zone = _sigmoid_zone()
+    q = torch.tensor([-0.8, 0.8], dtype=torch.float64)
     penalty = inventory_zone_penalty(q, zone)
-    assert float(penalty[0]) > 0.0
-    assert float(penalty[1]) > 0.0
+    assert float(penalty[0]) == pytest.approx(zone.low_penalty_cap, rel=1e-3)
+    assert float(penalty[1]) == pytest.approx(zone.high_penalty_cap, rel=1e-3)
+
+
+def test_inventory_zone_penalty_is_smooth_at_comfort_edges() -> None:
+    zone = _sigmoid_zone(low_ramp_width=0.05, high_ramp_width=0.05)
+    q = torch.tensor([zone.comfort_low - 1e-4, zone.comfort_low + 1e-4], dtype=torch.float64)
+    penalty = inventory_zone_penalty(q, zone)
+    assert abs(float(penalty[1]) - float(penalty[0])) < 0.2
+
+
+def test_inventory_zone_path_mean_reports_low_and_high_components() -> None:
+    zone = _sigmoid_zone()
+    inventory_path = torch.tensor([[-0.6, 0.0], [0.6, 0.0]], dtype=torch.float64)
+    mid_path = torch.full_like(inventory_path, 100.0)
+    path_mean, components = inventory_zone_path_mean(
+        inventory_path,
+        mid_path=mid_path,
+        wealth=10_000.0,
+        zone=zone,
+    )
+    assert float(path_mean) > 0.0
+    assert float(components["inventory_zone_penalty"]) == pytest.approx(float(path_mean))
+    assert float(components["inventory_zone_low_penalty"]) > 0.0
+    assert float(components["inventory_zone_high_penalty"]) > 0.0
 
 
 def test_combine_soft_objective_terms_keeps_ce_component_pure() -> None:

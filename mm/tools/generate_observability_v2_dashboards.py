@@ -3642,6 +3642,28 @@ def optimizer_diagnostics() -> dict[str, Any]:
             unit="percentunit",
             decimals=2,
         ),
+        _panel(
+            7,
+            "Inventory zone breakdown",
+            "timeseries",
+            PG_DS,
+            _optimizer_inventory_zone_breakdown_sql(),
+            x=0,
+            y=27,
+            w=12,
+            decimals=4,
+        ),
+        _panel(
+            8,
+            "Inventory zone config",
+            "timeseries",
+            PG_DS,
+            _optimizer_inventory_zone_config_sql(),
+            x=12,
+            y=27,
+            w=12,
+            decimals=4,
+        ),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
@@ -4422,6 +4444,54 @@ WHERE {_diagnostics_filter()}
     'book_quality_score',
     'global_book_quality_score'
   )
+ORDER BY 1"""
+
+
+def _optimizer_inventory_zone_breakdown_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND (
+    kv.key IN (
+      'inventory_zone_penalty_raw',
+      'inventory_zone_low_penalty',
+      'inventory_zone_high_penalty',
+      'global_inventory_zone_penalty_raw',
+      'global_inventory_zone_low_penalty',
+      'global_inventory_zone_high_penalty'
+    )
+  )
+ORDER BY 1"""
+
+
+def _optimizer_inventory_zone_config_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    zone_keys = (
+        "comfort_low",
+        "comfort_high",
+        "low_ramp_width",
+        "high_ramp_width",
+        "low_penalty_cap",
+        "high_penalty_cap",
+    )
+    keys_sql = ", ".join(f"'{key}'" for key in zone_keys)
+    return f"""SELECT e.ts AS "time",
+       (scope || '.' || kv.key) AS metric,
+       {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(
+    e.payload #> ARRAY['optimizer','config', scope, 'inventory_zone'],
+    '{{}}'::jsonb
+  )
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND kv.key IN ({keys_sql})
 ORDER BY 1"""
 
 
