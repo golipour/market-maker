@@ -250,8 +250,8 @@
               "measure": "quoted"
             },
             "inventory_zone": {
-              "comfort_low": -0.15,
-              "comfort_high": 0.15,
+              "comfort_low": -0.2,
+              "comfort_high": 0.2,
               "low_ramp_width": 0.05,
               "high_ramp_width": 0.05,
               "low_penalty_cap": 1.0,
@@ -274,8 +274,8 @@
               "measure": "quoted"
             },
             "inventory_zone": {
-              "comfort_low": -0.15,
-              "comfort_high": 0.15,
+              "comfort_low": -0.2,
+              "comfort_high": 0.2,
               "low_ramp_width": 0.05,
               "high_ramp_width": 0.05,
               "low_penalty_cap": 1.0,

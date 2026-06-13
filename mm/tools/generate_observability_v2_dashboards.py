@@ -4458,9 +4458,11 @@ WHERE {_diagnostics_filter()}
   AND (
     kv.key IN (
       'inventory_zone_penalty_raw',
+      'inventory_zone_imbalance',
       'inventory_zone_low_penalty',
       'inventory_zone_high_penalty',
       'global_inventory_zone_penalty_raw',
+      'global_inventory_zone_imbalance',
       'global_inventory_zone_low_penalty',
       'global_inventory_zone_high_penalty'
     )

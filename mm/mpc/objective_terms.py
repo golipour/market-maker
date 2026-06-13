@@ -28,10 +28,10 @@ _LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class InventoryZoneParams:
-    """Sigmoid operational inventory zone (proposal §4.3 option B)."""
+    """Sigmoid operational zone on wallet imbalance (proposal §4.3 option B)."""
 
-    comfort_low: float = -0.15
-    comfort_high: float = 0.15
+    comfort_low: float = -0.2
+    comfort_high: float = 0.2
     low_ramp_width: float = 0.05
     high_ramp_width: float = 0.05
     low_penalty_cap: float = 1.0
@@ -59,8 +59,8 @@ class InventoryZoneParams:
                 "low_penalty_cap, high_penalty_cap); remove: "
                 + ", ".join(removed_aliases)
             )
-        comfort_low = float(payload.get("comfort_low", -0.15))
-        comfort_high = float(payload.get("comfort_high", 0.15))
+        comfort_low = float(payload.get("comfort_low", -0.2))
+        comfort_high = float(payload.get("comfort_high", 0.2))
         if comfort_low >= comfort_high:
             raise ValueError("inventory_zone.comfort_low must be < comfort_high")
         return cls(
@@ -118,18 +118,28 @@ class BookQualityParams:
         )
 
 
-def inventory_value_fraction(
+def wallet_imbalance(
     inventory: Any,
     *,
     mid_price: Any,
-    wealth: float,
+    cash: Any,
+    eps: float = 1e-12,
 ) -> Any:
-    wealth_safe = max(1e-12, float(wealth))
-    return inventory * mid_price / wealth_safe
+    """
+    Normalized cash/base mix in [-1, 1].
+
+    (Q·mid − cash) / (|Q·mid| + |cash| + eps)
+    Negative ⇒ cash-heavy (low base, ask-side capacity risk).
+    Positive ⇒ base-heavy (low cash, bid-side capacity risk).
+    """
+
+    inv_value = inventory * mid_price
+    denom = inv_value.abs() + cash.abs() + float(eps)
+    return (inv_value - cash) / denom
 
 
 def inventory_zone_penalty(
-    q: Any,
+    imbalance: Any,
     zone: InventoryZoneParams,
     *,
     return_components: bool = False,
@@ -137,18 +147,18 @@ def inventory_zone_penalty(
     """
     Sigmoid zone-of-indifference penalty in [0, low_cap + high_cap].
 
-    Z(q) = low_penalty_cap * sigmoid((comfort_low - q) / low_ramp_width)
-         + high_penalty_cap * sigmoid((q - comfort_high) / high_ramp_width)
+    Z(imb) = low_penalty_cap * sigmoid((comfort_low - imb) / low_ramp_width)
+           + high_penalty_cap * sigmoid((imb - comfort_high) / high_ramp_width)
     """
 
     torch = _torch()
     d_lo = max(1e-9, float(zone.low_ramp_width))
     d_hi = max(1e-9, float(zone.high_ramp_width))
     low_penalty = float(zone.low_penalty_cap) * torch.sigmoid(
-        (float(zone.comfort_low) - q) / d_lo
+        (float(zone.comfort_low) - imbalance) / d_lo
     )
     high_penalty = float(zone.high_penalty_cap) * torch.sigmoid(
-        (q - float(zone.comfort_high)) / d_hi
+        (imbalance - float(zone.comfort_high)) / d_hi
     )
     total = low_penalty + high_penalty
     if return_components:
@@ -162,19 +172,24 @@ def inventory_zone_penalty(
 def inventory_zone_path_mean(
     inventory_path: Any,
     *,
+    cash_path: Any,
     mid_path: Any,
-    wealth: float,
     zone: InventoryZoneParams | None,
 ) -> tuple[Any, dict[str, Any]]:
     torch = _torch()
     if zone is None:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    q = inventory_value_fraction(inventory_path, mid_price=mid_path, wealth=wealth)
-    step_penalty, step_components = inventory_zone_penalty(q, zone, return_components=True)
+    imbalance = wallet_imbalance(inventory_path, mid_price=mid_path, cash=cash_path)
+    step_penalty, step_components = inventory_zone_penalty(
+        imbalance,
+        zone,
+        return_components=True,
+    )
     path_mean = step_penalty.mean()
     components = {
         "inventory_zone_penalty": path_mean,
+        "inventory_zone_imbalance": imbalance.mean(),
         "inventory_zone_low_penalty": step_components["inventory_zone_low_penalty"].mean(),
         "inventory_zone_high_penalty": step_components["inventory_zone_high_penalty"].mean(),
     }

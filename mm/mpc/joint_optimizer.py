@@ -408,8 +408,10 @@ def optimize_joint_with_diagnostics(
             total_global_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             step_reward_0 = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             local_inv_path: list[Any] = []
+            local_cash_path: list[Any] = []
             local_mid_path: list[Any] = []
             global_inv_path: list[Any] = []
+            global_cash_path: list[Any] = []
             global_mid_path: list[Any] = []
             local_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             local_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -715,8 +717,10 @@ def optimize_joint_with_diagnostics(
                 ).squeeze(1)
                 step_reward = local_step_reward + global_step_reward
                 local_inv_path.append(inv_t.squeeze(1))
+                local_cash_path.append(cash_t.squeeze(1))
                 local_mid_path.append(mid_t.squeeze(1))
                 global_inv_path.append(global_inv_t.squeeze(1))
+                global_cash_path.append(global_cash_t.squeeze(1))
                 global_mid_path.append(global_mid_t.squeeze(1))
                 if h == 0:
                     step_reward_0 = step_reward
@@ -810,8 +814,8 @@ def optimize_joint_with_diagnostics(
             if float(local_opt.w_inv) > 0.0 and local_opt.inventory_zone is not None:
                 zone_mean, zone_components = inventory_zone_path_mean(
                     torch_mod.stack(local_inv_path, dim=1),
+                    cash_path=torch_mod.stack(local_cash_path, dim=1),
                     mid_path=torch_mod.stack(local_mid_path, dim=1),
-                    wealth=wealth_0,
                     zone=local_opt.inventory_zone,
                 )
                 J, components = combine_soft_objective_terms(
@@ -829,8 +833,8 @@ def optimize_joint_with_diagnostics(
             ):
                 zone_mean, zone_components = inventory_zone_path_mean(
                     torch_mod.stack(global_inv_path, dim=1),
+                    cash_path=torch_mod.stack(global_cash_path, dim=1),
                     mid_path=torch_mod.stack(global_mid_path, dim=1),
-                    wealth=wealth_0,
                     zone=global_opt.inventory_zone,
                 )
                 J, components = combine_soft_objective_terms(

@@ -1136,6 +1136,7 @@ class MonteCarloMPCTensorBatched:
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 inv_path: list[Any] = []
+                cash_path: list[Any] = []
                 mid_path: list[Any] = []
                 conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
                 conditional_buy_vwap_t = None
@@ -1317,6 +1318,7 @@ class MonteCarloMPCTensorBatched:
                     if h == 0:
                         step_reward_0 = step_reward
                     inv_path.append(inv_t.squeeze(1))
+                    cash_path.append(cash_t.squeeze(1))
                     mid_path.append(mid_t.squeeze(1))
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
@@ -1371,11 +1373,12 @@ class MonteCarloMPCTensorBatched:
                     )
                 if float(venue_opt.w_inv) > 0.0 and venue_opt.inventory_zone is not None:
                     inv_path_t = torch_mod.stack(inv_path, dim=1)
+                    cash_path_t = torch_mod.stack(cash_path, dim=1)
                     mid_path_t = torch_mod.stack(mid_path, dim=1)
                     zone_mean, zone_components = inventory_zone_path_mean(
                         inv_path_t,
+                        cash_path=cash_path_t,
                         mid_path=mid_path_t,
-                        wealth=wealth_0,
                         zone=venue_opt.inventory_zone,
                     )
                     J, components = combine_soft_objective_terms(

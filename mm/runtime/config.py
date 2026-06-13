@@ -1626,9 +1626,9 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
             "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
             "inventory_zone": (
-                "sigmoid comfort band {comfort_low, comfort_high, low_ramp_width, "
-                "high_ramp_width, low_penalty_cap, high_penalty_cap} for operational "
-                "inventory shaping (§4.3 option B)"
+                "sigmoid comfort band on wallet imbalance (Q·mid−cash)/(|Q·mid|+|cash|); "
+                "keys {comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
+                "low_penalty_cap, high_penalty_cap}"
             ),
             "book_quality": (
                 "sub-weights and targets for presence/tightness/balance/uniformity; "
