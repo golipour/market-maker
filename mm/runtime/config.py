@@ -1333,6 +1333,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "quote_size_min_per_side",
             "quote_size_max_per_side",
             "spread_structure",
+            "reservation_offset",
             "w_book",
             "w_inv",
             "inventory_zone",
@@ -1639,6 +1640,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "optional structured first-touch geometry: center_sum_max caps "
                 "x0_bid,1 + x0_ask,1; center_min_depth floors spread-leg depth at touch; "
                 "center_k_epsilon shapes the first component slope"
+            ),
+            "reservation_offset": (
+                "optional relative reservation-price shift: r_max bounds dimensionless "
+                "r_offset with mid_eff = mid * (1 + r_offset); curve evaluation uses "
+                "D(x ± mid * r_offset) on the market spread grid"
             ),
             "soft_fill_temp": "venue soft-fill temperature",
             "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",

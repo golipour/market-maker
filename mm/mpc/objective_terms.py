@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from mm.mpc.l_param import LParamConfig, materialize_side_torch
+from mm.mpc.l_param import LParamConfig, materialize_side_torch, reservation_r_offset_from_params
 from mm.mpc.state_tensor import (
     depth_bid_derivative_tensor,
     depth_ask_derivative_tensor,
@@ -263,22 +263,35 @@ def book_quality_score(
     )
     spread_max = float(l_param.spread_max)
     touch = max(1e-9, spread_max * float(params.touch_spread_fraction))
+    reservation_r_offset = None
+    if float(l_param.reservation_r_max) > 0.0:
+        reservation_r_offset = reservation_r_offset_from_params(
+            action_flat,
+            n_components=n_components,
+            r_max=float(l_param.reservation_r_max),
+        )
+    mid_t = torch.tensor(float(mid_price), dtype=spread_grid.dtype, device=spread_grid.device)
+    depth_kw = {
+        "l_param": l_param,
+        "mid_price": mid_t,
+        "reservation_r_offset": reservation_r_offset,
+    }
 
     depth_bid = effective_depth_bid_tensor(
         action_flat,
         spread_grid,
         n_components,
-        l_param=l_param,
         quote_size_min=bid_quote_size_min,
         quote_size_max=bid_quote_size_max,
+        **depth_kw,
     )
     depth_ask = effective_depth_ask_tensor(
         action_flat,
         spread_grid,
         n_components,
-        l_param=l_param,
         quote_size_min=ask_quote_size_min,
         quote_size_max=ask_quote_size_max,
+        **depth_kw,
     )
     q_bid = depth_bid[-1]
     q_ask = depth_ask[-1]
@@ -287,17 +300,17 @@ def book_quality_score(
         action_flat,
         torch.tensor([touch], dtype=spread_grid.dtype, device=spread_grid.device),
         n_components,
-        l_param=l_param,
         quote_size_min=bid_quote_size_min,
         quote_size_max=bid_quote_size_max,
+        **depth_kw,
     )[0]
     depth_touch_ask = effective_depth_ask_tensor(
         action_flat,
         torch.tensor([touch], dtype=spread_grid.dtype, device=spread_grid.device),
         n_components,
-        l_param=l_param,
         quote_size_min=ask_quote_size_min,
         quote_size_max=ask_quote_size_max,
+        **depth_kw,
     )[0]
 
     if use_combined:
@@ -313,13 +326,13 @@ def book_quality_score(
             action_flat,
             spread_grid,
             n_components,
-            l_param=l_param,
+            **depth_kw,
         ) + _market_level_from_cumulative(market_cum_bid)
         ask_marg = depth_ask_derivative_tensor(
             action_flat,
             spread_grid,
             n_components,
-            l_param=l_param,
+            **depth_kw,
         ) + _market_level_from_cumulative(market_cum_ask)
     else:
         d_bid_touch = depth_touch_bid
@@ -328,13 +341,13 @@ def book_quality_score(
             action_flat,
             spread_grid,
             n_components,
-            l_param=l_param,
+            **depth_kw,
         )
         ask_marg = depth_ask_derivative_tensor(
             action_flat,
             spread_grid,
             n_components,
-            l_param=l_param,
+            **depth_kw,
         )
 
     smooth_min = torch.minimum(d_bid_touch, d_ask_touch)
@@ -367,6 +380,8 @@ def book_quality_score(
         "book_balance": balance,
         "book_uniformity": uniformity,
     }
+    if reservation_r_offset is not None:
+        components["reservation_r_offset"] = reservation_r_offset
     return score, components
 
 

@@ -124,7 +124,7 @@ def test_effective_sigmoid_action_exposes_executable_depth() -> None:
 
 
 def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
-    from mm.mpc.l_param import LParamConfig
+    from mm.mpc.l_param import LParamConfig, depth_logit_index
     from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange
 
     l_param = LParamConfig(
@@ -134,8 +134,8 @@ def test_soft_fill_uses_baseline_shifted_marginal_quote_depth() -> None:
         n_components=1,
     )
     flat = _initial_action_uniform_marginal_qrange(1, 100.0, l_param=l_param)
-    flat[-2] = 30.0
-    flat[-1] = 30.0
+    flat[depth_logit_index(side_off=0, n_components=1)] = 30.0
+    flat[depth_logit_index(side_off=3, n_components=1)] = 30.0
     params = torch.tensor(flat, dtype=torch.float64)
     spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 2), dtype=torch.float64)
@@ -243,7 +243,7 @@ def test_soft_fill_cash_prices_use_clean_mid_spreads_not_vwap_anchor() -> None:
         spread_max=1.0,
         n_components=1,
     )
-    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0], dtype=torch.float64)
+    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0, 0.0], dtype=torch.float64)
     spread_grid = torch.tensor([1.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 1), dtype=torch.float64)
     mid_price = torch.tensor([[100.0]], dtype=torch.float64)
@@ -279,7 +279,7 @@ def test_soft_fill_queue_model_back_of_queue_reduces_own_fill_share_and_keeps_gr
         n_components=1,
     )
     params = torch.tensor(
-        [0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0],
+        [0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0, 0.0],
         dtype=torch.float64,
         requires_grad=True,
     )
@@ -336,7 +336,7 @@ def test_soft_fill_dynamic_decoder_max_limits_simulated_fill_qty() -> None:
         spread_max=2.0,
         n_components=1,
     )
-    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0], dtype=torch.float64)
+    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0, 0.0], dtype=torch.float64)
     spread_grid = torch.tensor([1.0, 2.0], dtype=torch.float64)
     empty_book = torch.zeros((1, 2), dtype=torch.float64)
     mid_price = torch.tensor([[100.0]], dtype=torch.float64)

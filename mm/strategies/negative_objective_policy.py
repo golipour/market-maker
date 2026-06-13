@@ -139,6 +139,7 @@ def _min_sigmoid_action(
         flat,
         n,
         l_param=l_param,
+        mid_price=mid_price,
         bid_quote_size_min=bid_min,
         bid_quote_size_max=bid_max,
         ask_quote_size_min=ask_min,

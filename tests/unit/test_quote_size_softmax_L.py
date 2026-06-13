@@ -7,6 +7,8 @@ import torch
 
 from mm.mpc.l_param import (
     LParamConfig,
+    action_param_len,
+    depth_logit_index,
     effective_depth_at_center_from_flat_np,
     effective_qrange_from_flat_np,
     materialize_side_np,
@@ -67,7 +69,7 @@ def test_depth_logit_torch_matches_numpy_at_spread_max() -> None:
     flat = _initial_action_uniform_marginal_qrange(
         n, spread_max, l_param=l_param
     )
-    params = torch.tensor(flat[: 6 * n + 2], dtype=torch.float64)
+    params = torch.tensor(flat[: action_param_len(n)], dtype=torch.float64)
     s = torch.tensor([0.0, spread_max], dtype=torch.float64)
     q_torch = float(
         (
@@ -231,10 +233,11 @@ def test_depth_logit_selects_bounds() -> None:
     n = 2
     l_param = _l_param(q_min=q_min, q_max=q_max, spread_max=spread_max, n_components=n)
     flat = _initial_action_uniform_marginal_qrange(n, spread_max, l_param=l_param)
+    bid_depth_idx = depth_logit_index(side_off=0, n_components=n)
     flat_min = flat.copy()
-    flat_min[-2] = -30.0
+    flat_min[bid_depth_idx] = -30.0
     flat_max = flat.copy()
-    flat_max[-2] = 30.0
+    flat_max[bid_depth_idx] = 30.0
     q_lo = effective_qrange_from_flat_np(
         flat_min, n, side_off=0, spread_max=spread_max, l_param=l_param
     )

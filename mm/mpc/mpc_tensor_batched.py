@@ -16,8 +16,10 @@ import torch.nn.functional as F
 
 from mm.mpc.l_param import (
     LParamConfig,
+    ReservationOffsetParams,
     SpreadStructureParams,
     action_param_len,
+    reservation_r_offset_from_params,
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
 )
@@ -78,6 +80,7 @@ class VenueOptimizerParams:
     quote_size_min_per_side: float = 0.0
     quote_size_max_per_side: float | None = None
     spread_structure: SpreadStructureParams | None = None
+    reservation_offset: ReservationOffsetParams | None = None
     w_book: float = 0.0
     w_inv: float = 0.0
     inventory_zone: InventoryZoneParams | None = None
@@ -118,6 +121,11 @@ class VenueOptimizerParams:
                 SpreadStructureParams.from_mapping(data.get("spread_structure"))
                 if data.get("spread_structure") is not None
                 else base.spread_structure
+            ),
+            reservation_offset=(
+                ReservationOffsetParams.from_mapping(data.get("reservation_offset"))
+                if data.get("reservation_offset") is not None
+                else base.reservation_offset
             ),
             w_book=max(0.0, float(data.get("w_book", base.w_book))),
             w_inv=max(0.0, float(data.get("w_inv", base.w_inv))),
@@ -170,6 +178,11 @@ class VenueOptimizerParams:
             ),
             spread_max=spread_max,
             n_components=n_components,
+            reservation_r_max=(
+                float(self.reservation_offset.r_max)
+                if self.reservation_offset is not None
+                else 0.0
+            ),
             **spread_fields,
         )
 
@@ -189,6 +202,8 @@ class VenueOptimizerParams:
         }
         if self.spread_structure is not None:
             out["spread_structure"] = self.spread_structure.as_mapping()
+        if self.reservation_offset is not None:
+            out["reservation_offset"] = self.reservation_offset.as_mapping()
         if self.inventory_zone is not None:
             out["inventory_zone"] = self.inventory_zone.as_mapping()
         if self.book_quality is not None:
@@ -214,7 +229,7 @@ def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[fl
     """
     out: list[tuple[float, float]] = []
     for i, (lo, hi) in enumerate(bounds):
-        if i >= len(bounds) - 2:
+        if i >= len(bounds) - 3:
             out.append((float(lo), float(hi)))
         elif i % 3 == 0:
             out.append((float(lo), float(hi)))
@@ -311,7 +326,7 @@ def _initial_action_uniform_marginal_qrange(
             ask_part.extend([float(L_raw[i]), float(k_raw[i]), float(x0_raw[i])])
         core = np.array(bid_part + ask_part, dtype=np.float64)
 
-    return np.concatenate([core, np.array([0.0, 0.0], dtype=np.float64)])
+    return np.concatenate([core, np.array([0.0, 0.0, 0.0], dtype=np.float64)])
 
 
 def _format_action_verbose(flat: np.ndarray, n_components: int) -> str:
@@ -547,14 +562,27 @@ def soft_fill_batched(
       ob_bids_next, ob_asks_next: next market-only level volumes (n_samples, grid_levels)
       cash_delta, inv_delta: deltas from our fills only (n_samples,)
     """
+    eps = 1e-12
+    reservation_r_offset = None
+    if l_param is not None and float(l_param.reservation_r_max) > 0.0:
+        reservation_r_offset = reservation_r_offset_from_params(
+            params,
+            n_components=n_components,
+            r_max=float(l_param.reservation_r_max),
+        )
+    depth_kwargs = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "quote_size_min": bid_quote_size_min,
+        "quote_size_max": bid_quote_size_max,
+        "mid_price": mid_price,
+        "reservation_r_offset": reservation_r_offset,
+    }
     depth_bid = effective_depth_bid_tensor(
         params,
         spread_grid,
         n_components,
-        use_softplus=use_softplus,
-        l_param=l_param,
-        quote_size_min=bid_quote_size_min,
-        quote_size_max=bid_quote_size_max,
+        **depth_kwargs,
     )
     depth_ask = effective_depth_ask_tensor(
         params,
@@ -564,8 +592,9 @@ def soft_fill_batched(
         l_param=l_param,
         quote_size_min=ask_quote_size_min,
         quote_size_max=ask_quote_size_max,
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
     )
-    eps = 1e-12
 
     # Recover market-book level volumes from cumulative market book.
     book_bid_prev = torch.cat([torch.zeros_like(book_cum_bid[:, :1]), book_cum_bid[:, :-1]], dim=1)
@@ -864,8 +893,10 @@ class MonteCarloMPCTensorBatched:
             local_bounds = [logit_bound, k_bound, x0_bound] * (2 * self.local_n_components) + [
                 logit_bound,
                 logit_bound,
+                logit_bound,
             ]
             global_bounds = [logit_bound, k_bound, x0_bound] * (2 * self.global_n_components) + [
+                logit_bound,
                 logit_bound,
                 logit_bound,
             ]
@@ -899,6 +930,7 @@ class MonteCarloMPCTensorBatched:
         self,
         flat: np.ndarray,
         *,
+        mid_price: float | None = None,
         bid_quote_size_min: float | None = None,
         bid_quote_size_max: float | None = None,
         ask_quote_size_min: float | None = None,
@@ -908,6 +940,7 @@ class MonteCarloMPCTensorBatched:
             flat,
             self.local_n_components,
             l_param=self._l_param_config(),
+            mid_price=mid_price,
             bid_quote_size_min=bid_quote_size_min,
             bid_quote_size_max=bid_quote_size_max,
             ask_quote_size_min=ask_quote_size_min,
@@ -1071,6 +1104,7 @@ class MonteCarloMPCTensorBatched:
         initial_flat = np.array(x_torch.detach().cpu().numpy()[:single_len], dtype=np.float64)
         initial_action = self._flat_to_effective_action(
             initial_flat,
+            mid_price=mid_0,
             bid_quote_size_min=bid_quote_size_min_0,
             bid_quote_size_max=bid_quote_size_max_0,
             ask_quote_size_min=ask_quote_size_min_0,
@@ -1462,6 +1496,7 @@ class MonteCarloMPCTensorBatched:
             )
         best_action = self._flat_to_effective_action(
             best_flat_slice,
+            mid_price=mid_0,
             bid_quote_size_min=bid_quote_size_min_0,
             bid_quote_size_max=bid_quote_size_max_0,
             ask_quote_size_min=ask_quote_size_min_0,
@@ -1472,6 +1507,7 @@ class MonteCarloMPCTensorBatched:
             final_flat_slice = best_flat_slice
         final_action = self._flat_to_effective_action(
             final_flat_slice,
+            mid_price=mid_0,
             bid_quote_size_min=bid_quote_size_min_0,
             bid_quote_size_max=bid_quote_size_max_0,
             ask_quote_size_min=ask_quote_size_min_0,

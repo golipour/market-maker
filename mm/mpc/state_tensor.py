@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from mm.mpc.l_param import LParamConfig
     from mm.mpc.mpc_state import State, SigmoidMixtureAction
 
+from mm.mpc.l_param import action_param_len
+
 # Default number of orderbook buckets per side.
 DEFAULT_OB_LEVELS = 100
 
@@ -70,12 +72,10 @@ class ActionTensor:
     """
     Differentiable action: flat tensor of sigmoid-mixture parameters.
 
-    params: (6 * n_components,) with layout
-      [bid_L1, bid_k1, bid_x0_1, ..., bid_Ln, bid_kn, bid_x0_n,
-       ask_L1, ask_k1, ask_x0_1, ..., ask_Ln, ask_kn, ask_x0_n].
+    params: flat optimizer vector of length ``action_param_len(n_components)``:
+      mixture params, per-side depth logits, reservation offset logit.
 
-    L and k are interpreted as positive via softplus in depth computations so
-    unconstrained optimization is valid; x0 is free.
+    L and k decode through structured softmax / softplus in depth computations.
     """
 
     params: Tensor
@@ -83,8 +83,12 @@ class ActionTensor:
 
     def __post_init__(self):
         n = self.n_components
-        if self.params.numel() != 6 * n:
-            raise ValueError(f"ActionTensor params must have 6*n_components={6*n} elements, got {self.params.numel()}")
+        expected = action_param_len(n)
+        if self.params.numel() != expected:
+            raise ValueError(
+                f"ActionTensor params must have action_param_len({n})={expected} elements, "
+                f"got {self.params.numel()}"
+            )
 
     @property
     def device(self) -> "torch.device":
@@ -114,6 +118,8 @@ def depth_bid_tensor(
     l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """
     Cumulative bid depth at quote-price spread: D(δ) = sum_i L_i * sigmoid(k_i * (δ - x0_i)).
@@ -151,9 +157,15 @@ def depth_bid_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
-    # spread: (...,); L, k, x0: (n_components,)
-    # z_i = k_i * (spread - x0_i) -> (..., n_components)
-    z = (spread.unsqueeze(-1) - x0) * k
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    curve_spread = curve_spread_for_market_spread(
+        spread,
+        side="bid",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
+    z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     return _depth_from_materialized(L, s)
 
@@ -166,6 +178,8 @@ def depth_ask_tensor(
     l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Cumulative ask depth at quote-price spread (same formula as bid, ask-side params)."""
     from mm.mpc.l_param import materialize_side_torch
@@ -200,7 +214,15 @@ def depth_ask_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
-    z = (spread.unsqueeze(-1) - x0) * k
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    curve_spread = curve_spread_for_market_spread(
+        spread,
+        side="ask",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
+    z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     return _depth_from_materialized(L, s)
 
@@ -219,28 +241,22 @@ def effective_depth_bid_tensor(
     l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_bid_tensor(
-        params,
-        spread,
-        n_components,
-        use_softplus=use_softplus,
-        l_param=l_param,
-        quote_size_min=quote_size_min,
-        quote_size_max=quote_size_max,
-    )
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "quote_size_min": quote_size_min,
+        "quote_size_max": quote_size_max,
+        "mid_price": mid_price,
+        "reservation_r_offset": reservation_r_offset,
+    }
+    raw = depth_bid_tensor(params, spread, n_components, **depth_kw)
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_bid_tensor(
-        params,
-        s0,
-        n_components,
-        use_softplus=use_softplus,
-        l_param=l_param,
-        quote_size_min=quote_size_min,
-        quote_size_max=quote_size_max,
-    )
+    base = depth_bid_tensor(params, s0, n_components, **depth_kw)
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
@@ -254,28 +270,22 @@ def effective_depth_ask_tensor(
     l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
     torch = _get_torch()
-    raw = depth_ask_tensor(
-        params,
-        spread,
-        n_components,
-        use_softplus=use_softplus,
-        l_param=l_param,
-        quote_size_min=quote_size_min,
-        quote_size_max=quote_size_max,
-    )
+    depth_kw = {
+        "use_softplus": use_softplus,
+        "l_param": l_param,
+        "quote_size_min": quote_size_min,
+        "quote_size_max": quote_size_max,
+        "mid_price": mid_price,
+        "reservation_r_offset": reservation_r_offset,
+    }
+    raw = depth_ask_tensor(params, spread, n_components, **depth_kw)
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_ask_tensor(
-        params,
-        s0,
-        n_components,
-        use_softplus=use_softplus,
-        l_param=l_param,
-        quote_size_min=quote_size_min,
-        quote_size_max=quote_size_max,
-    )
+    base = depth_ask_tensor(params, s0, n_components, **depth_kw)
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
@@ -287,6 +297,8 @@ def depth_bid_derivative_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Marginal bid depth d/dδ D(δ) = sum_i L_i * k_i * s_i * (1 - s_i). Same shape as spread."""
     from mm.mpc.l_param import materialize_side_torch
@@ -315,7 +327,15 @@ def depth_bid_derivative_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
-    z = (spread.unsqueeze(-1) - x0) * k
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    curve_spread = curve_spread_for_market_spread(
+        spread,
+        side="bid",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
+    z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)
     return der
@@ -327,6 +347,8 @@ def depth_ask_derivative_tensor(
     n_components: int,
     use_softplus: bool = True,
     l_param: "LParamConfig | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Marginal ask depth d/dδ D(δ). Same shape as spread."""
     from mm.mpc.l_param import materialize_side_torch
@@ -356,7 +378,15 @@ def depth_ask_derivative_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
-    z = (spread.unsqueeze(-1) - x0) * k
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    curve_spread = curve_spread_for_market_spread(
+        spread,
+        side="ask",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
+    z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
     der = (L * k * s * (1.0 - s)).sum(dim=-1)
     return der

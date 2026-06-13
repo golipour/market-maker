@@ -222,11 +222,13 @@ Long inventory: widen bid (larger `x0_bid`), tighten ask (smaller `x0_ask`). **V
 
 #### Three implementation paths (merged recommendation)
 
-| Path | Mechanism | Where | When to use |
-|------|-----------|-------|-------------|
-| **A — Implicit (Fable2 default)** | Zone term `Z` gradient flows through fill sim into free `x0` | Rollout closure in `mpc_tensor_batched.py` | **Phase 1** — lowest risk; no new action dimension |
-| **B — Reservation anchor shift** | `reservation_price` at discretization | `mpc_engine.decide()`, `target_book_builder.py` | When you want interpretable, logged reservation skew independent of optimizer |
-| **C — Learned `delta_skew`** | New optimizer dimension per venue/step | `l_param.py`, vector layout in joint optimizer | **Phase 2** — if diagnostics show Path A/B insufficient |
+
+| Path                              | Mechanism                                                    | Where                                           | When to use                                                                   |
+| --------------------------------- | ------------------------------------------------------------ | ----------------------------------------------- | ----------------------------------------------------------------------------- |
+| **A — Implicit (Fable2 default)** | Zone term `Z` gradient flows through fill sim into free `x0` | Rollout closure in `mpc_tensor_batched.py`      | **Phase 1** — lowest risk; no new action dimension                            |
+| **B — Reservation anchor shift**  | `reservation_price` at discretization                        | `mpc_engine.decide()`, `target_book_builder.py` | When you want interpretable, logged reservation skew independent of optimizer |
+| **C — Learned `delta_skew`**      | New optimizer dimension per venue/step                       | `l_param.py`, vector layout in joint optimizer  | **Phase 2** — if diagnostics show Path A/B insufficient                       |
+
 
 Path A and C are not mutually exclusive: the zone term supplies the *objective pressure*; Path C supplies an explicit, bounded skew channel the optimizer can use without fighting book-quality balance terms.
 
@@ -261,7 +263,7 @@ Raw vector length with Path C: `6*n_components + 3` per venue per step (was `+ 2
 
 ### 5.3 `quote_spread_max` headroom audit
 
-Before finalizing skew design, pull recent `x0_*` distributions from `mm_optimizer_facts`:
+Before finalizing skew design, pull recent `x0_`* distributions from `mm_optimizer_facts`:
 
 
 | Typical x0 vs cap              | Action                                                                                                  |
@@ -379,16 +381,16 @@ Files: `mm/strategies/negative_objective_policy.py`, `mm/runtime/config.py`, exa
 ## 9. Implementation Roadmap
 
 
-| Order | Item                  | What changes                                 | Effort    | Depends on           |
-| ----- | --------------------- | -------------------------------------------- | --------- | -------------------- |
-| 1     | Objective scaffold    | Normalized terms + diagnostics plumbing      | 1–2 days  | —                    |
-| 2     | Inventory zone        | Trajectory-level `Z` with comfort band       | 1–3 days  | 1                    |
-| 3     | Decoder cleanup       | True available caps; remove ratio preference | 0.5–1 day | 2 validated          |
-| 4     | Spread headroom audit | Check x0 saturation vs cap                   | 0.5–1 day | —                    |
-| 5     | Reservation / price skew | Implicit x0 first; reservation anchor or `delta_skew` if needed | 2–5 days | 2, 4 |
-| 6     | Book-quality bundle   | `B` composite on h=0 action                  | 2–3 days  | 1, 3                 |
-| 7     | Adverse selection     | Audit → CMM/residual/copula                  | 3–10 days | parallel from step 1 |
-| 8     | Policy cleanup        | Demote negative objective; remove stopgap    | 0.5–1 day | 1, 7                 |
+| Order | Item                     | What changes                                                    | Effort    | Depends on           |
+| ----- | ------------------------ | --------------------------------------------------------------- | --------- | -------------------- |
+| 1     | Objective scaffold       | Normalized terms + diagnostics plumbing                         | 1–2 days  | —                    |
+| 2     | Inventory zone           | Trajectory-level `Z` with comfort band                          | 1–3 days  | 1                    |
+| 3     | Decoder cleanup          | True available caps; remove ratio preference                    | 0.5–1 day | 2 validated          |
+| 4     | Spread headroom audit    | Check x0 saturation vs cap                                      | 0.5–1 day | —                    |
+| 5     | Reservation / price skew | Implicit x0 first; reservation anchor or `delta_skew` if needed | 2–5 days  | 2, 4                 |
+| 6     | Book-quality bundle      | `B` composite on h=0 action                                     | 2–3 days  | 1, 3                 |
+| 7     | Adverse selection        | Audit → CMM/residual/copula                                     | 3–10 days | parallel from step 1 |
+| 8     | Policy cleanup           | Demote negative objective; remove stopgap                       | 0.5–1 day | 1, 7                 |
 
 
 **Critical path:** 1 → 2 → (3, 4 parallel) → 5 → 6
@@ -404,23 +406,23 @@ Overall: ~3–4 weeks for objective/decoder core; +3–10 days for adverse selec
 ## 10. Code Touchpoints
 
 
-| Area             | File(s)                                                               | Change                                                        |
-| ---------------- | --------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Objective terms  | **New** `mm/mpc/objective_terms_torch.py` or `mm/mpc/book_quality.py` | Shared `inventory_operational_term()`, `book_quality_term()`  |
-| Single objective | `mm/mpc/reward_tensor.py`                                             | `J = CE - w_inv*Z + w_book*B`                                 |
-| Joint objective  | `mm/mpc/joint_mpc.py`                                                 | Same; consolidated Q for inventory                            |
-| Rollout closure  | `mm/mpc/mpc_tensor_batched.py`                                        | h=0 book terms; trajectory Z; capacity bounds                 |
-| Joint rollout    | `mm/mpc/joint_optimizer.py`                                           | Mirror capacity, objective, coupling                          |
-| Decoder          | `mm/mpc/l_param.py`                                                   | Feasibility by construction; optional `delta_skew`            |
+| Area             | File(s)                                                               | Change                                                             |
+| ---------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Objective terms  | **New** `mm/mpc/objective_terms_torch.py` or `mm/mpc/book_quality.py` | Shared `inventory_operational_term()`, `book_quality_term()`       |
+| Single objective | `mm/mpc/reward_tensor.py`                                             | `J = CE - w_inv*Z + w_book*B`                                      |
+| Joint objective  | `mm/mpc/joint_mpc.py`                                                 | Same; consolidated Q for inventory                                 |
+| Rollout closure  | `mm/mpc/mpc_tensor_batched.py`                                        | h=0 book terms; trajectory Z; capacity bounds                      |
+| Joint rollout    | `mm/mpc/joint_optimizer.py`                                           | Mirror capacity, objective, coupling                               |
+| Decoder          | `mm/mpc/l_param.py`                                                   | Feasibility by construction; optional `delta_skew`                 |
 | Discretization   | `mm/strategies/target_book_builder.py`, `mpc_engine.decide()`         | Reservation anchor shift at `build_joint_target_book_from_sigmoid` |
-| Flow models      | `mm/mpc/market_order_flow_torch.py`                                   | `sample_from_uniforms()` / conditional API                    |
-| Price models     | `mm/mpc/price_torch.py`                                               | Conditional sampling; beta_flow for residual                  |
-| Coupling         | **New** `mm/mpc/coupling.py` (optional)                               | Latent draw, copula, EWMA rho                                 |
-| Strategy         | `mm/strategies/mpc_engine.py`                                         | Config keys, model update for rho                             |
-| Config           | `mm/runtime/config.py`                                                | `w_book`, `w_inv`, `inventory_zone`, `coupling`               |
-| Policy           | `mm/strategies/negative_objective_policy.py`                          | Circuit breaker only                                          |
-| Tests            | `tests/unit/test_`*                                                   | Dimensional consistency, C¹ boundaries, marginal preservation |
-| Offline eval     | `mm/persistence/frame_replay.py`, `mm/application/frame_simulator.py` | Pareto frontier tuning                                        |
+| Flow models      | `mm/mpc/market_order_flow_torch.py`                                   | `sample_from_uniforms()` / conditional API                         |
+| Price models     | `mm/mpc/price_torch.py`                                               | Conditional sampling; beta_flow for residual                       |
+| Coupling         | **New** `mm/mpc/coupling.py` (optional)                               | Latent draw, copula, EWMA rho                                      |
+| Strategy         | `mm/strategies/mpc_engine.py`                                         | Config keys, model update for rho                                  |
+| Config           | `mm/runtime/config.py`                                                | `w_book`, `w_inv`, `inventory_zone`, `coupling`                    |
+| Policy           | `mm/strategies/negative_objective_policy.py`                          | Circuit breaker only                                               |
+| Tests            | `tests/unit/test`_*                                                   | Dimensional consistency, C¹ boundaries, marginal preservation      |
+| Offline eval     | `mm/persistence/frame_replay.py`, `mm/application/frame_simulator.py` | Pareto frontier tuning                                             |
 
 
 ---
@@ -509,18 +511,20 @@ P7 (flow–price coupling) — independent track; start A0 audit in parallel; re
 
 Items explicitly merged from each proposal — use this to spot gaps during implementation review:
 
-| Topic | Grok | Qwen | Gemini | Claude | GPT | Fable | In this doc |
-|-------|------|------|--------|--------|-----|-------|-------------|
-| Flow–price coupling | ✓ | ✓ | ✓ | ✓ (audit-first) | ✓ | ✓ | §7 |
-| Zone inventory term | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | §4.3 |
-| Hard size cap by construction | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | §5.1 |
-| **Reservation price skew** | anchor | x0 + λ | price shading | delta_skew | **r = anchor − λq** | implicit x0 | **§5.2** |
-| Book-quality soft terms | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | §4.2 |
-| Remove imbalance floors | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | §5.2 |
-| `skew_spread_max` / headroom | — | max_skew_bps | spread room | ✓ | 30–50% rule | spread_step | §5.2–5.3 |
-| `R_ref` normalization | — | — | — | ✓ | — | — | §1, config |
-| Negative objective demotion | — | — | — | — | — | ✓ P6 | §8 |
-| Stopgap vol × inventory² | ✓ | ✓ | ✓ | ✓ B3 | ✓ | ✓ P4 | §4.4 |
-| `build_joint_target_book_from_sigmoid` | ✓ | — | — | ✓ | ✓ | ✓ | §5.2, §10 |
-| NetDeltaRiskEngine unchanged | — | — | — | ✓ | — | ✓ | §3 |
+
+| Topic                                  | Grok   | Qwen         | Gemini        | Claude          | GPT                 | Fable       | In this doc |
+| -------------------------------------- | ------ | ------------ | ------------- | --------------- | ------------------- | ----------- | ----------- |
+| Flow–price coupling                    | ✓      | ✓            | ✓             | ✓ (audit-first) | ✓                   | ✓           | §7          |
+| Zone inventory term                    | ✓      | ✓            | ✓             | ✓               | ✓                   | ✓           | §4.3        |
+| Hard size cap by construction          | ✓      | ✓            | ✓             | ✓               | ✓                   | ✓           | §5.1        |
+| **Reservation price skew**             | anchor | x0 + λ       | price shading | delta_skew      | **r = anchor − λq** | implicit x0 | **§5.2**    |
+| Book-quality soft terms                | ✓      | ✓            | ✓             | ✓               | ✓                   | ✓           | §4.2        |
+| Remove imbalance floors                | ✓      | ✓            | ✓             | ✓               | ✓                   | ✓           | §5.2        |
+| `skew_spread_max` / headroom           | —      | max_skew_bps | spread room   | ✓               | 30–50% rule         | spread_step | §5.2–5.3    |
+| `R_ref` normalization                  | —      | —            | —             | ✓               | —                   | —           | §1, config  |
+| Negative objective demotion            | —      | —            | —             | —               | —                   | ✓ P6        | §8          |
+| Stopgap vol × inventory²               | ✓      | ✓            | ✓             | ✓ B3            | ✓                   | ✓ P4        | §4.4        |
+| `build_joint_target_book_from_sigmoid` | ✓      | —            | —             | ✓               | ✓                   | ✓           | §5.2, §10   |
+| NetDeltaRiskEngine unchanged           | —      | —            | —             | ✓               | —                   | ✓           | §3          |
+
 

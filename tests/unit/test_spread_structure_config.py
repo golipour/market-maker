@@ -26,6 +26,7 @@ def test_missing_spread_structure_is_unstructured() -> None:
     params = VenueOptimizerParams.from_mapping({"quote_size_min_per_side": 1.0})
     l_param = params.l_param_config(spread_max=200.0, n_components=4)
     assert params.spread_structure is None
+    assert params.reservation_offset is None
     assert l_param.spread_structured is False
 
 

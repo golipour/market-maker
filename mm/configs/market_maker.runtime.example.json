@@ -257,6 +257,9 @@
               "low_penalty_cap": 1.0,
               "high_penalty_cap": 0.6
             },
+            "reservation_offset": {
+              "r_max": 0.002
+            },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",
             "soft_fill_queue_model": "back_of_queue"
@@ -278,8 +281,8 @@
               "comfort_high": 0.2,
               "low_ramp_width": 0.05,
               "high_ramp_width": 0.05,
-              "low_penalty_cap": 1.0,
-              "high_penalty_cap": 0.6
+              "low_penalty_cap": 0.7,
+              "high_penalty_cap": 1.0
             },
             "spread_structure": {
               "center_sum_max": 100.0,

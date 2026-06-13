@@ -157,8 +157,6 @@ class SigmoidMixtureAction:
         return max(0.0, self.depth_ask(spread) - self.depth_ask(0.0))
 
     def as_effective(self) -> EffectiveSigmoidMixtureAction:
-        """Return a view whose ``depth_*`` methods expose executable depth."""
-
         return EffectiveSigmoidMixtureAction(
             bid_L=self.bid_L,
             bid_k=self.bid_k,
@@ -166,6 +164,8 @@ class SigmoidMixtureAction:
             ask_L=self.ask_L,
             ask_k=self.ask_k,
             ask_x0=self.ask_x0,
+            reservation_r_offset=getattr(self, "reservation_r_offset", 0.0),
+            reservation_mid=getattr(self, "reservation_mid", 0.0),
         )
 
     def depth_bid_derivative(self, spread: float) -> float:
@@ -191,13 +191,29 @@ class EffectiveSigmoidMixtureAction(SigmoidMixtureAction):
 
     The flat parameters remain the original raw sigmoid-mixture parameters, so this
     can still be used for warm starts and diagnostics requiring the underlying model.
+
+    When ``reservation_r_offset`` and ``reservation_mid`` are set, curve evaluation
+    uses ``D(x ± mid * r_offset)`` on the market spread grid (relative reservation shift).
     """
 
+    reservation_r_offset: float = 0.0
+    reservation_mid: float = 0.0
+
+    def _curve_spread_for_market(self, market_spread: float, side: str) -> float:
+        from mm.mpc.l_param import curve_spread_for_market_spread_np
+
+        return curve_spread_for_market_spread_np(
+            market_spread,
+            side=side,
+            mid_price=self.reservation_mid,
+            reservation_r_offset=self.reservation_r_offset,
+        )
+
     def raw_depth_bid(self, spread: float) -> float:
-        return super().depth_bid(spread)
+        return super().depth_bid(self._curve_spread_for_market(spread, "bid"))
 
     def raw_depth_ask(self, spread: float) -> float:
-        return super().depth_ask(spread)
+        return super().depth_ask(self._curve_spread_for_market(spread, "ask"))
 
     def depth_bid(self, spread: float) -> float:
         return max(0.0, self.raw_depth_bid(spread) - self.raw_depth_bid(0.0))

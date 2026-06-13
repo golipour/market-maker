@@ -54,8 +54,35 @@ class SpreadStructureParams:
 
 
 def action_param_len(n_components: int) -> int:
-    """Flat optimizer vector length: sigmoid mixture params plus per-side depth logits."""
-    return 6 * max(1, int(n_components)) + 2
+    """Flat optimizer vector length: mixture params, depth logits, reservation offset."""
+    return 6 * max(1, int(n_components)) + 3
+
+
+def reservation_logit_index(n_components: int) -> int:
+    """Raw logit index for dimensionless reservation offset ``u_r``."""
+
+    return action_param_len(n_components) - 1
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationOffsetParams:
+    """Relative reservation-price shift: ``mid_eff = mid * (1 + r_offset)``."""
+
+    r_max: float
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> ReservationOffsetParams | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("reservation_offset must be an object")
+        r_max = max(0.0, float(payload.get("r_max", 0.0)))
+        if r_max <= 0.0:
+            return None
+        return cls(r_max=r_max)
+
+    def as_mapping(self) -> dict[str, float]:
+        return {"r_max": self.r_max}
 
 
 def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
@@ -97,6 +124,7 @@ class LParamConfig:
     quote_spread_max: float | None = None
     quote_spread_min_depth: float | None = None
     quote_spread_k_epsilon: float = 0.01
+    reservation_r_max: float = 0.0
 
     @property
     def spread_structured(self) -> bool:
@@ -203,6 +231,77 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
                 "spread-structured softmax requires n_components >= 2 "
                 "(spread leg + tail leg)"
             )
+    if float(l_param.reservation_r_max) > 0.0 and float(l_param.reservation_r_max) >= 1.0:
+        raise ValueError("reservation_offset.r_max must be < 1.0 for relative mid shift")
+
+
+def reservation_r_offset_from_flat_np(
+    flat: np.ndarray,
+    *,
+    n_components: int,
+    r_max: float,
+) -> float:
+    if float(r_max) <= 0.0:
+        return 0.0
+    u_r = float(flat[reservation_logit_index(n_components)])
+    return float(r_max) * float(np.tanh(u_r))
+
+
+def reservation_r_offset_from_params(
+    params: Any,
+    *,
+    n_components: int,
+    r_max: float,
+) -> Any:
+    torch = __import__("torch")
+    if float(r_max) <= 0.0:
+        return torch.zeros((), dtype=params.dtype, device=params.device)
+    idx = reservation_logit_index(n_components)
+    u_r = params[idx]
+    return float(r_max) * torch.tanh(u_r)
+
+
+def curve_spread_for_market_spread_np(
+    market_spread: float,
+    *,
+    side: str,
+    mid_price: float,
+    reservation_r_offset: float,
+) -> float:
+    """Numpy map from market spread to sigmoid curve argument."""
+
+    if mid_price <= 0.0 or abs(float(reservation_r_offset)) <= 0.0:
+        return float(market_spread)
+    shift = float(mid_price) * float(reservation_r_offset)
+    if side == "bid":
+        return max(0.0, float(market_spread) + shift)
+    return max(0.0, float(market_spread) - shift)
+
+
+def curve_spread_for_market_spread(
+    market_spread: Any,
+    *,
+    side: str,
+    mid_price: Any | None,
+    reservation_r_offset: Any | None,
+) -> Any:
+    """Map market-grid spread to sigmoid argument with relative reservation shift."""
+
+    if mid_price is None or reservation_r_offset is None:
+        return market_spread
+    torch = __import__("torch")
+    r_off = reservation_r_offset
+    if not torch.is_tensor(r_off):
+        r_off = torch.as_tensor(r_off, dtype=market_spread.dtype, device=market_spread.device)
+    if float(r_off.abs().item()) <= 0.0:
+        return market_spread
+    mid = mid_price
+    if not torch.is_tensor(mid):
+        mid = torch.as_tensor(mid, dtype=market_spread.dtype, device=market_spread.device)
+    shift = mid * r_off
+    if side == "bid":
+        return (market_spread + shift).clamp(min=0.0)
+    return (market_spread - shift).clamp(min=0.0)
 
 
 def _softplus_np(x: float) -> float:
@@ -456,6 +555,7 @@ def sigmoid_action_from_flat_raw(
     ask_quote_size_max: float | None = None,
     bid_quote_size_min: float | None = None,
     ask_quote_size_min: float | None = None,
+    mid_price: float | None = None,
     use_softplus: bool = True,
 ) -> EffectiveSigmoidMixtureAction:
     del use_softplus
@@ -463,6 +563,11 @@ def sigmoid_action_from_flat_raw(
 
     arr = np.asarray(flat, dtype=np.float64)
     n = n_components
+    r_offset = reservation_r_offset_from_flat_np(
+        arr,
+        n_components=n,
+        r_max=float(l_param.reservation_r_max),
+    )
     bid_L, bid_k, bid_x0 = materialize_side_np(
         arr,
         side_off=0,
@@ -486,6 +591,8 @@ def sigmoid_action_from_flat_raw(
         ask_L=tuple(float(x) for x in ask_L),
         ask_k=tuple(float(x) for x in ask_k),
         ask_x0=tuple(float(x) for x in ask_x0),
+        reservation_r_offset=r_offset,
+        reservation_mid=float(mid_price or 0.0),
     )
 
 
