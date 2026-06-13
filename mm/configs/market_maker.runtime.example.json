@@ -106,7 +106,7 @@
         "fill_event_source": "exchange_fill_history"
       },
       "fees": {
-        "maker_fee": 0.00000003
+        "maker_fee": 0.003
       }
     }
   },
@@ -301,9 +301,9 @@
     "mpc-controller": {
       "_comment": "One runtime config currently starts one bot. quoting_exchange is where maker quotes are placed; liquidity_exchange is the second book and optional liquidity-source venue.",
       "preset": "thin_local_liquidity_weighted_mpc",
-      "symbol": "PUMP_IRT",
-      "quoting_exchange": "bitpin",
-      "liquidity_exchange": "bitpin"
+      "symbol": "USDT_IRT",
+      "quoting_exchange": "nobitex",
+      "liquidity_exchange": "nobitex"
     }
   },
   "bus": {

@@ -49,6 +49,7 @@ _VENUE_OPTIMIZER_KEYS = {
     "quote_size_min_per_side",
     "quote_size_max_per_side",
     "spread_structure",
+    "reservation_offset",
     "w_book",
     "w_inv",
     "inventory_zone",
