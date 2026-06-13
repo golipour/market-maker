@@ -76,40 +76,44 @@ def test_local_plus_global_config_loads() -> None:
 def test_example_runtime_config_loads() -> None:
     config = load_runtime_config(EXAMPLE_CONFIG)
 
-    assert config.local.normalized_exchange() == "nobitex"
-    assert config.local.symbol == "USDT_IRT"
-    assert config.binding.local.exchange == "nobitex"
-    assert config.binding.local.symbol == "USDT_IRT"
-    assert config.global_ is not None
-    assert config.global_.normalized_exchange() == "tabdeal"
-    assert config.binding.global_ is not None
-    assert config.binding.global_.exchange == "tabdeal"
-    assert config.binding.global_.symbol == "USDT_IRT"
+    assert config.local.normalized_exchange() == "bitpin"
+    assert config.local.symbol == "PUMP_IRT"
+    assert config.binding.local.exchange == "bitpin"
+    assert config.binding.local.symbol == "PUMP_IRT"
+    assert config.global_ is None
     assert config.interval_ms == 10000
     assert config.controller is not None
     assert config.controller.enabled is True
     assert config.controller.actor_id == "mpc-controller"
     assert config.controller.execution_after_steps == 10
+    assert config.controller.negative_objective_action == "optimizer_action"
     assert config.controller.execution_model == {
         "kind": "real",
-        "local_maker_fee": 0.0015,
-        "global_maker_fee": 0.0033,
+        "local_maker_fee": 3e-8,
     }
-    assert config.liquidity_sourcing.enabled is True
-    assert config.liquidity_sourcing.global_live_orders is True
+    assert config.liquidity_sourcing.enabled is False
+    assert config.liquidity_sourcing.global_live_orders is False
     assert config.execution.local.enabled is True
-    assert config.execution.global_.enabled is True
+    assert config.execution.global_.enabled is False
     assert config.execution.local.planner == "replace"
     assert config.execution.global_.planner == "replace"
     assert config.bus.kind == "redis_streams"
     assert config.persistence.topics == ()
     assert config.resolved_persistence_topics == ()
-    assert "market:events:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
-    assert "market:events:tabdeal:USDT_IRT:10000" in config.effective_persistence_topics
-    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.effective_persistence_topics
+    assert "market:events:bitpin:PUMP_IRT:10000" in config.effective_persistence_topics
+    assert "strategy:joint:frames:bitpin:PUMP_IRT:10000" in config.effective_persistence_topics
     assert "execution:errors" in config.effective_persistence_topics
-    assert "private:state:nobitex:errors" in config.effective_persistence_topics
-    assert "private:state:tabdeal:errors" in config.effective_persistence_topics
+    assert "private:state:bitpin:errors" in config.effective_persistence_topics
+    local_optimizer = (config.controller.optimizer or {}).get("local", {})
+    assert local_optimizer.get("w_book") == pytest.approx(0.002)
+    assert local_optimizer.get("w_inv") == pytest.approx(0.01)
+    assert "spread_structure" not in local_optimizer
+    global_optimizer = (config.controller.optimizer or {}).get("global", {})
+    assert global_optimizer.get("spread_structure") == {
+        "center_sum_max": 100.0,
+        "center_min_depth": 0.3,
+        "center_k_epsilon": 0.01,
+    }
 
 
 def test_single_venue_runtime_config_dataclass() -> None:
@@ -144,6 +148,36 @@ def test_single_venue_runtime_config_dataclass() -> None:
 def test_config_joint_frame_topic_derived_from_local(mapping: dict, expected_joint_topic: str) -> None:
     config = runtime_config_from_mapping(mapping)
     assert config.joint_frame_topic == expected_joint_topic
+
+
+def test_flat_quote_spread_keys_are_rejected_in_optimizer_config() -> None:
+    payload = _runtime_payload()
+    payload["strategy_presets"]["test_preset"]["controller"] = {
+        "enabled": True,
+        "optimizer": {
+            "local": {
+                "quote_size_min_per_side": 1.0,
+                "quote_spread_max": 100.0,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="quote_spread_max"):
+        runtime_config_from_mapping(payload)
+
+
+def test_quote_imbalance_skew_strength_is_rejected_in_optimizer_config() -> None:
+    payload = _runtime_payload()
+    payload["strategy_presets"]["test_preset"]["controller"] = {
+        "enabled": True,
+        "optimizer": {
+            "local": {
+                "quote_size_min_per_side": 1.0,
+                "quote_imbalance_skew_strength": 0.5,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="quote_imbalance_skew_strength"):
+        runtime_config_from_mapping(payload)
 
 
 def test_quote_capacity_ratio_is_rejected_in_optimizer_config() -> None:

@@ -16,9 +16,17 @@ import torch.nn.functional as F
 
 from mm.mpc.l_param import (
     LParamConfig,
+    SpreadStructureParams,
     action_param_len,
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
+)
+from mm.mpc.objective_terms import (
+    BookQualityParams,
+    InventoryZoneParams,
+    book_quality_score,
+    combine_soft_objective_terms,
+    inventory_zone_path_mean,
 )
 from mm.mpc.mpc_state import State
 from mm.core.wallet import portfolio_wealth
@@ -67,12 +75,13 @@ class VenueOptimizerParams:
     n_components: int | None = None
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
-    quote_size_min_per_side: float | None = None
+    quote_size_min_per_side: float = 0.0
     quote_size_max_per_side: float | None = None
-    quote_imbalance_skew_strength: float = 0.0
-    quote_spread_max: float | None = None
-    quote_spread_min_depth: float | None = None
-    quote_spread_k_epsilon: float = 0.01
+    spread_structure: SpreadStructureParams | None = None
+    w_book: float = 0.0
+    w_inv: float = 0.0
+    inventory_zone: InventoryZoneParams | None = None
+    book_quality: BookQualityParams | None = None
     soft_fill_temp: float = 0.1
     soft_fill_activation: str = "sigmoid"
     soft_fill_queue_model: str = "back_of_queue"
@@ -97,37 +106,30 @@ class VenueOptimizerParams:
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
-            quote_size_min_per_side=(
-                float(data.get("quote_size_min_per_side"))
-                if data.get("quote_size_min_per_side") is not None
-                else base.quote_size_min_per_side
+            quote_size_min_per_side=float(
+                data.get("quote_size_min_per_side", base.quote_size_min_per_side)
             ),
             quote_size_max_per_side=(
                 float(data.get("quote_size_max_per_side"))
                 if data.get("quote_size_max_per_side") is not None
                 else base.quote_size_max_per_side
             ),
-            quote_imbalance_skew_strength=max(
-                0.0,
-                float(
-                    data.get(
-                        "quote_imbalance_skew_strength",
-                        base.quote_imbalance_skew_strength,
-                    )
-                ),
+            spread_structure=(
+                SpreadStructureParams.from_mapping(data.get("spread_structure"))
+                if data.get("spread_structure") is not None
+                else base.spread_structure
             ),
-            quote_spread_max=(
-                float(data.get("quote_spread_max"))
-                if data.get("quote_spread_max") is not None
-                else base.quote_spread_max
+            w_book=max(0.0, float(data.get("w_book", base.w_book))),
+            w_inv=max(0.0, float(data.get("w_inv", base.w_inv))),
+            inventory_zone=(
+                InventoryZoneParams.from_mapping(data.get("inventory_zone"))
+                if data.get("inventory_zone") is not None
+                else base.inventory_zone
             ),
-            quote_spread_min_depth=(
-                float(data.get("quote_spread_min_depth"))
-                if data.get("quote_spread_min_depth") is not None
-                else base.quote_spread_min_depth
-            ),
-            quote_spread_k_epsilon=float(
-                data.get("quote_spread_k_epsilon", base.quote_spread_k_epsilon)
+            book_quality=(
+                BookQualityParams.from_mapping(data.get("book_quality"))
+                if data.get("book_quality") is not None
+                else base.book_quality
             ),
             soft_fill_temp=float(data.get("soft_fill_temp", base.soft_fill_temp)),
             soft_fill_activation=_normalize_soft_fill_activation(
@@ -139,9 +141,9 @@ class VenueOptimizerParams:
         )
 
     def validate(self, *, spread_max: float, n_components: int | None, venue: str) -> None:
-        if self.quote_size_min_per_side is None:
+        if float(self.quote_size_min_per_side) < 0.0:
             raise ValueError(
-                f"optimizer.{venue}.quote_size_min_per_side is required"
+                f"optimizer.{venue}.quote_size_min_per_side must be >= 0"
             )
         l_param = self.l_param_config(
             spread_max=spread_max,
@@ -150,8 +152,15 @@ class VenueOptimizerParams:
         validate_l_param_config(l_param)
 
     def l_param_config(self, *, spread_max: float, n_components: int) -> LParamConfig:
-        if self.quote_size_min_per_side is None:
-            raise ValueError("quote_size_min_per_side is required")
+        spread_fields = (
+            self.spread_structure.to_l_param_fields()
+            if self.spread_structure is not None
+            else {
+                "quote_spread_max": None,
+                "quote_spread_min_depth": None,
+                "quote_spread_k_epsilon": 0.01,
+            }
+        )
         return LParamConfig(
             quote_size_min=float(self.quote_size_min_per_side),
             quote_size_max=(
@@ -161,27 +170,43 @@ class VenueOptimizerParams:
             ),
             spread_max=spread_max,
             n_components=n_components,
-            quote_spread_max=self.quote_spread_max,
-            quote_spread_min_depth=self.quote_spread_min_depth,
-            quote_spread_k_epsilon=self.quote_spread_k_epsilon,
+            **spread_fields,
         )
 
     def as_config(self, *, spread_max: float, n_components: int) -> dict[str, Any]:
         del spread_max
-        return {
+        out: dict[str, Any] = {
             "n_components": int(self.n_components or n_components),
             "return_risk_aversion_beta": self.return_risk_aversion_beta,
             "objective_weight": self.objective_weight,
             "quote_size_min_per_side": self.quote_size_min_per_side,
             "quote_size_max_per_side": self.quote_size_max_per_side,
-            "quote_imbalance_skew_strength": self.quote_imbalance_skew_strength,
-            "quote_spread_max": self.quote_spread_max,
-            "quote_spread_min_depth": self.quote_spread_min_depth,
-            "quote_spread_k_epsilon": self.quote_spread_k_epsilon,
+            "w_book": self.w_book,
+            "w_inv": self.w_inv,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
+        if self.spread_structure is not None:
+            out["spread_structure"] = self.spread_structure.as_mapping()
+        if self.inventory_zone is not None:
+            out["inventory_zone"] = {
+                "q_lo": self.inventory_zone.q_lo,
+                "q_hi": self.inventory_zone.q_hi,
+                "q_min": self.inventory_zone.q_min,
+                "q_max": self.inventory_zone.q_max,
+                "p": self.inventory_zone.p,
+            }
+        if self.book_quality is not None:
+            out["book_quality"] = {
+                "spread_target": self.book_quality.spread_target,
+                "depth_target": self.book_quality.depth_target,
+                "v_presence": self.book_quality.v_presence,
+                "v_tightness": self.book_quality.v_tightness,
+                "v_balance": self.book_quality.v_balance,
+                "v_uniformity": self.book_quality.v_uniformity,
+            }
+        return out
 
 
 def _bounds_effective_to_raw(bounds: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -677,23 +702,6 @@ def _delta_wealth_mtm_batched(
     return (W_next - W).squeeze(1)
 
 
-def _quote_imbalance_batched(
-    *,
-    cash: torch.Tensor,
-    inventory: torch.Tensor,
-    mid_price: torch.Tensor,
-) -> torch.Tensor:
-    inv_value = inventory * mid_price
-    denom = torch.abs(inv_value) + torch.abs(cash) + 1e-12
-    return torch.clamp((inv_value - cash) / denom, min=-1.0, max=1.0)
-
-
-def _quote_imbalance_scalar(*, cash: float, inventory: float, mid_price: float) -> float:
-    inv_value = float(inventory) * float(mid_price)
-    denom = abs(inv_value) + abs(float(cash)) + 1e-12
-    return max(-1.0, min(1.0, (inv_value - float(cash)) / denom))
-
-
 def _quote_capacity_bounds_batched(
     *,
     cash: torch.Tensor,
@@ -701,31 +709,19 @@ def _quote_capacity_bounds_batched(
     mid_price: torch.Tensor,
     optimizer: VenueOptimizerParams,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Side max depth from wallet totals (free + locked), not free-only.
-
-    ``MpcStrategyEngine`` passes wallet totals via ``inventory_cash_from_snapshot``.
-    Locked collateral in live orders is included because replace/reconcile execution
-    cancels existing actor orders before placing the target book, releasing that
-    collateral back into the deployable total for the next quote cycle.
-    """
-    base_min = max(0.0, float(optimizer.quote_size_min_per_side or 0.0))
+    """Hard side caps from wallet totals; side mins stay at zero (presence is soft)."""
     hard_cap_value = (
         float(optimizer.quote_size_max_per_side)
         if optimizer.quote_size_max_per_side is not None
         else float("inf")
     )
     hard_cap = torch.full_like(cash, max(0.0, hard_cap_value))
-    base_min_t = torch.full_like(cash, base_min)
     cash_qty = torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
     inventory_qty = torch.clamp(inventory, min=0.0)
     bid_max = torch.minimum(hard_cap, cash_qty)
     ask_max = torch.minimum(hard_cap, inventory_qty)
-    imbalance = _quote_imbalance_batched(cash=cash, inventory=inventory, mid_price=mid_price)
-    skew = max(0.0, float(optimizer.quote_imbalance_skew_strength))
-    bid_floor = base_min_t * (1.0 + skew * torch.relu(-imbalance))
-    ask_floor = base_min_t * (1.0 + skew * torch.relu(imbalance))
-    bid_min = torch.minimum(bid_floor, bid_max)
-    ask_min = torch.minimum(ask_floor, ask_max)
+    bid_min = torch.zeros_like(bid_max)
+    ask_min = torch.zeros_like(ask_max)
     return bid_min, bid_max, ask_min, ask_max
 
 
@@ -736,7 +732,6 @@ def _quote_capacity_bounds_scalar(
     mid_price: float,
     optimizer: VenueOptimizerParams,
 ) -> tuple[float, float, float, float]:
-    base_min = max(0.0, float(optimizer.quote_size_min_per_side or 0.0))
     hard_cap = (
         max(0.0, float(optimizer.quote_size_max_per_side))
         if optimizer.quote_size_max_per_side is not None
@@ -745,13 +740,7 @@ def _quote_capacity_bounds_scalar(
     mid_safe = max(1e-12, float(mid_price))
     bid_max = min(hard_cap, max(0.0, float(cash)) / mid_safe)
     ask_max = min(hard_cap, max(0.0, float(inventory)))
-    imbalance = _quote_imbalance_scalar(cash=cash, inventory=inventory, mid_price=mid_safe)
-    skew = max(0.0, float(optimizer.quote_imbalance_skew_strength))
-    bid_floor = base_min * (1.0 + skew * max(0.0, -imbalance))
-    ask_floor = base_min * (1.0 + skew * max(0.0, imbalance))
-    bid_min = min(bid_floor, bid_max)
-    ask_min = min(ask_floor, ask_max)
-    return bid_min, bid_max, ask_min, ask_max
+    return 0.0, bid_max, 0.0, ask_max
 
 
 class MonteCarloMPCTensorBatched:
@@ -790,10 +779,6 @@ class MonteCarloMPCTensorBatched:
         reference_price_source: str = "global",
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
-        quote_imbalance_skew_strength: float | None = None,
-        quote_spread_max: float | int | None = None,
-        quote_spread_min_depth: float | int | None = None,
-        quote_spread_k_epsilon: float | None = None,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -822,22 +807,10 @@ class MonteCarloMPCTensorBatched:
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
             quote_size_min_per_side=(
-                float(quote_size_min_per_side) if quote_size_min_per_side is not None else None
+                float(quote_size_min_per_side) if quote_size_min_per_side is not None else 0.0
             ),
             quote_size_max_per_side=(
                 float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
-            ),
-            quote_imbalance_skew_strength=(
-                float(quote_imbalance_skew_strength)
-                if quote_imbalance_skew_strength is not None
-                else 0.0
-            ),
-            quote_spread_max=float(quote_spread_max) if quote_spread_max is not None else None,
-            quote_spread_min_depth=(
-                float(quote_spread_min_depth) if quote_spread_min_depth is not None else None
-            ),
-            quote_spread_k_epsilon=(
-                float(quote_spread_k_epsilon) if quote_spread_k_epsilon is not None else 0.01
             ),
             soft_fill_temp=float(soft_fill_temp),
             soft_fill_activation=_normalize_soft_fill_activation(soft_fill_activation),
@@ -868,12 +841,6 @@ class MonteCarloMPCTensorBatched:
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
         self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
         self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
-        self.quote_imbalance_skew_strength = (
-            self.local_optimizer.quote_imbalance_skew_strength
-        )
-        self.quote_spread_max = self.local_optimizer.quote_spread_max
-        self.quote_spread_min_depth = self.local_optimizer.quote_spread_min_depth
-        self.quote_spread_k_epsilon = self.local_optimizer.quote_spread_k_epsilon
         self.soft_fill_temp = self.local_optimizer.soft_fill_temp
         self.soft_fill_activation = self.local_optimizer.soft_fill_activation
         self.soft_fill_queue_model = self.local_optimizer.soft_fill_queue_model
@@ -1172,6 +1139,8 @@ class MonteCarloMPCTensorBatched:
                 total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
                 step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
+                inv_path: list[Any] = []
+                mid_path: list[Any] = []
                 conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
                 conditional_buy_vwap_t = None
                 conditional_sell_vwap_t = None
@@ -1351,6 +1320,8 @@ class MonteCarloMPCTensorBatched:
                     step_reward = step_reward_main
                     if h == 0:
                         step_reward_0 = step_reward
+                    inv_path.append(inv_t.squeeze(1))
+                    mid_path.append(mid_t.squeeze(1))
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
 
@@ -1376,6 +1347,45 @@ class MonteCarloMPCTensorBatched:
                     returns,
                     return_risk_aversion_beta=self.return_risk_aversion_beta,
                 )
+                venue_opt = self.local_optimizer
+                if float(venue_opt.w_book) > 0.0:
+                    book_params = venue_opt.book_quality or BookQualityParams()
+                    book_score, book_components = book_quality_score(
+                        x_torch[:single_len],
+                        l_param=self._l_param_config(),
+                        n_components=n,
+                        bid_quote_size_min=bid_quote_size_min_0,
+                        bid_quote_size_max=bid_quote_size_max_0,
+                        ask_quote_size_min=ask_quote_size_min_0,
+                        ask_quote_size_max=ask_quote_size_max_0,
+                        mid_price=mid_0,
+                        params=book_params,
+                    )
+                    J, components = combine_soft_objective_terms(
+                        J,
+                        components,
+                        w_book=venue_opt.w_book,
+                        w_inv=0.0,
+                        book_score=book_score,
+                        book_components=book_components,
+                    )
+                if float(venue_opt.w_inv) > 0.0 and venue_opt.inventory_zone is not None:
+                    inv_path_t = torch_mod.stack(inv_path, dim=1)
+                    mid_path_t = torch_mod.stack(mid_path, dim=1)
+                    zone_mean, zone_components = inventory_zone_path_mean(
+                        inv_path_t,
+                        mid_path=mid_path_t,
+                        wealth=wealth_0,
+                        zone=venue_opt.inventory_zone,
+                    )
+                    J, components = combine_soft_objective_terms(
+                        J,
+                        components,
+                        w_book=0.0,
+                        w_inv=venue_opt.w_inv,
+                        inventory_zone_mean=zone_mean,
+                        zone_components=zone_components,
+                    )
 
                 def _finite_item(t) -> float:
                     try:

@@ -178,36 +178,48 @@ def delta_consolidated_wealth_batched(
 
 
 def joint_terminal_objective(
-    local_returns: Any,
-    global_returns: Any,
+    returns: Any,
     *,
-    local_return_risk_aversion_beta: float,
-    global_return_risk_aversion_beta: float,
-    local_objective_weight: float,
-    global_objective_weight: float,
-    global_active: float,
+    local_returns: Any | None = None,
+    global_returns: Any | None = None,
+    return_risk_aversion_beta: float,
+    global_active: float = 1.0,
 ) -> tuple[Any, dict[str, Any]]:
-    """Terminal objective with venue-scoped risk-adjusted return terms."""
+    """Terminal objective on consolidated portfolio return with optional venue diagnostics."""
 
     import torch
 
-    local_returns = torch.nan_to_num(local_returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
-    global_returns = torch.nan_to_num(global_returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
-    term_local_return = float(local_objective_weight) * objective_entropic_return(
-        local_returns,
-        beta=local_return_risk_aversion_beta,
+    returns = torch.nan_to_num(returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
+    term_return = objective_entropic_return(
+        returns,
+        beta=return_risk_aversion_beta,
     )
-    term_global_return = (
-        float(global_active)
-        * float(global_objective_weight)
-        * objective_entropic_return(global_returns, beta=global_return_risk_aversion_beta)
-    )
-    components = {
-        "risk_adjusted_return": term_local_return + term_global_return,
-        "local_risk_adjusted_return": term_local_return,
-        "global_risk_adjusted_return": term_global_return,
+    components: dict[str, Any] = {
+        "risk_adjusted_return": term_return,
     }
-    return term_local_return + term_global_return, components
+    if local_returns is not None:
+        local_returns = torch.nan_to_num(
+            local_returns.view(-1),
+            nan=0.0,
+            posinf=1e30,
+            neginf=-1e30,
+        )
+        components["local_risk_adjusted_return"] = objective_entropic_return(
+            local_returns,
+            beta=return_risk_aversion_beta,
+        )
+    if global_returns is not None and float(global_active) > 0.0:
+        global_returns = torch.nan_to_num(
+            global_returns.view(-1),
+            nan=0.0,
+            posinf=1e30,
+            neginf=-1e30,
+        )
+        components["global_risk_adjusted_return"] = objective_entropic_return(
+            global_returns,
+            beta=return_risk_aversion_beta,
+        )
+    return term_return, components
 
 
 def ob_rel_from_market_event(

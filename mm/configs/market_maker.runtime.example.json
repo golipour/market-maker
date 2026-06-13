@@ -154,8 +154,9 @@
         "enabled": true,
         "dry_run": false,
         "execution_after_steps": 10,
-        "_comment_negative_objective_action": "When best risk_adjusted_return < 0: optimizer_action=keep optimizer output, floor_action=per-side floors (default), zero_action=no quotes.",
-        "negative_objective_action": "floor_action",
+        "_comment_negative_objective_action": "When CE is weak: optimizer_action=keep optimizer output (default), floor_action=per-side min depth, zero_action=pull quotes when CE < -negative_objective_zero_threshold.",
+        "negative_objective_action": "optimizer_action",
+        "negative_objective_zero_threshold": 0.0,
         "decision_timeout_ms": 3000,
         "placement_timeout_ms": 7000,
         "placement_max_concurrency": 32,
@@ -241,10 +242,15 @@
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,
             "quote_size_min_per_side": 1.0,
-            "quote_imbalance_skew_strength": 0.5,
-            "quote_spread_max": 200.0,
-            "quote_spread_min_depth": 0.0,
-            "quote_spread_k_epsilon": 0.01,
+            "w_book": 0.002,
+            "w_inv": 0.01,
+            "inventory_zone": {
+              "q_lo": -0.15,
+              "q_hi": 0.15,
+              "q_min": -0.45,
+              "q_max": 0.45,
+              "p": 2.0
+            },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",
             "soft_fill_queue_model": "back_of_queue"
@@ -254,10 +260,20 @@
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,
             "quote_size_min_per_side": 1.0,
-            "quote_imbalance_skew_strength": 0.5,
-            "quote_spread_max": 100.0,
-            "quote_spread_min_depth": 0.3,
-            "quote_spread_k_epsilon": 0.01,
+            "w_book": 0.002,
+            "w_inv": 0.01,
+            "inventory_zone": {
+              "q_lo": -0.15,
+              "q_hi": 0.15,
+              "q_min": -0.45,
+              "q_max": 0.45,
+              "p": 2.0
+            },
+            "spread_structure": {
+              "center_sum_max": 100.0,
+              "center_min_depth": 0.3,
+              "center_k_epsilon": 0.01
+            },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",
             "soft_fill_queue_model": "back_of_queue"

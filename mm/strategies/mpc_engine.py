@@ -48,10 +48,11 @@ _VENUE_OPTIMIZER_KEYS = {
     "objective_weight",
     "quote_size_min_per_side",
     "quote_size_max_per_side",
-    "quote_imbalance_skew_strength",
-    "quote_spread_max",
-    "quote_spread_min_depth",
-    "quote_spread_k_epsilon",
+    "spread_structure",
+    "w_book",
+    "w_inv",
+    "inventory_zone",
+    "book_quality",
     "soft_fill_temp",
     "soft_fill_activation",
     "soft_fill_queue_model",
@@ -67,6 +68,11 @@ _REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
         "target_inventory",
         "target_inventory_multiplier",
         "quote_capacity_ratio",
+        "quote_imbalance_skew_strength",
+        "quote_spread_max",
+        "quote_spread_min_depth",
+        "quote_spread_k_epsilon",
+        "contract_spread_structure",
     }
 )
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
@@ -375,6 +381,7 @@ class MpcStrategyEngine:
         global_sigmoid = self._optimizer_backend.global_sigmoid_action
         sigmoid_action, global_sigmoid, negative_objective_policy = apply_negative_objective_policy(
             mode=self.config.negative_objective_action,
+            zero_threshold=float(self.config.negative_objective_zero_threshold),
             local_action=sigmoid_action,
             global_action=global_sigmoid,
             optimizer_run=optimizer_run,

@@ -496,10 +496,10 @@ class ControllerRuntimeConfig:
     ``execution_after_steps``: MPC runs every frame, but ``OrderManager.sync`` waits until
     ``frame_step > execution_after_steps``.
 
-    ``negative_objective_action``: when best risk-adjusted return is negative, choose how
+    ``negative_objective_action``: when best risk-adjusted return is weak, choose how
     to map the optimizer output before target-book construction — ``optimizer_action``
-    (no override), ``floor_action`` (quote at per-side minimum floors),
-    ``zero_action`` (zero quotes / pull liquidity).
+    (default, no override), ``floor_action`` (quote at per-side minimum floors when CE < 0),
+    ``zero_action`` (zero quotes when CE < -negative_objective_zero_threshold).
     """
 
     enabled: bool = False
@@ -507,7 +507,9 @@ class ControllerRuntimeConfig:
     dry_run: bool = True
     # Warm-up: skip live OrderManager.sync while frame_step <= this value (MPC still runs).
     execution_after_steps: int = 0
-    negative_objective_action: NegativeObjectiveActionMode = "floor_action"
+    negative_objective_action: NegativeObjectiveActionMode = "optimizer_action"
+    # Circuit-breaker threshold for zero_action: apply only when CE < -threshold (return units).
+    negative_objective_zero_threshold: float = 0.0
     # Max wall time for live order sync per frame; keeps diagnostics cadence within interval_ms.
     placement_timeout_ms: int = 3000
     # Max wall time for MPC decision compute per frame; timeout falls back to holding current orders.
@@ -1330,10 +1332,11 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "objective_weight",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
-            "quote_imbalance_skew_strength",
-            "quote_spread_max",
-            "quote_spread_min_depth",
-            "quote_spread_k_epsilon",
+            "spread_structure",
+            "w_book",
+            "w_inv",
+            "inventory_zone",
+            "book_quality",
             "soft_fill_temp",
             "soft_fill_activation",
             "soft_fill_queue_model",
@@ -1349,6 +1352,11 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "target_inventory",
                 "target_inventory_multiplier",
                 "quote_capacity_ratio",
+                "quote_imbalance_skew_strength",
+                "quote_spread_max",
+                "quote_spread_min_depth",
+                "quote_spread_k_epsilon",
+                "contract_spread_structure",
             }
         )
         removed_venue_optimizer_aliases = {
@@ -1371,10 +1379,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 *sorted(removed_threshold_objective_keys),
                 "quote_size_min_per_side",
                 "quote_size_max_per_side",
-                "quote_imbalance_skew_strength",
-                "quote_spread_max",
-                "quote_spread_min_depth",
-                "quote_spread_k_epsilon",
+                "spread_structure",
                 "soft_fill_temp",
                 "soft_fill_activation",
                 "soft_fill_queue_model",
@@ -1438,7 +1443,10 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             ),
         ),
         negative_objective_action=_normalize_negative_objective_action_mode(
-            payload.get("negative_objective_action", "floor_action")
+            payload.get("negative_objective_action", "optimizer_action")
+        ),
+        negative_objective_zero_threshold=max(
+            0.0, float(payload.get("negative_objective_zero_threshold", 0.0))
         ),
         placement_timeout_ms=max(0, int(payload.get("placement_timeout_ms", 3000))),
         decision_timeout_ms=max(0, int(payload.get("decision_timeout_ms", 3000))),
@@ -1552,6 +1560,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "dry_run": config.dry_run,
         "execution_after_steps": config.execution_after_steps,
         "negative_objective_action": config.negative_objective_action,
+        "negative_objective_zero_threshold": config.negative_objective_zero_threshold,
         "placement_timeout_ms": config.placement_timeout_ms,
         "decision_timeout_ms": config.decision_timeout_ms,
         "placement_max_concurrency": config.placement_max_concurrency,
@@ -1585,10 +1594,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.local/global quote_size_min_per_side sets the baseline "
-            "per-side depth floor; quote_size_max_per_side is an optional safety "
-            "cap. Cash/inventory capacity structurally caps each side, and "
-            "quote_imbalance_skew_strength can raise only the correcting-side floor."
+            "optimizer.local/global quote_size_min_per_side is the venue lot-size floor "
+            "for spread-structured decoding; quote_size_max_per_side is an optional safety "
+            "cap. Cash/inventory capacity structurally caps each side; two-sided presence "
+            "is encouraged via w_book * book_quality when configured."
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -1609,14 +1618,20 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "quote_size_min_per_side": "baseline venue cumulative quote depth floor per side at spread_max",
-            "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
-            "quote_imbalance_skew_strength": (
-                "raises the correcting-side min depth from quote_size_min_per_side "
-                "using portfolio imbalance; never lowers the other side below baseline"
+            "quote_size_min_per_side": (
+                "venue lot-size floor for spread-structured decoding at spread_max; "
+                "capacity bounds keep side mins at zero"
             ),
-            "quote_spread_max": "venue maximum allowed sum of first bid/ask spread centers",
-            "quote_spread_min_depth": "venue minimum executable depth at each side's first spread center",
+            "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
+            "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
+            "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
+            "inventory_zone": "comfort band {q_lo, q_hi, q_min, q_max, p} for operational inventory shaping",
+            "book_quality": "sub-weights and targets for presence/tightness/balance/uniformity",
+            "spread_structure": (
+                "optional structured first-touch geometry: center_sum_max caps "
+                "x0_bid,1 + x0_ask,1; center_min_depth floors spread-leg depth at touch; "
+                "center_k_epsilon shapes the first component slope"
+            ),
             "soft_fill_temp": "venue soft-fill temperature",
             "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",
             "soft_fill_queue_model": "venue queue model: pro_rata or back_of_queue",

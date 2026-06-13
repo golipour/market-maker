@@ -27,7 +27,7 @@ _MIN_DEPTH_LOGIT = -20.0
 
 
 def normalize_negative_objective_action_mode(value: Any) -> NegativeObjectiveActionMode:
-    mode = str(value or "floor_action").strip().lower()
+    mode = str(value or "optimizer_action").strip().lower()
     mode = _LEGACY_NEGATIVE_OBJECTIVE_ACTION_ALIASES.get(mode, mode)
     if mode not in ("optimizer_action", "floor_action", "zero_action"):
         raise ValueError(
@@ -149,6 +149,7 @@ def _min_sigmoid_action(
 def apply_negative_objective_policy(
     *,
     mode: NegativeObjectiveActionMode,
+    zero_threshold: float = 0.0,
     local_action: SigmoidMixtureAction,
     global_action: SigmoidMixtureAction | None,
     optimizer_run: OptimizerRunDiagnostics | None,
@@ -160,17 +161,22 @@ def apply_negative_objective_policy(
     """Adjust MPC sigmoid actions when best risk-adjusted return is negative."""
 
     risk_adjusted_return = best_risk_adjusted_return(optimizer_run)
+    threshold = max(0.0, float(zero_threshold))
     meta: dict[str, Any] = {
         "mode": mode,
+        "zero_threshold": threshold,
         "risk_adjusted_return": risk_adjusted_return,
         "applied": False,
         "resolved_action": "optimizer_action",
     }
-    if (
-        mode == "optimizer_action"
-        or risk_adjusted_return is None
-        or risk_adjusted_return >= 0.0
-    ):
+    if risk_adjusted_return is None:
+        return local_action, global_action, meta
+    if mode == "optimizer_action":
+        return local_action, global_action, meta
+    if mode == "zero_action":
+        if risk_adjusted_return >= -threshold:
+            return local_action, global_action, meta
+    elif risk_adjusted_return >= 0.0:
         return local_action, global_action, meta
 
     spread_max = float(config.orderbook_grid.spread_max)

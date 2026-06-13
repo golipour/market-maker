@@ -12,6 +12,47 @@ if TYPE_CHECKING:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
 
 
+@dataclass(frozen=True, slots=True)
+class SpreadStructureParams:
+    """Structured first-touch spread geometry for a venue optimizer block."""
+
+    center_sum_max: float
+    center_min_depth: float = 0.0
+    center_k_epsilon: float = 0.01
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> SpreadStructureParams | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("spread_structure must be an object")
+        center_sum_max = float(payload.get("center_sum_max", 0.0))
+        if center_sum_max <= 0.0:
+            raise ValueError("spread_structure.center_sum_max must be > 0")
+        return cls(
+            center_sum_max=center_sum_max,
+            center_min_depth=max(0.0, float(payload.get("center_min_depth", 0.0))),
+            center_k_epsilon=float(payload.get("center_k_epsilon", 0.01)),
+        )
+
+    def as_mapping(self) -> dict[str, float]:
+        out: dict[str, float] = {"center_sum_max": self.center_sum_max}
+        if self.center_min_depth > 0.0:
+            out["center_min_depth"] = self.center_min_depth
+        if self.center_k_epsilon != 0.01:
+            out["center_k_epsilon"] = self.center_k_epsilon
+        return out
+
+    def to_l_param_fields(self) -> dict[str, Any]:
+        return {
+            "quote_spread_max": self.center_sum_max,
+            "quote_spread_min_depth": (
+                self.center_min_depth if self.center_min_depth > 0.0 else None
+            ),
+            "quote_spread_k_epsilon": self.center_k_epsilon,
+        }
+
+
 def action_param_len(n_components: int) -> int:
     """Flat optimizer vector length: sigmoid mixture params plus per-side depth logits."""
     return 6 * max(1, int(n_components)) + 2
@@ -37,9 +78,9 @@ class LParamConfig:
 
     Without spread geometry: global softmax on ``L`` with ``δ(spread_max)`` normalization.
 
-    With spread geometry (``quote_spread_max`` and ``quote_spread_min_depth``):
-    - first centers satisfy ``x0_1_bid + x0_1_ask <= quote_spread_max`` via a scaled softmax split
-    - component 1 carries at least ``quote_spread_min_depth`` at its center
+    With spread geometry (``spread_structure.center_sum_max`` mapped to ``quote_spread_max``):
+    - first centers satisfy ``x0_1_bid + x0_1_ask <= center_sum_max`` via a scaled softmax split
+    - component 1 may carry at least ``center_min_depth`` at its center when configured
     - tail components fill remaining depth up to a chosen total in
       ``[quote_size_min, quote_size_max]`` at ``spread_max``
 
@@ -59,11 +100,7 @@ class LParamConfig:
 
     @property
     def spread_structured(self) -> bool:
-        if self.quote_spread_max is None or float(self.quote_spread_max) <= 0.0:
-            return False
-        if self.quote_spread_min_depth is None or float(self.quote_spread_min_depth) <= 0.0:
-            return False
-        return True
+        return self.quote_spread_max is not None and float(self.quote_spread_max) > 0.0
 
     def quote_size_midpoint(self) -> float:
         hi = float(self.quote_size_max) if self.quote_size_max is not None else float(self.quote_size_min)
@@ -142,8 +179,8 @@ class LParamConfig:
 def validate_l_param_config(l_param: LParamConfig) -> None:
     lo = float(l_param.quote_size_min)
     hi = float(l_param.quote_size_max) if l_param.quote_size_max is not None else None
-    if lo <= 0.0:
-        raise ValueError("quote_size_min_per_side must be positive")
+    if lo < 0.0:
+        raise ValueError("quote_size_min_per_side must be >= 0")
     if hi is not None and hi <= 0.0:
         raise ValueError("quote_size_max_per_side must be positive when configured")
     if hi is not None and lo > hi:
@@ -155,11 +192,11 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
         q_spread = float(l_param.quote_spread_min_depth or 0.0)
         if s_max > float(l_param.spread_max):
             raise ValueError(
-                f"quote_spread_max ({s_max}) must be <= spread_max ({l_param.spread_max})"
+                f"spread_structure.center_sum_max ({s_max}) must be <= spread_max ({l_param.spread_max})"
             )
         if hi is not None and q_spread > hi:
             raise ValueError(
-                f"quote_spread_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
+                f"spread_structure.center_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
             )
         if int(l_param.n_components) < 2:
             raise ValueError(
@@ -333,7 +370,7 @@ def materialize_side_np(
         quote_size_max=quote_size_max,
     )
     if l_param.spread_structured:
-        q_spread = float(l_param.quote_spread_min_depth)
+        q_spread = float(l_param.quote_spread_min_depth or 0.0)
         delta_at_center = component_delta_at_np(k_eff, x0_eff, float(x0_eff[0]))
         delta_at_max = component_delta_at_np(k_eff, x0_eff, spread_max)
         if n > 1:
@@ -589,7 +626,7 @@ def materialize_side_torch(
         quote_size_max=quote_size_max,
     )
     if l_param.spread_structured:
-        q_spread = float(l_param.quote_spread_min_depth)
+        q_spread = float(l_param.quote_spread_min_depth or 0.0)
         delta_at_center = component_delta_at_torch(k_eff, x0_eff, float(x0_eff[0].item()))
         delta_at_max = component_delta_at_torch(k_eff, x0_eff, spread_max)
         if n > 1:

@@ -18,6 +18,12 @@ from mm.mpc.joint_mpc import (
     _finite_item,
 )
 from mm.mpc.l_param import action_param_len, sigmoid_action_from_flat_raw
+from mm.mpc.objective_terms import (
+    BookQualityParams,
+    book_quality_score,
+    combine_soft_objective_terms,
+    inventory_zone_path_mean,
+)
 from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
 from mm.mpc.mpc_tensor_batched import (
     _book_cumulative_from_arrays,
@@ -401,6 +407,10 @@ def optimize_joint_with_diagnostics(
             total_local_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             total_global_reward = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
             step_reward_0 = torch_mod.zeros(mpc.n_samples, dtype=dtype, device=_device)
+            local_inv_path: list[Any] = []
+            local_mid_path: list[Any] = []
+            global_inv_path: list[Any] = []
+            global_mid_path: list[Any] = []
             local_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             local_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             global_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -704,6 +714,10 @@ def optimize_joint_with_diagnostics(
                     - (global_cash_t + global_inv_t * ref_t)
                 ).squeeze(1)
                 step_reward = local_step_reward + global_step_reward
+                local_inv_path.append(inv_t.squeeze(1))
+                local_mid_path.append(mid_t.squeeze(1))
+                global_inv_path.append(global_inv_t.squeeze(1))
+                global_mid_path.append(global_mid_t.squeeze(1))
                 if h == 0:
                     step_reward_0 = step_reward
                     local_fill_bid_sum = local_fill_bid_sum + local_inv_delta.mean()
@@ -730,14 +744,95 @@ def optimize_joint_with_diagnostics(
             local_returns = total_local_reward / wealth_0
             global_returns = total_global_reward / wealth_0
             J, components = joint_terminal_objective(
-                local_returns,
-                global_returns,
-                local_return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
-                global_return_risk_aversion_beta=global_opt.return_risk_aversion_beta,
-                local_objective_weight=local_opt.objective_weight,
-                global_objective_weight=global_opt.objective_weight,
+                returns,
+                local_returns=local_returns,
+                global_returns=global_returns,
+                return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
                 global_active=global_mask,
             )
+            joint_h0 = x_torch[:joint_step_len]
+            local_h0, global_h0 = torch_mod.split(
+                joint_h0,
+                [local_venue_len, global_venue_len],
+            )
+            if float(local_opt.w_book) > 0.0:
+                book_params = local_opt.book_quality or BookQualityParams()
+                book_score, book_components = book_quality_score(
+                    local_h0,
+                    l_param=local_l_param,
+                    n_components=local_n,
+                    bid_quote_size_min=local_bid_quote_size_min_0,
+                    bid_quote_size_max=local_bid_quote_size_max_0,
+                    ask_quote_size_min=local_ask_quote_size_min_0,
+                    ask_quote_size_max=local_ask_quote_size_max_0,
+                    mid_price=mid_0,
+                    params=book_params,
+                )
+                J, components = combine_soft_objective_terms(
+                    J,
+                    components,
+                    w_book=local_opt.w_book,
+                    w_inv=0.0,
+                    book_score=book_score,
+                    book_components=book_components,
+                )
+            if global_mask > 0.0 and float(global_opt.w_book) > 0.0:
+                book_params = global_opt.book_quality or BookQualityParams()
+                book_score, book_components = book_quality_score(
+                    global_h0,
+                    l_param=global_l_param,
+                    n_components=global_n,
+                    bid_quote_size_min=global_bid_quote_size_min_0,
+                    bid_quote_size_max=global_bid_quote_size_max_0,
+                    ask_quote_size_min=global_ask_quote_size_min_0,
+                    ask_quote_size_max=global_ask_quote_size_max_0,
+                    mid_price=global_mid_0,
+                    params=book_params,
+                )
+                prefixed = {f"global_{key}": value for key, value in book_components.items()}
+                J, components = combine_soft_objective_terms(
+                    J,
+                    components,
+                    w_book=global_opt.w_book,
+                    w_inv=0.0,
+                    book_score=book_score,
+                    book_components=prefixed,
+                )
+            if float(local_opt.w_inv) > 0.0 and local_opt.inventory_zone is not None:
+                zone_mean, zone_components = inventory_zone_path_mean(
+                    torch_mod.stack(local_inv_path, dim=1),
+                    mid_path=torch_mod.stack(local_mid_path, dim=1),
+                    wealth=wealth_0,
+                    zone=local_opt.inventory_zone,
+                )
+                J, components = combine_soft_objective_terms(
+                    J,
+                    components,
+                    w_book=0.0,
+                    w_inv=local_opt.w_inv,
+                    inventory_zone_mean=zone_mean,
+                    zone_components=zone_components,
+                )
+            if (
+                global_mask > 0.0
+                and float(global_opt.w_inv) > 0.0
+                and global_opt.inventory_zone is not None
+            ):
+                zone_mean, zone_components = inventory_zone_path_mean(
+                    torch_mod.stack(global_inv_path, dim=1),
+                    mid_path=torch_mod.stack(global_mid_path, dim=1),
+                    wealth=wealth_0,
+                    zone=global_opt.inventory_zone,
+                )
+                prefixed = {f"global_{key}": value for key, value in zone_components.items()}
+                J, components = combine_soft_objective_terms(
+                    J,
+                    components,
+                    w_book=0.0,
+                    w_inv=global_opt.w_inv,
+                    inventory_zone_mean=zone_mean,
+                    zone_components=prefixed,
+                )
             J_mean_raw = torch_mod.nan_to_num(
                 total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
             )

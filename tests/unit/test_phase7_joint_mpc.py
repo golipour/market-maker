@@ -395,7 +395,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
                     "quote_size_min_per_side": 0.2,
-                    "quote_imbalance_skew_strength": 0.25,
+                    "w_book": 0.001,
+                    "w_inv": 0.005,
                     "soft_fill_temp": 0.11,
                     "soft_fill_activation": "hardsigmoid",
                     "soft_fill_queue_model": "pro_rata",
@@ -406,7 +407,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "return_risk_aversion_beta": 0.8,
                     "quote_size_min_per_side": 1.0,
                     "quote_size_max_per_side": 5.0,
-                    "quote_imbalance_skew_strength": 0.5,
+                    "w_book": 0.002,
+                    "w_inv": 0.01,
                     "soft_fill_temp": 0.33,
                     "soft_fill_activation": "sigmoid",
                     "soft_fill_queue_model": "back_of_queue",
@@ -437,8 +439,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
     assert controller.local_optimizer.quote_size_max_per_side is None
-    assert controller.local_optimizer.quote_imbalance_skew_strength == pytest.approx(0.25)
-    assert controller.global_optimizer.quote_imbalance_skew_strength == pytest.approx(0.5)
+    assert controller.local_optimizer.w_book == pytest.approx(0.001)
+    assert controller.global_optimizer.w_inv == pytest.approx(0.01)
     assert controller.local_optimizer.soft_fill_queue_model == "pro_rata"
     assert controller.global_optimizer.soft_fill_queue_model == "back_of_queue"
     assert controller.reference_price_source == "local"

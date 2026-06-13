@@ -117,6 +117,23 @@ def test_apply_max_zeroes_action_when_objective_negative() -> None:
     assert global_out is None
 
 
+def test_zero_action_respects_threshold() -> None:
+    local = zero_sigmoid_action(1)
+    out, _, meta = apply_negative_objective_policy(
+        mode="zero_action",
+        zero_threshold=0.2,
+        local_action=local,
+        global_action=None,
+        optimizer_run=_negative_optimizer_run(risk_adjusted_return=-0.1),
+        config=_config(),
+        binding=_binding(),
+        state=_state(),
+        global_active=False,
+    )
+    assert meta["applied"] is False
+    assert out is local
+
+
 def test_apply_off_keeps_optimizer_action_when_objective_negative() -> None:
     local = zero_sigmoid_action(1)
     out, _, meta = apply_negative_objective_policy(
