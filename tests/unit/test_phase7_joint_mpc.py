@@ -395,7 +395,6 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
                     "quote_size_min_per_side": 0.2,
-                    "quote_capacity_ratio": 0.8,
                     "quote_imbalance_skew_strength": 0.25,
                     "soft_fill_temp": 0.11,
                     "soft_fill_activation": "hardsigmoid",
@@ -407,7 +406,6 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "return_risk_aversion_beta": 0.8,
                     "quote_size_min_per_side": 1.0,
                     "quote_size_max_per_side": 5.0,
-                    "quote_capacity_ratio": 0.6,
                     "quote_imbalance_skew_strength": 0.5,
                     "soft_fill_temp": 0.33,
                     "soft_fill_activation": "sigmoid",
@@ -438,8 +436,6 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
-    assert controller.local_optimizer.quote_capacity_ratio == pytest.approx(0.8)
-    assert controller.global_optimizer.quote_capacity_ratio == pytest.approx(0.6)
     assert controller.local_optimizer.quote_size_max_per_side is None
     assert controller.local_optimizer.quote_imbalance_skew_strength == pytest.approx(0.25)
     assert controller.global_optimizer.quote_imbalance_skew_strength == pytest.approx(0.5)

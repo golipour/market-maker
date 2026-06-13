@@ -69,7 +69,6 @@ class VenueOptimizerParams:
     objective_weight: float = 1.0
     quote_size_min_per_side: float | None = None
     quote_size_max_per_side: float | None = None
-    quote_capacity_ratio: float = 1.0
     quote_imbalance_skew_strength: float = 0.0
     quote_spread_max: float | None = None
     quote_spread_min_depth: float | None = None
@@ -107,10 +106,6 @@ class VenueOptimizerParams:
                 float(data.get("quote_size_max_per_side"))
                 if data.get("quote_size_max_per_side") is not None
                 else base.quote_size_max_per_side
-            ),
-            quote_capacity_ratio=max(
-                0.0,
-                float(data.get("quote_capacity_ratio", base.quote_capacity_ratio)),
             ),
             quote_imbalance_skew_strength=max(
                 0.0,
@@ -179,7 +174,6 @@ class VenueOptimizerParams:
             "objective_weight": self.objective_weight,
             "quote_size_min_per_side": self.quote_size_min_per_side,
             "quote_size_max_per_side": self.quote_size_max_per_side,
-            "quote_capacity_ratio": self.quote_capacity_ratio,
             "quote_imbalance_skew_strength": self.quote_imbalance_skew_strength,
             "quote_spread_max": self.quote_spread_max,
             "quote_spread_min_depth": self.quote_spread_min_depth,
@@ -707,8 +701,14 @@ def _quote_capacity_bounds_batched(
     mid_price: torch.Tensor,
     optimizer: VenueOptimizerParams,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Side max depth from wallet totals (free + locked), not free-only.
+
+    ``MpcStrategyEngine`` passes wallet totals via ``inventory_cash_from_snapshot``.
+    Locked collateral in live orders is included because replace/reconcile execution
+    cancels existing actor orders before placing the target book, releasing that
+    collateral back into the deployable total for the next quote cycle.
+    """
     base_min = max(0.0, float(optimizer.quote_size_min_per_side or 0.0))
-    ratio = max(0.0, float(optimizer.quote_capacity_ratio))
     hard_cap_value = (
         float(optimizer.quote_size_max_per_side)
         if optimizer.quote_size_max_per_side is not None
@@ -716,8 +716,8 @@ def _quote_capacity_bounds_batched(
     )
     hard_cap = torch.full_like(cash, max(0.0, hard_cap_value))
     base_min_t = torch.full_like(cash, base_min)
-    cash_qty = ratio * torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
-    inventory_qty = ratio * torch.clamp(inventory, min=0.0)
+    cash_qty = torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
+    inventory_qty = torch.clamp(inventory, min=0.0)
     bid_max = torch.minimum(hard_cap, cash_qty)
     ask_max = torch.minimum(hard_cap, inventory_qty)
     imbalance = _quote_imbalance_batched(cash=cash, inventory=inventory, mid_price=mid_price)
@@ -737,15 +737,14 @@ def _quote_capacity_bounds_scalar(
     optimizer: VenueOptimizerParams,
 ) -> tuple[float, float, float, float]:
     base_min = max(0.0, float(optimizer.quote_size_min_per_side or 0.0))
-    ratio = max(0.0, float(optimizer.quote_capacity_ratio))
     hard_cap = (
         max(0.0, float(optimizer.quote_size_max_per_side))
         if optimizer.quote_size_max_per_side is not None
         else float("inf")
     )
     mid_safe = max(1e-12, float(mid_price))
-    bid_max = min(hard_cap, ratio * max(0.0, float(cash)) / mid_safe)
-    ask_max = min(hard_cap, ratio * max(0.0, float(inventory)))
+    bid_max = min(hard_cap, max(0.0, float(cash)) / mid_safe)
+    ask_max = min(hard_cap, max(0.0, float(inventory)))
     imbalance = _quote_imbalance_scalar(cash=cash, inventory=inventory, mid_price=mid_safe)
     skew = max(0.0, float(optimizer.quote_imbalance_skew_strength))
     bid_floor = base_min * (1.0 + skew * max(0.0, -imbalance))
@@ -791,7 +790,6 @@ class MonteCarloMPCTensorBatched:
         reference_price_source: str = "global",
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
-        quote_capacity_ratio: float | None = None,
         quote_imbalance_skew_strength: float | None = None,
         quote_spread_max: float | int | None = None,
         quote_spread_min_depth: float | int | None = None,
@@ -828,9 +826,6 @@ class MonteCarloMPCTensorBatched:
             ),
             quote_size_max_per_side=(
                 float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
-            ),
-            quote_capacity_ratio=(
-                float(quote_capacity_ratio) if quote_capacity_ratio is not None else 1.0
             ),
             quote_imbalance_skew_strength=(
                 float(quote_imbalance_skew_strength)
@@ -873,7 +868,6 @@ class MonteCarloMPCTensorBatched:
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
         self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
         self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
-        self.quote_capacity_ratio = self.local_optimizer.quote_capacity_ratio
         self.quote_imbalance_skew_strength = (
             self.local_optimizer.quote_imbalance_skew_strength
         )

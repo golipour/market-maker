@@ -48,7 +48,6 @@ _VENUE_OPTIMIZER_KEYS = {
     "objective_weight",
     "quote_size_min_per_side",
     "quote_size_max_per_side",
-    "quote_capacity_ratio",
     "quote_imbalance_skew_strength",
     "quote_spread_max",
     "quote_spread_min_depth",
@@ -67,6 +66,7 @@ _REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
         "target_inv",
         "target_inventory",
         "target_inventory_multiplier",
+        "quote_capacity_ratio",
     }
 )
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {

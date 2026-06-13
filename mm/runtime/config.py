@@ -1330,7 +1330,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "objective_weight",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
-            "quote_capacity_ratio",
             "quote_imbalance_skew_strength",
             "quote_spread_max",
             "quote_spread_min_depth",
@@ -1349,6 +1348,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "target_inv",
                 "target_inventory",
                 "target_inventory_multiplier",
+                "quote_capacity_ratio",
             }
         )
         removed_venue_optimizer_aliases = {
@@ -1371,7 +1371,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 *sorted(removed_threshold_objective_keys),
                 "quote_size_min_per_side",
                 "quote_size_max_per_side",
-                "quote_capacity_ratio",
                 "quote_imbalance_skew_strength",
                 "quote_spread_max",
                 "quote_spread_min_depth",
@@ -1612,10 +1611,6 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
             "quote_size_min_per_side": "baseline venue cumulative quote depth floor per side at spread_max",
             "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
-            "quote_capacity_ratio": (
-                "venue side-cap ratio: bid max=min(optional config max, ratio*cash/mid); "
-                "ask max=min(optional config max, ratio*inventory)"
-            ),
             "quote_imbalance_skew_strength": (
                 "raises the correcting-side min depth from quote_size_min_per_side "
                 "using portfolio imbalance; never lowers the other side below baseline"

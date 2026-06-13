@@ -144,3 +144,18 @@ def test_single_venue_runtime_config_dataclass() -> None:
 def test_config_joint_frame_topic_derived_from_local(mapping: dict, expected_joint_topic: str) -> None:
     config = runtime_config_from_mapping(mapping)
     assert config.joint_frame_topic == expected_joint_topic
+
+
+def test_quote_capacity_ratio_is_rejected_in_optimizer_config() -> None:
+    payload = _runtime_payload()
+    payload["strategy_presets"]["test_preset"]["controller"] = {
+        "enabled": True,
+        "optimizer": {
+            "local": {
+                "quote_size_min_per_side": 1.0,
+                "quote_capacity_ratio": 0.5,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="quote_capacity_ratio"):
+        runtime_config_from_mapping(payload)
