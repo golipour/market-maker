@@ -3598,10 +3598,50 @@ def model_parameters() -> dict[str, Any]:
 
 def optimizer_diagnostics() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Optimizer objective, contribution fractions, and timing.", y=0),
+        _text(
+            1,
+            "Scope",
+            "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), and timing.",
+            y=0,
+        ),
         _panel(2, "Objective value", "timeseries", PG_DS, _optimizer_objective_sql(), x=0, y=3, w=24, unit="sci", decimals=4),
-        _panel(3, "Contribution fractions", "timeseries", PG_DS, _optimizer_contrib_sql(), x=0, y=11),
-        _panel(4, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11),
+        _panel(
+            3,
+            "Contribution fractions",
+            "timeseries",
+            PG_DS,
+            _optimizer_contrib_sql(),
+            x=0,
+            y=11,
+            w=12,
+            unit="percentunit",
+            decimals=2,
+        ),
+        _panel(4, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11, w=12),
+        _panel(
+            5,
+            "Objective components (weighted J terms)",
+            "timeseries",
+            PG_DS,
+            _optimizer_weighted_components_sql(),
+            x=0,
+            y=19,
+            w=12,
+            unit="sci",
+            decimals=4,
+        ),
+        _panel(
+            6,
+            "Book quality breakdown",
+            "timeseries",
+            PG_DS,
+            _optimizer_book_breakdown_sql(),
+            x=12,
+            y=19,
+            w=12,
+            unit="percentunit",
+            decimals=2,
+        ),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
@@ -4324,12 +4364,64 @@ WHERE {_diagnostics_filter()}
 ORDER BY 1"""
 
 
+_OBJECTIVE_CONTRIBUTION_KEYS_SQL = ", ".join(
+    f"'{key}'"
+    for key in (
+        "risk_adjusted_return",
+        "book_quality",
+        "inventory_zone_penalty",
+        "global_book_quality",
+        "global_inventory_zone_penalty",
+    )
+)
+
+
 def _optimizer_contrib_sql() -> str:
     value = _numeric_sql("kv.value", default="NULL")
     return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
 FROM mm_events e
-CROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{{}}'::jsonb)) AS kv
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(
+    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],
+    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],
+    '{{}}'::jsonb
+  )
+) AS kv
 WHERE {_diagnostics_filter()}
+  AND kv.key IN ({_OBJECTIVE_CONTRIBUTION_KEYS_SQL})
+ORDER BY 1"""
+
+
+def _optimizer_weighted_components_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND kv.key IN ({_OBJECTIVE_CONTRIBUTION_KEYS_SQL})
+ORDER BY 1"""
+
+
+def _optimizer_book_breakdown_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND (
+    kv.key LIKE 'book_%'
+    OR kv.key LIKE 'global_book_%'
+  )
+  AND kv.key NOT IN (
+    'book_quality',
+    'global_book_quality',
+    'book_quality_score',
+    'global_book_quality_score'
+  )
 ORDER BY 1"""
 
 

@@ -244,6 +244,11 @@
             "quote_size_min_per_side": 1.0,
             "w_book": 0.002,
             "w_inv": 0.01,
+            "book_quality": {
+              "spread_target": 50.0,
+              "depth_target": 1.0,
+              "measure": "quoted"
+            },
             "inventory_zone": {
               "q_lo": -0.15,
               "q_hi": 0.15,
@@ -262,6 +267,11 @@
             "quote_size_min_per_side": 1.0,
             "w_book": 0.002,
             "w_inv": 0.01,
+            "book_quality": {
+              "spread_target": 50.0,
+              "depth_target": 1.0,
+              "measure": "quoted"
+            },
             "inventory_zone": {
               "q_lo": -0.15,
               "q_hi": 0.15,

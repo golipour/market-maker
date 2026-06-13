@@ -757,16 +757,20 @@ def optimize_joint_with_diagnostics(
             )
             if float(local_opt.w_book) > 0.0:
                 book_params = local_opt.book_quality or BookQualityParams()
+                use_combined = book_params.measure == "combined"
                 book_score, book_components = book_quality_score(
                     local_h0,
                     l_param=local_l_param,
                     n_components=local_n,
+                    spread_grid=spread_grid,
                     bid_quote_size_min=local_bid_quote_size_min_0,
                     bid_quote_size_max=local_bid_quote_size_max_0,
                     ask_quote_size_min=local_ask_quote_size_min_0,
                     ask_quote_size_max=local_ask_quote_size_max_0,
                     mid_price=mid_0,
                     params=book_params,
+                    market_cum_bid=book_cum_bid if use_combined else None,
+                    market_cum_ask=book_cum_ask if use_combined else None,
                 )
                 J, components = combine_soft_objective_terms(
                     J,
@@ -778,25 +782,30 @@ def optimize_joint_with_diagnostics(
                 )
             if global_mask > 0.0 and float(global_opt.w_book) > 0.0:
                 book_params = global_opt.book_quality or BookQualityParams()
+                use_combined = book_params.measure == "combined"
                 book_score, book_components = book_quality_score(
                     global_h0,
                     l_param=global_l_param,
                     n_components=global_n,
+                    spread_grid=spread_grid,
                     bid_quote_size_min=global_bid_quote_size_min_0,
                     bid_quote_size_max=global_bid_quote_size_max_0,
                     ask_quote_size_min=global_ask_quote_size_min_0,
                     ask_quote_size_max=global_ask_quote_size_max_0,
                     mid_price=global_mid_0,
                     params=book_params,
+                    market_cum_bid=global_book_cum_bid if use_combined else None,
+                    market_cum_ask=global_book_cum_ask if use_combined else None,
                 )
-                prefixed = {f"global_{key}": value for key, value in book_components.items()}
                 J, components = combine_soft_objective_terms(
                     J,
                     components,
                     w_book=global_opt.w_book,
                     w_inv=0.0,
                     book_score=book_score,
-                    book_components=prefixed,
+                    book_components=book_components,
+                    book_term="global_book_quality",
+                    component_prefix="global_",
                 )
             if float(local_opt.w_inv) > 0.0 and local_opt.inventory_zone is not None:
                 zone_mean, zone_components = inventory_zone_path_mean(
@@ -824,14 +833,15 @@ def optimize_joint_with_diagnostics(
                     wealth=wealth_0,
                     zone=global_opt.inventory_zone,
                 )
-                prefixed = {f"global_{key}": value for key, value in zone_components.items()}
                 J, components = combine_soft_objective_terms(
                     J,
                     components,
                     w_book=0.0,
                     w_inv=global_opt.w_inv,
                     inventory_zone_mean=zone_mean,
-                    zone_components=prefixed,
+                    zone_components=zone_components,
+                    zone_term="global_inventory_zone_penalty",
+                    component_prefix="global_",
                 )
             J_mean_raw = torch_mod.nan_to_num(
                 total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30

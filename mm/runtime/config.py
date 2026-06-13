@@ -1626,7 +1626,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
             "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
             "inventory_zone": "comfort band {q_lo, q_hi, q_min, q_max, p} for operational inventory shaping",
-            "book_quality": "sub-weights and targets for presence/tightness/balance/uniformity",
+            "book_quality": (
+                "sub-weights and targets for presence/tightness/balance/uniformity; "
+                "measure='quoted' scores only your decoded quotes (default), "
+                "measure='combined' adds resting market depth at h=0"
+            ),
             "spread_structure": (
                 "optional structured first-touch geometry: center_sum_max caps "
                 "x0_bid,1 + x0_ask,1; center_min_depth floors spread-leg depth at touch; "

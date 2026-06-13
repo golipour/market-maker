@@ -3,8 +3,12 @@ from __future__ import annotations
 import pytest
 import torch
 
+from mm.mpc.l_param import LParamConfig
+from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange, _spread_grid_tensor
 from mm.mpc.objective_terms import (
+    BookQualityParams,
     InventoryZoneParams,
+    book_quality_score,
     combine_soft_objective_terms,
     inventory_zone_penalty,
 )
@@ -41,3 +45,104 @@ def test_combine_soft_objective_terms_keeps_ce_component_pure() -> None:
     )
     assert float(objective) == pytest.approx(0.5 + 0.1 * 0.8 - 0.05 * 0.2)
     assert float(components["risk_adjusted_return"]) == pytest.approx(0.5)
+    assert float(components["book_quality"]) == pytest.approx(0.08)
+    assert float(components["inventory_zone_penalty"]) == pytest.approx(-0.01)
+    assert float(components["book_quality_score"]) == pytest.approx(0.8)
+    assert float(components["inventory_zone_penalty_raw"]) == pytest.approx(0.2)
+
+
+def test_book_quality_quoted_mode_gradients_flow() -> None:
+    spread_max = 100.0
+    spread_step = 20.0
+    grid_levels = 5
+    spread_grid = _spread_grid_tensor(
+        torch,
+        grid_levels,
+        spread_step,
+        torch.device("cpu"),
+        torch.float64,
+        spread_max=spread_max,
+    )
+    l_param = LParamConfig(
+        quote_size_min=0.0,
+        quote_size_max=10.0,
+        spread_max=spread_max,
+        n_components=2,
+    )
+    flat = torch.tensor(
+        _initial_action_uniform_marginal_qrange(
+            n_components=2,
+            spread_max=spread_max,
+            l_param=l_param,
+        ),
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    score, components = book_quality_score(
+        flat,
+        l_param=l_param,
+        n_components=2,
+        spread_grid=spread_grid,
+        bid_quote_size_min=0.0,
+        bid_quote_size_max=10.0,
+        ask_quote_size_min=0.0,
+        ask_quote_size_max=10.0,
+        mid_price=100.0,
+        params=BookQualityParams(measure="quoted"),
+    )
+    score.backward()
+    assert flat.grad is not None
+    assert torch.isfinite(flat.grad).all()
+    assert 0.0 <= float(score) <= 1.0
+    assert 0.0 <= float(components["book_uniformity"]) <= 1.0
+
+
+def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
+    spread_max = 100.0
+    spread_step = 20.0
+    spread_grid = _spread_grid_tensor(
+        torch,
+        grid_levels=5,
+        spread_step=spread_step,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+        spread_max=spread_max,
+    )
+    l_param = LParamConfig(
+        quote_size_min=0.0,
+        quote_size_max=10.0,
+        spread_max=spread_max,
+        n_components=1,
+    )
+    flat = torch.zeros(8, dtype=torch.float64)
+    flat[6] = -30.0
+    flat[7] = -30.0
+    market_cum_bid = torch.tensor([5.0, 5.0, 5.0, 5.0, 5.0], dtype=torch.float64)
+    market_cum_ask = torch.tensor([4.0, 4.0, 4.0, 4.0, 4.0], dtype=torch.float64)
+    quoted_score, quoted_components = book_quality_score(
+        flat,
+        l_param=l_param,
+        n_components=1,
+        spread_grid=spread_grid,
+        bid_quote_size_min=0.0,
+        bid_quote_size_max=10.0,
+        ask_quote_size_min=0.0,
+        ask_quote_size_max=10.0,
+        mid_price=100.0,
+        params=BookQualityParams(measure="quoted", depth_target=1.0),
+    )
+    combined_score, combined_components = book_quality_score(
+        flat,
+        l_param=l_param,
+        n_components=1,
+        spread_grid=spread_grid,
+        bid_quote_size_min=0.0,
+        bid_quote_size_max=10.0,
+        ask_quote_size_min=0.0,
+        ask_quote_size_max=10.0,
+        mid_price=100.0,
+        params=BookQualityParams(measure="combined", depth_target=1.0),
+        market_cum_bid=market_cum_bid,
+        market_cum_ask=market_cum_ask,
+    )
+    assert float(combined_components["book_presence"]) > float(quoted_components["book_presence"])

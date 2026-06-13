@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Optimizer objective, contribution fractions, and timing.",
+        "content": "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), and timing.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -78,8 +78,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "decimals": 3
+          "unit": "percentunit",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -99,7 +99,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','objective','contribution_fractions'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],\n    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -150,6 +150,98 @@
         }
       ],
       "title": "Optimizer timings",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "sci",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Objective components (weighted J terms)",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND (\n    kv.key LIKE 'book_%'\n    OR kv.key LIKE 'global_book_%'\n  )\n  AND kv.key NOT IN (\n    'book_quality',\n    'global_book_quality',\n    'book_quality_score',\n    'global_book_quality_score'\n  )\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Book quality breakdown",
       "type": "timeseries",
       "options": {
         "legend": {

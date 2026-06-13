@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from mm.mpc.l_param import (
-    LParamConfig,
-    component_delta_at_torch,
-    component_delta_spread_range_torch,
-    materialize_side_torch,
+from mm.mpc.l_param import LParamConfig, materialize_side_torch
+from mm.mpc.state_tensor import (
+    depth_bid_derivative_tensor,
+    depth_ask_derivative_tensor,
+    effective_depth_ask_tensor,
+    effective_depth_bid_tensor,
 )
 
 
@@ -46,6 +47,8 @@ class InventoryZoneParams:
 class BookQualityParams:
     spread_target: float = 50.0
     depth_target: float = 1.0
+    touch_spread_fraction: float = 0.01
+    measure: str = "quoted"
     v_presence: float = 0.25
     v_tightness: float = 0.25
     v_balance: float = 0.25
@@ -57,9 +60,17 @@ class BookQualityParams:
             return None
         if not isinstance(payload, dict):
             raise ValueError("book_quality must be an object")
+        measure = str(payload.get("measure", "quoted")).strip().lower()
+        if measure not in ("quoted", "combined"):
+            raise ValueError("book_quality.measure must be 'quoted' or 'combined'")
         return cls(
             spread_target=max(1e-9, float(payload.get("spread_target", 50.0))),
             depth_target=max(1e-9, float(payload.get("depth_target", 1.0))),
+            touch_spread_fraction=max(
+                1e-9,
+                float(payload.get("touch_spread_fraction", 0.01)),
+            ),
+            measure=measure,
             v_presence=float(payload.get("v_presence", 0.25)),
             v_tightness=float(payload.get("v_tightness", 0.25)),
             v_balance=float(payload.get("v_balance", 0.25)),
@@ -128,21 +139,55 @@ def inventory_zone_path_mean(
     return path_mean, {"inventory_zone_penalty": path_mean}
 
 
+def _market_level_from_cumulative(cum: Any) -> Any:
+    torch = _torch()
+    prev = torch.cat([torch.zeros(1, dtype=cum.dtype, device=cum.device), cum[:-1]])
+    return torch.clamp(cum - prev, min=0.0)
+
+
+def _cum_depth_at_spread(cum: Any, spread_grid: Any, spread: float) -> Any:
+    torch = _torch()
+    spread_val = max(0.0, float(spread))
+    idx = torch.searchsorted(spread_grid, torch.tensor(spread_val, dtype=spread_grid.dtype, device=spread_grid.device))
+    idx = int(idx.item())
+    if idx <= 0:
+        if spread_grid.numel() == 0:
+            return torch.zeros((), dtype=cum.dtype, device=cum.device)
+        edge = torch.clamp(spread_grid[0], min=1e-12)
+        return cum[0] * (spread_val / edge)
+    idx = min(idx, int(cum.numel()) - 1)
+    return cum[idx]
+
+
+def _uniformity_from_marginals(marginals: Any) -> Any:
+    torch = _torch()
+    mean = marginals.mean()
+    var = ((marginals - mean) ** 2).mean()
+    return 1.0 - var / (mean * mean + var + 1e-9)
+
+
 def book_quality_score(
     action_flat: Any,
     *,
     l_param: LParamConfig,
     n_components: int,
+    spread_grid: Any,
     bid_quote_size_min: Any | None,
     bid_quote_size_max: Any | None,
     ask_quote_size_min: Any | None,
     ask_quote_size_max: Any | None,
     mid_price: float,
     params: BookQualityParams,
+    market_cum_bid: Any | None = None,
+    market_cum_ask: Any | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Scalar book-quality score in [0, 1] from the h=0 decoded action."""
 
     torch = _torch()
+    use_combined = str(params.measure).strip().lower() == "combined"
+    if use_combined and (market_cum_bid is None or market_cum_ask is None):
+        raise ValueError("book_quality.measure='combined' requires market cumulative depth tensors")
+
     bid_L, bid_k, bid_x0 = materialize_side_torch(
         action_flat,
         side_off=0,
@@ -160,16 +205,81 @@ def book_quality_score(
         quote_size_max=ask_quote_size_max,
     )
     spread_max = float(l_param.spread_max)
-    delta_max_bid = component_delta_spread_range_torch(bid_k, bid_x0, spread_max)
-    delta_max_ask = component_delta_spread_range_torch(ask_k, ask_x0, spread_max)
-    q_bid = (bid_L * delta_max_bid).sum()
-    q_ask = (ask_L * delta_max_ask).sum()
+    touch = max(1e-9, spread_max * float(params.touch_spread_fraction))
 
-    touch = max(1e-9, float(l_param.spread_max) * 0.01)
-    delta_touch_bid = component_delta_at_torch(bid_k, bid_x0, touch)
-    delta_touch_ask = component_delta_at_torch(ask_k, ask_x0, touch)
-    d_bid_touch = (bid_L * delta_touch_bid).sum()
-    d_ask_touch = (ask_L * delta_touch_ask).sum()
+    depth_bid = effective_depth_bid_tensor(
+        action_flat,
+        spread_grid,
+        n_components,
+        l_param=l_param,
+        quote_size_min=bid_quote_size_min,
+        quote_size_max=bid_quote_size_max,
+    )
+    depth_ask = effective_depth_ask_tensor(
+        action_flat,
+        spread_grid,
+        n_components,
+        l_param=l_param,
+        quote_size_min=ask_quote_size_min,
+        quote_size_max=ask_quote_size_max,
+    )
+    q_bid = depth_bid[-1]
+    q_ask = depth_ask[-1]
+
+    depth_touch_bid = effective_depth_bid_tensor(
+        action_flat,
+        torch.tensor([touch], dtype=spread_grid.dtype, device=spread_grid.device),
+        n_components,
+        l_param=l_param,
+        quote_size_min=bid_quote_size_min,
+        quote_size_max=bid_quote_size_max,
+    )[0]
+    depth_touch_ask = effective_depth_ask_tensor(
+        action_flat,
+        torch.tensor([touch], dtype=spread_grid.dtype, device=spread_grid.device),
+        n_components,
+        l_param=l_param,
+        quote_size_min=ask_quote_size_min,
+        quote_size_max=ask_quote_size_max,
+    )[0]
+
+    if use_combined:
+        market_touch_bid = _cum_depth_at_spread(market_cum_bid, spread_grid, touch)
+        market_touch_ask = _cum_depth_at_spread(market_cum_ask, spread_grid, touch)
+        market_q_bid = market_cum_bid[-1]
+        market_q_ask = market_cum_ask[-1]
+        d_bid_touch = depth_touch_bid + market_touch_bid
+        d_ask_touch = depth_touch_ask + market_touch_ask
+        q_bid = q_bid + market_q_bid
+        q_ask = q_ask + market_q_ask
+        bid_marg = depth_bid_derivative_tensor(
+            action_flat,
+            spread_grid,
+            n_components,
+            l_param=l_param,
+        ) + _market_level_from_cumulative(market_cum_bid)
+        ask_marg = depth_ask_derivative_tensor(
+            action_flat,
+            spread_grid,
+            n_components,
+            l_param=l_param,
+        ) + _market_level_from_cumulative(market_cum_ask)
+    else:
+        d_bid_touch = depth_touch_bid
+        d_ask_touch = depth_touch_ask
+        bid_marg = depth_bid_derivative_tensor(
+            action_flat,
+            spread_grid,
+            n_components,
+            l_param=l_param,
+        )
+        ask_marg = depth_ask_derivative_tensor(
+            action_flat,
+            spread_grid,
+            n_components,
+            l_param=l_param,
+        )
+
     smooth_min = torch.minimum(d_bid_touch, d_ask_touch)
     q_ref = max(1e-9, float(params.depth_target))
     presence = smooth_min / (q_ref + smooth_min)
@@ -182,13 +292,9 @@ def book_quality_score(
     denom = q_bid_notional + q_ask_notional + 1e-9
     balance = 1.0 - torch.abs(q_bid_notional - q_ask_notional) / denom
 
-    bid_mean = bid_L.mean()
-    bid_var = ((bid_L - bid_mean) ** 2).mean()
-    ask_mean = ask_L.mean()
-    ask_var = ((ask_L - ask_mean) ** 2).mean()
-    cv_bid = bid_var / (bid_mean * bid_mean + bid_var + 1e-9)
-    cv_ask = ask_var / (ask_mean * ask_mean + ask_var + 1e-9)
-    uniformity = 0.5 * (1.0 / (1.0 + cv_bid) + 1.0 / (1.0 + cv_ask))
+    uniformity = 0.5 * (
+        _uniformity_from_marginals(bid_marg) + _uniformity_from_marginals(ask_marg)
+    )
 
     w_p = float(params.v_presence)
     w_t = float(params.v_tightness)
@@ -207,6 +313,17 @@ def book_quality_score(
     return score, components
 
 
+OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
+    {
+        "risk_adjusted_return",
+        "book_quality",
+        "inventory_zone_penalty",
+        "global_book_quality",
+        "global_inventory_zone_penalty",
+    }
+)
+
+
 def combine_soft_objective_terms(
     base_objective: Any,
     components: dict[str, Any],
@@ -217,15 +334,31 @@ def combine_soft_objective_terms(
     inventory_zone_mean: Any | None = None,
     book_components: dict[str, Any] | None = None,
     zone_components: dict[str, Any] | None = None,
+    book_term: str = "book_quality",
+    zone_term: str = "inventory_zone_penalty",
+    component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
     """Combine CE return with optional book-quality reward and inventory-zone penalty."""
 
     out = dict(components)
     objective = base_objective
     if book_score is not None and float(w_book) > 0.0:
-        objective = objective + float(w_book) * book_score
-        out.update(book_components or {})
+        weighted_book = float(w_book) * book_score
+        objective = objective + weighted_book
+        out[book_term] = weighted_book
+        for key, value in (book_components or {}).items():
+            if key == "book_quality":
+                out[f"{book_term}_score"] = value
+            else:
+                diag_key = key if key.startswith("book_") else f"book_{key}"
+                out[f"{component_prefix}{diag_key}"] = value
     if inventory_zone_mean is not None and float(w_inv) > 0.0:
-        objective = objective - float(w_inv) * inventory_zone_mean
-        out.update(zone_components or {})
+        weighted_zone = -float(w_inv) * inventory_zone_mean
+        objective = objective + weighted_zone
+        out[zone_term] = weighted_zone
+        for key, value in (zone_components or {}).items():
+            if key == "inventory_zone_penalty":
+                out[f"{zone_term}_raw"] = value
+            else:
+                out[f"{component_prefix}{key}"] = value
     return objective, out

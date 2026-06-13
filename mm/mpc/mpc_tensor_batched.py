@@ -201,6 +201,8 @@ class VenueOptimizerParams:
             out["book_quality"] = {
                 "spread_target": self.book_quality.spread_target,
                 "depth_target": self.book_quality.depth_target,
+                "touch_spread_fraction": self.book_quality.touch_spread_fraction,
+                "measure": self.book_quality.measure,
                 "v_presence": self.book_quality.v_presence,
                 "v_tightness": self.book_quality.v_tightness,
                 "v_balance": self.book_quality.v_balance,
@@ -1350,16 +1352,20 @@ class MonteCarloMPCTensorBatched:
                 venue_opt = self.local_optimizer
                 if float(venue_opt.w_book) > 0.0:
                     book_params = venue_opt.book_quality or BookQualityParams()
+                    use_combined = book_params.measure == "combined"
                     book_score, book_components = book_quality_score(
                         x_torch[:single_len],
                         l_param=self._l_param_config(),
                         n_components=n,
+                        spread_grid=spread_grid,
                         bid_quote_size_min=bid_quote_size_min_0,
                         bid_quote_size_max=bid_quote_size_max_0,
                         ask_quote_size_min=ask_quote_size_min_0,
                         ask_quote_size_max=ask_quote_size_max_0,
                         mid_price=mid_0,
                         params=book_params,
+                        market_cum_bid=book_cum_bid if use_combined else None,
+                        market_cum_ask=book_cum_ask if use_combined else None,
                     )
                     J, components = combine_soft_objective_terms(
                         J,

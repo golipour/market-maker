@@ -8,6 +8,7 @@ from typing import Any
 
 from mm.diagnostics.models import ActionSnapshot, ObjectiveSnapshot
 from mm.mpc.mpc_state import SigmoidMixtureAction
+from mm.mpc.objective_terms import OBJECTIVE_CONTRIBUTION_KEYS
 
 
 def _finite(value: Any, default: float = 0.0) -> float:
@@ -30,10 +31,14 @@ def compute_contribution_fractions(
     """
     Share of each weighted objective term in the scalar ``J`` optimized at closure end.
 
-    Uses ``|component| / sum(|component|)`` where each ``component`` is already the
-    fully weighted term from ``terminal_objective``.
+    Uses ``|component| / sum(|component|)`` over objective-level keys only, where each
+    ``component`` is the fully weighted term stored in ``J`` (CE, ``w_book·B``, ``-w_inv·Z``).
     """
-    abs_components = {str(k): abs(float(v)) for k, v in components.items()}
+    abs_components = {
+        str(k): abs(float(v))
+        for k, v in components.items()
+        if str(k) in OBJECTIVE_CONTRIBUTION_KEYS
+    }
     total_abs = sum(abs_components.values())
     if total_abs <= float(eps):
         return {k: 0.0 for k in abs_components}
