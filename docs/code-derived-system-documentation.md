@@ -249,7 +249,7 @@ It publishes state to `admin:events` and updates Prometheus gauges for kill swit
 
 ### State Construction
 
-`MpcStrategyEngine.decide()` converts a `StrategyInputFrame` and optional ledger into an MPC `State`:
+`MpcStrategyEngine.decide()` converts a `StrategyInputFrame` and ledger into an MPC `State`:
 
 - a quote anchor from the configured pricing mode,
 - local orderbook depth relative to that anchor, clipped by `spread_max`,
@@ -277,6 +277,17 @@ The mark price is side-aware: long inventory is marked at sell-side VWAP, short 
 
 If no ledger snapshot is fresh, state construction falls back to private snapshots attached to the frame. In the normal runtime path, the strategy runner requires a ledger-backed frame.
 
+The state object passed to the optimizer is `State` in `mm/mpc/mpc_state.py`. Relevant fields are:
+
+- `mid`: local clean-book mid around the selected quote anchor.
+- `ob_rel`: local orderbook as `(spread, qty)` levels, where bid spread is `mid - bid_price` and ask spread is `ask_price - mid`.
+- `buy_vol`, `sell_vol`: local interval market buy/sell flow.
+- `inventory`, `cash`: local venue account state.
+- `buy_vwap`, `sell_vwap`, `vwap_depth`: local liquidation/reference VWAPs at the inventory-derived depth.
+- `global_mid`, `global_ob_rel`, `global_buy_vol`, `global_sell_vol`, `global_inventory`, `global_cash`, `global_buy_vwap`, `global_sell_vwap`: corresponding liquidity/global venue fields when present.
+- `reference_price`: selected inventory mark at state construction time.
+- `quote_anchor_price`, `inventory_mark_price`, `global_active`: diagnostics and rollout flags.
+
 ### Online Models
 
 The controller owns separate local and global flow/price models:
@@ -293,88 +304,265 @@ Model scoring happens before updates. `score_frame_models()` computes likelihood
 - local residual price model updates from the previous/current local frame,
 - global residual price model updates from previous/current global frame when configured.
 
-### MPC Optimization
+### Market Order-Flow Models
 
-The optimizer is `MonteCarloMPCTensorBatched` in `mm/mpc/mpc_tensor_batched.py`. It is a differentiable Monte Carlo MPC optimizer using PyTorch.
+Market order flow is sampled independently per side and per horizon step through the configured model's `.sample((n_samples, horizon))` method. The optimizer treats sampled `buy_vol` as market buys that consume ask-side depth and sampled `sell_vol` as market sells that consume bid-side depth.
 
-The action is a mixture of sigmoids per side. Each side has cumulative quoted depth as a function of spread:
+Supported model families in `mm/mpc/market_order_flow_torch.py` are:
 
-```
-D(spread) = sum_i L_i / (1 + exp(-k_i * (spread - x0_i)))
-```
+- `gamma`: EWMA estimates positive-volume Gamma parameters by side. For side `s in {buy, sell}`, positive volume is sampled as `V_s ~ Gamma(shape_s, scale_s)`, clamped to a small positive value in the tensor path. EWMA stores `S_s`, `S2_s`, and `W_s`; `mean_s = S_s / W_s`, `var_s = S2_s / W_s - mean_s^2`, `shape_s = mean_s^2 / var_s`, `scale_s = var_s / mean_s`.
+- `weibull`: EWMA estimates side-specific mean/variance, converts coefficient of variation to Weibull shape `k_s`, then sets `lambda_s = mean_s / Gamma(1 + 1/k_s)`. Tensor sampling uses `V_s ~ Weibull(k_s, lambda_s)`.
+- `hurdle_gamma`: EWMA estimates `p0_s = P(V_s = 0)` from zero observations and Gamma parameters from positive observations. Tensor sampling draws a Bernoulli zero event, otherwise samples Gamma.
+- `hurdle_weibull`: same hurdle structure, with positive volumes sampled from Weibull.
+- `hurdle_lognormal`: EWMA estimates zero mass and log-positive-volume moments; tensor sampling draws zero with probability `p0_s`, otherwise samples `exp(N(mu_s, sigma_s^2))`.
 
-The optimizer searches over raw action parameters and maps them to constrained effective parameters through `LParamConfig` and sigmoid/softplus transforms. Per-venue optimizer settings include:
+### Price And Reference Models
 
-- number of components,
-- risk aversion beta,
-- objective weight,
-- quote size min/max per side,
-- quote capacity ratio,
-- quote imbalance skew,
-- quote spread max/min-depth/k-epsilon,
-- soft fill temperature,
-- soft fill activation,
-- soft fill queue model.
+The optimizer forecasts side-specific VWAP/reference prices used to mark inventory during simulated rollouts.
 
-For each optimize call, the optimizer:
+The `residual` price model (`TorchResidualPriceModel`) learns Gaussian residuals around a market-order-flow-only VWAP transition:
 
-1. Converts the current orderbook into spread-grid tensors.
-2. Computes current inventory/cash capacity bounds.
-3. Samples market order flow and price innovations for `n_samples * horizon`.
-4. Runs Adam for `adam_epochs`.
-5. For each epoch and horizon step, simulates soft fills against combined public depth and the strategy's quoted depth.
-6. Updates simulated cash, inventory, book shape, mid, and VWAPs.
-7. Computes per-path return.
-8. Maximizes an entropic risk-adjusted return objective with optional cash/inventory threshold terms.
-9. Stores optimizer diagnostics, including initial/final/best objective snapshots, action snapshots, gradient issues, and timing.
-
-The default optimizer config in `_build_controller()` is modest:
-
-- `n_samples = 8`,
-- `horizon = 2`,
-- `adam_epochs = 10`,
-- CPU device,
-- spread grid from `ControllerRuntimeConfig.orderbook_grid`.
-
-The example runtime config uses larger values: `n_samples = 64`, `horizon = 1`, `adam_epochs = 30`.
-
-If liquidity sourcing is enabled or global reference pricing is active, the optimizer delegates to `mm/mpc/joint_optimizer.py`, which optimizes local and global action vectors with joint objective terms.
-
-### Objective
-
-The single-venue terminal objective is implemented in `mm/mpc/reward_tensor.py`:
-
-```
-J = entropic_return + threshold_shortfall_penalty
+```text
+e_buy,t  = observed_buy_vwap_t  - mechanical_buy_vwap_t
+e_sell,t = observed_sell_vwap_t - mechanical_sell_vwap_t
+mu_side,t     = gamma * mu_side,t-1 + (1 - gamma) * e_side,t
+sigma2_side,t = gamma * sigma2_side,t-1 + (1 - gamma) * (e_side,t - mu_side,t)^2
 ```
 
-The entropic return is a certainty equivalent over Monte Carlo path returns:
+During rollout it samples independent residuals:
 
-```
-CE = min(R) - (1 / beta) * log(mean(exp(-beta * (R - min(R)))))
-```
-
-Returns are normalized by current wealth:
-
-```
-wealth = cash + inventory * sell_vwap
+```text
+epsilon_buy  ~ N(mu_buy,  sigma_buy^2)
+epsilon_sell ~ N(mu_sell, sigma_sell^2)
+buy_vwap_rollout  = mechanical_buy_vwap  + epsilon_buy
+sell_vwap_rollout = mechanical_sell_vwap + epsilon_sell
 ```
 
-The threshold penalty is a one-sided normalized shortfall on simulated cash and inventory paths. `inventory_threshold_penalty_weight`, `cash_threshold`, and `inventory_threshold` are parsed into venue optimizer params and passed into the single-venue and joint terminal objectives.
+The `conditional_mechanical_mixture` model (`TorchConditionalMechanicalMixturePriceModel`) learns fixed-depth book-state transitions. For a reference depth `V_ref`, each observed transition is represented by four components:
+
+```text
+mid_delta         = mid_obs - mid_prev
+log_spread_delta = log(spread_obs) - log(spread_prev)
+log_buy_shape    = log(buy_shape_obs) - log(buy_shape_prev)
+log_sell_shape   = log(sell_shape_obs) - log(sell_shape_prev)
+
+buy_shape  = buy_vwap  - mid - 0.5 * spread
+sell_shape = mid - sell_vwap - 0.5 * spread
+```
+
+For each component, the model maintains a market-mechanical regression branch and a refresh branch:
+
+```text
+q_market = sigmoid(beta_gate[0] + beta_gate[1] * min(log1p(total_flow), 12))
+market_mean_component  = beta_component[0] + beta_component[1] * mechanical_component
+refresh_mean_component = EWMA refresh mean
+```
+
+The market branch uses Gaussian innovations; the refresh branch uses Student-t innovations. Posterior responsibility from the observed transition updates the logistic gate, weighted RLS market regressions, refresh means, and branch variances. During rollout, the model samples either branch, reconstructs predicted mid/spread/shape, and converts fixed-depth shape to dynamic-depth VWAPs:
+
+```text
+buy_vwap  = pred_mid + 0.5 * pred_spread + pred_buy_shape  * ratio(buy_depth, V_ref)
+sell_vwap = pred_mid - 0.5 * pred_spread - pred_sell_shape * ratio(sell_depth, V_ref)
+```
+
+The depth-shape ratio is a shifted power curve controlled by `shape_alpha`; it is zero at zero depth, one near `reference_vwap_vol`, and has finite derivative at zero for autograd stability.
+
+Global price models may be `ewma_gaussian`, static `gaussian`, `residual`, `conditional_mechanical_mixture`, or disabled. Current joint-rollout code consumes global models that expose `sample_innovations()`, `sample_residual()`, or `sample_dynamic_vwap()`. The EWMA/static Gaussian global models expose `sample_deltas()` for diagnostics/modeling, but `joint_optimizer.py` does not currently inject those deltas into rollout VWAPs. When `pricing.inventory_mark.venue` maps to global, the rollout marks consolidated inventory using global side-aware VWAPs. Otherwise it uses local VWAPs.
+
+### Action Parameterization
+
+The optimizer does not optimize discrete exchange orders directly. It optimizes continuous cumulative quote-depth curves. Later, the first-step continuous action is discretized into target orders.
+
+Each venue has one bid curve and one ask curve. For side `s in {bid, ask}`, cumulative raw depth at spread `x >= 0` is a mixture of sigmoids:
+
+```text
+D_s_raw(x) = sum_{i=1..n} L_{s,i} * sigmoid(k_{s,i} * (x - x0_{s,i}))
+sigmoid(z) = 1 / (1 + exp(-z))
+D_s(x) = max(0, D_s_raw(x) - D_s_raw(0))
+```
+
+The raw optimizer vector length per venue is `6 * n_components + 2`: bid `(L_raw, k_raw, x0_raw)` components, ask components, and one total-depth logit per side. The joint optimizer concatenates local and global venue vectors for every horizon step:
+
+```text
+x = [a_local,0, a_global,0, a_local,1, a_global,1, ..., a_local,H-1, a_global,H-1]
+```
+
+`LParamConfig` converts raw parameters into effective constrained parameters:
+
+- `k_eff = softplus(k_raw) + epsilon`, except the first spread-structured leg has an additional minimum slope.
+- Without spread-structured constraints, centers are `x0_eff = spread_max * sigmoid(x0_raw)`.
+- Total per-side depth is selected by `Q_s_total = Q_s_min + sigmoid(u_s_depth) * (Q_s_max - Q_s_min)`.
+- Component weights for `L_eff` use a softmax over `L_raw`, normalized so `D_s(spread_max) = Q_s_total`.
+
+When `quote_spread_max` and `quote_spread_min_depth` are configured, a spread-structured parameterization is used:
+
+```text
+scale = sigmoid(u_scale)
+[x0_bid,1, x0_ask,1] = scale * quote_spread_max * softmax([u_bid, u_ask])
+x0_bid,1 + x0_ask,1 <= quote_spread_max
+```
+
+The first component slope is forced high enough that `sigmoid(-k_1 * x0_1) <= quote_spread_k_epsilon`; the first leg carries at least `quote_spread_min_depth` at its center; tail components fill the remaining total depth up to `Q_s_total` at `spread_max`.
+
+### Quote Capacity And Structural Constraints
+
+At each rollout step and for each venue, dynamic side capacity is computed from simulated account state:
+
+```text
+bid_max = min(quote_size_max_per_side, quote_capacity_ratio * max(cash, 0) / mid)
+ask_max = min(quote_size_max_per_side, quote_capacity_ratio * max(inventory, 0))
+```
+
+The lower bound starts at `quote_size_min_per_side` and may be skewed by account imbalance:
+
+```text
+imbalance = clamp((inventory * mid - cash) / (abs(inventory * mid) + abs(cash) + eps), -1, 1)
+bid_floor = quote_size_min_per_side * (1 + skew_strength * max(-imbalance, 0))
+ask_floor = quote_size_min_per_side * (1 + skew_strength * max( imbalance, 0))
+bid_min = min(bid_floor, bid_max)
+ask_min = min(ask_floor, ask_max)
+```
+
+A venue with no quote cash has `bid_max = 0`, and a venue with no base inventory has `ask_max = 0`. Raw optimizer variables are box-constrained before each Adam closure:
+
+```text
+logit-like params: [-30, 30]
+k-like params:     [1e-6, 100]
+x0-like params:    [-spread_max, spread_max]
+```
 
 ### Fill Simulation
 
-`soft_fill_batched()` simulates the combined market book plus the strategy's quote depth. It:
+`soft_fill_batched()` simulates the combined market book plus the strategy's quote depth. It converts current cumulative market depth into marginal levels, converts quoted cumulative sigmoid depth into marginal quote levels, combines public and own quote levels, applies market order flow through a differentiable fill fraction, splits consumed volume between public book and own quotes, and returns the next market-only book plus cash and inventory deltas from own fills.
 
-- converts current cumulative market depth into marginal levels,
-- converts quoted cumulative sigmoid depth into marginal quote levels,
-- combines public and own quote levels,
-- applies market order flow through a differentiable fill fraction,
-- splits consumed volume between public book and own quotes,
-- supports `back_of_queue` and `pro_rata` queue models,
-- returns the next market-only book plus cash and inventory deltas from own fills.
+For each side and spread-grid level:
 
-Maker fees are read from the real execution model config and applied in fill simulation.
+```text
+combined_level = public_level + own_quote_level
+combined_cum   = cumsum(combined_level)
+reach_raw      = market_order_volume - combined_cum
+reach          = normalized(reach_raw)
+fill_fraction  = sigmoid(reach / soft_fill_temp)
+```
+
+If `soft_fill_activation = hardsigmoid`, the activation is `hardsigmoid(reach / soft_fill_temp)`, which can produce exactly zero fills for far unreached levels.
+
+The queue split is:
+
+```text
+own_share = own_quote_level / (combined_level + ahead_public_depth)
+own_fill_level = consumed_level * own_share
+```
+
+For `pro_rata`, `ahead_public_depth = 0`. For `back_of_queue`, `ahead_public_depth` is the next worse public level. Cash/inventory deltas from own fills are:
+
+```text
+cash_bid = sum(fill_bid_level * (mid - spread))
+cash_ask = sum(fill_ask_level * (mid + spread))
+cash_delta = cash_ask * (1 - maker_fee) - cash_bid
+inventory_delta = fill_bid * (1 - maker_fee) - fill_ask
+```
+
+### MPC Optimization
+
+The optimizer is `MonteCarloMPCTensorBatched` in `mm/mpc/mpc_tensor_batched.py`. It is a differentiable Monte Carlo MPC optimizer using PyTorch and Adam.
+
+For each optimize call, it converts orderbooks into spread-grid tensors, computes dynamic capacity bounds, draws Monte Carlo market-flow and price innovations, initializes or warm-starts the horizon action vector, clamps raw parameters, rolls out every path over the horizon, computes normalized returns, maximizes the terminal objective for `adam_epochs`, keeps the best finite epoch, and returns the best first-step local action. If joint/global mode is active, it also stores the best global action for target-book construction and diagnostics.
+
+Default `_build_controller()` optimizer settings are `n_samples = 8`, `horizon = 2`, `adam_epochs = 10`, CPU device, and spread grid from `ControllerRuntimeConfig.orderbook_grid`.
+
+### Single-Venue Rollout And Objective
+
+When liquidity sourcing is disabled and global reference pricing is inactive, `MonteCarloMPCTensorBatched.optimize_with_diagnostics()` uses the single-venue rollout.
+
+For Monte Carlo path `i` and horizon step `h`, `soft_fill_batched()` produces:
+
+```text
+Q_{i,h+1} = Q_{i,h} + inventory_delta_{i,h}
+X_{i,h+1} = X_{i,h} + cash_delta_{i,h}
+book_{i,h+1} = market-only public book after market-flow consumption
+```
+
+Single-venue wealth uses side-aware liquidation marking:
+
+```text
+mark(Q) =
+  buy_vwap  if Q < 0
+  sell_vwap if Q > 0
+  mid       if Q = 0
+
+W_h = X_h + Q_h * mark(Q_h)
+R_i = (sum_{h=0..H-1} Delta W_{i,h}) / W_0
+```
+
+The terminal objective in `mm/mpc/reward_tensor.py` is the entropic certainty equivalent:
+
+```text
+CE_beta(R) = min(R) - (1 / beta) * log(mean_i(exp(-beta * (R_i - min(R)))))
+J = CE_beta(R)
+loss = -J
+```
+
+The `min(R)` shift is numerical stabilization and is equivalent to `-(1 / beta) * log(mean_i(exp(-beta * R_i)))` for positive `beta`. In current code, the single-venue terminal objective exposes only the `risk_adjusted_return` component.
+
+### Joint Local/Global Rollout And Objective
+
+If liquidity sourcing is enabled, or if global reference pricing is active with available global VWAPs, the optimizer delegates to `mm/mpc/joint_optimizer.py`.
+
+The joint optimizer rolls out four curves: local bid, local ask, global bid, and global ask. It maintains separate local and global account states:
+
+```text
+Q^L_h, X^L_h = local inventory and cash
+Q^G_h, X^G_h = global inventory and cash
+```
+
+The dynamic VWAP depth in joint mode is:
+
+```text
+vwap_depth_h = abs(Q^L_h + Q^G_h)  when liquidity_sourcing_enabled
+vwap_depth_h = abs(Q^L_h)          otherwise
+```
+
+The reference price marks consolidated net inventory:
+
+```text
+Q_net = Q^L + Q^G
+
+ref(Q_net) =
+  buy_vwap_source  if Q_net < 0
+  sell_vwap_source if Q_net > 0
+  flat_mid_source  if Q_net = 0
+```
+
+`source` is global when `reference_price_source = global` and valid global VWAPs exist; otherwise it is local. Consolidated wealth is:
+
+```text
+W_h = X^L_h + X^G_h + (Q^L_h + Q^G_h) * ref_h
+```
+
+The objective uses venue-scoped wealth contributions, normalized by initial consolidated wealth:
+
+```text
+Delta W^L_h = X^L_{h+1} + Q^L_{h+1} * ref_{h+1}
+              - (X^L_h + Q^L_h * ref_h)
+
+Delta W^G_h = X^G_{h+1} + Q^G_{h+1} * ref_{h+1}
+              - (X^G_h + Q^G_h * ref_h)
+
+R^L_i = (sum_h Delta W^L_{i,h}) / W_0
+R^G_i = (sum_h Delta W^G_{i,h}) / W_0
+```
+
+The joint objective in `mm/mpc/joint_mpc.py` is:
+
+```text
+J = w_L * CE_{beta_L}(R^L) + active_G * w_G * CE_{beta_G}(R^G)
+loss = -J
+```
+
+where `w_L` and `w_G` are venue objective weights, `beta_L` and `beta_G` are venue risk-aversion betas, and `active_G` is one only when the global venue is active for liquidity sourcing. Diagnostics report local/global risk-adjusted return components, expected total reward/return, expected next-step reward, fill means, wealth contribution means, and raw local/global action vectors.
+
+Current code does not include an explicit quadratic inventory penalty, hard terminal-inventory constraint, cash-threshold penalty, or drawdown constraint inside the terminal objective. Inventory risk is represented indirectly through side-aware liquidation marking, dynamic quote capacity, quote imbalance skew, and downstream risk validation.
 
 ### Quote Discretization
 
@@ -615,7 +803,7 @@ Most common operational panels use typed Postgres fact tables or Prometheus metr
 
 ## 8. Testing Surface
 
-The repository contains 56 unit test files under `tests/unit`. The tests cover:
+The repository contains 73 unit test files under `tests/unit`. The tests cover:
 
 - exchange adapter registry and payload-schema contracts,
 - runtime config and migration contracts,

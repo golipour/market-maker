@@ -1,0 +1,177 @@
+"""Shared Grafana dashboard variable queries.
+
+Variables are ordered by most recent activity so a symbol/exchange change in
+runtime config does not leave dashboards stuck on stale alphabetical defaults.
+"""
+
+from __future__ import annotations
+
+MM_SCOPE_EVENT_TYPES = (
+    "'StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook'"
+)
+
+_INTERVAL_MS_EXPR = (
+    "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
+)
+
+
+def symbol_var_query(*, include_market_facts: bool = True) -> str:
+    sources = [
+        f"""SELECT symbol, ts
+  FROM mm_events
+  WHERE symbol IS NOT NULL
+    AND symbol <> ''
+    AND event_type IN ({MM_SCOPE_EVENT_TYPES})""",
+        """SELECT payload->>'symbol' AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND payload->>'symbol' IS NOT NULL
+    AND payload->>'symbol' <> ''""",
+        """SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'""",
+        """SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'""",
+    ]
+    if include_market_facts:
+        sources.append(
+            """SELECT symbol, ts
+  FROM mm_market_facts
+  WHERE symbol IS NOT NULL AND symbol <> ''"""
+        )
+    union = "\n  UNION ALL\n  ".join(sources)
+    return f"""SELECT symbol
+FROM (
+  SELECT symbol, max(ts) AS latest_ts
+  FROM (
+  {union}
+  ) sources
+  WHERE symbol IS NOT NULL AND symbol <> ''
+  GROUP BY symbol
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def exchange_var_query(*, include_market_facts: bool = True) -> str:
+    sources = [
+        f"""SELECT exchange, ts
+  FROM mm_events
+  WHERE exchange IS NOT NULL
+    AND exchange <> ''
+    AND event_type IN ({MM_SCOPE_EVENT_TYPES})""",
+        """SELECT gates.key AS exchange, e.ts
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)
+  ) AS gates(key, value)
+  WHERE e.event_type = 'ControllerDiagnostics'
+    AND gates.key IS NOT NULL
+    AND gates.key <> ''""",
+        """SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'""",
+        """SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'""",
+        """SELECT exchange, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND exchange IS NOT NULL
+    AND exchange <> ''""",
+    ]
+    if include_market_facts:
+        sources.append(
+            """SELECT exchange, ts
+  FROM mm_market_facts
+  WHERE exchange IS NOT NULL AND exchange <> ''"""
+        )
+    union = "\n  UNION ALL\n  ".join(sources)
+    return f"""SELECT exchange
+FROM (
+  SELECT exchange, max(ts) AS latest_ts
+  FROM (
+  {union}
+  ) sources
+  WHERE exchange IS NOT NULL AND exchange <> ''
+  GROUP BY exchange
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def actor_id_var_query() -> str:
+    return f"""SELECT actor_id
+FROM (
+  SELECT actor_id, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE actor_id IS NOT NULL
+    AND actor_id <> ''
+    AND event_type IN ({MM_SCOPE_EVENT_TYPES})
+  GROUP BY actor_id
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def interval_ms_var_query() -> str:
+    return f"""SELECT interval_ms
+FROM (
+  SELECT {_INTERVAL_MS_EXPR} AS interval_ms, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE {_INTERVAL_MS_EXPR} IS NOT NULL
+    AND {_INTERVAL_MS_EXPR} <> ''
+  GROUP BY 1
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def diagnostics_topic_var_query() -> str:
+    return """SELECT topic
+FROM (
+  SELECT topic, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE topic LIKE 'strategy:diagnostics:%'
+  GROUP BY topic
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def target_books_topic_var_query() -> str:
+    return """SELECT topic
+FROM (
+  SELECT topic, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE topic LIKE 'strategy:target_books:%'
+  GROUP BY topic
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def run_id_var_query() -> str:
+    return """SELECT run_id
+FROM (
+  SELECT run_id, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE run_id IS NOT NULL AND run_id <> ''
+  GROUP BY run_id
+) ranked
+ORDER BY latest_ts DESC"""
+
+
+def market_event_exchange_var_query() -> str:
+    return """SELECT exchange
+FROM (
+  SELECT exchange, max(ts) AS latest_ts
+  FROM (
+    SELECT exchange, ts
+    FROM mm_events
+    WHERE event_type = 'MarketEvent'
+      AND exchange IS NOT NULL
+      AND exchange <> ''
+    UNION ALL
+    SELECT exchange, ts
+    FROM mm_market_facts
+    WHERE exchange IS NOT NULL AND exchange <> ''
+  ) sources
+  GROUP BY exchange
+) ranked
+ORDER BY latest_ts DESC"""

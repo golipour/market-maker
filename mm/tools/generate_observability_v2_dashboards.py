@@ -11,15 +11,23 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mm.tools.grafana_dashboard_variables import (
+    MM_SCOPE_EVENT_TYPES,
+    actor_id_var_query,
+    diagnostics_topic_var_query,
+    exchange_var_query,
+    interval_ms_var_query,
+    run_id_var_query,
+    symbol_var_query,
+    target_books_topic_var_query,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "grafana" / "observability-v2"
 
 PROM_DS = {"type": "prometheus", "uid": "prometheus-mm"}
 PG_DS = {"type": "postgres", "uid": "postgres-mm"}
 LOKI_DS = {"type": "loki", "uid": "loki-mm"}
-MM_SCOPE_EVENT_TYPES = (
-    "'StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook'"
-)
 
 
 def _target(
@@ -450,76 +458,30 @@ def _templating() -> list[dict[str, Any]]:
         _query_var(
             "exchange",
             "Exchange",
-            _exchange_var_query(),
+            exchange_var_query(),
             multi=True,
         ),
         _query_var(
             "symbol",
             "Symbol",
-            _symbol_var_query(),
+            symbol_var_query(),
             multi=True,
         ),
         _query_var(
             "actor_id",
             "Actor",
-            f"SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL AND event_type IN ({MM_SCOPE_EVENT_TYPES}) ORDER BY 1",
+            actor_id_var_query(),
             multi=True,
         ),
-        _query_var("run_id", "Run", "SELECT DISTINCT run_id FROM mm_events WHERE run_id <> '' ORDER BY 1 DESC", multi=True),
-        _query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
-        _query_var("target_books_topic", "Target books topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1"),
+        _query_var("run_id", "Run", run_id_var_query(), multi=True),
+        _query_var("diagnostics_topic", "Diagnostics topic", diagnostics_topic_var_query()),
+        _query_var("target_books_topic", "Target books topic", target_books_topic_var_query()),
         _query_var(
             "interval_ms",
             "Interval ms",
-            _interval_ms_query(),
+            interval_ms_var_query(),
         ),
     ]
-
-
-def _exchange_var_query() -> str:
-    return f"""SELECT DISTINCT exchange
-FROM (
-  SELECT exchange
-  FROM mm_events
-  WHERE exchange IS NOT NULL
-    AND event_type IN ({MM_SCOPE_EVENT_TYPES})
-  UNION ALL
-  SELECT gates.key AS exchange
-  FROM mm_events e
-  CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)) AS gates(key, value)
-  WHERE e.event_type = 'ControllerDiagnostics'
-    AND gates.key IS NOT NULL
-  UNION ALL
-  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange
-  FROM mm_events
-  WHERE event_type = 'JointStrategyFrame'
-  UNION ALL
-  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange
-  FROM mm_events
-  WHERE event_type = 'JointStrategyFrame'
-) x
-WHERE exchange IS NOT NULL AND exchange <> ''
-ORDER BY 1"""
-
-
-def _symbol_var_query() -> str:
-    return f"""SELECT DISTINCT symbol
-FROM (
-  SELECT symbol
-  FROM mm_events
-  WHERE symbol IS NOT NULL
-    AND event_type IN ({MM_SCOPE_EVENT_TYPES})
-  UNION ALL
-  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol
-  FROM mm_events
-  WHERE event_type = 'JointStrategyFrame'
-  UNION ALL
-  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol
-  FROM mm_events
-  WHERE event_type = 'JointStrategyFrame'
-) x
-WHERE symbol IS NOT NULL AND symbol <> ''
-ORDER BY 1"""
 
 
 def _query_var(name: str, label: str, query: str, *, multi: bool = False, refresh: int = 1) -> dict[str, Any]:
@@ -535,7 +497,7 @@ def _query_var(name: str, label: str, query: str, *, multi: bool = False, refres
         "options": [],
         "query": query,
         "refresh": refresh,
-        "sort": 1,
+        "sort": 0,
         "type": "query",
     }
 
@@ -572,14 +534,6 @@ def _custom_var(name: str, label: str, query: str) -> dict[str, Any]:
         "query": query,
         "type": "custom",
     }
-
-
-def _interval_ms_query() -> str:
-    interval_expr = "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
-    return (
-        f"SELECT DISTINCT {interval_expr} AS interval_ms "
-        f"FROM mm_events WHERE {interval_expr} IS NOT NULL ORDER BY 1"
-    )
 
 
 def _time_bucket_sql(expr: str) -> str:

@@ -117,6 +117,8 @@ def test_zero_fill_metric_grids_use_market_maker_scope_not_wallet_symbols() -> N
     assert "global_market','exchange" in templating["exchange"]
     assert "event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')" in templating["symbol"]
     assert "global_market','symbol" in templating["symbol"]
+    assert "event_type = 'MarketEvent'" in templating["symbol"]
+    assert "ORDER BY latest_ts DESC" in templating["symbol"]
     assert "private:state" not in templating["symbol"]
 
 

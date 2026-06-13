@@ -7,6 +7,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+from mm.tools.grafana_dashboard_variables import (
+    actor_id_var_query,
+    diagnostics_topic_var_query,
+    exchange_var_query,
+    interval_ms_var_query,
+    market_event_exchange_var_query,
+    symbol_var_query,
+    target_books_topic_var_query,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "grafana" / "dashboards"
 PG_DS = {"type": "postgres", "uid": "postgres-mm"}
@@ -193,7 +203,7 @@ def _pg_query_var(name: str, label: str, query: str, *, multi: bool = False) -> 
         "options": [],
         "query": query,
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query",
     }
 
@@ -217,11 +227,7 @@ END"""
 
 
 def _interval_ms_query() -> str:
-    interval_expr = "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
-    return (
-        f"SELECT DISTINCT {interval_expr} AS interval_ms "
-        f"FROM mm_events WHERE {interval_expr} IS NOT NULL ORDER BY 1"
-    )
+    return interval_ms_var_query()
 
 
 def _jsonb_object_count_sql(expr: str) -> str:
@@ -360,12 +366,12 @@ def _ledger_templating() -> list[dict[str, Any]]:
         _pg_query_var(
             "symbol",
             "Symbol",
-            "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+            symbol_var_query(),
         ),
         _pg_query_var(
             "local_exchange",
             "Local exchange",
-            "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+            market_event_exchange_var_query(),
         ),
         _pg_query_var(
             "global_exchange",
@@ -395,11 +401,11 @@ def _joint_target_book_filter() -> str:
 
 def _controller_diagnostics_templating() -> list[dict[str, Any]]:
     return [
-        _pg_query_var("actor_id", "Actor ID", "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1"),
-        _pg_query_var("exchange", "Exchange", "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1"),
-        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
-        _pg_query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
-        _pg_query_var("target_books_topic", "Target books topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:target_books:%' ORDER BY 1"),
+        _pg_query_var("actor_id", "Actor ID", actor_id_var_query()),
+        _pg_query_var("exchange", "Exchange", exchange_var_query()),
+        _pg_query_var("symbol", "Symbol", symbol_var_query()),
+        _pg_query_var("diagnostics_topic", "Diagnostics topic", diagnostics_topic_var_query()),
+        _pg_query_var("target_books_topic", "Target books topic", target_books_topic_var_query()),
         _pg_query_var(
             "interval_ms",
             "Interval ms",
@@ -1003,16 +1009,25 @@ ORDER BY 1""",
         _pg_query_var(
             "local_exchange",
             "Local exchange",
-            "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+            market_event_exchange_var_query(),
         ),
         _pg_query_var(
             "global_exchange",
             "Global exchange",
-            "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
+            """SELECT exchange
+FROM (
+  SELECT payload #>> '{global,exchange}' AS exchange, max(ts) AS latest_ts
+  FROM mm_events
+  WHERE event_type = 'JointLedgerSnapshot'
+    AND payload #>> '{global,exchange}' IS NOT NULL
+    AND payload #>> '{global,exchange}' <> ''
+  GROUP BY 1
+) ranked
+ORDER BY latest_ts DESC""",
         ),
-        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
-        _pg_query_var("actor_id", "Actor ID", "SELECT DISTINCT actor_id FROM mm_events WHERE actor_id IS NOT NULL ORDER BY 1"),
-        _pg_query_var("diagnostics_topic", "Diagnostics topic", "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1"),
+        _pg_query_var("symbol", "Symbol", symbol_var_query()),
+        _pg_query_var("actor_id", "Actor ID", actor_id_var_query()),
+        _pg_query_var("diagnostics_topic", "Diagnostics topic", diagnostics_topic_var_query()),
     ]
     return _dashboard(
         title="MM portfolio (PostgreSQL)",
@@ -1547,12 +1562,12 @@ ORDER BY count DESC""",
     _replace_template_var(
         templating,
         "exchange",
-        _pg_query_var("exchange", "Exchange", "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1"),
+        _pg_query_var("exchange", "Exchange", exchange_var_query()),
     )
     _replace_template_var(
         templating,
         "symbol",
-        _pg_query_var("symbol", "Symbol", "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1"),
+        _pg_query_var("symbol", "Symbol", symbol_var_query()),
     )
     _replace_template_var(
         templating,
@@ -1560,7 +1575,7 @@ ORDER BY count DESC""",
         _pg_query_var(
             "diagnostics_topic",
             "Diagnostics topic",
-            "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1",
+            diagnostics_topic_var_query(),
         ),
     )
     data["panels"] = panels
@@ -1568,6 +1583,29 @@ ORDER BY count DESC""",
     compact_dashboard_panels(data, height_scale=1.0)
     data["version"] = int(data.get("version", 1)) + 1
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def patch_legacy_static_dashboards() -> None:
+    """Refresh variable queries in hand-maintained dashboard JSON files."""
+
+    replacements = {
+        "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1": symbol_var_query(),
+        "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1": exchange_var_query(),
+        "SELECT DISTINCT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms FROM mm_events WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL ORDER BY 1": interval_ms_var_query(),
+        "SELECT DISTINCT topic FROM mm_events WHERE topic LIKE 'strategy:diagnostics:%' ORDER BY 1": diagnostics_topic_var_query(),
+    }
+    for path in sorted(OUT.glob("*.json")):
+        text = path.read_text(encoding="utf-8")
+        updated = text
+        for old, new in replacements.items():
+            updated = updated.replace(old, new)
+        if updated != text:
+            updated = updated.replace(
+                '"sort": 1,\n        "type": "query"',
+                '"sort": 0,\n        "type": "query"',
+            )
+            path.write_text(updated, encoding="utf-8")
+            print("Patched variables in", path.name)
 
 
 def main() -> None:
@@ -1615,6 +1653,7 @@ def main() -> None:
         encoding="utf-8",
     )
     patch_model_params_dashboard()
+    patch_legacy_static_dashboards()
     print("Wrote grafana dashboards to", OUT)
 
 

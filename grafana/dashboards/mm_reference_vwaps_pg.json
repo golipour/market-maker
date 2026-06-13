@@ -123,15 +123,95 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "definition": "SELECT exchange
+FROM (
+  SELECT exchange, max(ts) AS latest_ts
+  FROM (
+  SELECT exchange, ts
+  FROM mm_events
+  WHERE exchange IS NOT NULL
+    AND exchange <> ''
+    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')
+  UNION ALL
+  SELECT gates.key AS exchange, e.ts
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)
+  ) AS gates(key, value)
+  WHERE e.event_type = 'ControllerDiagnostics'
+    AND gates.key IS NOT NULL
+    AND gates.key <> ''
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT exchange, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND exchange IS NOT NULL
+    AND exchange <> ''
+  UNION ALL
+  SELECT exchange, ts
+  FROM mm_market_facts
+  WHERE exchange IS NOT NULL AND exchange <> ''
+  ) sources
+  WHERE exchange IS NOT NULL AND exchange <> ''
+  GROUP BY exchange
+) ranked
+ORDER BY latest_ts DESC",
         "hide": 0,
         "label": "Exchange",
         "multi": false,
         "name": "exchange",
         "options": [],
-        "query": "SELECT DISTINCT exchange FROM mm_events WHERE exchange IS NOT NULL ORDER BY 1",
+        "query": "SELECT exchange
+FROM (
+  SELECT exchange, max(ts) AS latest_ts
+  FROM (
+  SELECT exchange, ts
+  FROM mm_events
+  WHERE exchange IS NOT NULL
+    AND exchange <> ''
+    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')
+  UNION ALL
+  SELECT gates.key AS exchange, e.ts
+  FROM mm_events e
+  CROSS JOIN LATERAL jsonb_each(
+    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)
+  ) AS gates(key, value)
+  WHERE e.event_type = 'ControllerDiagnostics'
+    AND gates.key IS NOT NULL
+    AND gates.key <> ''
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT exchange, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND exchange IS NOT NULL
+    AND exchange <> ''
+  UNION ALL
+  SELECT exchange, ts
+  FROM mm_market_facts
+  WHERE exchange IS NOT NULL AND exchange <> ''
+  ) sources
+  WHERE exchange IS NOT NULL AND exchange <> ''
+  GROUP BY exchange
+) ranked
+ORDER BY latest_ts DESC",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -140,15 +220,77 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "definition": "SELECT symbol
+FROM (
+  SELECT symbol, max(ts) AS latest_ts
+  FROM (
+  SELECT symbol, ts
+  FROM mm_events
+  WHERE symbol IS NOT NULL
+    AND symbol <> ''
+    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')
+  UNION ALL
+  SELECT payload->>'symbol' AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND payload->>'symbol' IS NOT NULL
+    AND payload->>'symbol' <> ''
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT symbol, ts
+  FROM mm_market_facts
+  WHERE symbol IS NOT NULL AND symbol <> ''
+  ) sources
+  WHERE symbol IS NOT NULL AND symbol <> ''
+  GROUP BY symbol
+) ranked
+ORDER BY latest_ts DESC",
         "hide": 0,
         "label": "Symbol",
         "multi": false,
         "name": "symbol",
         "options": [],
-        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "query": "SELECT symbol
+FROM (
+  SELECT symbol, max(ts) AS latest_ts
+  FROM (
+  SELECT symbol, ts
+  FROM mm_events
+  WHERE symbol IS NOT NULL
+    AND symbol <> ''
+    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')
+  UNION ALL
+  SELECT payload->>'symbol' AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'MarketEvent'
+    AND payload->>'symbol' IS NOT NULL
+    AND payload->>'symbol' <> ''
+  UNION ALL
+  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'JointStrategyFrame'
+  UNION ALL
+  SELECT symbol, ts
+  FROM mm_market_facts
+  WHERE symbol IS NOT NULL AND symbol <> ''
+  ) sources
+  WHERE symbol IS NOT NULL AND symbol <> ''
+  GROUP BY symbol
+) ranked
+ORDER BY latest_ts DESC",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {

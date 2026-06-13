@@ -426,7 +426,7 @@
         "options": [],
         "query": "SELECT DISTINCT topic FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -435,16 +435,16 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "definition": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Symbol",
         "multi": false,
         "name": "symbol",
         "options": [],
-        "query": "SELECT DISTINCT symbol FROM mm_events WHERE symbol IS NOT NULL ORDER BY 1",
+        "query": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -453,16 +453,16 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n    SELECT exchange, ts\n    FROM mm_events\n    WHERE event_type = 'MarketEvent'\n      AND exchange IS NOT NULL\n      AND exchange <> ''\n    UNION ALL\n    SELECT exchange, ts\n    FROM mm_market_facts\n    WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Local exchange",
         "multi": false,
         "name": "local_exchange",
         "options": [],
-        "query": "SELECT DISTINCT payload #>> '{local,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' ORDER BY 1",
+        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n    SELECT exchange, ts\n    FROM mm_events\n    WHERE event_type = 'MarketEvent'\n      AND exchange IS NOT NULL\n      AND exchange <> ''\n    UNION ALL\n    SELECT exchange, ts\n    FROM mm_market_facts\n    WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -480,7 +480,7 @@
         "options": [],
         "query": "SELECT DISTINCT payload #>> '{global,exchange}' FROM mm_events WHERE event_type = 'JointLedgerSnapshot' AND payload #>> '{global,exchange}' IS NOT NULL ORDER BY 1",
         "refresh": 1,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       }
     ]
