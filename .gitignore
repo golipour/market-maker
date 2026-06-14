@@ -8,7 +8,7 @@ __pycache__/
 /data/
 
 # Local runtime logs
-/logs/mm-runtime.jsonl
+/logs/
 
 # Platform UI (build with: cd platform/ui && npm install && npm run build)
 platform/ui/node_modules/
