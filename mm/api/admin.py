@@ -234,3 +234,9 @@ def _record_command_audit(
 
 
 app = create_admin_app()
+
+
+if __name__ == "__main__":
+    from mm.api.__main__ import main
+
+    main()
