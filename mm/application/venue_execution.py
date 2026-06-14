@@ -147,6 +147,8 @@ def compute_venue_execution_gates(
         global_blocked.append("warmup")
     if control_plane is not None and config.actor_id in control_plane.state.paused_actors:
         global_blocked.append("paused_actor")
+    if control_plane is not None and config.actor_id in control_plane.state.allocation_breached_actors:
+        global_blocked.append("allocation_breach")
 
     gates: dict[str, VenueExecutionGate] = {}
     venue_specs: list[tuple[str, str, VenueExecutionConfig, VenueTargetBook | None]] = [

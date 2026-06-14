@@ -74,6 +74,19 @@ class WorkerAssignmentUpsertRequest(BaseModel):
     status: str = "active"
 
 
+class AllocationUpsertRequest(BaseModel):
+    allocation_id: str | None = None
+    strategy_id: str
+    actor_id: str
+    account_id: str
+    quote_asset: str = ""
+    base_asset: str = ""
+    allocated_quote: float = 0.0
+    allocated_base: float = 0.0
+    halt_on_breach: bool = True
+    status: str = "active"
+
+
 class WorkerHeartbeatRequest(BaseModel):
     lease_ttl_seconds: int = 300
 
@@ -344,6 +357,62 @@ def create_registry_router(
         await bus.publish("admin:commands", event)
         _audit(user, "registry.strategy.start", "accepted", event)
         return {"status": "accepted", "command_id": command_id, "actor_id": strategy.actor_id}
+
+    @router.get("/allocations")
+    async def list_allocations(
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        rows = store.list_allocations()
+        return {"items": [row.as_dict() for row in rows]}
+
+    @router.get("/allocations/{allocation_id}")
+    async def get_allocation(
+        allocation_id: str,
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            record = store.get_allocation(allocation_id)
+        except RegistryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return record.as_dict()
+
+    @router.get("/strategies/{strategy_id}/allocation")
+    async def get_strategy_allocation(
+        strategy_id: str,
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            record = store.get_allocation_for_strategy(strategy_id)
+        except RegistryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return record.as_dict()
+
+    @router.post("/allocations")
+    async def upsert_allocation(
+        body: AllocationUpsertRequest,
+        user: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            record = store.upsert_allocation(
+                allocation_id=body.allocation_id,
+                strategy_id=body.strategy_id,
+                actor_id=body.actor_id,
+                account_id=body.account_id,
+                quote_asset=body.quote_asset,
+                base_asset=body.base_asset,
+                allocated_quote=body.allocated_quote,
+                allocated_base=body.allocated_base,
+                halt_on_breach=body.halt_on_breach,
+                status=body.status,
+            )
+        except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(user, "registry.allocation.upsert", "accepted", record.as_dict())
+        return record.as_dict()
 
     @router.get("/worker-assignments")
     async def list_worker_assignments(

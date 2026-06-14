@@ -20,6 +20,7 @@ from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.core.wallet import order_collateral_from_open_orders, reported_wallet_total
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
+from mm.portfolio.limits import AllocationCaps
 from mm.risk.engine import RiskLimits, _proposed_order_count
 from mm.risk.models import TargetBookRiskResult, VenueTransitionExposure
 from mm.runtime.config import LiquiditySourcingRuntimeConfig
@@ -115,6 +116,10 @@ def _risk_rejected_sides(reason: str) -> set[str]:
         return {"buy"}
     if normalized in {"insufficient_base_for_ask_orders", "min_inventory"}:
         return {"sell"}
+    if normalized in {"allocation_quote_exceeded"}:
+        return {"buy"}
+    if normalized in {"allocation_base_exceeded"}:
+        return {"buy"}
     return set()
 
 
@@ -144,6 +149,7 @@ def evaluate_venue_target_transition(
     target: VenueTargetBook,
     limits: VenueRiskLimits,
     release_unattributed: bool = False,
+    allocation: AllocationCaps | None = None,
 ) -> tuple[bool, list[str], VenueTransitionExposure]:
     """Evaluate whether ``target`` resting book is feasible from ``ledger`` state."""
 
@@ -223,6 +229,15 @@ def evaluate_venue_target_transition(
     if inventory_after_buys > limits.max_inventory:
         reasons.append("max_inventory")
 
+    if allocation is not None and allocation.max_base_inventory is not None:
+        projected_base = allocation.attributed_base + target_locked_base
+        if projected_base > allocation.max_base_inventory + 1e-9:
+            reasons.append("allocation_base_exceeded")
+    if allocation is not None and allocation.max_quote_exposure is not None:
+        projected_quote = allocation.attributed_quote_used + target_locked_quote
+        if projected_quote > allocation.max_quote_exposure + 1e-9:
+            reasons.append("allocation_quote_exceeded")
+
     return not reasons, reasons, exposure
 
 
@@ -235,6 +250,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
     liquidity_sourcing: LiquiditySourcingRuntimeConfig
     clock_ms: Any = None
     kill_switch: bool = False
+    allocation_caps_provider: Any | None = None
 
     def __post_init__(self) -> None:
         if self.clock_ms is None:
@@ -243,6 +259,11 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
     def set_kill_switch(self, enabled: bool) -> None:
         self.kill_switch = bool(enabled)
         gauge("mm_kill_switch_state", 1.0 if self.kill_switch else 0.0)
+
+    def _allocation_caps_for(self, actor_id: str) -> AllocationCaps | None:
+        if self.allocation_caps_provider is None:
+            return None
+        return self.allocation_caps_provider()
 
     def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         return self.validate_with_result(actions, state, event).approved_list
@@ -339,6 +360,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
             target=target_book.local,
             limits=self.limits.local,
             release_unattributed=target_book.local.policy == "replace",
+            allocation=self._allocation_caps_for(target_book.actor_id),
         )
         venue_diagnostics["local"] = local_exposure.as_dict()
         for reason in local_reasons:

@@ -10,6 +10,7 @@ ExchangeStatus = Literal["active", "disabled"]
 AccountStatus = Literal["active", "disabled"]
 PresetStatus = Literal["active", "disabled"]
 StrategyStatus = Literal["draft", "active", "paused", "retired"]
+AllocationStatus = Literal["active", "paused", "retired"]
 WorkerAssignmentStatus = Literal["active", "released", "expired"]
 
 
@@ -100,6 +101,38 @@ class StrategyRecord:
             "liquidity_exchange": self.liquidity_exchange,
             "status": self.status,
             "config_overrides": dict(self.config_overrides),
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AllocationRecord:
+    allocation_id: str
+    strategy_id: str
+    actor_id: str
+    account_id: str
+    quote_asset: str = ""
+    base_asset: str = ""
+    allocated_quote: float = 0.0
+    allocated_base: float = 0.0
+    halt_on_breach: bool = True
+    status: AllocationStatus = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "allocation_id": self.allocation_id,
+            "strategy_id": self.strategy_id,
+            "actor_id": self.actor_id,
+            "account_id": self.account_id,
+            "quote_asset": self.quote_asset,
+            "base_asset": self.base_asset,
+            "allocated_quote": self.allocated_quote,
+            "allocated_base": self.allocated_base,
+            "halt_on_breach": self.halt_on_breach,
+            "status": self.status,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

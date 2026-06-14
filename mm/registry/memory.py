@@ -8,6 +8,7 @@ from typing import Any
 
 from mm.registry.models import (
     AccountRecord,
+    AllocationRecord,
     ExchangeRecord,
     PlatformSettingsRecord,
     StrategyPresetRecord,
@@ -31,6 +32,7 @@ class MemoryRegistryStore:
         self._accounts: dict[str, AccountRecord] = {}
         self._presets: dict[str, StrategyPresetRecord] = {}
         self._strategies: dict[str, StrategyRecord] = {}
+        self._allocations: dict[str, AllocationRecord] = {}
         self._assignments: dict[str, WorkerAssignmentRecord] = {}
         self._platform = PlatformSettingsRecord(settings_id=DEFAULT_PLATFORM_SETTINGS_ID)
 
@@ -206,6 +208,78 @@ class MemoryRegistryStore:
         self._strategies[strategy_id] = record
         return record
 
+    def list_allocations(self) -> list[AllocationRecord]:
+        return sorted(self._allocations.values(), key=lambda row: row.allocation_id)
+
+    def get_allocation(self, allocation_id: str) -> AllocationRecord:
+        try:
+            return self._allocations[allocation_id]
+        except KeyError as exc:
+            raise RegistryNotFoundError(f"allocation {allocation_id!r} not found") from exc
+
+    def get_allocation_for_strategy(self, strategy_id: str) -> AllocationRecord:
+        for record in self._allocations.values():
+            if record.strategy_id == strategy_id:
+                return record
+        raise RegistryNotFoundError(f"allocation for strategy {strategy_id!r} not found")
+
+    def get_allocation_for_actor(self, actor_id: str) -> AllocationRecord:
+        key = actor_id.strip()
+        for record in self._allocations.values():
+            if record.actor_id == key:
+                return record
+        raise RegistryNotFoundError(f"allocation for actor {actor_id!r} not found")
+
+    def upsert_allocation(
+        self,
+        *,
+        allocation_id: str | None = None,
+        strategy_id: str,
+        actor_id: str,
+        account_id: str,
+        quote_asset: str = "",
+        base_asset: str = "",
+        allocated_quote: float = 0.0,
+        allocated_base: float = 0.0,
+        halt_on_breach: bool = True,
+        status: str = "active",
+    ) -> AllocationRecord:
+        if strategy_id not in self._strategies:
+            raise RegistryNotFoundError(f"strategy {strategy_id!r} not found")
+        if account_id not in self._accounts:
+            raise RegistryNotFoundError(f"account {account_id!r} not found")
+        strategy = self._strategies[strategy_id]
+        if strategy.actor_id != actor_id:
+            raise ValueError(
+                f"allocation actor_id {actor_id!r} does not match strategy actor {strategy.actor_id!r}"
+            )
+        if strategy.account_id != account_id:
+            raise ValueError(
+                f"allocation account_id {account_id!r} does not match strategy account {strategy.account_id!r}"
+            )
+        for other in self._allocations.values():
+            if other.strategy_id == strategy_id and other.allocation_id != (allocation_id or other.allocation_id):
+                raise RegistryConflictError(f"allocation already exists for strategy {strategy_id!r}")
+        key = allocation_id or uuid.uuid4().hex
+        now = _utcnow()
+        previous = self._allocations.get(key)
+        record = AllocationRecord(
+            allocation_id=key,
+            strategy_id=strategy_id,
+            actor_id=actor_id.strip(),
+            account_id=account_id,
+            quote_asset=str(quote_asset or "").strip(),
+            base_asset=str(base_asset or "").strip(),
+            allocated_quote=max(0.0, float(allocated_quote)),
+            allocated_base=max(0.0, float(allocated_base)),
+            halt_on_breach=bool(halt_on_breach),
+            status=status,  # type: ignore[arg-type]
+            created_at=previous.created_at if previous else now,
+            updated_at=now,
+        )
+        self._allocations[key] = record
+        return record
+
     def patch_strategy(
         self,
         strategy_id: str,
@@ -285,6 +359,18 @@ class MemoryRegistryStore:
         )
         self._assignments[assignment_id] = record
         return record
+
+    def get_active_worker_assignment(self, worker_id: str) -> WorkerAssignmentRecord:
+        key = worker_id.strip()
+        active = [
+            assignment
+            for assignment in self._assignments.values()
+            if assignment.worker_id == key and assignment.status == "active"
+        ]
+        if not active:
+            raise RegistryNotFoundError(f"no active worker assignment for worker_id {worker_id!r}")
+        active.sort(key=lambda row: row.heartbeat_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return active[0]
 
     def load_runtime_bundle(self, strategy_id: str) -> dict[str, Any]:
         strategy = self.get_strategy(strategy_id)

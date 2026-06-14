@@ -62,6 +62,23 @@ CREATE TABLE IF NOT EXISTS registry_worker_assignments (
 CREATE INDEX IF NOT EXISTS registry_worker_assignments_worker_idx
 ON registry_worker_assignments (worker_id, status);
 
+CREATE TABLE IF NOT EXISTS registry_allocations (
+    allocation_id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL UNIQUE REFERENCES registry_strategies(strategy_id),
+    actor_id TEXT NOT NULL,
+    account_id TEXT NOT NULL REFERENCES registry_accounts(account_id),
+    quote_asset TEXT NOT NULL DEFAULT '',
+    base_asset TEXT NOT NULL DEFAULT '',
+    allocated_quote DOUBLE PRECISION NOT NULL DEFAULT 0,
+    allocated_base DOUBLE PRECISION NOT NULL DEFAULT 0,
+    halt_on_breach BOOLEAN NOT NULL DEFAULT TRUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS registry_allocations_account_idx ON registry_allocations (account_id);
+CREATE INDEX IF NOT EXISTS registry_allocations_actor_idx ON registry_allocations (actor_id);
+
 CREATE TABLE IF NOT EXISTS registry_platform_settings (
     settings_id TEXT PRIMARY KEY,
     bus JSONB NOT NULL DEFAULT '{}'::jsonb,

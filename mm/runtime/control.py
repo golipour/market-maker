@@ -12,6 +12,7 @@ from mm.observability import counter_inc, gauge, log_event
 @dataclass(slots=True)
 class RuntimeControlState:
     paused_actors: set[str] = field(default_factory=set)
+    allocation_breached_actors: set[str] = field(default_factory=set)
     paused_venue_roles: set[str] = field(default_factory=set)
     dry_run: bool = False
     kill_switch: bool = False
@@ -51,6 +52,7 @@ class RuntimeControlPlane:
             self.state.paused_actors.add(str(actor_id))
         elif name == "resume" and actor_id:
             self.state.paused_actors.discard(str(actor_id))
+            self.state.allocation_breached_actors.discard(str(actor_id))
         elif name == "kill_switch":
             self.state.kill_switch = bool(command.get("enabled", True))
         elif name in ("dry_run", "observe_only"):
@@ -91,11 +93,33 @@ class RuntimeControlPlane:
             )
         await self._publish_state(command)
 
+    def halt_actor_for_allocation_breach(
+        self,
+        actor_id: str,
+        *,
+        reasons: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        actor = str(actor_id or "").strip()
+        if not actor:
+            return
+        if actor in self.state.allocation_breached_actors:
+            return
+        self.state.allocation_breached_actors.add(actor)
+        self.state.paused_actors.add(actor)
+        log_event(
+            "allocation_breach_halt",
+            {
+                "actor_id": actor,
+                "reasons": list(reasons),
+            },
+        )
+
     async def _publish_state(self, command: dict[str, Any]) -> None:
         payload = {
             "type": "RuntimeControlState",
             "command_id": command.get("command_id"),
             "paused_actors": sorted(self.state.paused_actors),
+            "allocation_breached_actors": sorted(self.state.allocation_breached_actors),
             "paused_venue_roles": sorted(self.state.paused_venue_roles),
             "dry_run": self.state.dry_run,
             "kill_switch": self.state.kill_switch,

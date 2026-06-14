@@ -70,6 +70,12 @@ MM_EVENT_PAYLOAD_BYTES_TOTAL = "mm_event_payload_bytes_total"
 MM_EVENT_PAYLOAD_BYTES = "mm_event_payload_bytes"
 MM_EVENT_ENVELOPE_BYTES_TOTAL = "mm_event_envelope_bytes_total"
 MM_EVENT_ENVELOPE_BYTES = "mm_event_envelope_bytes"
+MM_ALLOCATION_USED_BASE = "mm_allocation_used_base"
+MM_ALLOCATION_USED_QUOTE = "mm_allocation_used_quote"
+MM_ALLOCATION_LIMIT_BASE = "mm_allocation_limit_base"
+MM_ALLOCATION_LIMIT_QUOTE = "mm_allocation_limit_quote"
+MM_ALLOCATION_REALIZED_PNL_QUOTE = "mm_allocation_realized_pnl_quote"
+MM_ALLOCATION_BREACH_TOTAL = "mm_allocation_breach_total"
 
 # Log event keys (mm.observability.log_event)
 EVENT_STRATEGY_FRAME = "strategy_frame"

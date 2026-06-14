@@ -24,6 +24,7 @@ FLEET_CORE_PERSISTENCE_TOPICS: tuple[str, ...] = (
     "execution:errors",
     "risk:events",
     "admin:events",
+    "portfolio:allocations",
 )
 
 

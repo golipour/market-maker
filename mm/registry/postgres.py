@@ -10,6 +10,7 @@ from typing import Any
 from mm.registry.memory import MemoryRegistryStore, RegistryConflictError, RegistryNotFoundError
 from mm.registry.models import (
     AccountRecord,
+    AllocationRecord,
     ExchangeRecord,
     PlatformSettingsRecord,
     StrategyPresetRecord,
@@ -476,6 +477,140 @@ class PostgresRegistryStore(MemoryRegistryStore):
             ),
         )
 
+    def list_allocations(self) -> list[AllocationRecord]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT allocation_id, strategy_id, actor_id, account_id, quote_asset,
+                           base_asset, allocated_quote, allocated_base, halt_on_breach,
+                           status, created_at, updated_at
+                    FROM registry_allocations
+                    ORDER BY allocation_id
+                    """
+                )
+                rows = cur.fetchall()
+        return [_allocation_from_row(row) for row in rows]
+
+    def get_allocation(self, allocation_id: str) -> AllocationRecord:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT allocation_id, strategy_id, actor_id, account_id, quote_asset,
+                           base_asset, allocated_quote, allocated_base, halt_on_breach,
+                           status, created_at, updated_at
+                    FROM registry_allocations
+                    WHERE allocation_id = %s
+                    """,
+                    (allocation_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RegistryNotFoundError(f"allocation {allocation_id!r} not found")
+        return _allocation_from_row(row)
+
+    def get_allocation_for_strategy(self, strategy_id: str) -> AllocationRecord:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT allocation_id, strategy_id, actor_id, account_id, quote_asset,
+                           base_asset, allocated_quote, allocated_base, halt_on_breach,
+                           status, created_at, updated_at
+                    FROM registry_allocations
+                    WHERE strategy_id = %s
+                    """,
+                    (strategy_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RegistryNotFoundError(f"allocation for strategy {strategy_id!r} not found")
+        return _allocation_from_row(row)
+
+    def get_allocation_for_actor(self, actor_id: str) -> AllocationRecord:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT allocation_id, strategy_id, actor_id, account_id, quote_asset,
+                           base_asset, allocated_quote, allocated_base, halt_on_breach,
+                           status, created_at, updated_at
+                    FROM registry_allocations
+                    WHERE actor_id = %s
+                    """,
+                    (actor_id.strip(),),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RegistryNotFoundError(f"allocation for actor {actor_id!r} not found")
+        return _allocation_from_row(row)
+
+    def upsert_allocation(
+        self,
+        *,
+        allocation_id: str | None = None,
+        strategy_id: str,
+        actor_id: str,
+        account_id: str,
+        quote_asset: str = "",
+        base_asset: str = "",
+        allocated_quote: float = 0.0,
+        allocated_base: float = 0.0,
+        halt_on_breach: bool = True,
+        status: str = "active",
+    ) -> AllocationRecord:
+        record = super().upsert_allocation(
+            allocation_id=allocation_id,
+            strategy_id=strategy_id,
+            actor_id=actor_id,
+            account_id=account_id,
+            quote_asset=quote_asset,
+            base_asset=base_asset,
+            allocated_quote=allocated_quote,
+            allocated_base=allocated_base,
+            halt_on_breach=halt_on_breach,
+            status=status,
+        )
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO registry_allocations (
+                        allocation_id, strategy_id, actor_id, account_id, quote_asset,
+                        base_asset, allocated_quote, allocated_base, halt_on_breach,
+                        status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (allocation_id) DO UPDATE SET
+                        strategy_id = EXCLUDED.strategy_id,
+                        actor_id = EXCLUDED.actor_id,
+                        account_id = EXCLUDED.account_id,
+                        quote_asset = EXCLUDED.quote_asset,
+                        base_asset = EXCLUDED.base_asset,
+                        allocated_quote = EXCLUDED.allocated_quote,
+                        allocated_base = EXCLUDED.allocated_base,
+                        halt_on_breach = EXCLUDED.halt_on_breach,
+                        status = EXCLUDED.status,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        record.allocation_id,
+                        record.strategy_id,
+                        record.actor_id,
+                        record.account_id,
+                        record.quote_asset,
+                        record.base_asset,
+                        record.allocated_quote,
+                        record.allocated_base,
+                        record.halt_on_breach,
+                        record.status,
+                        record.created_at,
+                        record.updated_at,
+                    ),
+                )
+            conn.commit()
+        return record
+
     def list_worker_assignments(self) -> list[WorkerAssignmentRecord]:
         with self._connection() as conn:
             with conn.cursor() as cur:
@@ -602,6 +737,25 @@ class PostgresRegistryStore(MemoryRegistryStore):
             conn.commit()
         return record
 
+    def get_active_worker_assignment(self, worker_id: str) -> WorkerAssignmentRecord:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT assignment_id, worker_id, strategy_ids, lease_expires_at,
+                           heartbeat_at, status, created_at, updated_at
+                    FROM registry_worker_assignments
+                    WHERE worker_id = %s AND status = 'active'
+                    ORDER BY heartbeat_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (worker_id.strip(),),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RegistryNotFoundError(f"no active worker assignment for worker_id {worker_id!r}")
+        return _assignment_from_row(row)
+
     def load_runtime_bundle(self, strategy_id: str) -> dict[str, Any]:
         strategy = self.get_strategy(strategy_id)
         account = self.get_account(strategy.account_id)
@@ -680,6 +834,23 @@ def _strategy_from_row(row: tuple[Any, ...]) -> StrategyRecord:
         config_overrides=dict(row[8] or {}),
         created_at=row[9],
         updated_at=row[10],
+    )
+
+
+def _allocation_from_row(row: tuple[Any, ...]) -> AllocationRecord:
+    return AllocationRecord(
+        allocation_id=row[0],
+        strategy_id=row[1],
+        actor_id=row[2],
+        account_id=row[3],
+        quote_asset=str(row[4] or ""),
+        base_asset=str(row[5] or ""),
+        allocated_quote=float(row[6] or 0.0),
+        allocated_base=float(row[7] or 0.0),
+        halt_on_breach=bool(row[8]),
+        status=row[9],
+        created_at=row[10],
+        updated_at=row[11],
     )
 
 
