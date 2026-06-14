@@ -12,6 +12,7 @@ Full architecture and operations guides live in **[docs/](docs/README.md)**:
 - [Controller & execution](docs/controller-and-execution.md)
 - [Observability & operations](docs/observability.md)
 - [Configuration](docs/configuration.md)
+- [Local development (decomposed stack, admin, UI)](docs/local-development.md)
 
 ## Quick start
 
