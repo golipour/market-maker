@@ -1,3 +1,12 @@
+FROM node:20-bookworm-slim AS ui
+
+WORKDIR /ui
+COPY platform/ui/package.json platform/ui/package-lock.json ./
+RUN npm ci
+
+COPY platform/ui/ ./
+RUN npm run build
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,10 +23,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mm/ mm/
+COPY --from=ui /ui/dist platform/ui/dist
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin marketmaker \
     && mkdir -p /config /data/parquet /var/log/mm \
-    && chown -R marketmaker:marketmaker /config /data/parquet /var/log/mm
+    && chown -R marketmaker:marketmaker /config /data/parquet /var/log/mm /app/platform
 
 USER marketmaker
 

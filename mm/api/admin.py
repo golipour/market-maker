@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
+from mm.api.platform_routes import create_platform_router
 from mm.api.registry_routes import create_registry_router
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
@@ -41,6 +44,7 @@ def create_admin_app(
     app = FastAPI(title="market-maker-admin")
     app.state.bus = runtime_bus
     app.state.started_ms = int(time.time() * 1000)
+    _configure_cors(app)
     app.include_router(
         create_registry_router(
             require_auth=_require_auth,
@@ -48,17 +52,23 @@ def create_admin_app(
             registry_store=registry_store,
         ),
     )
+    app.include_router(create_platform_router(require_auth=_require_auth))
+    _mount_platform_ui(app)
 
     @app.get("/api/admin/health")
     async def health() -> dict[str, Any]:
         return {"status": "ok", "started_ms": app.state.started_ms}
 
     @app.get("/api/admin/config")
-    async def config(_: None = Depends(_require_auth)) -> dict[str, Any]:
-        return {"bus": _bus_config_from_env().kind, "admin_auth": bool(_admin_token())}
+    async def config(_: str = Depends(_require_auth)) -> dict[str, Any]:
+        return {
+            "bus": _bus_config_from_env().kind,
+            "admin_auth": bool(_admin_token()),
+            "platform_ui": _platform_ui_dist().is_dir(),
+        }
 
     @app.get("/api/admin/status")
-    async def status(_: None = Depends(_require_auth)) -> dict[str, Any]:
+    async def status(_: str = Depends(_require_auth)) -> dict[str, Any]:
         return {
             "status": "ok",
             "bus": _bus_config_from_env().kind,
@@ -67,6 +77,7 @@ def create_admin_app(
             "parquet_root_configured": bool(os.environ.get("MM_PARQUET_ROOT", "").strip()),
             "metrics_port": os.environ.get("MM_METRICS_PORT", ""),
             "log_path": os.environ.get("MM_LOG_PATH", ""),
+            "grafana_url": os.environ.get("MM_GRAFANA_URL", "http://localhost:3000"),
         }
 
     @app.get("/metrics")
@@ -111,6 +122,49 @@ def create_admin_app(
         return {"status": "accepted", "command_id": command_id}
 
     return app
+
+
+def _configure_cors(app: FastAPI) -> None:
+    origins = os.environ.get(
+        "MM_PLATFORM_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    allow = [origin.strip() for origin in origins.split(",") if origin.strip()]
+    if allow:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+
+def _platform_ui_dist() -> Path:
+    return Path(__file__).resolve().parents[2] / "platform" / "ui" / "dist"
+
+
+def _mount_platform_ui(app: FastAPI) -> None:
+    dist = _platform_ui_dist()
+    if not dist.is_dir():
+        return
+
+    @app.get("/")
+    async def root() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
+
+    @app.get("/ui")
+    async def ui_root() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
+
+    @app.get("/ui/{resource_path:path}")
+    async def ui_files(resource_path: str) -> FileResponse:
+        if resource_path in ("", "/"):
+            return FileResponse(dist / "index.html")
+        candidate = dist / resource_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
 
 
 def _require_auth(authorization: str | None = Header(default=None)) -> str:

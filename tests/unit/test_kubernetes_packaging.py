@@ -90,6 +90,7 @@ def test_dockerfile_declares_python_runtime() -> None:
     assert "python:3.11-slim" in dockerfile
     assert "requirements.txt" in dockerfile
     assert "mm/" in dockerfile
+    assert "platform/ui/dist" in dockerfile
 
 
 def test_admin_entrypoint_module_imports() -> None:
