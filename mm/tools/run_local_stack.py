@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mm.env_loader import load_mm_env
+from mm.registry.store import registry_database_url
+from mm.tools.seed_local_registry import ensure_local_worker_registry
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIGS = {
@@ -99,6 +101,19 @@ def _terminate_all(procs: list[subprocess.Popen[str]]) -> None:
         _terminate_process(proc, sig=signal.SIGKILL)
 
 
+def _maybe_seed_worker_registry(services: list[StackService]) -> None:
+    if not any(svc.name == "worker" for svc in services):
+        return
+    if not registry_database_url():
+        print(
+            "[stack] warning: MM_DATABASE_URL unset; worker may fail without registry seed",
+            flush=True,
+        )
+        return
+    if ensure_local_worker_registry():
+        print("[stack] seeded local registry for worker-1", flush=True)
+
+
 def run_stack(
     services: list[StackService],
     *,
@@ -106,6 +121,7 @@ def run_stack(
     ingestor_warmup_s: float,
 ) -> int:
     load_mm_env()
+    _maybe_seed_worker_registry(services)
     procs: list[tuple[str, subprocess.Popen[str]]] = []
     stop_requested = False
 
@@ -184,13 +200,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             default=str(DEFAULT_CONFIGS[name]),
             help=f"Path to {name} JSON config.",
         )
-    skip = parser.add_mutually_exclusive_group()
-    skip.add_argument(
+    parser.add_argument(
         "--skip",
+        action="append",
         nargs="+",
         choices=tuple(DEFAULT_CONFIGS.keys()),
         default=[],
-        help="Skip one or more stack services.",
+        help="Skip one or more stack services (repeatable).",
     )
     return parser.parse_args(argv)
 
@@ -205,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
     if missing:
         raise SystemExit(f"Config file(s) not found: {', '.join(missing)}")
 
-    skip = set(args.skip)
+    skip = {name for batch in args.skip for name in batch}
     services = [svc for svc in default_services(configs) if svc.name not in skip]
     if not services:
         raise SystemExit("No services selected to run.")

@@ -37,4 +37,25 @@ def test_build_command_uses_current_interpreter() -> None:
 def test_parse_args_with_admin_and_skip() -> None:
     args = parse_args(["--with-admin", "--skip", "worker", "persistence"])
     assert args.with_admin is True
-    assert set(args.skip) == {"worker", "persistence"}
+    assert {name for batch in args.skip for name in batch} == {
+        "worker",
+        "persistence",
+    }
+
+
+def test_parse_args_repeated_skip_flags() -> None:
+    args = parse_args(
+        [
+            "--skip",
+            "ingestor",
+            "--skip",
+            "persistence",
+            "--skip",
+            "consumer",
+        ]
+    )
+    assert {name for batch in args.skip for name in batch} == {
+        "ingestor",
+        "persistence",
+        "consumer",
+    }
