@@ -49,7 +49,6 @@ _VENUE_OPTIMIZER_KEYS = {
     "objective_weight",
     "quote_size_min_per_side",
     "quote_size_max_per_side",
-    "spread_structure",
     "reservation_offset",
     "w_book",
     "w_inv",
@@ -79,6 +78,7 @@ _REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
 )
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
     "soft_fill_queue_penalty": "soft_fill_queue_model",
+    "spread_structure": "book_quality.hard_structure",
 }
 _FLAT_VENUE_OPTIMIZER_KEYS = _VENUE_OPTIMIZER_KEYS | set(_REMOVED_VENUE_OPTIMIZER_ALIASES)
 

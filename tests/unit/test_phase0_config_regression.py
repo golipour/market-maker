@@ -109,10 +109,17 @@ def test_example_runtime_config_loads() -> None:
     assert local_optimizer.get("w_inv") == pytest.approx(0.01)
     assert "spread_structure" not in local_optimizer
     global_optimizer = (config.controller.optimizer or {}).get("global", {})
-    assert global_optimizer.get("spread_structure") == {
-        "center_sum_max": 100.0,
-        "center_min_depth": 0.3,
-        "center_k_epsilon": 0.01,
+    assert global_optimizer.get("book_quality") == {
+        "hard_structure": {
+            "action_max_spread": 100.0,
+            "action_min_depth": 0.3,
+            "action_k_epsilon": 0.01,
+        },
+        "soft_target": {
+            "spread_target": 100.0,
+            "depth_target": 1.0,
+            "measure": "quoted",
+        },
     }
 
 

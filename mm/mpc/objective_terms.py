@@ -117,8 +117,66 @@ class ObjectiveNormalizeParams:
         }
 
 
+_LEGACY_BOOK_QUALITY_SOFT_KEYS = frozenset(
+    {
+        "spread_target",
+        "depth_target",
+        "touch_spread_fraction",
+        "measure",
+        "v_presence",
+        "v_tightness",
+        "v_balance",
+        "v_uniformity",
+    }
+)
+_LEGACY_SPREAD_STRUCTURE_KEYS = frozenset(
+    {"center_sum_max", "center_min_depth", "center_k_epsilon"}
+)
+
+
 @dataclass(frozen=True, slots=True)
-class BookQualityParams:
+class BookQualityHardStructure:
+    """Hard decoder geometry for first-touch spread legs."""
+
+    action_max_spread: float
+    action_min_depth: float = 0.0
+    action_k_epsilon: float = 0.01
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> BookQualityHardStructure | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("book_quality.hard_structure must be an object")
+        legacy = sorted(k for k in _LEGACY_SPREAD_STRUCTURE_KEYS if k in payload)
+        if legacy:
+            raise ValueError(
+                "book_quality.hard_structure keys renamed: use "
+                "action_max_spread, action_min_depth, action_k_epsilon; remove "
+                + ", ".join(legacy)
+            )
+        action_max_spread = float(payload.get("action_max_spread", 0.0))
+        if action_max_spread <= 0.0:
+            raise ValueError("book_quality.hard_structure.action_max_spread must be > 0")
+        return cls(
+            action_max_spread=action_max_spread,
+            action_min_depth=max(0.0, float(payload.get("action_min_depth", 0.0))),
+            action_k_epsilon=float(payload.get("action_k_epsilon", 0.01)),
+        )
+
+    def as_mapping(self) -> dict[str, float]:
+        out: dict[str, float] = {"action_max_spread": self.action_max_spread}
+        if self.action_min_depth > 0.0:
+            out["action_min_depth"] = self.action_min_depth
+        if self.action_k_epsilon != 0.01:
+            out["action_k_epsilon"] = self.action_k_epsilon
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class BookQualitySoftTarget:
+    """Soft book-quality objective targets and sub-weights."""
+
     spread_target: float = 50.0
     depth_target: float = 1.0
     touch_spread_fraction: float = 0.01
@@ -129,14 +187,14 @@ class BookQualityParams:
     v_uniformity: float = 0.25
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> BookQualityParams | None:
+    def from_mapping(cls, payload: Any) -> BookQualitySoftTarget:
         if payload is None:
-            return None
+            return cls()
         if not isinstance(payload, dict):
-            raise ValueError("book_quality must be an object")
+            raise ValueError("book_quality.soft_target must be an object")
         measure = str(payload.get("measure", "quoted")).strip().lower()
         if measure not in ("quoted", "combined"):
-            raise ValueError("book_quality.measure must be 'quoted' or 'combined'")
+            raise ValueError("book_quality.soft_target.measure must be 'quoted' or 'combined'")
         return cls(
             spread_target=max(1e-9, float(payload.get("spread_target", 50.0))),
             depth_target=max(1e-9, float(payload.get("depth_target", 1.0))),
@@ -150,6 +208,91 @@ class BookQualityParams:
             v_balance=float(payload.get("v_balance", 0.25)),
             v_uniformity=float(payload.get("v_uniformity", 0.25)),
         )
+
+    def as_mapping(self) -> dict[str, float | str]:
+        out: dict[str, float | str] = {
+            "spread_target": self.spread_target,
+            "depth_target": self.depth_target,
+            "measure": self.measure,
+        }
+        if self.touch_spread_fraction != 0.01:
+            out["touch_spread_fraction"] = self.touch_spread_fraction
+        if self.v_presence != 0.25:
+            out["v_presence"] = self.v_presence
+        if self.v_tightness != 0.25:
+            out["v_tightness"] = self.v_tightness
+        if self.v_balance != 0.25:
+            out["v_balance"] = self.v_balance
+        if self.v_uniformity != 0.25:
+            out["v_uniformity"] = self.v_uniformity
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class BookQualityParams:
+    """Venue book geometry: optional hard decoder structure plus soft targets."""
+
+    hard_structure: BookQualityHardStructure | None = None
+    soft_target: BookQualitySoftTarget = BookQualitySoftTarget()
+
+    @property
+    def spread_target(self) -> float:
+        return self.soft_target.spread_target
+
+    @property
+    def depth_target(self) -> float:
+        return self.soft_target.depth_target
+
+    @property
+    def touch_spread_fraction(self) -> float:
+        return self.soft_target.touch_spread_fraction
+
+    @property
+    def measure(self) -> str:
+        return self.soft_target.measure
+
+    @property
+    def v_presence(self) -> float:
+        return self.soft_target.v_presence
+
+    @property
+    def v_tightness(self) -> float:
+        return self.soft_target.v_tightness
+
+    @property
+    def v_balance(self) -> float:
+        return self.soft_target.v_balance
+
+    @property
+    def v_uniformity(self) -> float:
+        return self.soft_target.v_uniformity
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> BookQualityParams | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("book_quality must be an object")
+        if "spread_structure" in payload:
+            raise ValueError(
+                "spread_structure belongs under book_quality.hard_structure "
+                "(action_max_spread, action_min_depth, action_k_epsilon)"
+            )
+        flat_soft = sorted(k for k in _LEGACY_BOOK_QUALITY_SOFT_KEYS if k in payload)
+        if flat_soft:
+            raise ValueError(
+                "book_quality soft keys belong under book_quality.soft_target: "
+                + ", ".join(flat_soft)
+            )
+        hard = BookQualityHardStructure.from_mapping(payload.get("hard_structure"))
+        soft = BookQualitySoftTarget.from_mapping(payload.get("soft_target"))
+        return cls(hard_structure=hard, soft_target=soft)
+
+    def as_mapping(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"soft_target": self.soft_target.as_mapping()}
+        if self.hard_structure is not None:
+            out["hard_structure"] = self.hard_structure.as_mapping()
+        return out
 
 
 def wallet_imbalance(

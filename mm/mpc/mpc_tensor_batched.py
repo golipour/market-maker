@@ -82,7 +82,6 @@ class VenueOptimizerParams:
     objective_weight: float = 1.0
     quote_size_min_per_side: float = 0.0
     quote_size_max_per_side: float | None = None
-    spread_structure: SpreadStructureParams | None = None
     reservation_offset: ReservationOffsetParams | None = None
     w_book: float = 0.0
     w_inv: float = 0.0
@@ -101,6 +100,11 @@ class VenueOptimizerParams:
     ) -> "VenueOptimizerParams":
         base = defaults or cls()
         data = dict(payload or {})
+        if data.get("spread_structure") is not None:
+            raise ValueError(
+                "optimizer spread_structure was removed; use "
+                "book_quality.hard_structure.{action_max_spread, action_min_depth, action_k_epsilon}"
+            )
         return cls(
             n_components=(
                 max(1, int(data.get("n_components")))
@@ -119,11 +123,6 @@ class VenueOptimizerParams:
                 float(data.get("quote_size_max_per_side"))
                 if data.get("quote_size_max_per_side") is not None
                 else base.quote_size_max_per_side
-            ),
-            spread_structure=(
-                SpreadStructureParams.from_mapping(data.get("spread_structure"))
-                if data.get("spread_structure") is not None
-                else base.spread_structure
             ),
             reservation_offset=(
                 ReservationOffsetParams.from_mapping(data.get("reservation_offset"))
@@ -161,6 +160,14 @@ class VenueOptimizerParams:
             n_components=n_components or self.n_components or 1,
         )
         validate_l_param_config(l_param)
+
+    @property
+    def spread_structure(self) -> SpreadStructureParams | None:
+        if self.book_quality is None or self.book_quality.hard_structure is None:
+            return None
+        return SpreadStructureParams.from_book_quality_hard_structure(
+            self.book_quality.hard_structure
+        )
 
     def l_param_config(self, *, spread_max: float, n_components: int) -> LParamConfig:
         spread_fields = (
@@ -203,23 +210,12 @@ class VenueOptimizerParams:
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
-        if self.spread_structure is not None:
-            out["spread_structure"] = self.spread_structure.as_mapping()
         if self.reservation_offset is not None:
             out["reservation_offset"] = self.reservation_offset.as_mapping()
         if self.inventory_zone is not None:
             out["inventory_zone"] = self.inventory_zone.as_mapping()
         if self.book_quality is not None:
-            out["book_quality"] = {
-                "spread_target": self.book_quality.spread_target,
-                "depth_target": self.book_quality.depth_target,
-                "touch_spread_fraction": self.book_quality.touch_spread_fraction,
-                "measure": self.book_quality.measure,
-                "v_presence": self.book_quality.v_presence,
-                "v_tightness": self.book_quality.v_tightness,
-                "v_balance": self.book_quality.v_balance,
-                "v_uniformity": self.book_quality.v_uniformity,
-            }
+            out["book_quality"] = self.book_quality.as_mapping()
         return out
 
 

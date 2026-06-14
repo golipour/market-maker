@@ -249,9 +249,11 @@
             "w_book": 0.002,
             "w_inv": 0.01,
             "book_quality": {
-              "spread_target": 200.0,
-              "depth_target": 1.0,
-              "measure": "quoted"
+              "soft_target": {
+                "spread_target": 200.0,
+                "depth_target": 1.0,
+                "measure": "quoted"
+              }
             },
             "inventory_zone": {
               "comfort_low": -0.2,
@@ -276,9 +278,16 @@
             "w_book": 0.002,
             "w_inv": 0.01,
             "book_quality": {
-              "spread_target": 50.0,
-              "depth_target": 1.0,
-              "measure": "quoted"
+              "hard_structure": {
+                "action_max_spread": 100.0,
+                "action_min_depth": 0.3,
+                "action_k_epsilon": 0.01
+              },
+              "soft_target": {
+                "spread_target": 100.0,
+                "depth_target": 1.0,
+                "measure": "quoted"
+              }
             },
             "inventory_zone": {
               "comfort_low": -0.2,
@@ -287,11 +296,6 @@
               "high_ramp_width": 0.05,
               "low_penalty_cap": 0.7,
               "high_penalty_cap": 1.0
-            },
-            "spread_structure": {
-              "center_sum_max": 100.0,
-              "center_min_depth": 0.3,
-              "center_k_epsilon": 0.01
             },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",

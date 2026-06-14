@@ -1332,7 +1332,6 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             "objective_weight",
             "quote_size_min_per_side",
             "quote_size_max_per_side",
-            "spread_structure",
             "reservation_offset",
             "w_book",
             "w_inv",
@@ -1362,6 +1361,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         )
         removed_venue_optimizer_aliases = {
             "soft_fill_queue_penalty": "soft_fill_queue_model",
+            "spread_structure": "book_quality.hard_structure",
         }
         removed_optimizer_keys = [
             key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_payload
@@ -1636,14 +1636,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "low_penalty_cap, high_penalty_cap}"
             ),
             "book_quality": (
-                "sub-weights and targets for presence/tightness/balance/uniformity; "
-                "measure='quoted' scores only your decoded quotes (default), "
-                "measure='combined' adds resting market depth at h=0"
-            ),
-            "spread_structure": (
-                "optional structured first-touch geometry: center_sum_max caps "
-                "x0_bid,1 + x0_ask,1; center_min_depth floors spread-leg depth at touch; "
-                "center_k_epsilon shapes the first component slope"
+                "book shape preferences: hard_structure caps first-touch decode "
+                "(action_max_spread, action_min_depth, action_k_epsilon); "
+                "soft_target sets spread/depth targets for w_book scoring "
+                "(measure='quoted' or 'combined')"
             ),
             "reservation_offset": (
                 "optional relative reservation-price shift: r_max bounds dimensionless "

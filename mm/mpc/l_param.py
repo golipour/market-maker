@@ -25,14 +25,33 @@ class SpreadStructureParams:
         if payload is None:
             return None
         if not isinstance(payload, dict):
-            raise ValueError("spread_structure must be an object")
-        center_sum_max = float(payload.get("center_sum_max", 0.0))
+            raise ValueError("book_quality.hard_structure must be an object")
+        center_sum_max = float(
+            payload.get("action_max_spread", payload.get("center_sum_max", 0.0))
+        )
         if center_sum_max <= 0.0:
-            raise ValueError("spread_structure.center_sum_max must be > 0")
+            raise ValueError("book_quality.hard_structure.action_max_spread must be > 0")
         return cls(
             center_sum_max=center_sum_max,
-            center_min_depth=max(0.0, float(payload.get("center_min_depth", 0.0))),
-            center_k_epsilon=float(payload.get("center_k_epsilon", 0.01)),
+            center_min_depth=max(
+                0.0,
+                float(payload.get("action_min_depth", payload.get("center_min_depth", 0.0))),
+            ),
+            center_k_epsilon=float(
+                payload.get("action_k_epsilon", payload.get("center_k_epsilon", 0.01))
+            ),
+        )
+
+    @classmethod
+    def from_book_quality_hard_structure(cls, hard: Any) -> SpreadStructureParams | None:
+        if hard is None:
+            return None
+        return cls.from_mapping(
+            {
+                "action_max_spread": hard.action_max_spread,
+                "action_min_depth": hard.action_min_depth,
+                "action_k_epsilon": hard.action_k_epsilon,
+            }
         )
 
     def as_mapping(self) -> dict[str, float]:
@@ -105,7 +124,7 @@ class LParamConfig:
 
     Without spread geometry: global softmax on ``L`` with ``δ(spread_max)`` normalization.
 
-    With spread geometry (``spread_structure.center_sum_max`` mapped to ``quote_spread_max``):
+    With spread geometry (``book_quality.hard_structure.action_max_spread`` mapped to ``quote_spread_max``):
     - first centers satisfy ``x0_1_bid + x0_1_ask <= center_sum_max`` via a scaled softmax split
     - component 1 may carry at least ``center_min_depth`` at its center when configured
     - tail components fill remaining depth up to a chosen total in
@@ -220,11 +239,11 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
         q_spread = float(l_param.quote_spread_min_depth or 0.0)
         if s_max > float(l_param.spread_max):
             raise ValueError(
-                f"spread_structure.center_sum_max ({s_max}) must be <= spread_max ({l_param.spread_max})"
+                f"book_quality.hard_structure.action_max_spread ({s_max}) must be <= spread_max ({l_param.spread_max})"
             )
         if hi is not None and q_spread > hi:
             raise ValueError(
-                f"spread_structure.center_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
+                f"book_quality.hard_structure.action_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
             )
         if int(l_param.n_components) < 2:
             raise ValueError(
