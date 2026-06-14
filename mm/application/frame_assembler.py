@@ -162,6 +162,8 @@ class StrategyInputFrameAssembler:
 
 
 def _require_market_event(event: Any) -> MarketEvent:
+    if isinstance(event, MarketEvent):
+        return event
     parsed = market_event_from_payload(event)
     if parsed is None:
         raise TypeError(f"expected versioned MarketEvent payload, got {type(event)!r}")

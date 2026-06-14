@@ -165,9 +165,10 @@ class RedisStreamsBus(AbstractEventBus):
                 async for envelope in self.subscribe_envelopes(topic, start_id="$"):
                     if getattr(envelope, "source", "") == self._source:
                         continue
+                    event = _parse_remote_stream_payload(topic, envelope.payload)
                     await deliver_to_subscriber(
                         queue,
-                        envelope.payload,
+                        event,
                         max_queue_size=self._max_queue_size,
                         policy=self._backpressure_policy,
                     )
@@ -220,6 +221,22 @@ def _balance_is_zero(balance: Balance) -> bool:
     return float(balance.free) == 0.0 and float(balance.locked) == 0.0
 
 
+def _parse_remote_stream_payload(topic: str, payload: Any) -> Any:
+    if topic.startswith("strategy:joint:frames:"):
+        from mm.core.payload_schema import joint_strategy_frame_from_payload
+
+        parsed = joint_strategy_frame_from_payload(payload)
+        if parsed is not None:
+            return parsed
+    if topic.startswith("market:events:"):
+        from mm.core.payload_schema import market_event_from_payload
+
+        parsed = market_event_from_payload(payload)
+        if parsed is not None:
+            return parsed
+    return payload
+
+
 def _compact_stream_event(topic: str, event: Any) -> Any | None:
     if topic.startswith("market:events:"):
         from mm.core.models.market import MarketEvent
@@ -230,6 +247,16 @@ def _compact_stream_event(topic: str, event: Any) -> Any | None:
             return market_event_event(event)
         if parsed is not None:
             return market_event_event(parsed)
+        return None
+    if topic.startswith("strategy:joint:frames:"):
+        from mm.core.models.joint_strategy import JointStrategyFrame
+        from mm.core.payload_schema import joint_strategy_frame_event, joint_strategy_frame_from_payload
+
+        if isinstance(event, JointStrategyFrame):
+            return joint_strategy_frame_event(event)
+        parsed = joint_strategy_frame_from_payload(event)
+        if parsed is not None:
+            return joint_strategy_frame_event(parsed)
         return None
     if topic.endswith(":balances") and isinstance(event, Balance):
         if _balance_is_zero(event):

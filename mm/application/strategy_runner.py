@@ -26,6 +26,7 @@ from mm.core.interfaces.risk import AbstractRiskEngine
 from mm.core.models.execution import Action, Order
 from mm.core.models.instrument import SymbolBinding
 from mm.core.models.joint_strategy import JointStrategyFrame
+from mm.core.payload_schema import joint_strategy_frame_from_payload
 from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
@@ -108,17 +109,27 @@ class StrategyRunner:
     async def _run(self) -> None:
         try:
             while not self._stopped.is_set():
-                frame = await self.frame_queue.get()
+                raw_frame = await self.frame_queue.get()
+                frame = _coerce_joint_strategy_frame(raw_frame)
+                if frame is None:
+                    log_event(
+                        "strategy_runner_frame_skipped",
+                        {
+                            "actor_id": self.config.actor_id,
+                            "reason": "unparseable_joint_strategy_frame",
+                            "payload_type": type(raw_frame).__name__,
+                        },
+                    )
+                    continue
                 try:
                     await self.on_joint_frame(frame)
                 except Exception as exc:
+                    context = _joint_frame_log_context(frame)
                     log_event(
                         "strategy_runner_frame_error",
                         {
                             "actor_id": self.config.actor_id,
-                            "exchange": frame.local_market.exchange,
-                            "symbol": frame.local_market.symbol,
-                            "t_end_ms": frame.local_market.t_end_ms,
+                            **context,
                             "error": type(exc).__name__,
                             "message": str(exc),
                         },
@@ -831,6 +842,30 @@ def _local_risk_rejection_counts(rejection_counts: dict[str, int]) -> dict[str, 
         for reason, count in rejection_counts.items()
         if not reason.startswith("global_")
     }
+
+
+def _coerce_joint_strategy_frame(raw_frame: Any) -> JointStrategyFrame | None:
+    if isinstance(raw_frame, JointStrategyFrame):
+        return raw_frame
+    return joint_strategy_frame_from_payload(raw_frame)
+
+
+def _joint_frame_log_context(frame: Any) -> dict[str, Any]:
+    if isinstance(frame, JointStrategyFrame):
+        return {
+            "exchange": frame.local_market.exchange,
+            "symbol": frame.local_market.symbol,
+            "t_end_ms": frame.local_market.t_end_ms,
+        }
+    if isinstance(frame, dict):
+        local = frame.get("local_market")
+        if isinstance(local, dict):
+            return {
+                "exchange": local.get("exchange"),
+                "symbol": local.get("symbol"),
+                "t_end_ms": local.get("t_end_ms"),
+            }
+    return {}
 
 
 def _elapsed_ms(started_ns: int) -> float:

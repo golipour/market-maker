@@ -43,6 +43,10 @@ MARKET_EVENT_SCHEMA = "mm.market_event"
 MARKET_EVENT_VERSION = 1
 MARKET_EVENT_TYPE = "MarketEvent"
 
+JOINT_STRATEGY_FRAME_SCHEMA = "mm.joint_strategy_frame"
+JOINT_STRATEGY_FRAME_VERSION = 1
+JOINT_STRATEGY_FRAME_TYPE = "JointStrategyFrame"
+
 
 def stamped(schema: str, version: int, **fields: Any) -> dict[str, Any]:
     return {"payload_schema": schema, "payload_version": version, **fields}
@@ -892,6 +896,165 @@ def joint_ledger_snapshot_event(joint: Any) -> dict[str, Any]:
         venue_ledger_snapshot_event(joint.global_) if joint.global_ is not None else None
     )
     return payload
+
+
+def joint_strategy_frame_event(frame: Any) -> dict[str, Any]:
+    """Build a versioned joint strategy frame bus payload with full replay data."""
+
+    from mm.core.models.joint_strategy import JointStrategyFrame
+
+    if isinstance(frame, dict):
+        if frame.get("payload_schema") == JOINT_STRATEGY_FRAME_SCHEMA:
+            assert_payload_schema(frame, JOINT_STRATEGY_FRAME_SCHEMA, JOINT_STRATEGY_FRAME_VERSION)
+            return dict(frame)
+        parsed = joint_strategy_frame_from_payload(frame)
+        if parsed is not None:
+            frame = parsed
+    if not isinstance(frame, JointStrategyFrame):
+        raise TypeError(f"expected JointStrategyFrame, got {type(frame)!r}")
+    if frame.input_frame is None:
+        raise ValueError("JointStrategyFrame.input_frame is required for durable bus payloads")
+    if frame.ledger is None:
+        raise ValueError("JointStrategyFrame.ledger is required for durable bus payloads")
+    return stamped(
+        JOINT_STRATEGY_FRAME_SCHEMA,
+        JOINT_STRATEGY_FRAME_VERSION,
+        type=JOINT_STRATEGY_FRAME_TYPE,
+        local_market=market_event_event(frame.local_market),
+        global_market=(
+            market_event_event(frame.global_market) if frame.global_market is not None else None
+        ),
+        ledger=joint_ledger_snapshot_event(frame.ledger),
+        mode=str(frame.mode),
+        sync_status=frame.sync_status.as_payload(),
+        created_at_ms=int(frame.created_at_ms),
+        input_frame=_strategy_input_frame_event(frame.input_frame),
+        frame_id=str(frame.frame_id or ""),
+    )
+
+
+def joint_strategy_frame_from_payload(payload: Any) -> Any | None:
+    """Parse a versioned joint strategy frame payload back into a domain struct."""
+
+    from mm.core.models.joint_strategy import FrameSyncStatus, JointStrategyFrame
+
+    if isinstance(payload, JointStrategyFrame):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("payload_schema") != JOINT_STRATEGY_FRAME_SCHEMA:
+        return None
+    try:
+        assert_payload_schema(payload, JOINT_STRATEGY_FRAME_SCHEMA, JOINT_STRATEGY_FRAME_VERSION)
+        input_payload = payload.get("input_frame")
+        if not isinstance(input_payload, dict):
+            return None
+        local_market = market_event_from_payload(payload["local_market"])
+        if local_market is None:
+            return None
+        global_payload = payload.get("global_market")
+        global_market = (
+            market_event_from_payload(global_payload)
+            if isinstance(global_payload, dict)
+            else None
+        )
+        ledger = joint_ledger_snapshot_from_payload(payload["ledger"])
+        input_frame = _strategy_input_frame_from_payload(input_payload)
+        sync_payload = payload.get("sync_status")
+        sync_status = (
+            _frame_sync_status_from_payload(sync_payload)
+            if isinstance(sync_payload, dict)
+            else FrameSyncStatus()
+        )
+        return JointStrategyFrame(
+            local_market=local_market,
+            global_market=global_market,
+            ledger=ledger,
+            mode=payload.get("mode") or "single_venue",
+            sync_status=sync_status,
+            created_at_ms=int(payload.get("created_at_ms") or 0),
+            input_frame=input_frame,
+            frame_id=str(payload.get("frame_id") or ""),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _strategy_input_frame_event(frame: Any) -> dict[str, Any]:
+    from mm.core.models.strategy import StrategyInputFrame
+
+    if not isinstance(frame, StrategyInputFrame):
+        raise TypeError(f"expected StrategyInputFrame, got {type(frame)!r}")
+    return {
+        "local": market_event_event(frame.local),
+        "global_": market_event_event(frame.global_) if frame.global_ is not None else None,
+        "local_private": (
+            private_state_snapshot_event(frame.local_private)
+            if frame.local_private is not None
+            else None
+        ),
+        "global_private": (
+            private_state_snapshot_event(frame.global_private)
+            if frame.global_private is not None
+            else None
+        ),
+        "global_status": frame.global_status,
+        "global_lag_ms": frame.global_lag_ms,
+        "max_global_lag_ms": int(frame.max_global_lag_ms),
+        "created_at_ms": int(frame.created_at_ms),
+        "frame_id": str(frame.frame_id or ""),
+    }
+
+
+def _strategy_input_frame_from_payload(payload: dict[str, Any]) -> Any:
+    from mm.core.models.strategy import StrategyInputFrame
+
+    local = market_event_from_payload(payload["local"])
+    if local is None:
+        raise ValueError("StrategyInputFrame.local is required")
+    global_payload = payload.get("global_")
+    global_market = (
+        market_event_from_payload(global_payload)
+        if isinstance(global_payload, dict)
+        else None
+    )
+    local_private_payload = payload.get("local_private")
+    local_private = (
+        private_state_snapshot_from_payload(local_private_payload)
+        if isinstance(local_private_payload, dict)
+        else None
+    )
+    global_private_payload = payload.get("global_private")
+    global_private = (
+        private_state_snapshot_from_payload(global_private_payload)
+        if isinstance(global_private_payload, dict)
+        else None
+    )
+    return StrategyInputFrame(
+        local=local,
+        global_=global_market,
+        local_private=local_private,
+        global_private=global_private,
+        global_status=payload.get("global_status") or "disabled",
+        global_lag_ms=payload.get("global_lag_ms"),
+        max_global_lag_ms=int(payload.get("max_global_lag_ms") or 0),
+        created_at_ms=int(payload.get("created_at_ms") or 0),
+        frame_id=str(payload.get("frame_id") or ""),
+    )
+
+
+def _frame_sync_status_from_payload(payload: dict[str, Any]) -> Any:
+    from mm.core.models.joint_strategy import FrameSyncStatus
+
+    return FrameSyncStatus(
+        local_market_ready=bool(payload.get("local_market_ready", False)),
+        global_market_ready=bool(payload.get("global_market_ready", False)),
+        local_private_ready=bool(payload.get("local_private_ready", False)),
+        global_private_ready=bool(payload.get("global_private_ready", False)),
+        ledger_fresh=bool(payload.get("ledger_fresh", True)),
+        latency_skew_ms=payload.get("latency_skew_ms"),
+        global_status=payload.get("global_status") or "disabled",
+    )
 
 
 def joint_ledger_snapshot_from_payload(payload: Any) -> Any:

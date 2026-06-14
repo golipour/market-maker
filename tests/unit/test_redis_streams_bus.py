@@ -272,3 +272,43 @@ async def test_redis_streams_bus_market_event_cross_process_round_trip() -> None
 
     await publisher.close()
     await subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_bus_joint_strategy_frame_cross_process_round_trip() -> None:
+    from mm.core.models.joint_strategy import JointStrategyFrame
+    from mm.core.payload_schema import joint_strategy_frame_event
+    from tests.unit.conftest import joint_frame_for_input
+    from tests.unit.test_strategy_pipeline import _event_for
+
+    redis = SharedFakeRedis()
+    publisher = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    subscriber = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    publisher._redis = redis
+    subscriber._redis = redis
+
+    local = _event_for("nobitex", "USDT_IRT", t_start_ms=9_000, t_end_ms=10_000)
+    from mm.core.models.strategy import StrategyInputFrame
+
+    input_frame = StrategyInputFrame(local=local, created_at_ms=10_000)
+    original = joint_frame_for_input(input_frame)
+    assert isinstance(original, JointStrategyFrame)
+    topic = "strategy:joint:frames:nobitex:USDT_IRT:10000"
+    queue = subscriber.subscribe_queue(topic)
+    await asyncio.wait_for(redis.xread_started.wait(), timeout=1.0)
+
+    await publisher.publish(topic, original)
+    delivered = await asyncio.wait_for(queue.get(), timeout=1.0)
+
+    assert isinstance(delivered, JointStrategyFrame)
+    assert delivered.local_market.exchange == original.local_market.exchange
+    assert delivered.local_market.symbol == original.local_market.symbol
+    assert delivered.input_frame is not None
+    assert delivered.ledger is not None
+
+    payload = joint_strategy_frame_event(original)
+    assert payload["payload_schema"] == "mm.joint_strategy_frame"
+    assert isinstance(payload["input_frame"], dict)
+
+    await publisher.close()
+    await subscriber.close()
