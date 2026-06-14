@@ -23,6 +23,7 @@ from mm.mpc.objective_terms import (
     book_quality_score,
     combine_soft_objective_terms,
     inventory_zone_path_mean,
+    update_ce_ewma_scale,
 )
 from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
 from mm.mpc.mpc_tensor_batched import (
@@ -755,6 +756,7 @@ def optimize_joint_with_diagnostics(
                 return_risk_aversion_beta=local_opt.return_risk_aversion_beta,
                 global_active=global_mask,
             )
+            J, components = mpc.normalize_terminal_objective(J, components)
             joint_h0 = x_torch[:joint_step_len]
             local_h0, global_h0 = torch_mod.split(
                 joint_h0,
@@ -977,6 +979,13 @@ def optimize_joint_with_diagnostics(
         ask_quote_size_max=local_ask_quote_size_max_0,
     )
 
+    if best_metrics is not None:
+        mpc._ce_ewma_scale = update_ce_ewma_scale(
+            mpc._ce_ewma_scale,
+            best_metrics.components,
+            normalize=mpc.objective_normalize,
+        )
+
     diagnostics = OptimizerRunDiagnostics(
         config={
             "kind": "monte_carlo_mpc_tensor_batched",
@@ -992,6 +1001,7 @@ def optimize_joint_with_diagnostics(
             "reference_price": ref_0,
             "reference_price_source": reference_price_source,
             "wealth_0": wealth_0,
+            "objective_normalize": mpc.objective_normalize.as_mapping(),
             "local_optimizer": local_opt.as_config(
                 spread_max=mpc.spread_max,
                 n_components=local_n,

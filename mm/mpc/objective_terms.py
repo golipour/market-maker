@@ -84,6 +84,40 @@ class InventoryZoneParams:
 
 
 @dataclass(frozen=True, slots=True)
+class ObjectiveNormalizeParams:
+    """Optional scaling so CE, book, and inventory terms share comparable magnitude."""
+
+    enabled: bool = False
+    ce_ewma_decay: float = 0.95
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> ObjectiveNormalizeParams:
+        if payload is None:
+            return cls()
+        if not isinstance(payload, dict):
+            raise ValueError("objective_normalize must be an object")
+        unknown = sorted(key for key in payload if key not in {"enabled", "ce_ewma_decay"})
+        if unknown:
+            raise ValueError(
+                "unknown objective_normalize keys: "
+                + ", ".join(unknown)
+            )
+        decay = float(payload.get("ce_ewma_decay", 0.95))
+        if not (0.0 <= decay < 1.0):
+            raise ValueError("objective_normalize.ce_ewma_decay must be in [0, 1)")
+        return cls(
+            enabled=bool(payload.get("enabled", False)),
+            ce_ewma_decay=decay,
+        )
+
+    def as_mapping(self) -> dict[str, bool | float]:
+        return {
+            "enabled": self.enabled,
+            "ce_ewma_decay": self.ce_ewma_decay,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class BookQualityParams:
     spread_target: float = 50.0
     depth_target: float = 1.0
@@ -145,13 +179,23 @@ def inventory_zone_penalty(
     return_components: bool = False,
 ) -> Any | tuple[Any, dict[str, Any]]:
     """
-    Sigmoid zone-of-indifference penalty in [0, low_cap + high_cap].
+    Normalized sigmoid zone-of-indifference penalty in [0, 1].
 
-    Z(imb) = low_penalty_cap * sigmoid((comfort_low - imb) / low_ramp_width)
-           + high_penalty_cap * sigmoid((imb - comfort_high) / high_ramp_width)
+    Z(imb) = (a_lo * sigmoid((comfort_low - imb) / d_lo)
+              + a_hi * sigmoid((imb - comfort_high) / d_hi))
+             / (a_lo + a_hi)
     """
 
     torch = _torch()
+    cap_sum = float(zone.low_penalty_cap) + float(zone.high_penalty_cap)
+    if cap_sum <= 0.0:
+        zero = torch.zeros_like(imbalance)
+        if return_components:
+            return zero, {
+                "inventory_zone_low_penalty": zero,
+                "inventory_zone_high_penalty": zero,
+            }
+        return zero
     d_lo = max(1e-9, float(zone.low_ramp_width))
     d_hi = max(1e-9, float(zone.high_ramp_width))
     low_penalty = float(zone.low_penalty_cap) * torch.sigmoid(
@@ -160,11 +204,11 @@ def inventory_zone_penalty(
     high_penalty = float(zone.high_penalty_cap) * torch.sigmoid(
         (imbalance - float(zone.comfort_high)) / d_hi
     )
-    total = low_penalty + high_penalty
+    total = (low_penalty + high_penalty) / cap_sum
     if return_components:
         return total, {
-            "inventory_zone_low_penalty": low_penalty,
-            "inventory_zone_high_penalty": high_penalty,
+            "inventory_zone_low_penalty": low_penalty / cap_sum,
+            "inventory_zone_high_penalty": high_penalty / cap_sum,
         }
     return total
 
@@ -394,6 +438,66 @@ OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
         "global_inventory_zone_penalty",
     }
 )
+
+
+def _ce_magnitude(value: Any) -> float:
+    torch = _torch()
+    if torch.is_tensor(value):
+        return abs(float(value.detach().item()))
+    return abs(float(value))
+
+
+def apply_ce_objective_normalization(
+    objective: Any,
+    components: dict[str, Any],
+    *,
+    normalize: ObjectiveNormalizeParams | None,
+    ce_ewma_scale: float,
+) -> tuple[Any, dict[str, Any], float]:
+    """
+    Scale ``risk_adjusted_return`` by the EWMA reference magnitude.
+
+    Uses the scale from the previous decision during optimization; returns the scale
+    used so callers can update the EWMA after the frame completes.
+    """
+
+    if normalize is None or not normalize.enabled:
+        return objective, components, float(ce_ewma_scale)
+    ce = components.get("risk_adjusted_return")
+    if ce is None:
+        return objective, components, float(ce_ewma_scale)
+    scale = max(float(ce_ewma_scale), 0.0)
+    if scale <= 0.0:
+        scale = max(_ce_magnitude(ce), 1e-12)
+        return objective, dict(components), scale
+    ce_norm = ce / scale
+    out = dict(components)
+    out["risk_adjusted_return_raw"] = ce
+    out["risk_adjusted_return"] = ce_norm
+    out["objective_ce_ewma_scale"] = scale
+    return objective - ce + ce_norm, out, scale
+
+
+def update_ce_ewma_scale(
+    ce_ewma_scale: float,
+    components: dict[str, Any],
+    *,
+    normalize: ObjectiveNormalizeParams | None,
+) -> float:
+    """Advance the CE EWMA scale from the raw (unnormalized) closure CE."""
+
+    if normalize is None or not normalize.enabled:
+        return float(ce_ewma_scale)
+    raw = components.get("risk_adjusted_return_raw", components.get("risk_adjusted_return"))
+    if raw is None:
+        return float(ce_ewma_scale)
+    magnitude = _ce_magnitude(raw)
+    if magnitude <= 0.0:
+        return float(ce_ewma_scale)
+    decay = float(normalize.ce_ewma_decay)
+    if ce_ewma_scale <= 0.0:
+        return max(magnitude, 1e-12)
+    return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
 def combine_soft_objective_terms(

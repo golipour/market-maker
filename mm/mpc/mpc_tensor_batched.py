@@ -26,9 +26,12 @@ from mm.mpc.l_param import (
 from mm.mpc.objective_terms import (
     BookQualityParams,
     InventoryZoneParams,
+    ObjectiveNormalizeParams,
+    apply_ce_objective_normalization,
     book_quality_score,
     combine_soft_objective_terms,
     inventory_zone_path_mean,
+    update_ce_ewma_scale,
 )
 from mm.mpc.mpc_state import State
 from mm.core.wallet import portfolio_wealth
@@ -804,6 +807,7 @@ class MonteCarloMPCTensorBatched:
         reference_price_source: str = "global",
         quote_size_min_per_side: float | int | None = None,
         quote_size_max_per_side: float | int | None = None,
+        objective_normalize: dict[str, Any] | ObjectiveNormalizeParams | None = None,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -885,6 +889,11 @@ class MonteCarloMPCTensorBatched:
         self._last_diagnostics: OptimizerRunDiagnostics | None = None
         self._x_torch: Any = None
         self._optimizer: Any = None
+        if isinstance(objective_normalize, ObjectiveNormalizeParams):
+            self.objective_normalize = objective_normalize
+        else:
+            self.objective_normalize = ObjectiveNormalizeParams.from_mapping(objective_normalize)
+        self._ce_ewma_scale = 0.0
 
         if bounds is None:
             logit_bound = (-30.0, 30.0)
@@ -910,6 +919,21 @@ class MonteCarloMPCTensorBatched:
     @property
     def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
         return self._last_diagnostics
+
+    def normalize_terminal_objective(
+        self,
+        objective: Any,
+        components: dict[str, Any],
+    ) -> tuple[Any, dict[str, Any]]:
+        """Apply configured CE EWMA normalization to the terminal return term."""
+
+        normalized, out, _ = apply_ce_objective_normalization(
+            objective,
+            components,
+            normalize=self.objective_normalize,
+            ce_ewma_scale=self._ce_ewma_scale,
+        )
+        return normalized, out
 
     def _venue_optimizer(self, venue: str = "local") -> VenueOptimizerParams:
         return self.global_optimizer if str(venue).lower() == "global" else self.local_optimizer
@@ -1379,6 +1403,7 @@ class MonteCarloMPCTensorBatched:
                     returns,
                     return_risk_aversion_beta=self.return_risk_aversion_beta,
                 )
+                J, components = self.normalize_terminal_objective(J, components)
                 venue_opt = self.local_optimizer
                 if float(venue_opt.w_book) > 0.0:
                     book_params = venue_opt.book_quality or BookQualityParams()
@@ -1531,6 +1556,12 @@ class MonteCarloMPCTensorBatched:
             best_metrics = final_metrics
         if initial_metrics is None and final_metrics is not None:
             initial_metrics = final_metrics
+        if best_metrics is not None:
+            self._ce_ewma_scale = update_ce_ewma_scale(
+                self._ce_ewma_scale,
+                best_metrics.components,
+                normalize=self.objective_normalize,
+            )
         diagnostics = OptimizerRunDiagnostics(
             config={
                 "kind": "monte_carlo_mpc_tensor_batched",
@@ -1542,6 +1573,7 @@ class MonteCarloMPCTensorBatched:
                 "spread_step": self.spread_step,
                 "vwap_depth": vwap_depth,
                 "reference_price_source": self.reference_price_source,
+                "objective_normalize": self.objective_normalize.as_mapping(),
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,
                     n_components=self.local_n_components,

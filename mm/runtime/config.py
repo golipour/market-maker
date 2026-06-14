@@ -1615,6 +1615,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         },
         "optimizer_objective": {
             "shape": "controller.optimizer.local and controller.optimizer.global",
+            "objective_normalize": (
+                "optional controller.optimizer.objective_normalize: enabled scales "
+                "risk_adjusted_return by EWMA(|CE|); ce_ewma_decay in [0, 1)"
+            ),
             "objective_weight": "venue contribution weight in the mixed joint objective",
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"

@@ -237,6 +237,10 @@
           "adam_epochs": 40,
           "adam_lr": 1e0,
           "device": "cpu",
+          "objective_normalize": {
+            "enabled": true,
+            "ce_ewma_decay": 0.95
+          },
           "local": {
             "n_components": 4,
             "objective_weight": 1.0,
@@ -245,7 +249,7 @@
             "w_book": 0.002,
             "w_inv": 0.01,
             "book_quality": {
-              "spread_target": 50.0,
+              "spread_target": 200.0,
               "depth_target": 1.0,
               "measure": "quoted"
             },
@@ -264,7 +268,7 @@
             "soft_fill_activation": "hardsigmoid",
             "soft_fill_queue_model": "back_of_queue"
           },
-          "global": {
+            "global": {
             "n_components": 2,
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,

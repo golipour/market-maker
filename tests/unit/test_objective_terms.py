@@ -3,15 +3,18 @@ from __future__ import annotations
 import pytest
 import torch
 
-from mm.mpc.l_param import LParamConfig
+from mm.mpc.l_param import LParamConfig, action_param_len
 from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange, _spread_grid_tensor
 from mm.mpc.objective_terms import (
     BookQualityParams,
     InventoryZoneParams,
+    ObjectiveNormalizeParams,
+    apply_ce_objective_normalization,
     book_quality_score,
     combine_soft_objective_terms,
     inventory_zone_penalty,
     inventory_zone_path_mean,
+    update_ce_ewma_scale,
     wallet_imbalance,
 )
 
@@ -68,10 +71,12 @@ def test_inventory_zone_penalty_is_near_zero_inside_comfort_band() -> None:
 
 def test_inventory_zone_penalty_saturates_at_extremes() -> None:
     zone = _sigmoid_zone()
+    cap_sum = zone.low_penalty_cap + zone.high_penalty_cap
     imbalance = torch.tensor([-0.95, 0.95], dtype=torch.float64)
     penalty = inventory_zone_penalty(imbalance, zone)
-    assert float(penalty[0]) == pytest.approx(zone.low_penalty_cap, rel=1e-3)
-    assert float(penalty[1]) == pytest.approx(zone.high_penalty_cap, rel=1e-3)
+    assert float(penalty[0]) == pytest.approx(zone.low_penalty_cap / cap_sum, rel=1e-3)
+    assert float(penalty[1]) == pytest.approx(zone.high_penalty_cap / cap_sum, rel=1e-3)
+    assert float(penalty.max()) <= 1.0 + 1e-9
 
 
 def test_inventory_zone_low_side_penalizes_cash_heavy_imbalance() -> None:
@@ -98,11 +103,35 @@ def test_inventory_zone_path_mean_reports_imbalance_and_side_components() -> Non
         mid_path=mid_path,
         zone=zone,
     )
-    assert float(path_mean) > 0.0
+    assert 0.0 <= float(path_mean) <= 1.0
     assert float(components["inventory_zone_penalty"]) == pytest.approx(float(path_mean))
     assert float(components["inventory_zone_imbalance"]) != 0.0
     assert float(components["inventory_zone_low_penalty"]) > 0.0
     assert float(components["inventory_zone_high_penalty"]) > 0.0
+
+
+def test_apply_ce_objective_normalization_scales_by_previous_ewma() -> None:
+    normalize = ObjectiveNormalizeParams(enabled=True, ce_ewma_decay=0.95)
+    ce = torch.tensor(0.002, dtype=torch.float64)
+    objective, components, _ = apply_ce_objective_normalization(
+        ce,
+        {"risk_adjusted_return": ce},
+        normalize=normalize,
+        ce_ewma_scale=0.001,
+    )
+    assert float(components["risk_adjusted_return"]) == pytest.approx(2.0)
+    assert float(objective) == pytest.approx(2.0)
+    assert float(components["risk_adjusted_return_raw"]) == pytest.approx(0.002)
+
+
+def test_update_ce_ewma_scale_tracks_magnitude() -> None:
+    normalize = ObjectiveNormalizeParams(enabled=True, ce_ewma_decay=0.9)
+    scale = update_ce_ewma_scale(
+        0.001,
+        {"risk_adjusted_return_raw": 0.002},
+        normalize=normalize,
+    )
+    assert scale == pytest.approx(0.9 * 0.001 + 0.1 * 0.002)
 
 
 def test_combine_soft_objective_terms_keeps_ce_component_pure() -> None:
@@ -190,7 +219,7 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         spread_max=spread_max,
         n_components=1,
     )
-    flat = torch.zeros(8, dtype=torch.float64)
+    flat = torch.zeros(action_param_len(1), dtype=torch.float64)
     flat[6] = -30.0
     flat[7] = -30.0
     market_cum_bid = torch.tensor([5.0, 5.0, 5.0, 5.0, 5.0], dtype=torch.float64)
