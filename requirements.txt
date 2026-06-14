@@ -9,4 +9,5 @@ psycopg2-binary>=2.9
 pyarrow
 opentelemetry-api
 opentelemetry-sdk
-opentelemetry-exporter-otlp
+fastapi>=0.100
+uvicorn>=0.23

@@ -9,8 +9,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from mm.api.registry_routes import create_registry_router
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
+from mm.registry.audit import record_admin_audit
+from mm.registry.store import registry_database_url
 from mm.runtime.config import BusRuntimeConfig, runtime_config_from_mapping
 
 
@@ -29,11 +32,22 @@ class AdminCommand(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-def create_admin_app(bus: AbstractEventBus | None = None) -> FastAPI:
+def create_admin_app(
+    bus: AbstractEventBus | None = None,
+    *,
+    registry_store: object | None = None,
+) -> FastAPI:
     runtime_bus = bus or _bus_from_env()
     app = FastAPI(title="market-maker-admin")
     app.state.bus = runtime_bus
     app.state.started_ms = int(time.time() * 1000)
+    app.include_router(
+        create_registry_router(
+            require_auth=_require_auth,
+            bus=runtime_bus,
+            registry_store=registry_store,
+        ),
+    )
 
     @app.get("/api/admin/health")
     async def health() -> dict[str, Any]:
@@ -49,6 +63,7 @@ def create_admin_app(bus: AbstractEventBus | None = None) -> FastAPI:
             "status": "ok",
             "bus": _bus_config_from_env().kind,
             "database_url_configured": bool(os.environ.get("MM_DATABASE_URL", "").strip()),
+            "registry_enabled": bool(os.environ.get("MM_DATABASE_URL", "").strip()),
             "parquet_root_configured": bool(os.environ.get("MM_PARQUET_ROOT", "").strip()),
             "metrics_port": os.environ.get("MM_METRICS_PORT", ""),
             "log_path": os.environ.get("MM_LOG_PATH", ""),
@@ -85,6 +100,13 @@ def create_admin_app(bus: AbstractEventBus | None = None) -> FastAPI:
                 "user_id": user,
                 "timestamp_ms": int(time.time() * 1000),
             },
+        )
+        _record_command_audit(
+            user_id=user,
+            command_id=command_id,
+            command=command.command,
+            status="accepted",
+            payload=event,
         )
         return {"status": "accepted", "command_id": command_id}
 
@@ -131,6 +153,30 @@ def _bus_config_from_env() -> BusRuntimeConfig:
             },
         }
     ).bus
+
+
+def _record_command_audit(
+    *,
+    user_id: str,
+    command_id: str,
+    command: str,
+    status: str,
+    payload: dict[str, Any],
+) -> None:
+    database_url = registry_database_url()
+    if not database_url:
+        return
+    try:
+        record_admin_audit(
+            database_url,
+            command_id=command_id,
+            user_id=user_id,
+            command=command,
+            status=status,
+            payload=payload,
+        )
+    except Exception:
+        return
 
 
 app = create_admin_app()
