@@ -22,7 +22,8 @@ from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.capabilities import get_exchange_capabilities
 from mm.execution.order_manager import ExecutionSnapshot
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, PrivateRuntimeConfig, load_runtime_config
-from mm.runtime.engine import RuntimeComponents, build_runtime_components
+from mm.runtime.build_options import RuntimeBuildOptions
+from mm.runtime.engine import RuntimeComponents, build_runtime_components, resolve_build_options
 
 
 @dataclass(slots=True)
@@ -345,9 +346,11 @@ async def print_events(queues: list[tuple[str, asyncio.Queue]], event_count: int
 async def run(args: argparse.Namespace) -> None:
     if args.config:
         runtime_config = load_runtime_config(args.config)
-        runtime = await build_runtime_components(runtime_config)
+        build_options = _resolve_build_options(runtime_config, args.build_mode)
+        runtime = await build_runtime_components(runtime_config, build_options=build_options)
         contract = runtime_config.as_contract()
         contract["type"] = "RuntimeConfigCheck"
+        contract["runtime_build_mode"] = build_options.mode
         contract["selected_public_market_transports"] = {
             role: selection.transport
             for role, selection in runtime.public_market_selections.items()
@@ -581,9 +584,24 @@ def resolve_api_token(exchange: str, explicit: str | None, env_name: str | None)
     return os.environ.get(f"{exchange.upper()}_API_TOKEN")
 
 
+def _resolve_build_options(
+    config: MarketMakerRuntimeConfig,
+    build_mode: str,
+) -> RuntimeBuildOptions:
+    if build_mode == "auto":
+        return resolve_build_options(config)
+    return RuntimeBuildOptions.for_mode(build_mode)  # type: ignore[arg-type]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Print live market-data bus events.")
     parser.add_argument("--config", default=None, help="Path to a JSON runtime config file.")
+    parser.add_argument(
+        "--build-mode",
+        choices=["auto", "monolith", "consumer_only", "ingestor_only", "persistence_only"],
+        default="auto",
+        help="Runtime composition mode; auto picks consumer_only when all market sources use bus.",
+    )
     parser.add_argument("--exchange", choices=["nobitex", "wallex"], default=None)
     parser.add_argument("--symbol", default="BTC_IRT")
     parser.add_argument("--global-exchange", choices=["nobitex", "wallex"], default=None)

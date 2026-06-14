@@ -1,0 +1,69 @@
+{
+  "_comment": "Consumer runtime: reads market:events from Redis published by mm.ingestor. Run ingestor first.",
+  "exchanges": {
+    "nobitex": {
+      "market_data": {
+        "market_data_source": "bus",
+        "mode": "rest"
+      },
+      "private": {
+        "mode": "rest",
+        "api_token_env": "NOBITEX_API_TOKEN",
+        "api_private_key_env": "NOBITEX_API_PRIVATE_KEY",
+        "poll_interval_ms": 10000,
+        "fill_event_source": "exchange_fill_history"
+      },
+      "fees": {
+        "maker_fee": 0.000015
+      }
+    }
+  },
+  "strategy_presets": {
+    "thin_local_liquidity_weighted_mpc": {
+      "interval_ms": 10000,
+      "liquidity_sourcing": {"mode": "off"},
+      "pricing": {
+        "quote_anchor": {"mode": "quoting_mid"},
+        "inventory_mark": {"venue": "quoting"}
+      },
+      "execution": {
+        "local": {"enabled": false, "planner": "reconcile"}
+      },
+      "controller": {
+        "enabled": true,
+        "dry_run": true,
+        "actor_id": "mpc-controller",
+        "local_price_model": {"kind": "residual"},
+        "local_market_flow_model": {"kind": "gamma"},
+        "optimizer": {"kind": "monte_carlo_mpc_tensor_batched", "horizon": 2}
+      }
+    }
+  },
+  "bots": {
+    "mpc-controller": {
+      "preset": "thin_local_liquidity_weighted_mpc",
+      "symbol": "USDT_IRT",
+      "quoting_exchange": "nobitex",
+      "liquidity_exchange": "nobitex"
+    }
+  },
+  "bus": {
+    "kind": "redis_streams",
+    "redis_url": "redis://localhost:6379/0",
+    "stream_prefix": "mm",
+    "consumer_group": "mm-runtime",
+    "consumer_name": "runtime-consumer",
+    "max_stream_length": 100000,
+    "read_block_ms": 1000
+  },
+  "persistence": {
+    "enabled": false
+  },
+  "observability": {
+    "service_name": "market-maker-consumer",
+    "metrics_enabled": true,
+    "metrics_port": 8000,
+    "json_logs": true,
+    "log_path": "logs/mm-runtime.jsonl"
+  }
+}

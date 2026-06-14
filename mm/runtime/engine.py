@@ -142,13 +142,21 @@ class RuntimeComponents:
         return f"execution:state:{source.normalized_exchange()}"
 
 
+def resolve_build_options(config: MarketMakerRuntimeConfig) -> RuntimeBuildOptions:
+    """Pick runtime composition from config unless overridden by the caller."""
+
+    if all(source.market_data_source == "bus" for source in config.sources):
+        return RuntimeBuildOptions.for_mode("consumer_only")
+    return RuntimeBuildOptions.monolith()
+
+
 async def build_runtime_components(
     config: MarketMakerRuntimeConfig,
     *,
     bus: AbstractEventBus | None = None,
     build_options: RuntimeBuildOptions | None = None,
 ) -> RuntimeComponents:
-    options = build_options or RuntimeBuildOptions.monolith()
+    options = build_options or resolve_build_options(config)
     load_mm_env()
     configure_observability(config.observability)
     _validate_build_options(config, options)

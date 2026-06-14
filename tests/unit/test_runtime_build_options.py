@@ -10,7 +10,8 @@ from mm.runtime.config import (
     MarketMakerRuntimeConfig,
     PersistenceRuntimeConfig,
 )
-from mm.runtime.engine import build_runtime_components
+from mm.runtime.config import BusRuntimeConfig, ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, PersistenceRuntimeConfig
+from mm.runtime.engine import build_runtime_components, resolve_build_options
 
 
 def _minimal_config(**kwargs) -> MarketMakerRuntimeConfig:
@@ -39,6 +40,28 @@ def test_runtime_build_options_for_mode_presets() -> None:
     assert persistence.enable_public_ingestion is False
     assert persistence.enable_strategy is False
     assert persistence.enable_persistence is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_build_options_mixed_sources_stays_monolith() -> None:
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(
+            role="local",
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            market_data_source="bus",
+        ),
+        global_=MarketDataSourceConfig(
+            role="global",
+            exchange="wallex",
+            symbol="BTC_IRT",
+            market_data_source="local",
+        ),
+        bus=BusRuntimeConfig(kind="redis_streams"),
+    )
+    options = resolve_build_options(config)
+    assert options.mode == "monolith"
+    assert options.enable_public_ingestion is True
 
 
 @pytest.mark.asyncio
