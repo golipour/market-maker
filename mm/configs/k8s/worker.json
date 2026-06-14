@@ -1,0 +1,29 @@
+{
+  "worker_id": "worker-1",
+  "mode": "multi",
+  "registry": {
+    "database_url_env": "MM_DATABASE_URL"
+  },
+  "bus": {
+    "kind": "redis_streams",
+    "redis_url": "redis://redis:6379/0",
+    "stream_prefix": "mm",
+    "consumer_group": "mm-worker",
+    "consumer_name": "worker-1",
+    "max_stream_length": 100000,
+    "read_block_ms": 1000
+  },
+  "backoff": {
+    "initial_s": 1.0,
+    "max_s": 60.0
+  },
+  "heartbeat_interval_s": 30,
+  "lease_ttl_seconds": 300,
+  "observability": {
+    "service_name": "market-maker-worker",
+    "metrics_enabled": true,
+    "metrics_port": 8003,
+    "json_logs": true,
+    "log_path": null
+  }
+}

@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-maker-worker
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: market-maker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-maker-worker
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-maker-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: market-maker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8003"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: worker
+          image: market-maker:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -m
+            - mm.worker
+            - --config
+            - /config/worker.json
+          ports:
+            - containerPort: 8003
+              name: metrics
+          env:
+            - name: MM_ENV
+              value: prod
+            - name: MM_WORKER_ID
+              value: worker-1
+            - name: MM_METRICS_LABEL_WORKER_ID
+              value: "1"
+          envFrom:
+            - secretRef:
+                name: market-maker-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: market-maker-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-maker-worker
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: market-maker
+spec:
+  selector:
+    app.kubernetes.io/name: market-maker-worker
+    app.kubernetes.io/component: worker
+  ports:
+    - name: metrics
+      port: 8003
+      targetPort: metrics

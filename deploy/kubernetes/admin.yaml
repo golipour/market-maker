@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-maker-admin
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-admin
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/part-of: market-maker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-maker-admin
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-maker-admin
+        app.kubernetes.io/component: control-plane
+        app.kubernetes.io/part-of: market-maker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: admin
+          image: market-maker:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -m
+            - mm.api.admin
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: MM_ENV
+              value: prod
+            - name: MM_ADMIN_HOST
+              value: 0.0.0.0
+            - name: MM_ADMIN_PORT
+              value: "8080"
+            - name: MM_BUS_KIND
+              value: redis_streams
+            - name: MM_BUS_REDIS_URL
+              value: redis://redis:6379/0
+            - name: MM_BUS_STREAM_PREFIX
+              value: mm
+            - name: MM_BUS_CONSUMER_GROUP
+              value: mm-admin
+            - name: MM_BUS_CONSUMER_NAME
+              value: admin-1
+          envFrom:
+            - secretRef:
+                name: market-maker-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/admin/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /api/admin/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-maker-admin
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-admin
+    app.kubernetes.io/component: control-plane
+    app.kubernetes.io/part-of: market-maker
+spec:
+  selector:
+    app.kubernetes.io/name: market-maker-admin
+    app.kubernetes.io/component: control-plane
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

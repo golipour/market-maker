@@ -1,0 +1,38 @@
+{
+  "feeds": [
+    {
+      "exchange": "nobitex",
+      "symbol": "USDT_IRT",
+      "interval_ms": 10000
+    }
+  ],
+  "exchanges": {
+    "nobitex": {
+      "market_data": {
+        "mode": "rest",
+        "depth_limit": 100,
+        "trades_limit": 200,
+        "poll_interval_ms": 2000
+      }
+    }
+  },
+  "bus": {
+    "kind": "redis_streams",
+    "redis_url": "redis://redis:6379/0",
+    "stream_prefix": "mm",
+    "consumer_group": "mm-ingestor",
+    "consumer_name": "ingestor-1",
+    "max_stream_length": 100000,
+    "read_block_ms": 1000
+  },
+  "observability": {
+    "service_name": "market-maker-ingestor",
+    "metrics_enabled": true,
+    "metrics_port": 8001,
+    "json_logs": true,
+    "log_path": null
+  },
+  "scheduler": {
+    "max_concurrency": 8
+  }
+}

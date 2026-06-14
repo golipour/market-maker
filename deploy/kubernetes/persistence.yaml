@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-maker-persistence
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-persistence
+    app.kubernetes.io/component: persistence
+    app.kubernetes.io/part-of: market-maker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-maker-persistence
+      app.kubernetes.io/component: persistence
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-maker-persistence
+        app.kubernetes.io/component: persistence
+        app.kubernetes.io/part-of: market-maker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: persistence
+          image: market-maker:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -m
+            - mm.persistence
+            - --config
+            - /config/persistence.json
+          ports:
+            - containerPort: 8002
+              name: metrics
+          env:
+            - name: MM_ENV
+              value: prod
+            - name: MM_PARQUET_ROOT
+              value: /data/parquet
+          envFrom:
+            - secretRef:
+                name: market-maker-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: parquet
+              mountPath: /data/parquet
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: market-maker-config
+        - name: parquet
+          persistentVolumeClaim:
+            claimName: market-maker-parquet
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: market-maker-persistence
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-persistence
+    app.kubernetes.io/component: persistence
+    app.kubernetes.io/part-of: market-maker
+spec:
+  selector:
+    app.kubernetes.io/name: market-maker-persistence
+    app.kubernetes.io/component: persistence
+  ports:
+    - name: metrics
+      port: 8002
+      targetPort: metrics

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: market-maker
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - redis.yaml
+  - ingestor.yaml
+  - persistence.yaml
+  - worker.yaml
+  - admin.yaml
+images:
+  - name: market-maker
+    newName: market-maker
+    newTag: latest
