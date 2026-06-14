@@ -38,6 +38,7 @@ def venues_payload(
                     "trades_limit",
                     "poll_interval_ms",
                     "instrument",
+                    "market_data_source",
                 }
             }
         }
@@ -54,6 +55,7 @@ def venues_payload(
                     "trades_limit",
                     "poll_interval_ms",
                     "instrument",
+                    "market_data_source",
                 }
             }
         }

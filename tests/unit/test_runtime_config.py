@@ -415,6 +415,32 @@ def test_runtime_config_rejects_invalid_global_role() -> None:
         )
 
 
+def test_market_data_source_from_mapping_defaults_to_local() -> None:
+    config = runtime_config_from_mapping(
+        venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+    )
+    assert config.local.market_data_source == "local"
+
+
+def test_market_data_source_from_mapping_accepts_bus() -> None:
+    config = runtime_config_from_mapping(
+        venues_payload(
+            local={"exchange": "nobitex", "symbol": "BTC_IRT", "market_data_source": "bus"},
+        ),
+    )
+    assert config.local.market_data_source == "bus"
+
+
+def test_market_data_source_rejects_invalid_value() -> None:
+    with pytest.raises(ValueError, match="market_data_source"):
+        MarketDataSourceConfig(
+            role="local",
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            market_data_source="remote",  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.asyncio
 async def test_runtime_builder_wires_local_and_global_topics_without_starting_network() -> None:
     config = MarketMakerRuntimeConfig(

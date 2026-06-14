@@ -28,6 +28,7 @@ from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
 from mm.execution.reconcile import ReconcileConfig
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
+from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.control import RuntimeControlPlane
 from mm.ledger.service import build_portfolio_ledger_service
 from mm.runtime.pipeline import build_symbol_engine
@@ -41,7 +42,7 @@ class RuntimeComponents:
     bus: AbstractEventBus
     scheduler: IntervalScheduler
     engines: dict[SourceRole, SymbolEngine]
-    frame_assembler: JointStrategyFrameAssembler
+    frame_assembler: JointStrategyFrameAssembler | None
     public_market_selections: dict[SourceRole, PublicMarketDataAdapterSelection]
     private_state_selections: dict[SourceRole, PrivateStateAdapterSelection] = field(default_factory=dict)
     order_command_selections: dict[SourceRole, OrderCommandAdapterSelection] = field(default_factory=dict)
@@ -53,6 +54,7 @@ class RuntimeComponents:
     control_plane: RuntimeControlPlane | None = None
     strategy_runner: object | None = None
     ledger_service: object | None = None
+    build_options: RuntimeBuildOptions = field(default_factory=RuntimeBuildOptions.monolith)
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
 
@@ -67,7 +69,8 @@ class RuntimeComponents:
             start = getattr(daemon, "start", None)
             if start is not None:
                 await start()
-        await self.frame_assembler.start()
+        if self.frame_assembler is not None:
+            await self.frame_assembler.start()
         if self.strategy_runner is not None:
             await self.strategy_runner.start()
         if self.ledger_service is not None:
@@ -107,7 +110,8 @@ class RuntimeComponents:
             stop = getattr(daemon, "stop", None)
             if stop is not None:
                 await stop()
-        await self.frame_assembler.stop()
+        if self.frame_assembler is not None:
+            await self.frame_assembler.stop()
         for engine in reversed(tuple(self.engines.values())):
             await engine.stop()
         await self.bus.close()
@@ -142,9 +146,28 @@ async def build_runtime_components(
     config: MarketMakerRuntimeConfig,
     *,
     bus: AbstractEventBus | None = None,
+    build_options: RuntimeBuildOptions | None = None,
 ) -> RuntimeComponents:
+    options = build_options or RuntimeBuildOptions.monolith()
     load_mm_env()
     configure_observability(config.observability)
+    _validate_build_options(config, options)
+    log_event(
+        "runtime_build_options",
+        {
+            "mode": options.mode,
+            "enable_public_ingestion": options.enable_public_ingestion,
+            "enable_strategy": options.enable_strategy,
+            "enable_private_state": options.enable_private_state,
+            "enable_execution": options.enable_execution,
+            "enable_persistence": options.enable_persistence,
+            "enable_observability": options.enable_observability,
+            "local_market_data_source": config.local.market_data_source,
+            "global_market_data_source": (
+                config.global_.market_data_source if config.global_ is not None else None
+            ),
+        },
+    )
     if config.controller is not None:
         log_event(
             "runtime_controller_config",
@@ -164,6 +187,8 @@ async def build_runtime_components(
     engines: dict[SourceRole, SymbolEngine] = {}
 
     for source in config.sources:
+        if not _ingest_source_locally(source, options):
+            continue
         selection = _select_public_source(source)
         public_selections[source.role] = selection
         engine = build_symbol_engine(
@@ -181,99 +206,108 @@ async def build_runtime_components(
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = {}
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = {}
 
-    for source in config.sources:
-        private_config = config.private_config_for(source.role)
-        if private_config is None:
-            continue
-        api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
-        if not api_credentials:
-            continue
-        private_selection = select_private_state_adapter(
-            source.normalized_exchange(),
-            source.symbol,
-            mode=private_config.mode,
-            api_token=api_credentials,
-            poll_interval_ms=private_config.poll_interval_ms,
-        )
-        private_selections[source.role] = private_selection
-        private_reconcilers[source.role] = PrivateStateReconciler(
-            exchange=source.normalized_exchange(),
-            adapter=private_selection.adapter,
-            bus=runtime_bus,
-            fill_event_source=private_config.fill_event_source,
-        )
-        if config.execution.for_role(source.role).enabled:
-            placement_max_concurrency = 8
-            if config.controller is not None:
-                placement_max_concurrency = config.controller.placement_max_concurrency
-            order_selection = select_order_command_adapter(
+    if options.enable_private_state:
+        for source in config.sources:
+            private_config = config.private_config_for(source.role)
+            if private_config is None:
+                continue
+            api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
+            if not api_credentials:
+                continue
+            private_selection = select_private_state_adapter(
                 source.normalized_exchange(),
                 source.symbol,
+                mode=private_config.mode,
                 api_token=api_credentials,
-                placement_max_concurrency=placement_max_concurrency,
+                poll_interval_ms=private_config.poll_interval_ms,
             )
-            order_command_selections[source.role] = order_selection
-            manager = order_managers.get(source.normalized_exchange())
-            if manager is None:
-                manager = OrderManager(
-                    exchange=source.normalized_exchange(),
-                    command_adapter=order_selection.adapter,
-                    bus=runtime_bus,
-                    limit_source=select_venue_order_limit_source(source.normalized_exchange()),
-                    reconcile_config=_execution_reconcile_config(config),
+            private_selections[source.role] = private_selection
+            private_reconcilers[source.role] = PrivateStateReconciler(
+                exchange=source.normalized_exchange(),
+                adapter=private_selection.adapter,
+                bus=runtime_bus,
+                fill_event_source=private_config.fill_event_source,
+            )
+            if not options.enable_execution:
+                continue
+            if config.execution.for_role(source.role).enabled:
+                placement_max_concurrency = 8
+                if config.controller is not None:
+                    placement_max_concurrency = config.controller.placement_max_concurrency
+                order_selection = select_order_command_adapter(
+                    source.normalized_exchange(),
+                    source.symbol,
+                    api_token=api_credentials,
+                    placement_max_concurrency=placement_max_concurrency,
                 )
-                order_managers[source.normalized_exchange()] = manager
-            execution_reconcilers[source.role] = ExecutionStateReconciler(
-                source.normalized_exchange(),
-                manager,
-                runtime_bus,
-            )
+                order_command_selections[source.role] = order_selection
+                manager = order_managers.get(source.normalized_exchange())
+                if manager is None:
+                    manager = OrderManager(
+                        exchange=source.normalized_exchange(),
+                        command_adapter=order_selection.adapter,
+                        bus=runtime_bus,
+                        limit_source=select_venue_order_limit_source(source.normalized_exchange()),
+                        reconcile_config=_execution_reconcile_config(config),
+                    )
+                    order_managers[source.normalized_exchange()] = manager
+                execution_reconcilers[source.role] = ExecutionStateReconciler(
+                    source.normalized_exchange(),
+                    manager,
+                    runtime_bus,
+                )
 
-    topics = _runtime_topics(config)
-    local_topic = topics.local_market_events
-    global_topic = topics.global_market_events
-    frame_assembler_inner = StrategyInputFrameAssembler(
-        local_queue=runtime_bus.subscribe_queue(local_topic),
-        global_queue=runtime_bus.subscribe_queue(global_topic) if global_topic is not None else None,
-        max_global_lag_ms=config.max_global_lag_ms,
-        global_grace_ms=config.global_grace_ms,
-    )
+    frame_assembler: JointStrategyFrameAssembler | None = None
+    control_plane: RuntimeControlPlane | None = None
+    strategy_runner: object | None = None
+    ledger_service: object | None = None
 
-    ledger_service = build_portfolio_ledger_service(
-        config,
-        bus=runtime_bus,
-        order_managers=order_managers,
-    )
+    if options.enable_strategy:
+        topics = _runtime_topics(config)
+        local_topic = topics.local_market_events
+        global_topic = topics.global_market_events
+        frame_assembler_inner = StrategyInputFrameAssembler(
+            local_queue=runtime_bus.subscribe_queue(local_topic),
+            global_queue=runtime_bus.subscribe_queue(global_topic) if global_topic is not None else None,
+            max_global_lag_ms=config.max_global_lag_ms,
+            global_grace_ms=config.global_grace_ms,
+        )
 
-    max_local_private_age_ms = 120_000
-    max_global_private_age_ms = 120_000
-    if config.controller is not None:
-        max_local_private_age_ms = config.controller.risk.local.max_private_state_age_ms
-        max_global_private_age_ms = config.controller.risk.global_.max_private_state_age_ms
+        ledger_service = build_portfolio_ledger_service(
+            config,
+            bus=runtime_bus,
+            order_managers=order_managers,
+        )
 
-    frame_assembler = JointStrategyFrameAssembler(
-        input_assembler=frame_assembler_inner,
-        binding=config.binding,
-        liquidity_sourcing=config.liquidity_sourcing,
-        bus=runtime_bus,
-        joint_output_topic=config.joint_frame_topic,
-        ledger_service=ledger_service,
-        max_local_private_age_ms=max_local_private_age_ms,
-        max_global_private_age_ms=max_global_private_age_ms,
-    )
+        max_local_private_age_ms = 120_000
+        max_global_private_age_ms = 120_000
+        if config.controller is not None:
+            max_local_private_age_ms = config.controller.risk.local.max_private_state_age_ms
+            max_global_private_age_ms = config.controller.risk.global_.max_private_state_age_ms
 
-    control_plane = RuntimeControlPlane(bus=runtime_bus)
+        frame_assembler = JointStrategyFrameAssembler(
+            input_assembler=frame_assembler_inner,
+            binding=config.binding,
+            liquidity_sourcing=config.liquidity_sourcing,
+            bus=runtime_bus,
+            joint_output_topic=config.joint_frame_topic,
+            ledger_service=ledger_service,
+            max_local_private_age_ms=max_local_private_age_ms,
+            max_global_private_age_ms=max_global_private_age_ms,
+        )
 
-    strategy_runner = build_strategy_runner(
-        config,
-        bus=runtime_bus,
-        frame_topic=config.joint_frame_topic,
-        order_managers=order_managers,
-        control_plane=control_plane,
-    )
+        control_plane = RuntimeControlPlane(bus=runtime_bus)
 
-    persistence_daemons = _build_persistence_daemons(config, runtime_bus)
-    observability_daemons = _build_observability_daemons(config, runtime_bus)
+        strategy_runner = build_strategy_runner(
+            config,
+            bus=runtime_bus,
+            frame_topic=config.joint_frame_topic,
+            order_managers=order_managers,
+            control_plane=control_plane,
+        )
+
+    persistence_daemons = _build_persistence_daemons(config, runtime_bus, options)
+    observability_daemons = _build_observability_daemons(config, runtime_bus, options)
 
     return RuntimeComponents(
         config=config,
@@ -292,7 +326,24 @@ async def build_runtime_components(
         control_plane=control_plane,
         strategy_runner=strategy_runner,
         ledger_service=ledger_service,
+        build_options=options,
     )
+
+
+def _ingest_source_locally(source: MarketDataSourceConfig, options: RuntimeBuildOptions) -> bool:
+    return options.enable_public_ingestion and source.market_data_source == "local"
+
+
+def _validate_build_options(config: MarketMakerRuntimeConfig, options: RuntimeBuildOptions) -> None:
+    bus_sources = [source for source in config.sources if source.market_data_source == "bus"]
+    if not bus_sources:
+        return
+    if config.bus.kind != "redis_streams":
+        exchanges = ", ".join(source.normalized_exchange() for source in bus_sources)
+        raise ValueError(
+            "market_data_source='bus' requires bus.kind='redis_streams' "
+            f"for cross-process delivery (sources: {exchanges})"
+        )
 
 
 def _select_public_source(source: MarketDataSourceConfig) -> PublicMarketDataAdapterSelection:
@@ -306,7 +357,14 @@ def _select_public_source(source: MarketDataSourceConfig) -> PublicMarketDataAda
     )
 
 
-def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
+def _build_persistence_daemons(
+    config: MarketMakerRuntimeConfig,
+    bus: AbstractEventBus,
+    options: RuntimeBuildOptions,
+) -> tuple[object, ...]:
+    if not options.enable_persistence:
+        log_event("persistence_disabled", {"reason": "build_options"})
+        return ()
     if not config.persistence.enabled:
         log_event("persistence_disabled", {"reason": "config"})
         return ()
@@ -369,7 +427,13 @@ def _build_persistence_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEv
     return tuple(daemons)
 
 
-def _build_observability_daemons(config: MarketMakerRuntimeConfig, bus: AbstractEventBus) -> tuple[object, ...]:
+def _build_observability_daemons(
+    config: MarketMakerRuntimeConfig,
+    bus: AbstractEventBus,
+    options: RuntimeBuildOptions,
+) -> tuple[object, ...]:
+    if not options.enable_observability:
+        return ()
     topics = _runtime_topics(config)
     observed_topics = [
         config.joint_frame_topic,

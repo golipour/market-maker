@@ -209,3 +209,66 @@ async def test_redis_streams_bus_subscribe_receives_cross_process_stream_events(
 
     await publisher.close()
     await subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_bus_market_event_cross_process_round_trip() -> None:
+    from mm.application.frame_assembler import _require_market_event
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+    from mm.core.payload_schema import market_event_event
+
+    redis = SharedFakeRedis()
+    publisher = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    subscriber = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    publisher._redis = redis
+    subscriber._redis = redis
+
+    book = RawOrderbook(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        timestamp_ms=5_000,
+        bids=(PriceLevel(100.0, 5.0),),
+        asks=(PriceLevel(101.0, 4.0),),
+        is_snapshot=True,
+    )
+    original = MarketEvent(
+        exchange="wallex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=4_000,
+        t_end_ms=5_000,
+        orderbook=book,
+        trades=(),
+        buy_volume=1.25,
+        sell_volume=0.75,
+        vwap=100.5,
+        imbalance=0.1,
+        microprice=100.55,
+    )
+    topic = "market:events:wallex:BTC_IRT:1000"
+    queue = subscriber.subscribe_queue(topic)
+    await asyncio.wait_for(redis.xread_started.wait(), timeout=1.0)
+
+    await publisher.publish(topic, original)
+    delivered = await asyncio.wait_for(queue.get(), timeout=1.0)
+    parsed = _require_market_event(delivered)
+
+    assert parsed.exchange == original.exchange
+    assert parsed.symbol == original.symbol
+    assert parsed.interval_ms == original.interval_ms
+    assert parsed.t_start_ms == original.t_start_ms
+    assert parsed.t_end_ms == original.t_end_ms
+    assert parsed.buy_volume == original.buy_volume
+    assert parsed.sell_volume == original.sell_volume
+    assert parsed.vwap == original.vwap
+    assert parsed.imbalance == original.imbalance
+    assert parsed.microprice == original.microprice
+    assert parsed.orderbook.bids[0].price == original.orderbook.bids[0].price
+    assert parsed.orderbook.asks[0].qty == original.orderbook.asks[0].qty
+
+    payload = market_event_event(parsed)
+    assert payload["payload_schema"] == "mm.market_event"
+    assert payload["payload_version"] == 1
+
+    await publisher.close()
+    await subscriber.close()

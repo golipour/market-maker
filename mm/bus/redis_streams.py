@@ -222,9 +222,12 @@ def _balance_is_zero(balance: Balance) -> bool:
 
 def _compact_stream_event(topic: str, event: Any) -> Any | None:
     if topic.startswith("market:events:"):
-        from mm.core.payload_schema import market_event_from_payload
+        from mm.core.models.market import MarketEvent
+        from mm.core.payload_schema import market_event_event, market_event_from_payload
 
         parsed = market_event_from_payload(event)
+        if parsed is None and isinstance(event, MarketEvent):
+            return market_event_event(event)
         if parsed is not None:
             return market_event_event(parsed)
         return None

@@ -23,6 +23,7 @@ LiquiditySourcingMode = Literal["single_venue", "liquidity_sourcing"]
 ReferenceVenueRole = Literal["global", "local"]
 QuoteVenueRole = Literal["quoting", "liquidity"]
 QuoteAnchorMode = Literal["quoting_mid", "liquidity_mid", "liquidity_weighted_mid"]
+MarketDataSourceKind = Literal["local", "bus"]
 BusKind = Literal["memory", "redis_streams"]
 BusBackpressurePolicy = Literal["block", "drop_oldest", "drop_newest"]
 FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
@@ -76,6 +77,13 @@ def _int_config_key(
     return default
 
 
+def _normalize_market_data_source(value: Any) -> MarketDataSourceKind:
+    source = str(value or "local").strip().lower()
+    if source not in ("local", "bus"):
+        raise ValueError("market_data_source must be 'local' or 'bus'")
+    return source  # type: ignore[return-value]
+
+
 def _normalize_quote_anchor_mode(value: Any) -> QuoteAnchorMode:
     mode = str(value or "liquidity_weighted_mid").strip().lower()
     if mode not in ("quoting_mid", "liquidity_mid", "liquidity_weighted_mid"):
@@ -92,11 +100,19 @@ class MarketDataSourceConfig:
     role: SourceRole
     exchange: str
     symbol: str
+    market_data_source: MarketDataSourceKind = "local"
     mode: str = "rest"
     depth_limit: int = 10
     trades_limit: int = 100
     poll_interval_ms: int = 1000
     instrument: InstrumentPrecisionConfig | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "market_data_source",
+            _normalize_market_data_source(self.market_data_source),
+        )
 
     def normalized_exchange(self) -> str:
         return self.exchange.lower().strip()
@@ -807,6 +823,7 @@ def _source_contract(source: MarketDataSourceConfig | None, interval_ms: int) ->
         "role": source.role,
         "exchange": source.normalized_exchange(),
         "symbol": source.symbol,
+        "market_data_source": source.market_data_source,
         "requested_public_market_transport": source.mode,
         "market_event_topic": source.market_event_topic(interval_ms),
         "market_error_topic": source.market_error_topic(),
@@ -1217,6 +1234,7 @@ def _source_from_mapping(payload: dict[str, Any], *, role: SourceRole) -> Market
         role=role,
         exchange=str(payload["exchange"]),
         symbol=str(payload["symbol"]),
+        market_data_source=_normalize_market_data_source(payload.get("market_data_source", "local")),
         mode=str(payload.get("mode", "rest")),
         depth_limit=int(payload.get("depth_limit", 10)),
         trades_limit=int(payload.get("trades_limit", 100)),
