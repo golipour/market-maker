@@ -33,7 +33,11 @@ export function ServiceCard({ service }: ServiceCardProps) {
           )}
         </p>
       ) : null}
-      <p style={{ fontSize: "0.8rem" }}>{service.detail}</p>
+      <p style={{ fontSize: "0.8rem" }}>
+        {service.detail === "not running"
+          ? "Service not running on this host (start it separately)."
+          : service.detail}
+      </p>
       <a href={service.metrics_url} target="_blank" rel="noreferrer">
         Metrics endpoint
       </a>

@@ -7,7 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mm.api.admin import create_admin_app, _platform_ui_dist
-from mm.api.platform_routes import _grafana_dashboards, _grafana_solo_panels, _service_targets
+from mm.api.platform_routes import (
+    _grafana_dashboards,
+    _grafana_solo_panels,
+    _probe_url,
+    _service_targets,
+)
 from mm.bus.memory import InMemoryBus
 
 
@@ -72,6 +77,40 @@ def test_root_redirects_to_ui_when_built(platform_client: TestClient, tmp_path, 
     ui = client.get("/ui/")
     assert ui.status_code == 200
     assert "ui" in ui.text
+
+
+def test_probe_url_accepts_empty_metrics_body() -> None:
+    import asyncio
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"\n")
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A002
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ok, detail = asyncio.run(
+            _probe_url(f"http://127.0.0.1:{port}/metrics", expect_metrics=True)
+        )
+        assert ok is True
+        assert detail == "http 200"
+    finally:
+        server.shutdown()
+
+
+def test_admin_metrics_include_control_plane_gauge(platform_client: TestClient) -> None:
+    response = platform_client.get("/metrics")
+    assert response.status_code == 200
+    assert "mm_control_plane_up" in response.text
 
 
 def test_platform_ui_dist_path_exists_after_build() -> None:

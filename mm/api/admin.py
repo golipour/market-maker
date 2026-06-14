@@ -44,6 +44,7 @@ def create_admin_app(
     app = FastAPI(title="market-maker-admin")
     app.state.bus = runtime_bus
     app.state.started_ms = int(time.time() * 1000)
+    _register_admin_metrics(app.state.started_ms)
     _configure_cors(app)
     app.include_router(
         create_registry_router(
@@ -122,6 +123,21 @@ def create_admin_app(
         return {"status": "accepted", "command_id": command_id}
 
     return app
+
+
+def _register_admin_metrics(started_ms: int) -> None:
+    from mm.observability.registry import REGISTRY
+
+    REGISTRY.gauge(
+        "mm_control_plane_up",
+        1.0,
+        help="Admin control plane process is running",
+    )
+    REGISTRY.gauge(
+        "mm_control_plane_started_ms",
+        float(started_ms),
+        help="Unix epoch milliseconds when the admin API started",
+    )
 
 
 def _configure_cors(app: FastAPI) -> None:

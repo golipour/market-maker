@@ -123,11 +123,18 @@ async def _probe_url(url: str, *, expect_metrics: bool) -> tuple[bool, str]:
                 body = response.read(4096).decode("utf-8", errors="replace")
                 if response.status >= 400:
                     return False, f"http {response.status}"
-                if expect_metrics and "mm_" not in body and "# HELP" not in body:
-                    return False, "unexpected metrics payload"
+                if expect_metrics:
+                    stripped = body.strip()
+                    if stripped and "mm_" not in body and "# HELP" not in body:
+                        return False, "unexpected metrics payload"
                 return True, f"http {response.status}"
         except urllib.error.HTTPError as exc:
             return False, f"http {exc.code}"
+        except urllib.error.URLError as exc:
+            reason = exc.reason
+            if isinstance(reason, ConnectionRefusedError):
+                return False, "not running"
+            return False, "unreachable"
         except Exception as exc:
             return False, type(exc).__name__
 
