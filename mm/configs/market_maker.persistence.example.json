@@ -1,0 +1,35 @@
+{
+  "_comment": "Standalone persistence subscriber. Run alongside ingestor and consumer runtimes.",
+  "feeds": [
+    {
+      "exchange": "nobitex",
+      "symbol": "USDT_IRT",
+      "interval_ms": 10000
+    }
+  ],
+  "exchanges": ["nobitex"],
+  "actors": ["mpc-controller"],
+  "bus": {
+    "kind": "redis_streams",
+    "redis_url": "redis://localhost:6379/0",
+    "stream_prefix": "mm",
+    "consumer_group": "persistence",
+    "consumer_name": "persistence-1",
+    "max_stream_length": 100000,
+    "read_block_ms": 1000
+  },
+  "persistence": {
+    "enabled": true,
+    "database_url_env": "MM_DATABASE_URL",
+    "parquet_root_env": "MM_PARQUET_ROOT",
+    "batch_size": 100,
+    "flush_interval_ms": 1000
+  },
+  "observability": {
+    "service_name": "market-maker-persistence",
+    "metrics_enabled": true,
+    "metrics_port": 8002,
+    "json_logs": true,
+    "log_path": "logs/mm-persistence.jsonl"
+  }
+}

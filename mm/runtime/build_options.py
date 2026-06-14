@@ -38,6 +38,7 @@ class RuntimeBuildOptions:
             return cls(
                 mode=mode,
                 enable_public_ingestion=False,
+                enable_persistence=False,
             )
         if mode == "ingestor_only":
             return cls(

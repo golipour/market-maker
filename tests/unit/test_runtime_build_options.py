@@ -10,7 +10,6 @@ from mm.runtime.config import (
     MarketMakerRuntimeConfig,
     PersistenceRuntimeConfig,
 )
-from mm.runtime.config import BusRuntimeConfig, ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig, PersistenceRuntimeConfig
 from mm.runtime.engine import build_runtime_components, resolve_build_options
 
 
@@ -29,6 +28,7 @@ def test_runtime_build_options_for_mode_presets() -> None:
     consumer = RuntimeBuildOptions.for_mode("consumer_only")
     assert consumer.enable_public_ingestion is False
     assert consumer.enable_strategy is True
+    assert consumer.enable_persistence is False
 
     ingestor = RuntimeBuildOptions.for_mode("ingestor_only")
     assert ingestor.enable_public_ingestion is True
@@ -106,6 +106,7 @@ async def test_build_runtime_components_market_data_source_bus_skips_local_engin
     runtime = await build_runtime_components(config)
 
     assert runtime.engines == {}
+    assert runtime.persistence_daemons == ()
 
 
 @pytest.mark.asyncio

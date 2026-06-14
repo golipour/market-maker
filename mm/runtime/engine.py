@@ -31,6 +31,7 @@ from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, 
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.control import RuntimeControlPlane
 from mm.ledger.service import build_portfolio_ledger_service
+from mm.persistence.service import build_persistence_writers
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -373,66 +374,12 @@ def _build_persistence_daemons(
     if not options.enable_persistence:
         log_event("persistence_disabled", {"reason": "build_options"})
         return ()
-    if not config.persistence.enabled:
-        log_event("persistence_disabled", {"reason": "config"})
-        return ()
-    topics = config.effective_persistence_topics
-    daemons: list[object] = []
-    database_url = config.persistence.resolved_database_url()
-    if database_url:
-        from mm.persistence.postgres import PostgresEventWriter
-
-        daemons.append(
-            PostgresEventWriter(
-                bus=bus,
-                topics=topics,
-                database_url=database_url,
-                batch_size=config.persistence.batch_size,
-                flush_interval_ms=config.persistence.flush_interval_ms,
-                run_id=config.observability.run_id,
-            )
-        )
-    else:
-        log_event(
-            "persistence_sink_missing",
-            {
-                "sink": "postgres",
-                "database_url_env": config.persistence.database_url_env,
-                "message": "persistence.enabled is true, but no database URL resolved",
-            },
-        )
-    parquet_root = config.persistence.resolved_parquet_root()
-    if parquet_root:
-        from mm.persistence.parquet_writer import ParquetEventWriter
-
-        daemons.append(
-            ParquetEventWriter(
-                bus=bus,
-                topics=topics,
-                root_path=parquet_root,
-                batch_size=config.persistence.batch_size,
-                flush_interval_ms=config.persistence.flush_interval_ms,
-                run_id=config.observability.run_id,
-            )
-        )
-    if not daemons:
-        log_event(
-            "persistence_no_writers_configured",
-            {
-                "database_url_env": config.persistence.database_url_env,
-                "parquet_root_env": config.persistence.parquet_root_env,
-                "topic_count": len(topics),
-            },
-        )
-    else:
-        log_event(
-            "persistence_writers_configured",
-            {
-                "writers": [type(daemon).__name__ for daemon in daemons],
-                "topic_count": len(topics),
-            },
-        )
-    return tuple(daemons)
+    return build_persistence_writers(
+        bus=bus,
+        persistence=config.persistence,
+        topics=config.effective_persistence_topics,
+        run_id=config.observability.run_id,
+    )
 
 
 def _build_observability_daemons(
