@@ -81,7 +81,10 @@ The config schema is intentionally strict around recent runtime migrations. It r
 - `controller.vwap_depth` was removed; VWAP depth is derived from inventory every frame.
 - old controller model keys `price_model` and `market_flow_model` were renamed to `local_price_model` and `local_market_flow_model`.
 - global model config belongs directly under `controller`, not under `controller.optimizer`.
-- venue optimizer keys belong under `controller.optimizer.local` and `controller.optimizer.global`; old aliases such as `inv_coef`, `target_inventory`, and `soft_fill_queue_penalty` are rejected.
+- venue optimizer keys belong under `controller.optimizer.local` and `controller.optimizer.global`; old aliases such as `inv_coef`, `target_inventory`, `soft_fill_queue_penalty`, and `spread_structure` are rejected with pointers to replacements.
+- flat `book_quality` soft keys (`spread_target`, `depth_target`, `measure`, sub-weights) must live under `book_quality.soft_target`; hard first-touch geometry lives under `book_quality.hard_structure`.
+- removed flat quote keys `quote_spread_max`, `quote_spread_min_depth`, `quote_spread_k_epsilon`, `quote_capacity_ratio`, and `quote_imbalance_skew_strength` must not appear under venue optimizer blocks.
+- optional `controller.optimizer.objective_normalize` scales the CE return term by an EWMA of `|CE|` so it can share numeric range with `w_book` and `w_inv`.
 - `private.enable_execution` was removed; live execution is controlled by the strategy preset's `execution` block and controller gates.
 - `execution.liquidity_source` was removed; liquidity-venue execution policy is configured under `execution.liquidity`, while its live-enabled flag is derived from `liquidity_sourcing.mode`.
 
@@ -381,7 +384,7 @@ sigmoid(z) = 1 / (1 + exp(-z))
 D_s(x) = max(0, D_s_raw(x) - D_s_raw(0))
 ```
 
-The raw optimizer vector length per venue is `6 * n_components + 2`: bid `(L_raw, k_raw, x0_raw)` components, ask components, and one total-depth logit per side. The joint optimizer concatenates local and global venue vectors for every horizon step:
+The raw optimizer vector length per venue is `6 * n_components + 3`: bid `(L_raw, k_raw, x0_raw)` components, ask components, one total-depth logit per side, and one reservation-offset logit `u_r`. The joint optimizer concatenates local and global venue vectors for every horizon step:
 
 ```text
 x = [a_local,0, a_global,0, a_local,1, a_global,1, ..., a_local,H-1, a_global,H-1]
@@ -393,37 +396,61 @@ x = [a_local,0, a_global,0, a_local,1, a_global,1, ..., a_local,H-1, a_global,H-
 - Without spread-structured constraints, centers are `x0_eff = spread_max * sigmoid(x0_raw)`.
 - Total per-side depth is selected by `Q_s_total = Q_s_min + sigmoid(u_s_depth) * (Q_s_max - Q_s_min)`.
 - Component weights for `L_eff` use a softmax over `L_raw`, normalized so `D_s(spread_max) = Q_s_total`.
+- When `reservation_offset.r_max > 0`, the decoder exposes `r_offset = r_max * tanh(u_r)` and evaluates curves on the market spread grid with `mid_eff = mid * (1 + r_offset)`. Bid depth uses `D_bid(x + mid * r_offset)` and ask depth uses `D_ask(x - mid * r_offset)`; target-book discretization still uses the true quote anchor mid.
 
-When `quote_spread_max` and `quote_spread_min_depth` are configured, a spread-structured parameterization is used:
+When `book_quality.hard_structure.action_max_spread` is configured (mapped internally to `quote_spread_max`), a spread-structured parameterization is used:
 
 ```text
 scale = sigmoid(u_scale)
-[x0_bid,1, x0_ask,1] = scale * quote_spread_max * softmax([u_bid, u_ask])
-x0_bid,1 + x0_ask,1 <= quote_spread_max
+[x0_bid,1, x0_ask,1] = scale * action_max_spread * softmax([u_bid, u_ask])
+x0_bid,1 + x0_ask,1 <= action_max_spread
 ```
 
-The first component slope is forced high enough that `sigmoid(-k_1 * x0_1) <= quote_spread_k_epsilon`; the first leg carries at least `quote_spread_min_depth` at its center; tail components fill the remaining total depth up to `Q_s_total` at `spread_max`.
+The first component slope is forced high enough that `sigmoid(-k_1 * x0_1) <= action_k_epsilon`; the first leg carries at least `action_min_depth` at its center when configured; tail components fill the remaining total depth up to `Q_s_total` at `spread_max`. Spread structure requires `n_components >= 2`. If `hard_structure` is omitted, the venue decodes in unstructured mode with per-side centers in `[0, spread_max]`.
+
+Example venue optimizer blocks in `mm/configs/market_maker.runtime.example.json`:
+
+```json
+"book_quality": {
+  "hard_structure": {
+    "action_max_spread": 100.0,
+    "action_min_depth": 0.3,
+    "action_k_epsilon": 0.01
+  },
+  "soft_target": {
+    "spread_target": 100.0,
+    "depth_target": 1.0,
+    "measure": "quoted"
+  }
+},
+"reservation_offset": { "r_max": 0.002 },
+"w_book": 0.002,
+"w_inv": 0.01,
+"inventory_zone": {
+  "comfort_low": -0.2,
+  "comfort_high": 0.2,
+  "low_ramp_width": 0.05,
+  "high_ramp_width": 0.05,
+  "low_penalty_cap": 0.7,
+  "high_penalty_cap": 1.0
+}
+```
+
+Local and global venues can use different `book_quality`, `w_book`, `w_inv`, `inventory_zone`, and `reservation_offset` settings. The example config keeps hard structure on global only and soft targets on both venues.
 
 ### Quote Capacity And Structural Constraints
 
-At each rollout step and for each venue, dynamic side capacity is computed from simulated account state:
+At each rollout step and for each venue, dynamic side capacity is computed from simulated account state and optional per-venue caps:
 
 ```text
-bid_max = min(quote_size_max_per_side, quote_capacity_ratio * max(cash, 0) / mid)
-ask_max = min(quote_size_max_per_side, quote_capacity_ratio * max(inventory, 0))
+bid_max = min(quote_size_max_per_side, cash / mid)   when quote_size_max_per_side is set
+bid_max = cash / mid                                   otherwise
+ask_max = min(quote_size_max_per_side, inventory)    when quote_size_max_per_side is set
+ask_max = inventory                                    otherwise
+bid_min = ask_min = 0
 ```
 
-The lower bound starts at `quote_size_min_per_side` and may be skewed by account imbalance:
-
-```text
-imbalance = clamp((inventory * mid - cash) / (abs(inventory * mid) + abs(cash) + eps), -1, 1)
-bid_floor = quote_size_min_per_side * (1 + skew_strength * max(-imbalance, 0))
-ask_floor = quote_size_min_per_side * (1 + skew_strength * max( imbalance, 0))
-bid_min = min(bid_floor, bid_max)
-ask_min = min(ask_floor, ask_max)
-```
-
-A venue with no quote cash has `bid_max = 0`, and a venue with no base inventory has `ask_max = 0`. Raw optimizer variables are box-constrained before each Adam closure:
+Side mins stay at zero; two-sided presence is encouraged through the optional book-quality term rather than hard quote floors. A venue with no quote cash has `bid_max = 0`, and a venue with no base inventory has `ask_max = 0`. Raw optimizer variables are box-constrained before each Adam closure:
 
 ```text
 logit-like params: [-30, 30]
@@ -431,9 +458,11 @@ k-like params:     [1e-6, 100]
 x0-like params:    [-spread_max, spread_max]
 ```
 
+The last three raw slots per venue (bid depth logit, ask depth logit, reservation logit) use logit bounds.
+
 ### Fill Simulation
 
-`soft_fill_batched()` simulates the combined market book plus the strategy's quote depth. It converts current cumulative market depth into marginal levels, converts quoted cumulative sigmoid depth into marginal quote levels, combines public and own quote levels, applies market order flow through a differentiable fill fraction, splits consumed volume between public book and own quotes, and returns the next market-only book plus cash and inventory deltas from own fills.
+`soft_fill_batched()` simulates the combined market book plus the strategy's quote depth. It converts current cumulative market depth into marginal levels, converts quoted cumulative sigmoid depth into marginal quote levels (using the same reservation-offset curve shift as decoding when configured), combines public and own quote levels, applies market order flow through a differentiable fill fraction, splits consumed volume between public book and own quotes, and returns the next market-only book plus cash and inventory deltas from own fills.
 
 For each side and spread-grid level:
 
@@ -465,9 +494,36 @@ inventory_delta = fill_bid * (1 - maker_fee) - fill_ask
 
 ### MPC Optimization
 
-The optimizer is `MonteCarloMPCTensorBatched` in `mm/mpc/mpc_tensor_batched.py`. It is a differentiable Monte Carlo MPC optimizer using PyTorch and Adam.
+The optimizer is `MonteCarloMPCTensorBatched` in `mm/mpc/mpc_tensor_batched.py`. It is a differentiable Monte Carlo MPC optimizer using PyTorch and Adam. `MpcStrategyEngine` builds it from `controller.optimizer` through `_build_controller()` in `mm/strategies/mpc_engine.py`.
 
-For each optimize call, it converts orderbooks into spread-grid tensors, computes dynamic capacity bounds, draws Monte Carlo market-flow and price innovations, initializes or warm-starts the horizon action vector, clamps raw parameters, rolls out every path over the horizon, computes normalized returns, maximizes the terminal objective for `adam_epochs`, keeps the best finite epoch, and returns the best first-step local action. If joint/global mode is active, it also stores the best global action for target-book construction and diagnostics.
+Venue-scoped optimizer parameters are parsed into `VenueOptimizerParams` (`mm/mpc/mpc_tensor_batched.py`) for `controller.optimizer.local` and `controller.optimizer.global`:
+
+| Key | Role |
+|-----|------|
+| `n_components` | Sigmoid mixture count per side |
+| `return_risk_aversion_beta` | Entropic CE risk aversion `beta` |
+| `objective_weight` | Parsed and stored per venue; not currently multiplied into the terminal CE in rollout code |
+| `quote_size_min_per_side` | Lot-size floor used in spread-structured depth decoding |
+| `quote_size_max_per_side` | Optional hard cap on cumulative quote depth per side |
+| `book_quality.hard_structure` | First-touch spread cap / min depth / slope epsilon |
+| `book_quality.soft_target` | Book-quality score targets and sub-weights |
+| `reservation_offset.r_max` | Bounds relative reservation shift `r_offset` |
+| `w_book` | Weight on h=0 book-quality score |
+| `w_inv` | Weight on trajectory inventory-zone penalty |
+| `inventory_zone` | Sigmoid comfort band on wallet imbalance |
+| `soft_fill_temp`, `soft_fill_activation`, `soft_fill_queue_model` | Differentiable fill model |
+
+Optimizer-wide settings live directly under `controller.optimizer`:
+
+| Key | Role |
+|-----|------|
+| `kind` | `monte_carlo_mpc_tensor_batched` |
+| `n_samples`, `horizon`, `adam_epochs`, `adam_lr`, `device` | Monte Carlo and Adam loop |
+| `warm_start`, `fixed_mc_samples` | Action warm start and fixed sample reuse |
+| `objective_normalize.enabled` | Scale CE by EWMA(`|CE|`) during optimization |
+| `objective_normalize.ce_ewma_decay` | EWMA decay in `[0, 1)`; higher = slower adaptation |
+
+For each optimize call, the controller converts orderbooks into spread-grid tensors, computes dynamic capacity bounds, draws Monte Carlo market-flow and price innovations, initializes or warm-starts the horizon action vector, clamps raw parameters, rolls out every path over the horizon, computes normalized returns, maximizes the terminal objective for `adam_epochs`, keeps the best finite epoch, updates the CE EWMA scale from the best epoch's raw CE, and returns the best first-step local action. If joint/global mode is active, it also stores the best global action for target-book construction and diagnostics.
 
 Default `_build_controller()` optimizer settings are `n_samples = 8`, `horizon = 2`, `adam_epochs = 10`, CPU device, and spread grid from `ControllerRuntimeConfig.orderbook_grid`.
 
@@ -495,15 +551,49 @@ W_h = X_h + Q_h * mark(Q_h)
 R_i = (sum_{h=0..H-1} Delta W_{i,h}) / W_0
 ```
 
-The terminal objective in `mm/mpc/reward_tensor.py` is the entropic certainty equivalent:
+The terminal objective in `mm/mpc/reward_tensor.py` starts from the entropic certainty equivalent:
 
 ```text
 CE_beta(R) = min(R) - (1 / beta) * log(mean_i(exp(-beta * (R_i - min(R)))))
-J = CE_beta(R)
-loss = -J
 ```
 
-The `min(R)` shift is numerical stabilization and is equivalent to `-(1 / beta) * log(mean_i(exp(-beta * R_i)))` for positive `beta`. In current code, the single-venue terminal objective exposes only the `risk_adjusted_return` component.
+The `min(R)` shift is numerical stabilization and is equivalent to `-(1 / beta) * log(mean_i(exp(-beta * R_i)))` for positive `beta`.
+
+Optional soft terms from `mm/mpc/objective_terms.py` are added after CE computation:
+
+```text
+J = CE_beta(R) + w_book * B - w_inv * Z
+```
+
+- `B` is the h=0 book-quality score in `[0, 1]` from `book_quality_score()`.
+- `Z` is the mean trajectory inventory-zone penalty in `[0, 1]` from `inventory_zone_path_mean()`.
+
+When `controller.optimizer.objective_normalize.enabled = true`, only the CE term is rescaled before the soft terms are added:
+
+```text
+CE_norm = CE / scale
+scale   = EWMA(|CE|) from previous frames, or |CE| on the first frame
+J       = CE_norm + w_book * B - w_inv * Z
+```
+
+During a single optimize call, `scale` is fixed from the previous frame. After the best epoch is chosen, the controller updates the EWMA from that epoch's raw CE (`risk_adjusted_return_raw` in diagnostics). Book and inventory terms are not EWMA-normalized. Within one optimize call, dividing CE by a positive constant preserves the ranking of actions by return; the main effect of normalization is to keep CE on a comparable numeric scale to `w_book` and `w_inv` across regimes.
+
+Book-quality scoring (`book_quality_score()`) evaluates the decoded h=0 action:
+
+- `measure = quoted`: score only the strategy's decoded quote depth.
+- `measure = combined`: add resting public depth at the touch and full cumulative depth when scoring presence/uniformity.
+
+Sub-scores are presence, tightness (from first-component spread sum vs `spread_target`), balance (bid/ask notional symmetry), and uniformity (marginal depth evenness). Sub-weights default to `0.25` each under `book_quality.soft_target`.
+
+Inventory-zone scoring uses wallet imbalance:
+
+```text
+imb = (Q * mid - cash) / (|Q * mid| + |cash| + eps)
+Z   = (a_lo * sigmoid((comfort_low - imb) / d_lo)
+       + a_hi * sigmoid((imb - comfort_high) / d_hi)) / (a_lo + a_hi)
+```
+
+Diagnostics expose `risk_adjusted_return`, optional `risk_adjusted_return_raw`, `objective_ce_ewma_scale`, `book_quality`, and `inventory_zone_penalty` when the corresponding weights are non-zero. Adam minimizes `loss = -J`.
 
 ### Joint Local/Global Rollout And Objective
 
@@ -553,16 +643,23 @@ R^L_i = (sum_h Delta W^L_{i,h}) / W_0
 R^G_i = (sum_h Delta W^G_{i,h}) / W_0
 ```
 
-The joint objective in `mm/mpc/joint_mpc.py` is:
+The joint objective in `mm/mpc/joint_mpc.py` optimizes consolidated portfolio return:
 
 ```text
-J = w_L * CE_{beta_L}(R^L) + active_G * w_G * CE_{beta_G}(R^G)
-loss = -J
+R_i = (sum_h Delta W_{i,h}) / W_0
+J   = CE_{beta_L}(R)
 ```
 
-where `w_L` and `w_G` are venue objective weights, `beta_L` and `beta_G` are venue risk-aversion betas, and `active_G` is one only when the global venue is active for liquidity sourcing. Diagnostics report local/global risk-adjusted return components, expected total reward/return, expected next-step reward, fill means, wealth contribution means, and raw local/global action vectors.
+where `Delta W` is the sum of local and global wealth increments under the shared reference mark. `joint_terminal_objective()` also reports `local_risk_adjusted_return` and `global_risk_adjusted_return` as diagnostic CE components on venue-scoped return paths, but those venue CE values are not mixed into `J`.
 
-Current code does not include an explicit quadratic inventory penalty, hard terminal-inventory constraint, cash-threshold penalty, or drawdown constraint inside the terminal objective. Inventory risk is represented indirectly through side-aware liquidation marking, dynamic quote capacity, quote imbalance skew, and downstream risk validation.
+After CE computation, joint mode applies the same optional normalization and soft terms as single-venue mode, separately per venue where configured:
+
+- local `w_book` / `w_inv` / `inventory_zone` on local h=0 action and local inventory/cash paths,
+- global `w_book` / `w_inv` / `inventory_zone` on global h=0 action and global paths when the global venue is active.
+
+Diagnostics report local/global risk-adjusted return components, expected total reward/return, expected next-step reward, fill means, wealth contribution means, book-quality and inventory-zone components, reservation offset when enabled, and raw local/global action vectors.
+
+Inventory risk is represented through side-aware liquidation marking, wallet-based quote capacity caps, optional inventory-zone penalty, reservation-price shifting, and downstream risk validation. Current code does not include a hard terminal-inventory constraint, cash-threshold penalty, or drawdown constraint inside the terminal objective.
 
 ### Quote Discretization
 

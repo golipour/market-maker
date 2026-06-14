@@ -239,15 +239,15 @@
           "device": "cpu",
           "objective_normalize": {
             "enabled": true,
-            "ce_ewma_decay": 0.95
+            "ce_ewma_decay": 0.9
           },
           "local": {
             "n_components": 4,
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,
             "quote_size_min_per_side": 1.0,
-            "w_book": 0.002,
-            "w_inv": 0.01,
+            "w_book": 0.0,
+            "w_inv": 0.0,
             "book_quality": {
               "soft_target": {
                 "spread_target": 200.0,
