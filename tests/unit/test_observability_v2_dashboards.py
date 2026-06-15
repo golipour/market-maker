@@ -163,9 +163,9 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     depth_expected = {
-        "Orderbook depth": (0, 9, "MarketEvent", "m.exchange = ctx.exchange"),
-        "Clean orderbook depth": (0, 17, "cleared_orderbook", "ctx.diag_payload AS payload"),
-        "Action ladder depth": (0, 25, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
+        "Orderbook depth": (0, 4, "MarketEvent", "m.exchange = ctx.exchange"),
+        "Clean orderbook depth": (0, 12, "cleared_orderbook", "ctx.diag_payload AS payload"),
+        "Action ladder depth": (0, 20, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
     }
     for title, (x, y, expected_sql, role_sql) in depth_expected.items():
         panel = panels_by_title[title]
@@ -180,14 +180,14 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
             assert "jsonb_typeof" in sql
             assert "orders_sample" in sql
 
-    assert "Ladder grid vs orders" in panels_by_title
+    assert "Ladder grid vs orders" not in panels_by_title
     assert "Local orderbook depth" not in panels_by_title
     assert "Global marginal ladder" not in panels_by_title
 
     expected = {
-        "Marginal ladder": (0, 33, "ladder"),
-        "After venue rounding": (0, 43, "rules_valid"),
-        "Exchange-accepted placements": (12, 43, "router_accepted"),
+        "Marginal ladder": (0, 28, "ladder"),
+        "After venue rounding": (0, 38, "rules_valid"),
+        "Exchange-accepted placements": (12, 38, "router_accepted"),
     }
     for title, (x, y, stage) in expected.items():
         panel = panels_by_title[title]

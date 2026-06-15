@@ -143,14 +143,15 @@ async def _probe_url(url: str, *, expect_metrics: bool) -> tuple[bool, str]:
 
 def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
     rows = [
-        ("Runtime Overview", "mm-obs-v2-runtime-overview"),
-        ("Controller Health", "mm-obs-v2-controller-health"),
-        ("Risk & Execution", "mm-obs-v2-risk-execution"),
-        ("Portfolio & PnL", "mm-obs-v2-portfolio-pnl"),
-        ("Allocations", "mm-obs-v2-allocations"),
-        ("Market Data", "mm-obs-v2-market-data"),
-        ("Runtime Logs", "mm-obs-v2-runtime-logs"),
-        ("Incidents", "mm-obs-v2-incident"),
+        ("MM Observability v2 / 01 Market Data Quality", "mm-obs-v2-market-data"),
+        ("MM Observability v2 / 01B Orderbook Depth", "mm-obs-v2-orderbook-depth"),
+        ("MM Observability v2 / 05C Target Order Stems", "mm-obs-v2-target-order-stems"),
+        ("MM Observability v2 / 05D Action Pipeline Side Counts", "mm-obs-v2-action-pipeline-side-counts"),
+        ("MM Observability v2 / 04 Optimizer Diagnostics", "mm-obs-v2-optimizer"),
+        ("MM Observability v2 / 03B Model Parameters", "mm-obs-v2-model-parameters"),
+        ("MM Observability v2 / 02B Pipeline Time Profile", "mm-obs-v2-pipeline-time-profile"),
+        ("MM Observability v2 / 07 Portfolio And PnL", "mm-obs-v2-portfolio-pnl"),
+        ("MM Observability v2 / 07B Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
     ]
     return [
         {
@@ -166,21 +167,4 @@ def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
 
 
 def _grafana_solo_panels(base_url: str) -> list[dict[str, Any]]:
-    rows = [
-        ("Frames / min", "mm-obs-v2-runtime-overview", 2),
-        ("Controller latency", "mm-obs-v2-controller-health", 2),
-        ("Risk rejects", "mm-obs-v2-risk-execution", 2),
-        ("Allocation quote usage", "mm-obs-v2-allocations", 1),
-    ]
-    return [
-        {
-            "title": title,
-            "uid": uid,
-            "panel_id": panel_id,
-            "embed_url": (
-                f"{base_url}/d-solo/{uid}?orgId=1&panelId={panel_id}"
-                "&theme=dark&from=now-1h&to=now"
-            ),
-        }
-        for title, uid, panel_id in rows
-    ]
+    return []

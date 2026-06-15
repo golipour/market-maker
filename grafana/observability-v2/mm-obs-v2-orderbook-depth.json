@@ -18,55 +18,12 @@
       },
       "id": 1,
       "options": {
-        "content": "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per `orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side). See **Ladder grid vs orders** for the active grid and plotted order counts.",
+        "content": "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per `orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side).",
         "mode": "markdown"
       },
       "title": "Scope",
       "transparent": true,
       "type": "text"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 4
-      },
-      "id": 14,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\ngrid AS (\n  SELECT\n    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid']), 0) AS bid_grid_levels,\n    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask']), 0) AS ask_grid_levels,\n    MAX(CASE\n  WHEN trim(COALESCE(elem->>'spread_quote', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(elem->>'spread_quote', ''))::double precision\n  ELSE NULL\nEND) FILTER (WHERE elem ? 'spread_quote') AS spread_max_quote,\n    MIN(CASE\n  WHEN trim(COALESCE(elem->>'spread_quote', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(elem->>'spread_quote', ''))::double precision\n  ELSE NULL\nEND) FILTER (WHERE elem ? 'spread_quote') AS spread_step_quote\n  FROM latest l\n  LEFT JOIN LATERAL jsonb_array_elements(\n    COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)\n  ) AS elem ON TRUE\n),\nladder AS (\n  SELECT\n    COUNT(*) FILTER (WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'bid' AND CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND > 0) AS ladder_bid_orders,\n    COUNT(*) FILTER (WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'ask' AND CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND > 0) AS ladder_ask_orders,\n    COALESCE(MAX(l.payload #>> ARRAY['action_pipeline', 'ladder', 'order_count']), '0') AS ladder_order_count\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND) AS o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n)\nSELECT\n  g.bid_grid_levels,\n  g.ask_grid_levels,\n  g.spread_step_quote,\n  g.spread_max_quote,\n  l.ladder_bid_orders,\n  l.ladder_ask_orders,\n  l.ladder_order_count\nFROM grid g\nCROSS JOIN ladder l",
-          "refId": "A"
-        }
-      ],
-      "title": "Ladder grid vs orders",
-      "type": "table",
-      "description": "Grid rungs come from controller `orderbook_grid`. Ladder orders are marginal sizes at those rungs for the selected exchange.",
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false
-        },
-        "showHeader": true
-      }
     },
     {
       "datasource": {
@@ -205,7 +162,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 4
       },
       "id": 2,
       "options": {
@@ -391,7 +348,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 12
       },
       "id": 3,
       "options": {
@@ -577,7 +534,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 20
       },
       "id": 4,
       "options": {
@@ -754,7 +711,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 28
       },
       "id": 5,
       "options": {
@@ -931,7 +888,7 @@
         "h": 10,
         "w": 12,
         "x": 0,
-        "y": 43
+        "y": 38
       },
       "id": 6,
       "options": {
@@ -1107,7 +1064,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 43
+        "y": 38
       },
       "id": 7,
       "options": {

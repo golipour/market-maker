@@ -37,16 +37,26 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
     assert response.status_code == 200
     body = response.json()
     assert body["base_url"] == "http://grafana.test:3000"
-    assert any(d["uid"] == "mm-obs-v2-runtime-overview" for d in body["dashboards"])
-    assert body["solo_panels"]
+    uids = {d["uid"] for d in body["dashboards"]}
+    assert uids == {
+        "mm-obs-v2-market-data",
+        "mm-obs-v2-orderbook-depth",
+        "mm-obs-v2-target-order-stems",
+        "mm-obs-v2-action-pipeline-side-counts",
+        "mm-obs-v2-optimizer",
+        "mm-obs-v2-model-parameters",
+        "mm-obs-v2-pipeline-time-profile",
+        "mm-obs-v2-portfolio-pnl",
+        "mm-obs-v2-fill-spread-pnl",
+    }
+    assert body["solo_panels"] == []
 
 
-def test_grafana_embed_urls_use_kiosk_and_solo() -> None:
+def test_grafana_embed_urls_use_kiosk() -> None:
     dashboards = _grafana_dashboards("http://localhost:3000")
-    overview = next(d for d in dashboards if d["uid"] == "mm-obs-v2-runtime-overview")
-    assert "kiosk=1" in overview["embed_url"]
-    solo = _grafana_solo_panels("http://localhost:3000")
-    assert solo[0]["embed_url"].startswith("http://localhost:3000/d-solo/")
+    market_data = next(d for d in dashboards if d["uid"] == "mm-obs-v2-market-data")
+    assert "kiosk=1" in market_data["embed_url"]
+    assert _grafana_solo_panels("http://localhost:3000") == []
 
 
 def test_service_targets_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

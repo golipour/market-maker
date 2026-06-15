@@ -2665,60 +2665,6 @@ FROM axis_rows
 ORDER BY price, series"""
 
 
-def _orderbook_ladder_grid_summary_sql() -> str:
-    side = _side_sql("o.value->>'side'")
-    price = _numeric_sql("o.value->>'price'", default="NULL")
-    qty = _numeric_sql("o.value->>'qty'")
-    orders_expr = _action_pipeline_orders_array_sql("ladder")
-    spread = _numeric_sql("elem->>'spread_quote'", default="NULL")
-    return f"""WITH latest AS (
-  SELECT e.payload
-  FROM mm_events e
-  WHERE e.topic = '${{diagnostics_topic}}'
-    AND e.event_type = 'ControllerDiagnostics'
-    AND (
-      '${{target_frame_mode}}' = 'latest'
-      OR e.event_id = ${{target_frame_event_id:sqlstring}}
-    )
-    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
-    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
-    AND $__timeFilter(e.ts)
-  ORDER BY e.ts DESC
-  LIMIT 1
-),
-grid AS (
-  SELECT
-    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid']), 0) AS bid_grid_levels,
-    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask']), 0) AS ask_grid_levels,
-    MAX({spread}) FILTER (WHERE elem ? 'spread_quote') AS spread_max_quote,
-    MIN({spread}) FILTER (WHERE elem ? 'spread_quote') AS spread_step_quote
-  FROM latest l
-  LEFT JOIN LATERAL jsonb_array_elements(
-    COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)
-  ) AS elem ON TRUE
-),
-ladder AS (
-  SELECT
-    COUNT(*) FILTER (WHERE {side} = 'bid' AND {qty} > 0) AS ladder_bid_orders,
-    COUNT(*) FILTER (WHERE {side} = 'ask' AND {qty} > 0) AS ladder_ask_orders,
-    COALESCE(MAX(l.payload #>> ARRAY['action_pipeline', 'ladder', 'order_count']), '0') AS ladder_order_count
-  FROM latest l
-  CROSS JOIN LATERAL jsonb_array_elements({orders_expr}) AS o(value)
-  WHERE {price} IS NOT NULL
-)
-SELECT
-  g.bid_grid_levels,
-  g.ask_grid_levels,
-  g.spread_step_quote,
-  g.spread_max_quote,
-  l.ladder_bid_orders,
-  l.ladder_ask_orders,
-  l.ladder_order_count
-FROM grid g
-CROSS JOIN ladder l"""
-
-
 def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str | None = "local") -> str:
     if role is not None and role not in {"local", "global"}:
         raise ValueError(f"unknown action pipeline depth role: {role}")
@@ -3362,33 +3308,19 @@ def orderbook_depth() -> dict[str, Any]:
             "Scope",
             "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. "
             "Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per "
-            "`orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side). "
-            "See **Ladder grid vs orders** for the active grid and plotted order counts.",
+            "`orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side).",
             y=0,
             h=4,
         ),
-        _panel(
-            14,
-            "Ladder grid vs orders",
-            "table",
-            PG_DS,
-            _orderbook_ladder_grid_summary_sql(),
-            x=0,
-            y=4,
-            w=24,
-            h=5,
-            fmt="table",
-            description="Grid rungs come from controller `orderbook_grid`. Ladder orders are marginal sizes at those rungs for the selected exchange.",
-        ),
-        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw", role=None), x=0, y=9, w=24),
-        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean", role=None), x=0, y=17, w=24),
-        _xy_depth_panel(4, "Action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role=None), x=0, y=25, w=24),
+        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw", role=None), x=0, y=4, w=24),
+        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean", role=None), x=0, y=12, w=24),
+        _xy_depth_panel(4, "Action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role=None), x=0, y=20, w=24),
         _stem_order_qty_price_panel(
             5,
             "Marginal ladder",
             _latest_action_pipeline_stage_orders_sql("ladder", role=None),
             x=0,
-            y=33,
+            y=28,
             w=24,
             description="Marginal ladder orders on the controller spread grid (pre-cap) for the selected exchange.",
         ),
@@ -3397,7 +3329,7 @@ def orderbook_depth() -> dict[str, Any]:
             "After venue rounding",
             _latest_action_pipeline_stage_orders_sql("rules_valid", role=None),
             x=0,
-            y=43,
+            y=38,
             w=12,
         ),
         _stem_order_qty_price_panel(
@@ -3405,7 +3337,7 @@ def orderbook_depth() -> dict[str, Any]:
             "Exchange-accepted placements",
             _latest_action_pipeline_stage_orders_sql("router_accepted", role=None),
             x=12,
-            y=43,
+            y=38,
             w=12,
         ),
     ]
