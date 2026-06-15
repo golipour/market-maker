@@ -82,3 +82,41 @@ def test_registry_strategy_start_publishes_admin_command(registry_client) -> Non
     assert topic == "admin:commands"
     assert event["command"] == "resume"
     assert event["actor_id"] == "btc-maker-actor"
+
+
+def test_registry_strategy_stop_publishes_pause(registry_client) -> None:
+    client, store, bus = registry_client
+    strategy_id = _seed_strategy(store)
+    published: list[tuple[str, object]] = []
+    original_publish = bus.publish
+
+    async def capture_publish(topic: str, event: object) -> None:
+        published.append((topic, event))
+        await original_publish(topic, event)
+
+    bus.publish = capture_publish  # type: ignore[method-assign]
+
+    response = client.post(f"/api/admin/registry/strategies/{strategy_id}/stop")
+    assert response.status_code == 200
+    assert response.json()["actor_id"] == "btc-maker-actor"
+    topic, event = published[0]
+    assert topic == "admin:commands"
+    assert event["command"] == "pause"
+
+
+def test_runtime_overview_endpoint(registry_client) -> None:
+    client, store, _bus = registry_client
+    strategy_id = _seed_strategy(store)
+    store.upsert_worker_assignment(
+        assignment_id="wa-test",
+        worker_id="worker-1",
+        strategy_ids=[strategy_id],
+        lease_ttl_seconds=300,
+        status="active",
+    )
+    response = client.get("/api/admin/runtime/overview")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["strategies"][0]["strategy_id"] == strategy_id
+    assert body["workers"][0]["worker_id"] == "worker-1"
+    assert body["control"]["connected"] is False

@@ -285,3 +285,58 @@ export interface CommandResult {
   status: string;
   command_id: string;
 }
+
+export type WorkerLiveStatus = "alive" | "stale" | "offline";
+
+export type TradingStatus =
+  | "running"
+  | "paused"
+  | "breach"
+  | "kill_switch"
+  | "dry_run"
+  | "worker_offline"
+  | "unassigned"
+  | "registry_inactive";
+
+export interface RuntimeControlState {
+  connected: boolean;
+  paused_actors: string[];
+  allocation_breached_actors: string[];
+  paused_venue_roles: string[];
+  dry_run: boolean;
+  kill_switch: boolean;
+  updated_at_ms: number;
+}
+
+export interface RuntimeOverviewWorker {
+  assignment_id: string;
+  worker_id: string;
+  strategy_ids: string[];
+  registry_status: string;
+  live: WorkerLiveStatus;
+  lease_remaining_s: number;
+  heartbeat_at: string | null;
+  lease_expires_at: string | null;
+}
+
+export interface RuntimeOverviewStrategy {
+  strategy_id: string;
+  actor_id: string;
+  registry_status: string;
+  worker_id: string | null;
+  worker_live: WorkerLiveStatus | null;
+  trading_status: TradingStatus;
+}
+
+export interface RuntimeOverview {
+  checked_at_ms: number;
+  control: RuntimeControlState;
+  workers: RuntimeOverviewWorker[];
+  strategies: RuntimeOverviewStrategy[];
+}
+
+export interface StrategyControlResult {
+  status: string;
+  command_id: string;
+  actor_id: string;
+}

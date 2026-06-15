@@ -167,6 +167,16 @@ button {
   color: var(--danger);
 }
 
+.status-warning {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--warning);
+}
+
+.status-muted {
+  background: rgba(139, 148, 158, 0.15);
+  color: var(--text-muted);
+}
+
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--border);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,8 @@ from pydantic import BaseModel, Field
 
 from mm.api.platform_routes import create_platform_router
 from mm.api.registry_routes import create_registry_router
+from mm.api.runtime_routes import create_runtime_router
+from mm.api.runtime_state import RuntimeControlCache
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.registry.audit import record_admin_audit
@@ -41,7 +44,18 @@ def create_admin_app(
     registry_store: object | None = None,
 ) -> FastAPI:
     runtime_bus = bus or _bus_from_env()
-    app = FastAPI(title="market-maker-admin")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        cache = RuntimeControlCache(bus=app.state.bus)
+        await cache.start()
+        app.state.runtime_control = cache
+        try:
+            yield
+        finally:
+            await cache.stop()
+
+    app = FastAPI(title="market-maker-admin", lifespan=lifespan)
     app.state.bus = runtime_bus
     app.state.started_ms = int(time.time() * 1000)
     _register_admin_metrics(app.state.started_ms)
@@ -51,6 +65,12 @@ def create_admin_app(
             require_auth=_require_auth,
             bus=runtime_bus,
             registry_store=registry_store,
+        ),
+    )
+    app.include_router(
+        create_runtime_router(
+            require_auth=_require_auth,
+            registry_store=registry_store,  # type: ignore[arg-type]
         ),
     )
     app.include_router(create_platform_router(require_auth=_require_auth))

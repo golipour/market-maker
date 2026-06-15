@@ -10,10 +10,18 @@ import {
   type Allocation,
   type Preset,
   type RegistryList,
+  type RuntimeOverview,
   type Strategy,
   type StrategyRuntimeConfig,
   type StrategyUpsertPayload,
 } from "../api/client";
+import {
+  canStartTrading,
+  canStopTrading,
+  runtimeByStrategyId,
+  tradingStatusClass,
+  tradingStatusLabel,
+} from "../lib/runtimeStatus";
 
 const STRATEGY_STATUSES = ["draft", "active", "paused", "retired"] as const;
 const SIZING_SOURCES = [
@@ -52,6 +60,11 @@ export function StrategiesPage() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [runtime, setRuntime] = useState<RuntimeOverview | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [controlBusy, setControlBusy] = useState<string | null>(null);
+
+  const runtimeByStrategy = runtime ? runtimeByStrategyId(runtime.strategies) : new Map();
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -93,6 +106,18 @@ export function StrategiesPage() {
     setLoading(false);
   }, []);
 
+  const loadRuntime = useCallback(async () => {
+    setRuntimeLoading(true);
+    try {
+      const overview = await api.get<RuntimeOverview>("/api/admin/runtime/overview");
+      setRuntime(overview);
+    } catch {
+      /* keep last snapshot; list endpoints may still work */
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }, []);
+
   const loadDetail = useCallback(async (strategyId: string) => {
     setDetailLoading(true);
     setError(null);
@@ -116,7 +141,10 @@ export function StrategiesPage() {
 
   useEffect(() => {
     void loadList();
-  }, [loadList]);
+    void loadRuntime();
+    const timer = window.setInterval(() => void loadRuntime(), 5000);
+    return () => window.clearInterval(timer);
+  }, [loadList, loadRuntime]);
 
   useEffect(() => {
     if (selectedId) {
@@ -170,15 +198,36 @@ export function StrategiesPage() {
   }
 
   async function startStrategy(strategyId: string) {
+    setControlBusy(strategyId);
     setMessage(null);
     setError(null);
     try {
       const result = await api.post<{ actor_id: string }>(
         `/api/admin/registry/strategies/${strategyId}/start`,
       );
-      setMessage(`Start command accepted for actor ${result.actor_id}`);
+      setMessage(`Start (resume) accepted for actor ${result.actor_id}`);
+      await loadRuntime();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Start failed");
+    } finally {
+      setControlBusy(null);
+    }
+  }
+
+  async function stopStrategy(strategyId: string) {
+    setControlBusy(strategyId);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await api.post<{ actor_id: string }>(
+        `/api/admin/registry/strategies/${strategyId}/stop`,
+      );
+      setMessage(`Stop (pause) accepted for actor ${result.actor_id}`);
+      await loadRuntime();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Stop failed");
+    } finally {
+      setControlBusy(null);
     }
   }
 
@@ -230,7 +279,8 @@ export function StrategiesPage() {
         <h1>Strategies</h1>
         <p>
           Bot instances, sizing ledger (physical account vs virtual capital pool), and linked
-          presets. Restart the worker after changes.
+          presets. <strong>Start / Stop</strong> sends resume / pause to a running worker; restart
+          the worker after registry or preset changes.
         </p>
         <EditModeNote mode="hybrid" />
       </header>
@@ -242,7 +292,17 @@ export function StrategiesPage() {
         <button type="button" className="btn" onClick={() => void loadList()}>
           Refresh
         </button>
+        <button type="button" className="btn" onClick={() => void loadRuntime()} disabled={runtimeLoading}>
+          {runtimeLoading ? "Refreshing live…" : "Refresh live status"}
+        </button>
       </div>
+
+      {runtime && !runtime.control.connected ? (
+        <div className="alert" style={{ borderColor: "var(--warning)", color: "var(--warning)" }}>
+          Worker runtime state not seen yet — start the worker and send a control command. Lease
+          heartbeats still show worker process liveness.
+        </div>
+      ) : null}
 
       {error ? <div className="alert alert-error">{error}</div> : null}
       {message ? <div className="alert alert-success">{message}</div> : null}
@@ -438,12 +498,17 @@ export function StrategiesPage() {
                 <th>Account</th>
                 <th>Preset</th>
                 <th>Sizing</th>
-                <th>Status</th>
+                <th>Registry</th>
+                <th>Trading</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {items.map((row) => (
+              {items.map((row) => {
+                const live = runtimeByStrategy.get(row.strategy_id);
+                const trading = live?.trading_status;
+                const busy = controlBusy === row.strategy_id;
+                return (
                 <tr
                   key={row.strategy_id}
                   className={selectedId === row.strategy_id ? "row-selected" : "row-clickable"}
@@ -460,7 +525,48 @@ export function StrategiesPage() {
                       : "physical"}
                   </td>
                   <td>{row.status}</td>
+                  <td>
+                    {trading ? (
+                      <span className={`status-badge ${tradingStatusClass(trading)}`}>
+                        {tradingStatusLabel(trading)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--text-muted)" }}>—</span>
+                    )}
+                  </td>
                   <td style={{ whiteSpace: "nowrap" }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={busy || !canStartTrading(trading)}
+                      title={
+                        canStartTrading(trading)
+                          ? "Resume trading (worker must be running)"
+                          : "Not resumable in current state"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void startStrategy(row.strategy_id);
+                      }}
+                    >
+                      Start
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || !canStopTrading(trading)}
+                      title={
+                        canStopTrading(trading)
+                          ? "Pause trading"
+                          : "Not running"
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void stopStrategy(row.strategy_id);
+                      }}
+                    >
+                      Stop
+                    </button>{" "}
                     <button
                       type="button"
                       className="btn"
@@ -483,10 +589,11 @@ export function StrategiesPage() {
                     </button>
                   </td>
                 </tr>
-              ))}
+              );
+              })}
               {!loading && items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ color: "var(--text-muted)" }}>
+                  <td colSpan={9} style={{ color: "var(--text-muted)" }}>
                     No strategies registered. Seed via registry or create one above.
                   </td>
                 </tr>
@@ -502,9 +609,19 @@ export function StrategiesPage() {
             <p className="loading">Loading detail…</p>
           ) : detail ? (
             <>
+              {(() => {
+                const live = runtimeByStrategy.get(detail.strategy_id);
+                const trading = live?.trading_status;
+                const busy = controlBusy === detail.strategy_id;
+                return (
               <div className="detail-panel-header">
                 <h3>{detail.strategy_id}</h3>
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                  {trading ? (
+                    <span className={`status-badge ${tradingStatusClass(trading)}`}>
+                      {tradingStatusLabel(trading)}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     className="btn"
@@ -515,12 +632,23 @@ export function StrategiesPage() {
                   <button
                     type="button"
                     className="btn btn-primary"
+                    disabled={busy || !canStartTrading(trading)}
                     onClick={() => void startStrategy(detail.strategy_id)}
                   >
                     Start
                   </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy || !canStopTrading(trading)}
+                    onClick={() => void stopStrategy(detail.strategy_id)}
+                  >
+                    Stop
+                  </button>
                 </div>
               </div>
+                );
+              })()}
 
               <dl className="detail-dl">
                 <dt>Actor</dt>
@@ -546,6 +674,21 @@ export function StrategiesPage() {
                 </dd>
                 <dt>Status</dt>
                 <dd>{detail.status}</dd>
+                <dt>Worker</dt>
+                <dd>
+                  {runtimeByStrategy.get(detail.strategy_id)?.worker_id ?? "—"}
+                  {runtimeByStrategy.get(detail.strategy_id)?.worker_live
+                    ? ` (${runtimeByStrategy.get(detail.strategy_id)?.worker_live})`
+                    : ""}
+                </dd>
+                <dt>Trading</dt>
+                <dd>
+                  {runtimeByStrategy.get(detail.strategy_id)?.trading_status
+                    ? tradingStatusLabel(
+                        runtimeByStrategy.get(detail.strategy_id)!.trading_status,
+                      )
+                    : "—"}
+                </dd>
                 <dt>Wallet</dt>
                 <dd>{detail.wallet_id ?? "—"}</dd>
                 <dt>Sizing</dt>

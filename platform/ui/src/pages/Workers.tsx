@@ -5,10 +5,12 @@ import {
   ApiError,
   api,
   type RegistryList,
+  type RuntimeOverview,
   type Strategy,
   type WorkerAssignment,
   type WorkerAssignmentUpsertPayload,
 } from "../api/client";
+import { workerLiveClass, workerLiveLabel } from "../lib/runtimeStatus";
 
 const STATUSES = ["active", "released", "expired"] as const;
 
@@ -55,6 +57,11 @@ export function WorkersPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [runtime, setRuntime] = useState<RuntimeOverview | null>(null);
+
+  const runtimeByAssignment = new Map(
+    (runtime?.workers ?? []).map((row) => [row.assignment_id, row]),
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,11 +80,24 @@ export function WorkersPage() {
     }
   }, []);
 
+  const loadRuntime = useCallback(async () => {
+    try {
+      const overview = await api.get<RuntimeOverview>("/api/admin/runtime/overview");
+      setRuntime(overview);
+    } catch {
+      /* keep last snapshot */
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 10000);
+    void loadRuntime();
+    const timer = window.setInterval(() => {
+      void loadRuntime();
+      void load();
+    }, 5000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, loadRuntime]);
 
   const selected = items.find((row) => row.assignment_id === selectedId) ?? null;
 
@@ -152,7 +172,10 @@ export function WorkersPage() {
     <>
       <header className="page-header">
         <h1>Workers</h1>
-        <p>Strategy worker lease assignments and heartbeats.</p>
+        <p>
+          Strategy worker lease assignments and heartbeats. Live status reflects lease renewal;
+          start the worker process separately (e.g. <code>run_local_stack</code>).
+        </p>
         <EditModeNote mode="form" />
       </header>
 
@@ -285,19 +308,33 @@ export function WorkersPage() {
               <th>Assignment</th>
               <th>Worker</th>
               <th>Strategies</th>
+              <th>Live</th>
               <th>Lease remaining (s)</th>
               <th>Last heartbeat</th>
-              <th>Status</th>
+              <th>Registry</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {items.map((row) => (
+            {items.map((row) => {
+              const live = runtimeByAssignment.get(row.assignment_id);
+              const leaseRemaining =
+                live !== undefined ? String(live.lease_remaining_s) : leaseRemainingSeconds(row.lease_expires_at);
+              return (
               <tr key={row.assignment_id}>
                 <td>{row.assignment_id}</td>
                 <td>{row.worker_id}</td>
                 <td>{row.strategy_ids.join(", ") || "—"}</td>
-                <td>{leaseRemainingSeconds(row.lease_expires_at)}</td>
+                <td>
+                  {live ? (
+                    <span className={`status-badge ${workerLiveClass(live.live)}`}>
+                      {workerLiveLabel(live.live)}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)" }}>—</span>
+                  )}
+                </td>
+                <td>{leaseRemaining}</td>
                 <td>{formatTime(row.heartbeat_at)}</td>
                 <td>{row.status}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
@@ -309,10 +346,11 @@ export function WorkersPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+            );
+            })}
             {!loading && items.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ color: "var(--text-muted)" }}>
+                <td colSpan={8} style={{ color: "var(--text-muted)" }}>
                   No worker assignments.
                 </td>
               </tr>
@@ -322,11 +360,21 @@ export function WorkersPage() {
       </div>
       {selected && !showForm ? (
         <section className="card" style={{ marginTop: "1rem" }}>
-          <h3>{selected.assignment_id}</h3>
+          <h3 style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            {selected.assignment_id}
+            {runtimeByAssignment.get(selected.assignment_id) ? (
+              <span
+                className={`status-badge ${workerLiveClass(runtimeByAssignment.get(selected.assignment_id)!.live)}`}
+              >
+                {workerLiveLabel(runtimeByAssignment.get(selected.assignment_id)!.live)}
+              </span>
+            ) : null}
+          </h3>
           <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
             Worker <code>{selected.worker_id}</code> · lease expires in{" "}
-            {leaseRemainingSeconds(selected.lease_expires_at)}s · last heartbeat{" "}
-            {formatTime(selected.heartbeat_at)}
+            {runtimeByAssignment.get(selected.assignment_id)?.lease_remaining_s ??
+              leaseRemainingSeconds(selected.lease_expires_at)}
+            s · last heartbeat {formatTime(selected.heartbeat_at)}
           </p>
           <JsonBlock value={selected} />
         </section>

@@ -349,11 +349,14 @@ def create_registry_router(
         }
         return JSONResponse(content=to_jsonable(payload))
 
-    @router.post("/strategies/{strategy_id}/start")
-    async def start_strategy(
+    async def _publish_strategy_control(
+        *,
         strategy_id: str,
-        user: str = Depends(require_auth),
-        store: RegistryStore = Depends(_store),
+        command: str,
+        audit_command: str,
+        reason: str,
+        user: str,
+        store: RegistryStore,
     ) -> dict[str, Any]:
         try:
             strategy = store.get_strategy(strategy_id)
@@ -364,19 +367,49 @@ def create_registry_router(
             "type": "AdminCommand",
             "command_id": command_id,
             "user_id": user,
-            "command": "resume",
+            "command": command,
             "actor_id": strategy.actor_id,
             "exchange": strategy.quoting_exchange,
-            "enabled": True,
-            "reason": f"registry start for strategy {strategy_id}",
+            "enabled": command == "resume",
+            "reason": reason,
             "payload": {"strategy_id": strategy_id},
             "timestamp_ms": int(time.time() * 1000),
         }
         if bus is None:
             raise HTTPException(status_code=503, detail="admin bus is not configured")
         await bus.publish("admin:commands", event)
-        _audit(user, "registry.strategy.start", "accepted", event)
+        _audit(user, audit_command, "accepted", event)
         return {"status": "accepted", "command_id": command_id, "actor_id": strategy.actor_id}
+
+    @router.post("/strategies/{strategy_id}/start")
+    async def start_strategy(
+        strategy_id: str,
+        user: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        return await _publish_strategy_control(
+            strategy_id=strategy_id,
+            command="resume",
+            audit_command="registry.strategy.start",
+            reason=f"registry start for strategy {strategy_id}",
+            user=user,
+            store=store,
+        )
+
+    @router.post("/strategies/{strategy_id}/stop")
+    async def stop_strategy(
+        strategy_id: str,
+        user: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        return await _publish_strategy_control(
+            strategy_id=strategy_id,
+            command="pause",
+            audit_command="registry.strategy.stop",
+            reason=f"registry stop for strategy {strategy_id}",
+            user=user,
+            store=store,
+        )
 
     @router.get("/allocations")
     async def list_allocations(
