@@ -1,4 +1,4 @@
-"""Portfolio allocation tracking and enforcement via virtual strategy wallets."""
+"""Per-strategy virtual ledgers backed by registry wallet allocations."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding
+from mm.core.models.ledger import JointLedgerSnapshot
 from mm.observability import counter_inc, gauge, log_event
 from mm.observability import schema as obs_schema
-from mm.portfolio.limits import AllocationCaps, wallet_initial_caps
-from mm.portfolio.wallet import StrategyWallet
+from mm.portfolio.wallet import StrategyWallet, joint_ledger_with_virtual_local
 from mm.registry.models import AllocationRecord
 from mm.runtime.control import RuntimeControlPlane
 
@@ -37,10 +37,6 @@ class ActorWalletTracker:
         assert self.wallet is not None
         self.wallet.refresh_open_order_locks(order_managers)
 
-    def caps(self) -> AllocationCaps:
-        assert self.wallet is not None
-        return wallet_initial_caps(self.wallet)
-
     def breach_reasons(self) -> tuple[str, ...]:
         if self.record.status != "active":
             return ()
@@ -51,7 +47,7 @@ class ActorWalletTracker:
         assert self.wallet is not None
         wallet_view = self.wallet.as_dict()
         return {
-            "type": "PortfolioAllocationSnapshot",
+            "type": "VirtualLedgerSnapshot",
             "allocation_id": self.record.allocation_id,
             "strategy_id": self.record.strategy_id,
             "actor_id": self.record.actor_id,
@@ -69,12 +65,12 @@ class ActorWalletTracker:
         }
 
 
-# Backward-compatible alias for tests and imports.
+# Backward-compatible alias.
 ActorAllocationTracker = ActorWalletTracker
 
 
-class PortfolioAllocationService:
-    """Track per-actor virtual wallets, publish portfolio views, and enforce halts."""
+class VirtualLedgerService:
+    """Maintain per-actor virtual ledgers, publish snapshots, and enforce halts."""
 
     def __init__(
         self,
@@ -112,9 +108,17 @@ class PortfolioAllocationService:
         tracker.refresh_open_order_locks(self.order_managers)
         return tracker.wallet
 
-    def caps_for(self, actor_id: str) -> AllocationCaps | None:
-        tracker = self._trackers.get(actor_id.strip())
-        return tracker.caps() if tracker is not None else None
+    def joint_ledger_for(
+        self,
+        actor_id: str,
+        physical_ledger: JointLedgerSnapshot,
+    ) -> JointLedgerSnapshot:
+        """Strategy ledger: virtual local balances with physical global + freshness."""
+
+        wallet = self.wallet_for(actor_id)
+        if wallet is None:
+            return physical_ledger
+        return joint_ledger_with_virtual_local(physical_ledger, wallet)
 
     def allocation_for(self, actor_id: str) -> AllocationRecord | None:
         tracker = self._trackers.get(actor_id.strip())
@@ -165,7 +169,7 @@ class PortfolioAllocationService:
         await self.bus.publish(
             "portfolio:allocations",
             {
-                "type": "PortfolioAllocationView",
+                "type": "VirtualLedgerView",
                 "actors": portfolio,
                 "timestamp_ms": int(time.time() * 1000),
             },
@@ -234,3 +238,7 @@ class PortfolioAllocationService:
             labels=labels,
             help="Wallet quote PnL vs initial allocation",
         )
+
+
+# Backward-compatible alias for existing imports.
+PortfolioAllocationService = VirtualLedgerService

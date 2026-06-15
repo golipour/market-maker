@@ -10,7 +10,7 @@ from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.env_loader import load_mm_env
 from mm.observability import configure_observability, log_event
-from mm.portfolio.allocation_service import PortfolioAllocationService
+from mm.portfolio.virtual_ledger_service import VirtualLedgerService
 from mm.registry.memory import RegistryNotFoundError
 from mm.registry.models import AllocationRecord, WorkerAssignmentRecord
 from mm.registry.runtime_config import runtime_config_from_registry
@@ -43,7 +43,7 @@ class WorkerComponents:
     slots: tuple[StrategySlot, ...] = ()
     supervisors: tuple[StrategySupervisor, ...] = ()
     control_plane: RuntimeControlPlane | None = None
-    allocation_service: PortfolioAllocationService | None = None
+    virtual_ledger_service: VirtualLedgerService | None = None
     build_options: RuntimeBuildOptions = field(default_factory=RuntimeBuildOptions.for_mode)
     _heartbeat_task: asyncio.Task | None = None
     _started: bool = False
@@ -53,8 +53,8 @@ class WorkerComponents:
             return
         if self.control_plane is not None:
             await self.control_plane.start()
-        if self.allocation_service is not None:
-            await self.allocation_service.start()
+        if self.virtual_ledger_service is not None:
+            await self.virtual_ledger_service.start()
         await self.account_pool.start()
         for supervisor in self.supervisors:
             await supervisor.start()
@@ -68,8 +68,8 @@ class WorkerComponents:
             self._heartbeat_task = None
         for supervisor in reversed(self.supervisors):
             await supervisor.stop()
-        if self.allocation_service is not None:
-            await self.allocation_service.stop()
+        if self.virtual_ledger_service is not None:
+            await self.virtual_ledger_service.stop()
         await self.account_pool.stop()
         if self.control_plane is not None:
             await self.control_plane.stop()
@@ -215,9 +215,9 @@ async def build_worker_components(
         for item in strategies
         if item.config.controller is not None
     }
-    allocation_service: PortfolioAllocationService | None = None
+    virtual_ledger_service: VirtualLedgerService | None = None
     if allocations:
-        allocation_service = PortfolioAllocationService(
+        virtual_ledger_service = VirtualLedgerService(
             bus=runtime_bus,
             allocations=allocations,
             bindings=bindings,
@@ -233,7 +233,7 @@ async def build_worker_components(
             bus=runtime_bus,
             account_pool=account_pool,
             control_plane=control_plane,
-            allocation_service=allocation_service,
+            virtual_ledger_service=virtual_ledger_service,
         )
         for item in strategies
     )
@@ -274,6 +274,6 @@ async def build_worker_components(
         slots=slots,
         supervisors=supervisors,
         control_plane=control_plane,
-        allocation_service=allocation_service,
+        virtual_ledger_service=virtual_ledger_service,
         build_options=options,
     )

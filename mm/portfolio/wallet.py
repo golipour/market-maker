@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping
 
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding
-from mm.core.models.ledger import VenueLedger
+from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.private import OpenOrder
 from mm.core.wallet import make_balance, order_collateral_from_open_orders
 from mm.registry.models import AllocationRecord
@@ -170,3 +170,20 @@ def venue_ledger_from_strategy_wallet(
         last_private_event_ms=timestamp_ms,
         last_snapshot_ms=timestamp_ms,
     )
+
+
+def joint_ledger_with_virtual_local(
+    joint: JointLedgerSnapshot,
+    wallet: StrategyWallet,
+) -> JointLedgerSnapshot:
+    """Return a joint ledger whose local venue uses the strategy virtual wallet.
+
+    Live orders are taken from the physical ledger so locks stay aligned with the
+    shared order manager; only this actor's orders are included in the virtual view.
+    """
+
+    virtual_local = venue_ledger_from_strategy_wallet(
+        wallet,
+        live_orders=joint.local.live_orders,
+    )
+    return replace(joint, local=virtual_local)

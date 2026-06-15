@@ -203,6 +203,7 @@ class DecisionContext:
     run_id: str = ""
     binding: SymbolBinding | None = None
     ledger: JointLedgerSnapshot | None = None
+    physical_ledger: JointLedgerSnapshot | None = None
     frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 

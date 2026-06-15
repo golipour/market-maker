@@ -33,7 +33,7 @@ from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
 from mm.risk.net_delta import NetDeltaRiskEngine, target_book_result_to_risk_result
-from mm.portfolio.wallet import StrategyWallet
+from mm.portfolio.wallet import StrategyWallet, joint_ledger_with_virtual_local
 from mm.runtime.config import (
     ControllerRuntimeConfig,
     ExecutionRuntimeConfig,
@@ -173,22 +173,25 @@ class StrategyRunner:
         self._sync_control_plane_to_risk()
 
         clean_started = time.monotonic_ns()
-        ledger = joint_frame.ledger
-        open_orders = _live_orders_from_ledger(ledger)
-        clean_frame = clean_strategy_frame(frame, open_orders)
+        physical_ledger = joint_frame.ledger
         wallet = self.strategy_wallet_provider() if self.strategy_wallet_provider is not None else None
         if wallet is not None:
+            strategy_ledger = joint_ledger_with_virtual_local(physical_ledger, wallet)
+            open_orders = _live_orders_from_ledger(strategy_ledger)
             trading_state = trading_state_from_wallet(
                 wallet,
                 actor_id=self.config.actor_id,
                 open_orders=open_orders,
             )
         else:
+            strategy_ledger = physical_ledger
+            open_orders = _live_orders_from_ledger(physical_ledger)
             trading_state = trading_state_from_ledger(
-                ledger,
+                physical_ledger,
                 actor_id=self.config.actor_id,
                 open_orders=open_orders,
             )
+        clean_frame = clean_strategy_frame(frame, open_orders)
 
         ctx = DecisionContext(
             config=self.config,
@@ -198,7 +201,8 @@ class StrategyRunner:
             frame_step=self._frame_step,
             run_id=self.run_id,
             binding=self.binding,
-            ledger=ledger,
+            ledger=strategy_ledger,
+            physical_ledger=physical_ledger,
             frame_sync_status=joint_frame.sync_status.as_payload(),
         )
         ctx.record_stage_latency("clean", _elapsed_ms(clean_started))
@@ -207,7 +211,7 @@ class StrategyRunner:
         try:
             decide_started = time.monotonic_ns()
             try:
-                self._engine.set_ledger_context(ledger)
+                self._engine.set_ledger_context(strategy_ledger)
                 decision = await self._decide_with_timeout(clean_frame, frame_step=self._frame_step)
                 decision = _with_decision_lineage(decision, lineage)
                 ctx.record_decision(decision)
@@ -267,7 +271,7 @@ class StrategyRunner:
             if isinstance(self.risk_engine, NetDeltaRiskEngine):
                 target_risk_result = self.risk_engine.validate_target_book_with_result(
                     decision.joint_target_book,
-                    ledger,
+                    strategy_ledger,
                     clean_frame,
                     live_execution=live_execution,
                     global_live_execution=global_live_execution,

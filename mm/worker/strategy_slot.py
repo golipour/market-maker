@@ -11,7 +11,7 @@ from mm.bus.base import AbstractEventBus
 from mm.core.topics import RuntimeTopics
 from mm.ledger.service import PortfolioLedgerService, build_portfolio_ledger_service
 from mm.runtime.config import MarketMakerRuntimeConfig
-from mm.portfolio.allocation_service import PortfolioAllocationService
+from mm.portfolio.virtual_ledger_service import VirtualLedgerService
 from mm.runtime.control import RuntimeControlPlane
 
 from mm.worker.account_pool import SharedAccountPool
@@ -61,7 +61,7 @@ def build_strategy_slot(
     bus: AbstractEventBus,
     account_pool: SharedAccountPool,
     control_plane: RuntimeControlPlane,
-    allocation_service: PortfolioAllocationService | None = None,
+    virtual_ledger_service: VirtualLedgerService | None = None,
 ) -> StrategySlot:
     if config.controller is None or not config.controller.enabled:
         return StrategySlot(strategy_id=strategy_id, account_id=account_id, config=config)
@@ -96,12 +96,10 @@ def build_strategy_slot(
         max_global_private_age_ms=max_global_private_age_ms,
     )
     actor_id = config.controller.actor_id
-    allocation = allocation_service.allocation_for(actor_id) if allocation_service is not None else None
+    allocation = virtual_ledger_service.allocation_for(actor_id) if virtual_ledger_service is not None else None
     strategy_wallet_provider = None
-    allocation_caps_provider = None
-    if allocation_service is not None:
-        strategy_wallet_provider = lambda actor_id=actor_id: allocation_service.wallet_for(actor_id)
-        allocation_caps_provider = lambda actor_id=actor_id: allocation_service.caps_for(actor_id)
+    if virtual_ledger_service is not None:
+        strategy_wallet_provider = lambda actor_id=actor_id: virtual_ledger_service.wallet_for(actor_id)
     strategy_runner = build_strategy_runner(
         config,
         bus=bus,
@@ -109,7 +107,6 @@ def build_strategy_slot(
         order_managers=account_pool.order_managers,
         control_plane=control_plane,
         allocation=allocation,
-        allocation_caps_provider=allocation_caps_provider,
         strategy_wallet_provider=strategy_wallet_provider,
     )
     return StrategySlot(

@@ -1,5 +1,8 @@
-"""Portfolio allocation and capital attribution."""
+"""Portfolio virtual ledgers and capital attribution."""
 
-from mm.portfolio.allocation_service import PortfolioAllocationService
+from mm.portfolio.virtual_ledger_service import VirtualLedgerService
 
-__all__ = ["PortfolioAllocationService"]
+# Backward-compatible alias.
+PortfolioAllocationService = VirtualLedgerService
+
+__all__ = ["VirtualLedgerService", "PortfolioAllocationService"]

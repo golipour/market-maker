@@ -20,8 +20,7 @@ from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.core.wallet import order_collateral_from_open_orders, reported_wallet_total
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
-from mm.portfolio.limits import AllocationCaps, wallet_initial_caps
-from mm.portfolio.wallet import StrategyWallet, venue_ledger_from_strategy_wallet
+from mm.portfolio.limits import AllocationCaps
 from mm.risk.engine import RiskLimits, _proposed_order_count
 from mm.risk.models import TargetBookRiskResult, VenueTransitionExposure
 from mm.runtime.config import LiquiditySourcingRuntimeConfig
@@ -263,24 +262,19 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         gauge("mm_kill_switch_state", 1.0 if self.kill_switch else 0.0)
 
     def _allocation_caps_for(self, actor_id: str) -> AllocationCaps | None:
+        # Virtual ledger balances are enforced via ledger feasibility checks.
+        # Risk policy limits (min_cash, max_inventory, etc.) remain separate.
         if self.strategy_wallet_provider is not None:
             wallet = self.strategy_wallet_provider()
             if wallet is not None:
-                return wallet_initial_caps(wallet)
+                return None
         if self.allocation_caps_provider is None:
             return None
         return self.allocation_caps_provider()
 
     def _local_ledger_for_risk(self, ledger: JointLedgerSnapshot) -> VenueLedger:
-        if self.strategy_wallet_provider is None:
-            return ledger.local
-        wallet = self.strategy_wallet_provider()
-        if wallet is None:
-            return ledger.local
-        return venue_ledger_from_strategy_wallet(
-            wallet,
-            live_orders=ledger.local.live_orders,
-        )
+        # Strategy runner passes a joint ledger whose local venue is already virtual.
+        return ledger.local
 
     def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         return self.validate_with_result(actions, state, event).approved_list

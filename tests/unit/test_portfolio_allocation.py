@@ -6,12 +6,13 @@ from mm.bus.memory import InMemoryBus
 from mm.core.models.execution import Fill
 from mm.core.risk_limits import VenueRiskLimits
 from mm.core.models.target_book import TargetOrder, VenueTargetBook
-from mm.portfolio.allocation_service import ActorWalletTracker, PortfolioAllocationService
+from mm.portfolio.virtual_ledger_service import ActorWalletTracker, VirtualLedgerService
 from mm.portfolio.limits import merge_allocation_into_venue_limits
-from mm.portfolio.wallet import StrategyWallet, venue_ledger_from_strategy_wallet
+from mm.portfolio.wallet import StrategyWallet, joint_ledger_with_virtual_local, venue_ledger_from_strategy_wallet
 from mm.registry.memory import MemoryRegistryStore
 from mm.registry.models import AllocationRecord
 from mm.risk.net_delta import evaluate_venue_target_transition
+from mm.core.models.strategy import StrategyInputFrame
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
 from mm.worker.worker import build_worker_components
@@ -121,7 +122,7 @@ async def test_portfolio_allocation_service_halts_actor_on_wallet_breach(monkeyp
     tracker = ActorWalletTracker(record=record, binding=config.binding)
     assert tracker.wallet is not None
     tracker.wallet.held_quote = -1.0
-    service = PortfolioAllocationService(
+    service = VirtualLedgerService(
         bus=bus,
         allocations=(record,),
         bindings={record.actor_id: config.binding},
@@ -172,9 +173,145 @@ async def test_worker_loads_allocations_from_registry(monkeypatch: pytest.Monkey
         store=store,
         bus=InMemoryBus(),
     )
-    assert worker.allocation_service is not None
-    assert len(worker.allocation_service._trackers) == 2
-    wallet = worker.allocation_service.wallet_for("btc-maker-actor")
+    assert worker.virtual_ledger_service is not None
+    assert len(worker.virtual_ledger_service._trackers) == 2
+    wallet = worker.virtual_ledger_service.wallet_for("btc-maker-actor")
     assert wallet is not None
     assert wallet.initial_base == 2.0
     assert wallet.held_base == 2.0
+
+
+def test_joint_ledger_with_virtual_local_uses_wallet_not_physical_balances() -> None:
+    from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
+    from mm.core.wallet import make_balance
+
+    physical = VenueLedger(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        available_base=100.0,
+        available_quote=50_000_000.0,
+        locked_base=0.0,
+        locked_quote=0.0,
+        balances={
+            "BTC": make_balance("nobitex", "BTC", 100.0, 0.0, 1),
+            "IRT": make_balance("nobitex", "IRT", 50_000_000.0, 0.0, 1),
+        },
+    )
+    joint = JointLedgerSnapshot(local=physical)
+    wallet = StrategyWallet(
+        actor_id="btc-maker-actor",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        initial_base=1.0,
+        initial_quote=1_000_000.0,
+        held_base=1.0,
+        held_quote=1_000_000.0,
+    )
+    virtual_joint = joint_ledger_with_virtual_local(joint, wallet)
+    assert virtual_joint.local.available_base == pytest.approx(1.0)
+    assert virtual_joint.local.available_quote == pytest.approx(1_000_000.0)
+
+
+def test_mpc_state_from_frame_uses_virtual_ledger_balances() -> None:
+    from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+    from mm.core.wallet import make_balance
+    from mm.strategies.mpc_engine import _state_from_frame
+
+    physical = VenueLedger(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        available_base=100.0,
+        available_quote=50_000_000.0,
+        balances={
+            "BTC": make_balance("nobitex", "BTC", 100.0, 0.0, 1),
+            "IRT": make_balance("nobitex", "IRT", 50_000_000.0, 0.0, 1),
+        },
+        last_snapshot_ms=1,
+    )
+    wallet = StrategyWallet(
+        actor_id="btc-maker-actor",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        initial_base=2.0,
+        initial_quote=500_000.0,
+        held_base=2.0,
+        held_quote=500_000.0,
+    )
+    ledger = joint_ledger_with_virtual_local(JointLedgerSnapshot(local=physical), wallet)
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        controller=ControllerRuntimeConfig(enabled=True, actor_id="btc-maker-actor"),
+    )
+    frame = StrategyInputFrame(
+        local=MarketEvent(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            interval_ms=10_000,
+            t_start_ms=0,
+            t_end_ms=10_000,
+            orderbook=RawOrderbook(
+                exchange="nobitex",
+                symbol="BTC_IRT",
+                timestamp_ms=10_000,
+                bids=(PriceLevel(100.0, 1.0),),
+                asks=(PriceLevel(101.0, 1.0),),
+                is_snapshot=True,
+            ),
+            trades=(),
+            buy_volume=0.0,
+            sell_volume=0.0,
+            vwap=100.5,
+            imbalance=0.0,
+            microprice=100.5,
+        ),
+    )
+    state = _state_from_frame(
+        frame,
+        config.binding,
+        spread_max=200.0,
+        ledger=ledger,
+    )
+    assert state.inventory == pytest.approx(2.0)
+    assert state.cash == pytest.approx(500_000.0)
+
+
+def test_risk_rejects_on_virtual_ledger_without_allocation_cap_double_count() -> None:
+    wallet = StrategyWallet(
+        actor_id="btc-maker-actor",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        initial_base=0.0,
+        initial_quote=50.0,
+        held_base=0.0,
+        held_quote=50.0,
+    )
+    ledger = venue_ledger_from_strategy_wallet(wallet)
+    target = VenueTargetBook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="btc-maker-actor",
+        orders=(
+            TargetOrder(exchange="nobitex", symbol="BTC_IRT", side="buy", price=100.0, qty=1.0),
+        ),
+        policy="merge",
+    )
+    ok, reasons, _ = evaluate_venue_target_transition(
+        ledger=ledger,
+        target=target,
+        limits=VenueRiskLimits(),
+        allocation=None,
+    )
+    assert not ok
+    assert "insufficient_quote_for_bid_orders" in reasons
+    assert "allocation_quote_exceeded" not in reasons
