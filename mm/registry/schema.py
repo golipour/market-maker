@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS registry_strategies (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS registry_strategies_account_idx ON registry_strategies (account_id);
-CREATE INDEX IF NOT EXISTS registry_strategies_wallet_idx ON registry_strategies (wallet_id);
 CREATE INDEX IF NOT EXISTS registry_strategies_preset_idx ON registry_strategies (preset_id);
 CREATE INDEX IF NOT EXISTS registry_strategies_status_idx ON registry_strategies (status);
 

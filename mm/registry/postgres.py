@@ -36,6 +36,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
     def ensure_schema(self) -> None:
         with self._connection() as conn:
             with conn.cursor() as cur:
+                # Base tables/indexes first; migrations add columns on existing DBs.
                 cur.execute(REGISTRY_DDL)
                 cur.execute(REGISTRY_MIGRATIONS)
                 cur.execute(
