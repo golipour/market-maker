@@ -73,6 +73,7 @@ def _panel(
     unit: str = "short",
     decimals: int = 3,
     legend: str | None = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
     field_defaults: dict[str, Any] = {"unit": unit, "decimals": decimals}
     if panel_type == "stat":
@@ -93,6 +94,8 @@ def _panel(
         "title": title,
         "type": panel_type,
     }
+    if description:
+        panel["description"] = description
     if panel_type == "timeseries":
         panel["options"] = {
             "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
@@ -532,6 +535,33 @@ def _custom_var(name: str, label: str, query: str) -> dict[str, Any]:
         "name": name,
         "options": [{"selected": i == 0, "text": item, "value": item} for i, item in enumerate(query.split(","))],
         "query": query,
+        "type": "custom",
+    }
+
+
+def _custom_var_multi(
+    name: str,
+    label: str,
+    query: str,
+    *,
+    default: str | None = None,
+) -> dict[str, Any]:
+    items = [item.strip() for item in query.split(",") if item.strip()]
+    selected = [item.strip() for item in (default or query).split(",") if item.strip()]
+    all_selected = len(selected) == len(items)
+    return {
+        "current": {
+            "selected": True,
+            "text": ["All"] if all_selected else selected,
+            "value": ["$__all"] if all_selected else selected,
+        },
+        "hide": 0,
+        "includeAll": True,
+        "label": label,
+        "multi": True,
+        "name": name,
+        "options": [{"selected": all_selected or item in selected, "text": item, "value": item} for item in items],
+        "query": ",".join(items),
         "type": "custom",
     }
 
@@ -3171,26 +3201,94 @@ def runtime_overview() -> dict[str, Any]:
     return _dashboard("mm-obs-v2-runtime-overview", "MM Observability v2 / 00 Runtime Overview", panels, tags=["runtime"])
 
 
+def _raw_feed_metrics_guide_markdown() -> str:
+    return """### Raw feed metrics (ingestor Prometheus, pre-aggregation)
+
+These panels track **raw** orderbook/trade payloads as they arrive at the ingestor (`market:raw:*` topics), **before** interval `MarketEvent` aggregation. Each series is labeled by `exchange`, `symbol`, and `kind` (`orderbook` or `trade`).
+
+| Panel | What it measures | How to read it |
+|-------|----------------|----------------|
+| **Raw feed freshness ms** | `now − latest_event_timestamp_ms` at scrape time | **Staleness of the last seen upstream timestamp.** Flat and low → feed is updating. **Steadily climbing** while the market is open → no new raw events (stuck poll, dead WS, or ingestor not subscribed). Between REST polls this naturally ramps up until the next snapshot resets it. |
+| **Raw receive lag latest ms** | `wall_clock_at_receive − event.timestamp_ms` on the **last** raw event | **Exchange-timestamp vs when we received it.** Captures API latency, network delay, and clock skew. Spikes on each REST poll are normal; a persistently high floor suggests slow venue responses or timestamp drift. Updates only when a new raw event arrives. |
+| **Raw event gap latest ms** | `current_event.timestamp_ms − previous_event.timestamp_ms` (per exchange/symbol/kind) | **Spacing between consecutive upstream timestamps.** For REST orderbooks, expect gaps ≈ `poll_interval_ms`. For trades, smaller irregular gaps during active tape; **sudden jumps** can mean missed polls or an API gap. Does not measure wall-clock silence by itself. |
+
+**Healthy patterns:** freshness rises and falls with your poll cadence; receive lag stays within a stable band; orderbook gaps track `poll_interval_ms` from the market-feed config.
+
+**Warning signs:** freshness monotonically increasing for minutes; receive lag far above poll interval + network budget; orderbook gaps many multiples of `poll_interval_ms` without an explanation (outage, rate limit, feed disabled)."""
+
+
 def market_data_quality() -> dict[str, Any]:
     panels = [
         _text(
             1,
             "Scope",
-            "Raw feed health from Prometheus; prices/volumes from persisted `MarketEvent` rows. "
-            "`best_bid`/`best_ask` are top-of-book (L1). "
-            "`buy_vwap`/`sell_vwap` walk the stored orderbook snapshot up to `min(total_bid_qty, total_ask_qty)` base units "
-            "(levels fetched per feed `depth_limit`). "
-            "`trade_vwap` is the interval trade VWAP over `[t_start_ms, t_end_ms]` and is omitted when no trades fired.",
+            "Per-exchange prices/volumes from persisted `MarketEvent` rows (post-aggregation). "
+            "Raw ingest health is covered below and in the three Prometheus panels. "
+            "Use **Price series** / **Volume series** to toggle bid, ask, VWAP, and volume lines.",
             y=0,
         ),
-        _panel(2, "Market events / step", "timeseries", PG_DS, _market_event_step_sql(), x=0, y=3, w=6, unit="ops"),
-        _panel(3, "Raw feed freshness ms", "timeseries", PROM_DS, '(time() * 1000) - max by (exchange,symbol,kind)(mm_raw_market_event_timestamp_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=6, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
-        _panel(4, "Raw receive lag latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=12, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
-        _panel(5, "Raw event gap latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_event_gap_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=18, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
-        _panel(6, "Best bid / ask / VWAP by exchange", "timeseries", PG_DS, _exchange_price_vwap_sql(), x=0, y=11, w=24),
-        _panel(8, "Buy / sell volume by exchange", "timeseries", PG_DS, _exchange_volume_sql(), x=0, y=19, w=24),
+        _text(2, "Raw feed metrics guide", _raw_feed_metrics_guide_markdown(), y=3, h=9),
+        _panel(
+            3,
+            "Raw feed freshness ms",
+            "timeseries",
+            PROM_DS,
+            '(time() * 1000) - max by (exchange,symbol,kind)(mm_raw_market_event_timestamp_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})',
+            x=0,
+            y=12,
+            w=8,
+            unit="ms",
+            legend="{{exchange}} {{kind}}",
+            description="Staleness of the latest upstream `timestamp_ms` at scrape time. Rises between polls; climbing without resets means the feed stopped updating.",
+        ),
+        _panel(
+            4,
+            "Raw receive lag latest ms",
+            "timeseries",
+            PROM_DS,
+            'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})',
+            x=8,
+            y=12,
+            w=8,
+            unit="ms",
+            legend="{{exchange}} {{kind}}",
+            description="Wall-clock lag recorded when the last raw event arrived: `receive_time − event.timestamp_ms`. Reflects API/network latency and clock skew.",
+        ),
+        _panel(
+            5,
+            "Raw event gap latest ms",
+            "timeseries",
+            PROM_DS,
+            'max by (exchange,symbol,kind)(mm_raw_market_event_gap_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})',
+            x=16,
+            y=12,
+            w=8,
+            unit="ms",
+            legend="{{exchange}} {{kind}}",
+            description="Timestamp delta between the last two raw events for the same exchange/symbol/kind. Orderbook gaps should track `poll_interval_ms`.",
+        ),
+        _panel(6, "Best bid / ask / VWAP by exchange", "timeseries", PG_DS, _exchange_price_vwap_sql(), x=0, y=20, w=24),
+        _panel(8, "Buy / sell volume by exchange", "timeseries", PG_DS, _exchange_volume_sql(), x=0, y=28, w=24),
     ]
-    return _dashboard("mm-obs-v2-market-data", "MM Observability v2 / 01 Market Data Quality", panels, tags=["market-data"])
+    return _dashboard(
+        "mm-obs-v2-market-data",
+        "MM Observability v2 / 01 Market Data Quality",
+        panels,
+        tags=["market-data"],
+        extra_templating=[
+            _custom_var_multi(
+                "price_series",
+                "Price series",
+                "best_bid,best_ask,buy_vwap,sell_vwap,trade_vwap",
+                default="best_bid,best_ask,buy_vwap,sell_vwap",
+            ),
+            _custom_var_multi(
+                "volume_series",
+                "Volume series",
+                "buy_volume,sell_volume",
+            ),
+        ],
+    )
 
 
 def orderbook_depth() -> dict[str, Any]:
@@ -4207,35 +4305,35 @@ def _exchange_price_vwap_sql() -> str:
   AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
   AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
   AND $__timeFilter(ts)"""
-    return f"""SELECT ts AS "time", (exchange || ' best_bid') AS metric,
-       {best_bid} AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
-UNION ALL
-SELECT ts AS "time", (exchange || ' best_ask') AS metric,
-       {best_ask} AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
-UNION ALL
-SELECT ts AS "time", (exchange || ' buy_vwap') AS metric,
-       NULLIF({book_buy_vwap}, 0.0) AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->>'book_buy_vwap') IS NOT NULL
-UNION ALL
-SELECT ts AS "time", (exchange || ' sell_vwap') AS metric,
-       NULLIF({book_sell_vwap}, 0.0) AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->>'book_sell_vwap') IS NOT NULL
-UNION ALL
-SELECT ts AS "time", (exchange || ' trade_vwap') AS metric,
-       {trade_vwap} AS value
-FROM mm_events
-WHERE {filters}
-  AND NULLIF(payload->>'vwap', '0') IS NOT NULL
+    return f"""WITH all_series AS (
+  SELECT ts AS "time", (exchange || ' best_bid') AS metric, {best_bid} AS value, 'best_bid'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
+  UNION ALL
+  SELECT ts AS "time", (exchange || ' best_ask') AS metric, {best_ask} AS value, 'best_ask'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
+  UNION ALL
+  SELECT ts AS "time", (exchange || ' buy_vwap') AS metric, NULLIF({book_buy_vwap}, 0.0) AS value, 'buy_vwap'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->>'book_buy_vwap') IS NOT NULL
+  UNION ALL
+  SELECT ts AS "time", (exchange || ' sell_vwap') AS metric, NULLIF({book_sell_vwap}, 0.0) AS value, 'sell_vwap'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->>'book_sell_vwap') IS NOT NULL
+  UNION ALL
+  SELECT ts AS "time", (exchange || ' trade_vwap') AS metric, {trade_vwap} AS value, 'trade_vwap'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND NULLIF(payload->>'vwap', '0') IS NOT NULL
+)
+SELECT "time", metric, value
+FROM all_series
+WHERE series = ANY(ARRAY[${{price_series:sqlstring}}]::text[])
 ORDER BY 1"""
 
 
@@ -4246,17 +4344,20 @@ def _exchange_volume_sql() -> str:
   AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
   AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
   AND $__timeFilter(ts)"""
-    return f"""SELECT ts AS "time", (exchange || ' buy_volume') AS metric,
-       {buy_volume} AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->>'buy_volume') IS NOT NULL
-UNION ALL
-SELECT ts AS "time", (exchange || ' sell_volume') AS metric,
-       {sell_volume} AS value
-FROM mm_events
-WHERE {filters}
-  AND (payload->>'sell_volume') IS NOT NULL
+    return f"""WITH all_series AS (
+  SELECT ts AS "time", (exchange || ' buy_volume') AS metric, {buy_volume} AS value, 'buy_volume'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->>'buy_volume') IS NOT NULL
+  UNION ALL
+  SELECT ts AS "time", (exchange || ' sell_volume') AS metric, {sell_volume} AS value, 'sell_volume'::text AS series
+  FROM mm_events
+  WHERE {filters}
+    AND (payload->>'sell_volume') IS NOT NULL
+)
+SELECT "time", metric, value
+FROM all_series
+WHERE series = ANY(ARRAY[${{volume_series:sqlstring}}]::text[])
 ORDER BY 1"""
 
 

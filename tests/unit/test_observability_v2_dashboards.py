@@ -42,14 +42,27 @@ def test_market_data_quality_uses_per_exchange_market_events() -> None:
     assert "exchange || ' sell_vwap'" in price_sql
     assert "exchange || ' trade_vwap'" in price_sql
     assert "NULLIF(payload->>'vwap', '0')" in price_sql
+    assert "price_series:sqlstring" in price_sql
 
     volume_sql = panels_by_title["Buy / sell volume by exchange"]["targets"][0]["rawSql"]
     assert "role_exchange" not in volume_sql
     assert "exchange || ' buy_volume'" in volume_sql
+    assert "volume_series:sqlstring" in volume_sql
 
-    step_sql = panels_by_title["Market events / step"]["targets"][0]["rawSql"]
-    assert "event_type = 'MarketEvent'" in step_sql
-    assert "StrategyDecision" not in step_sql
+    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
+    assert templating["price_series"]["multi"] is True
+    assert "trade_vwap" in templating["price_series"]["query"]
+    assert templating["price_series"]["current"]["value"] == [
+        "best_bid",
+        "best_ask",
+        "buy_vwap",
+        "sell_vwap",
+    ]
+
+    assert "Market events / step" not in panels_by_title
+    assert "Raw feed metrics guide" in panels_by_title
+    freshness = panels_by_title["Raw feed freshness ms"]
+    assert freshness.get("description")
 
 
 def test_event_rate_panels_emit_zero_filled_series() -> None:
@@ -74,7 +87,6 @@ def test_event_rate_panels_emit_zero_filled_series() -> None:
         "Filled qty / step (private feed)",
         "Execution live orders / step (latest snapshot)",
         "Execution live qty / step (latest snapshot)",
-        "Market events / step",
         "Warnings / step",
         "Order flow / step",
         "Sync plan counts / step",
@@ -774,7 +786,6 @@ def test_rate_dashboards_use_approximate_step_queries() -> None:
         "Fill events / step (private feed)",
         "Execution live orders / step (latest snapshot)",
         "Execution live qty / step (latest snapshot)",
-        "Market events / step",
         "Stage latency / step",
         "Warnings / step",
         "Model NLL / step",

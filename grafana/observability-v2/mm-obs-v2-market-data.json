@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Raw feed health from Prometheus; prices/volumes from persisted `MarketEvent` rows. `best_bid`/`best_ask` are top-of-book (L1). `buy_vwap`/`sell_vwap` walk the stored orderbook snapshot up to `min(total_bid_qty, total_ask_qty)` base units (levels fetched per feed `depth_limit`). `trade_vwap` is the interval trade VWAP over `[t_start_ms, t_end_ms]` and is omitted when no trades fired.",
+        "content": "Per-exchange prices/volumes from persisted `MarketEvent` rows (post-aggregation). Raw ingest health is covered below and in the three Prometheus panels. Use **Price series** / **Volume series** to toggle bid, ask, VWAP, and volume lines.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -26,50 +26,20 @@
       "type": "text"
     },
     {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "decimals": 3
-        },
-        "overrides": []
-      },
       "gridPos": {
-        "h": 8,
-        "w": 6,
+        "h": 9,
+        "w": 24,
         "x": 0,
         "y": 3
       },
       "id": 2,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "WITH buckets AS (\n  SELECT generate_series(\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeFrom())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    to_timestamp(floor(EXTRACT(EPOCH FROM ($__timeTo())::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)),\n    make_interval(secs => GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001))\n  ) AS \"time\"\n),\nmetrics AS (\n  SELECT scope.exchange || ' ' || scope.symbol AS metric\n  FROM (\n    SELECT DISTINCT e.exchange, e.symbol\n  FROM mm_events e\n  WHERE e.event_type = 'MarketEvent'\n    AND e.exchange IS NOT NULL\n    AND e.symbol IS NOT NULL\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  ) AS scope\n),\ndata AS (\nSELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (e.exchange || ' ' || e.symbol) AS metric,\n  COUNT(*)::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'MarketEvent'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nGROUP BY 1, 2\n)\nSELECT b.\"time\", m.metric, COALESCE(d.value, 0.0) AS value\nFROM buckets b\nCROSS JOIN metrics m\nLEFT JOIN data d\n  ON d.\"time\" = b.\"time\"\n AND d.metric = m.metric\nORDER BY 1, 2",
-          "refId": "A"
-        }
-      ],
-      "title": "Market events / step",
-      "type": "timeseries",
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
+        "content": "### Raw feed metrics (ingestor Prometheus, pre-aggregation)\n\nThese panels track **raw** orderbook/trade payloads as they arrive at the ingestor (`market:raw:*` topics), **before** interval `MarketEvent` aggregation. Each series is labeled by `exchange`, `symbol`, and `kind` (`orderbook` or `trade`).\n\n| Panel | What it measures | How to read it |\n|-------|----------------|----------------|\n| **Raw feed freshness ms** | `now − latest_event_timestamp_ms` at scrape time | **Staleness of the last seen upstream timestamp.** Flat and low → feed is updating. **Steadily climbing** while the market is open → no new raw events (stuck poll, dead WS, or ingestor not subscribed). Between REST polls this naturally ramps up until the next snapshot resets it. |\n| **Raw receive lag latest ms** | `wall_clock_at_receive − event.timestamp_ms` on the **last** raw event | **Exchange-timestamp vs when we received it.** Captures API latency, network delay, and clock skew. Spikes on each REST poll are normal; a persistently high floor suggests slow venue responses or timestamp drift. Updates only when a new raw event arrives. |\n| **Raw event gap latest ms** | `current_event.timestamp_ms − previous_event.timestamp_ms` (per exchange/symbol/kind) | **Spacing between consecutive upstream timestamps.** For REST orderbooks, expect gaps ≈ `poll_interval_ms`. For trades, smaller irregular gaps during active tape; **sudden jumps** can mean missed polls or an API gap. Does not measure wall-clock silence by itself. |\n\n**Healthy patterns:** freshness rises and falls with your poll cadence; receive lag stays within a stable band; orderbook gaps track `poll_interval_ms` from the market-feed config.\n\n**Warning signs:** freshness monotonically increasing for minutes; receive lag far above poll interval + network budget; orderbook gaps many multiples of `poll_interval_ms` without an explanation (outage, rate limit, feed disabled).",
+        "mode": "markdown"
+      },
+      "title": "Raw feed metrics guide",
+      "transparent": true,
+      "type": "text"
     },
     {
       "datasource": {
@@ -85,9 +55,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 6,
-        "y": 3
+        "w": 8,
+        "x": 0,
+        "y": 12
       },
       "id": 3,
       "targets": [
@@ -103,6 +73,7 @@
       ],
       "title": "Raw feed freshness ms",
       "type": "timeseries",
+      "description": "Staleness of the latest upstream `timestamp_ms` at scrape time. Rises between polls; climbing without resets means the feed stopped updating.",
       "options": {
         "legend": {
           "displayMode": "list",
@@ -129,9 +100,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 12,
-        "y": 3
+        "w": 8,
+        "x": 8,
+        "y": 12
       },
       "id": 4,
       "targets": [
@@ -147,6 +118,7 @@
       ],
       "title": "Raw receive lag latest ms",
       "type": "timeseries",
+      "description": "Wall-clock lag recorded when the last raw event arrived: `receive_time − event.timestamp_ms`. Reflects API/network latency and clock skew.",
       "options": {
         "legend": {
           "displayMode": "list",
@@ -173,9 +145,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 3
+        "w": 8,
+        "x": 16,
+        "y": 12
       },
       "id": 5,
       "targets": [
@@ -191,6 +163,7 @@
       ],
       "title": "Raw event gap latest ms",
       "type": "timeseries",
+      "description": "Timestamp delta between the last two raw events for the same exchange/symbol/kind. Orderbook gaps should track `poll_interval_ms`.",
       "options": {
         "legend": {
           "displayMode": "list",
@@ -219,7 +192,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 11
+        "y": 20
       },
       "id": 6,
       "targets": [
@@ -231,7 +204,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts AS \"time\", (exchange || ' best_bid') AS metric,\n       CASE\n  WHEN trim(COALESCE(payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' best_ask') AS metric,\n       CASE\n  WHEN trim(COALESCE(payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' buy_vwap') AS metric,\n       NULLIF(CASE\n  WHEN trim(COALESCE(payload->>'book_buy_vwap', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'book_buy_vwap', ''))::double precision\n  ELSE NULL\nEND, 0.0) AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->>'book_buy_vwap') IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' sell_vwap') AS metric,\n       NULLIF(CASE\n  WHEN trim(COALESCE(payload->>'book_sell_vwap', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'book_sell_vwap', ''))::double precision\n  ELSE NULL\nEND, 0.0) AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->>'book_sell_vwap') IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' trade_vwap') AS metric,\n       CASE\n  WHEN trim(COALESCE(NULLIF(payload->>'vwap', '0'), '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(NULLIF(payload->>'vwap', '0'), ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND NULLIF(payload->>'vwap', '0') IS NOT NULL\nORDER BY 1",
+          "rawSql": "WITH all_series AS (\n  SELECT ts AS \"time\", (exchange || ' best_bid') AS metric, CASE\n  WHEN trim(COALESCE(payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND AS value, 'best_bid'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL\n  UNION ALL\n  SELECT ts AS \"time\", (exchange || ' best_ask') AS metric, CASE\n  WHEN trim(COALESCE(payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND AS value, 'best_ask'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL\n  UNION ALL\n  SELECT ts AS \"time\", (exchange || ' buy_vwap') AS metric, NULLIF(CASE\n  WHEN trim(COALESCE(payload->>'book_buy_vwap', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'book_buy_vwap', ''))::double precision\n  ELSE NULL\nEND, 0.0) AS value, 'buy_vwap'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->>'book_buy_vwap') IS NOT NULL\n  UNION ALL\n  SELECT ts AS \"time\", (exchange || ' sell_vwap') AS metric, NULLIF(CASE\n  WHEN trim(COALESCE(payload->>'book_sell_vwap', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'book_sell_vwap', ''))::double precision\n  ELSE NULL\nEND, 0.0) AS value, 'sell_vwap'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->>'book_sell_vwap') IS NOT NULL\n  UNION ALL\n  SELECT ts AS \"time\", (exchange || ' trade_vwap') AS metric, CASE\n  WHEN trim(COALESCE(NULLIF(payload->>'vwap', '0'), '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(NULLIF(payload->>'vwap', '0'), ''))::double precision\n  ELSE NULL\nEND AS value, 'trade_vwap'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND NULLIF(payload->>'vwap', '0') IS NOT NULL\n)\nSELECT \"time\", metric, value\nFROM all_series\nWHERE series = ANY(ARRAY[${price_series:sqlstring}]::text[])\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -265,7 +238,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 28
       },
       "id": 8,
       "targets": [
@@ -277,7 +250,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT ts AS \"time\", (exchange || ' buy_volume') AS metric,\n       CASE\n  WHEN trim(COALESCE(payload->>'buy_volume', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'buy_volume', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->>'buy_volume') IS NOT NULL\nUNION ALL\nSELECT ts AS \"time\", (exchange || ' sell_volume') AS metric,\n       CASE\n  WHEN trim(COALESCE(payload->>'sell_volume', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'sell_volume', ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events\nWHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n  AND (payload->>'sell_volume') IS NOT NULL\nORDER BY 1",
+          "rawSql": "WITH all_series AS (\n  SELECT ts AS \"time\", (exchange || ' buy_volume') AS metric, CASE\n  WHEN trim(COALESCE(payload->>'buy_volume', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'buy_volume', ''))::double precision\n  ELSE NULL\nEND AS value, 'buy_volume'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->>'buy_volume') IS NOT NULL\n  UNION ALL\n  SELECT ts AS \"time\", (exchange || ' sell_volume') AS metric, CASE\n  WHEN trim(COALESCE(payload->>'sell_volume', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(payload->>'sell_volume', ''))::double precision\n  ELSE NULL\nEND AS value, 'sell_volume'::text AS series\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(ts)\n    AND (payload->>'sell_volume') IS NOT NULL\n)\nSELECT \"time\", metric, value\nFROM all_series\nWHERE series = ANY(ARRAY[${volume_series:sqlstring}]::text[])\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -447,6 +420,87 @@
         "refresh": 1,
         "sort": 0,
         "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "best_bid",
+            "best_ask",
+            "buy_vwap",
+            "sell_vwap"
+          ],
+          "value": [
+            "best_bid",
+            "best_ask",
+            "buy_vwap",
+            "sell_vwap"
+          ]
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Price series",
+        "multi": true,
+        "name": "price_series",
+        "options": [
+          {
+            "selected": true,
+            "text": "best_bid",
+            "value": "best_bid"
+          },
+          {
+            "selected": true,
+            "text": "best_ask",
+            "value": "best_ask"
+          },
+          {
+            "selected": true,
+            "text": "buy_vwap",
+            "value": "buy_vwap"
+          },
+          {
+            "selected": true,
+            "text": "sell_vwap",
+            "value": "sell_vwap"
+          },
+          {
+            "selected": false,
+            "text": "trade_vwap",
+            "value": "trade_vwap"
+          }
+        ],
+        "query": "best_bid,best_ask,buy_vwap,sell_vwap,trade_vwap",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Volume series",
+        "multi": true,
+        "name": "volume_series",
+        "options": [
+          {
+            "selected": true,
+            "text": "buy_volume",
+            "value": "buy_volume"
+          },
+          {
+            "selected": true,
+            "text": "sell_volume",
+            "value": "sell_volume"
+          }
+        ],
+        "query": "buy_volume,sell_volume",
+        "type": "custom"
       }
     ]
   },
