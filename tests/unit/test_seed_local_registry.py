@@ -23,6 +23,14 @@ def test_seed_local_worker_registry_creates_active_assignment() -> None:
     assert bundle["strategy"].strategy_id == LOCAL_STRATEGY_ID
     assert bundle["exchanges"]["nobitex"].config["market_data"]["market_data_source"] == "bus"
 
+    preset = store.get_preset("thin_local_liquidity_weighted_mpc")
+    optimizer = preset.config["controller"]["optimizer"]
+    assert optimizer["kind"] == "monte_carlo_mpc_tensor_batched"
+    assert "local" in optimizer
+    assert "global" in optimizer
+    assert preset.config["execution"]["quoting"]["planner"] == "replace"
+    assert preset.config["controller"]["dry_run"] is True
+
 
 def test_ensure_local_worker_registry_seeds_once(monkeypatch: pytest.MonkeyPatch) -> None:
     store = MemoryRegistryStore()

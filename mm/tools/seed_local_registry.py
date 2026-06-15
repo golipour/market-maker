@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import json
+from pathlib import Path
 from typing import Any
 
 from mm.registry.memory import RegistryNotFoundError
@@ -15,6 +18,10 @@ LOCAL_ACCOUNT_ID = "account-nobitex-main"
 LOCAL_EXCHANGE = "nobitex"
 LOCAL_SYMBOL = "USDT_IRT"
 LOCAL_ACTOR_ID = "mpc-controller"
+
+_RUNTIME_EXAMPLE_PATH = (
+    Path(__file__).resolve().parents[1] / "configs" / "market_maker.runtime.example.json"
+)
 
 
 def _local_platform_settings() -> dict[str, Any]:
@@ -54,30 +61,36 @@ def _local_exchange_config() -> dict[str, Any]:
     }
 
 
+def _strip_doc_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_doc_keys(nested)
+            for key, nested in value.items()
+            if not str(key).startswith("_")
+        }
+    if isinstance(value, list):
+        return [_strip_doc_keys(item) for item in value]
+    return value
+
+
+def _example_preset_config(preset_id: str = LOCAL_PRESET_ID) -> dict[str, Any]:
+    payload = json.loads(_RUNTIME_EXAMPLE_PATH.read_text())
+    presets = payload.get("strategy_presets")
+    if not isinstance(presets, dict):
+        raise ValueError("runtime example missing strategy_presets")
+    preset = presets.get(preset_id)
+    if not isinstance(preset, dict):
+        raise ValueError(f"runtime example missing strategy_presets.{preset_id}")
+    return _strip_doc_keys(copy.deepcopy(preset))
+
+
 def _local_preset_config() -> dict[str, Any]:
-    return {
-        "interval_ms": 10000,
-        "liquidity_sourcing": {"mode": "off"},
-        "pricing": {
-            "quote_anchor": {"mode": "quoting_mid"},
-            "inventory_mark": {"venue": "quoting"},
-        },
-        "execution": {
-            "local": {"enabled": False, "planner": "reconcile"},
-        },
-        "controller": {
-            "enabled": True,
-            "dry_run": True,
-            "actor_id": LOCAL_ACTOR_ID,
-            "orderbook_grid": {
-                "spread_step": 20.0,
-                "spread_max": 200.0,
-            },
-            "local_price_model": {"kind": "residual"},
-            "local_market_flow_model": {"kind": "gamma"},
-            "optimizer": {"kind": "monte_carlo_mpc_tensor_batched", "horizon": 2},
-        },
-    }
+    preset = _example_preset_config()
+    controller = preset.get("controller")
+    if isinstance(controller, dict):
+        controller["dry_run"] = True
+        controller.pop("actor_id", None)
+    return preset
 
 
 def seed_local_worker_registry(

@@ -1,4 +1,5 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
@@ -18,6 +19,7 @@ const EMPTY: PresetUpsertPayload = {
 };
 
 export function PresetsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<Preset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<PresetUpsertPayload>(EMPTY);
@@ -28,6 +30,7 @@ export function PresetsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const openedFromQuery = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -45,6 +48,29 @@ export function PresetsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const presetId = searchParams.get("preset_id")?.trim();
+    if (!presetId || loading || openedFromQuery.current === presetId) {
+      return;
+    }
+    const row = items.find((item) => item.preset_id === presetId);
+    if (!row) {
+      return;
+    }
+    openedFromQuery.current = presetId;
+    setEditingId(row.preset_id);
+    setForm({
+      preset_id: row.preset_id,
+      config: row.config,
+      version: row.version,
+      status: row.status,
+    });
+    setConfigJson(JSON.stringify(row.config ?? {}, null, 2));
+    setSelectedId(row.preset_id);
+    setShowForm(true);
+    setSearchParams({}, { replace: true });
+  }, [items, loading, searchParams, setSearchParams]);
 
   const selected = items.find((row) => row.preset_id === selectedId) ?? null;
 

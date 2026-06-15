@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
@@ -14,7 +15,7 @@ import {
 
 const STRATEGY_STATUSES = ["draft", "active", "paused", "retired"] as const;
 
-const EMPTY_CREATE: StrategyUpsertPayload = {
+const EMPTY_FORM: StrategyUpsertPayload = {
   strategy_id: "",
   actor_id: "",
   account_id: "",
@@ -33,10 +34,10 @@ export function StrategiesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Strategy | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<StrategyRuntimeConfig | null>(null);
+  const [form, setForm] = useState<StrategyUpsertPayload>(EMPTY_FORM);
   const [overridesJson, setOverridesJson] = useState("{}");
-  const [detailStatus, setDetailStatus] = useState("draft");
-  const [createForm, setCreateForm] = useState<StrategyUpsertPayload>(EMPTY_CREATE);
-  const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,8 +75,6 @@ export function StrategiesPage() {
         ),
       ]);
       setDetail(strategy);
-      setDetailStatus(strategy.status);
-      setOverridesJson(JSON.stringify(strategy.config_overrides ?? {}, null, 2));
       setRuntimeConfig(runtime);
     } catch (err) {
       setDetail(null);
@@ -98,17 +97,44 @@ export function StrategiesPage() {
     }
   }, [selectedId, loadDetail]);
 
-  function onAccountChange(accountId: string, target: "create" | "detail") {
+  function onAccountChange(accountId: string) {
     const account = accounts.find((row) => row.account_id === accountId);
-    const exchange = account?.exchange ?? "nobitex";
-    if (target === "create") {
-      setCreateForm((prev) => ({
-        ...prev,
-        account_id: accountId,
-        quoting_exchange: exchange,
-        liquidity_exchange: exchange,
-      }));
-    }
+    const exchange = account?.exchange ?? form.quoting_exchange;
+    setForm((prev) => ({
+      ...prev,
+      account_id: accountId,
+      quoting_exchange: exchange,
+      liquidity_exchange: exchange,
+    }));
+  }
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setOverridesJson("{}");
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
+  function openEdit(row: Strategy) {
+    setEditingId(row.strategy_id);
+    setForm({
+      strategy_id: row.strategy_id,
+      actor_id: row.actor_id,
+      account_id: row.account_id,
+      symbol: row.symbol,
+      preset_id: row.preset_id,
+      quoting_exchange: row.quoting_exchange,
+      liquidity_exchange: row.liquidity_exchange,
+      status: row.status,
+      config_overrides: row.config_overrides ?? {},
+    });
+    setOverridesJson(JSON.stringify(row.config_overrides ?? {}, null, 2));
+    setSelectedId(row.strategy_id);
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
   }
 
   async function startStrategy(strategyId: string) {
@@ -124,49 +150,26 @@ export function StrategiesPage() {
     }
   }
 
-  async function onCreateSubmit(event: FormEvent) {
+  async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const body: StrategyUpsertPayload = { ...createForm };
-      const strategyId = createForm.strategy_id;
-      await api.post<Strategy>("/api/admin/registry/strategies", body);
-      setMessage(`Strategy ${strategyId} saved`);
-      setShowCreate(false);
-      setCreateForm(EMPTY_CREATE);
-      await loadList();
-      setSelectedId(strategyId);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Create failed");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onPatchDetail(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedId) {
-      return;
-    }
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
       const config_overrides = JSON.parse(overridesJson) as Record<string, unknown>;
-      await api.patch<Strategy>(`/api/admin/registry/strategies/${selectedId}`, {
-        status: detailStatus,
-        config_overrides,
-      });
-      setMessage(`Strategy ${selectedId} updated`);
+      const body: StrategyUpsertPayload = { ...form, config_overrides };
+      const saved = await api.post<Strategy>("/api/admin/registry/strategies", body);
+      setMessage(`Strategy ${saved.strategy_id} saved`);
+      setShowForm(false);
+      setEditingId(null);
+      setSelectedId(saved.strategy_id);
       await loadList();
-      await loadDetail(selectedId);
+      await loadDetail(saved.strategy_id);
     } catch (err) {
       if (err instanceof SyntaxError) {
         setError("Config overrides must be valid JSON");
       } else {
-        setError(err instanceof ApiError ? err.message : "Update failed");
+        setError(err instanceof ApiError ? err.message : "Save failed");
       }
     } finally {
       setSaving(false);
@@ -182,12 +185,8 @@ export function StrategiesPage() {
       </header>
 
       <div className="page-toolbar">
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setShowCreate((open) => !open)}
-        >
-          {showCreate ? "Cancel" : "New strategy"}
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
+          New strategy
         </button>
         <button type="button" className="btn" onClick={() => void loadList()}>
           Refresh
@@ -197,39 +196,36 @@ export function StrategiesPage() {
       {error ? <div className="alert alert-error">{error}</div> : null}
       {message ? <div className="alert alert-success">{message}</div> : null}
 
-      {showCreate ? (
-        <form onSubmit={(e) => void onCreateSubmit(e)} className="card form-card">
-          <h3>New strategy</h3>
+      {showForm ? (
+        <form onSubmit={(e) => void onSubmit(e)} className="card form-card">
+          <h3>{editingId ? `Edit ${editingId}` : "New strategy"}</h3>
           <div className="form-grid">
             <div className="form-field">
-              <label htmlFor="create-strategy-id">Strategy ID</label>
+              <label htmlFor="strategy-id">Strategy ID</label>
               <input
-                id="create-strategy-id"
+                id="strategy-id"
                 required
-                value={createForm.strategy_id}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, strategy_id: e.target.value }))
-                }
+                readOnly={Boolean(editingId)}
+                value={form.strategy_id}
+                onChange={(e) => setForm((prev) => ({ ...prev, strategy_id: e.target.value }))}
               />
             </div>
             <div className="form-field">
-              <label htmlFor="create-actor-id">Actor ID</label>
+              <label htmlFor="strategy-actor-id">Actor ID</label>
               <input
-                id="create-actor-id"
+                id="strategy-actor-id"
                 required
-                value={createForm.actor_id}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, actor_id: e.target.value }))
-                }
+                value={form.actor_id}
+                onChange={(e) => setForm((prev) => ({ ...prev, actor_id: e.target.value }))}
               />
             </div>
             <div className="form-field">
-              <label htmlFor="create-account">Account</label>
+              <label htmlFor="strategy-account">Account</label>
               <select
-                id="create-account"
+                id="strategy-account"
                 required
-                value={createForm.account_id}
-                onChange={(e) => onAccountChange(e.target.value, "create")}
+                value={form.account_id}
+                onChange={(e) => onAccountChange(e.target.value)}
               >
                 <option value="">Select account…</option>
                 {accounts.map((row) => (
@@ -240,14 +236,12 @@ export function StrategiesPage() {
               </select>
             </div>
             <div className="form-field">
-              <label htmlFor="create-preset">Preset</label>
+              <label htmlFor="strategy-preset">Preset</label>
               <select
-                id="create-preset"
+                id="strategy-preset"
                 required
-                value={createForm.preset_id}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, preset_id: e.target.value }))
-                }
+                value={form.preset_id}
+                onChange={(e) => setForm((prev) => ({ ...prev, preset_id: e.target.value }))}
               >
                 <option value="">Select preset…</option>
                 {presets.map((row) => (
@@ -258,46 +252,42 @@ export function StrategiesPage() {
               </select>
             </div>
             <div className="form-field">
-              <label htmlFor="create-symbol">Symbol</label>
+              <label htmlFor="strategy-symbol">Symbol</label>
               <input
-                id="create-symbol"
+                id="strategy-symbol"
                 required
-                value={createForm.symbol}
+                value={form.symbol}
+                onChange={(e) => setForm((prev) => ({ ...prev, symbol: e.target.value }))}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="strategy-quoting">Quoting exchange</label>
+              <input
+                id="strategy-quoting"
+                required
+                value={form.quoting_exchange}
                 onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, symbol: e.target.value }))
+                  setForm((prev) => ({ ...prev, quoting_exchange: e.target.value }))
                 }
               />
             </div>
             <div className="form-field">
-              <label htmlFor="create-quoting">Quoting exchange</label>
+              <label htmlFor="strategy-liquidity">Liquidity exchange</label>
               <input
-                id="create-quoting"
+                id="strategy-liquidity"
                 required
-                value={createForm.quoting_exchange}
+                value={form.liquidity_exchange}
                 onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, quoting_exchange: e.target.value }))
+                  setForm((prev) => ({ ...prev, liquidity_exchange: e.target.value }))
                 }
               />
             </div>
             <div className="form-field">
-              <label htmlFor="create-liquidity">Liquidity exchange</label>
-              <input
-                id="create-liquidity"
-                required
-                value={createForm.liquidity_exchange}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, liquidity_exchange: e.target.value }))
-                }
-              />
-            </div>
-            <div className="form-field">
-              <label htmlFor="create-status">Status</label>
+              <label htmlFor="strategy-status">Status</label>
               <select
-                id="create-status"
-                value={createForm.status ?? "draft"}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({ ...prev, status: e.target.value }))
-                }
+                id="strategy-status"
+                value={form.status ?? "draft"}
+                onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
               >
                 {STRATEGY_STATUSES.map((status) => (
                   <option key={status} value={status}>
@@ -307,9 +297,31 @@ export function StrategiesPage() {
               </select>
             </div>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? "Saving…" : "Create strategy"}
-          </button>
+          <div className="form-field">
+            <label htmlFor="strategy-overrides">Config overrides (JSON)</label>
+            <textarea
+              id="strategy-overrides"
+              className="json-textarea"
+              rows={8}
+              value={overridesJson}
+              onChange={(e) => setOverridesJson(e.target.value)}
+            />
+          </div>
+          <div className="form-actions">
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setShowForm(false);
+                setEditingId(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       ) : null}
 
@@ -340,7 +352,7 @@ export function StrategiesPage() {
                   <td>{row.account_id}</td>
                   <td>{row.preset_id}</td>
                   <td>{row.status}</td>
-                  <td>
+                  <td style={{ whiteSpace: "nowrap" }}>
                     <button
                       type="button"
                       className="btn"
@@ -350,6 +362,16 @@ export function StrategiesPage() {
                       }}
                     >
                       View
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEdit(row);
+                      }}
+                    >
+                      Edit
                     </button>
                   </td>
                 </tr>
@@ -374,13 +396,22 @@ export function StrategiesPage() {
             <>
               <div className="detail-panel-header">
                 <h3>{detail.strategy_id}</h3>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => void startStrategy(detail.strategy_id)}
-                >
-                  Start
-                </button>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => openEdit(detail)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void startStrategy(detail.strategy_id)}
+                  >
+                    Start
+                  </button>
+                </div>
               </div>
 
               <dl className="detail-dl">
@@ -391,43 +422,30 @@ export function StrategiesPage() {
                 <dt>Symbol</dt>
                 <dd>{detail.symbol}</dd>
                 <dt>Preset</dt>
-                <dd>{detail.preset_id}</dd>
+                <dd>
+                  {detail.preset_id}{" "}
+                  <Link
+                    to={`/presets?preset_id=${encodeURIComponent(detail.preset_id)}`}
+                    className="btn"
+                    style={{ marginLeft: "0.35rem", padding: "0.1rem 0.5rem", fontSize: "0.85rem" }}
+                  >
+                    Edit preset
+                  </Link>
+                </dd>
                 <dt>Quoting / liquidity</dt>
                 <dd>
                   {detail.quoting_exchange} / {detail.liquidity_exchange}
                 </dd>
+                <dt>Status</dt>
+                <dd>{detail.status}</dd>
               </dl>
 
-              <form onSubmit={(e) => void onPatchDetail(e)} className="detail-form">
-                <div className="form-row">
-                  <div className="form-field">
-                    <label htmlFor="detail-status">Status</label>
-                    <select
-                      id="detail-status"
-                      value={detailStatus}
-                      onChange={(e) => setDetailStatus(e.target.value)}
-                    >
-                      {STRATEGY_STATUSES.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div className="form-field">
-                  <label htmlFor="detail-overrides">Config overrides (JSON)</label>
-                  <textarea
-                    id="detail-overrides"
-                    className="json-textarea"
-                    value={overridesJson}
-                    onChange={(e) => setOverridesJson(e.target.value)}
-                  />
-                </div>
-                <button type="submit" className="btn btn-primary" disabled={saving}>
-                  {saving ? "Saving…" : "Save changes"}
-                </button>
-              </form>
+              {Object.keys(detail.config_overrides ?? {}).length > 0 ? (
+                <>
+                  <h4 className="detail-section-title">Config overrides</h4>
+                  <JsonBlock value={detail.config_overrides ?? {}} maxHeight="160px" />
+                </>
+              ) : null}
 
               {runtimeConfig ? (
                 <>
