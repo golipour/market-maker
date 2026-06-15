@@ -3,7 +3,7 @@
 Example::
 
     python3 -m mm.tools.run_local_stack
-    python3 -m mm.tools.run_local_stack --with-admin
+    python3 -m mm.tools.run_local_stack --no-with-admin
 """
 
 from __future__ import annotations
@@ -187,8 +187,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--with-admin",
-        action="store_true",
-        help="Also start the control-plane admin API on :8080.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Start the control-plane admin API on :8080 (default: on). Use --no-with-admin to skip.",
     )
     parser.add_argument(
         "--ingestor-warmup-s",

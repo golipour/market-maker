@@ -31,7 +31,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const response = await fetch(path, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers });
+  } catch {
+    throw new ApiError(
+      "Cannot reach admin API — start it with: python3 -m mm.tools.run_local_stack --skip consumer",
+      0,
+    );
+  }
   if (!response.ok) {
     let detail = response.statusText;
     try {

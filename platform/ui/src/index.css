@@ -249,6 +249,10 @@ table.data-table tbody tr:hover {
   gap: 0.3rem;
 }
 
+.form-field-full {
+  grid-column: 1 / -1;
+}
+
 .form-field label {
   font-size: 0.8rem;
   color: var(--text-muted);

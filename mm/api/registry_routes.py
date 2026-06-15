@@ -438,20 +438,21 @@ def create_registry_router(
     async def list_market_feeds(
         _: str = Depends(require_auth),
         store: RegistryStore = Depends(_store),
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         rows = store.list_market_feeds()
-        return {"items": [row.as_dict() for row in rows]}
+        return JSONResponse(content=to_jsonable({"items": [row.as_dict() for row in rows]}))
 
     @router.get("/market-feeds/{feed_id}")
     async def get_market_feed(
         feed_id: str,
         _: str = Depends(require_auth),
         store: RegistryStore = Depends(_store),
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         try:
-            return store.get_market_feed(feed_id).as_dict()
+            record = store.get_market_feed(feed_id)
         except RegistryNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(content=to_jsonable(record.as_dict()))
 
     @router.post("/market-feeds")
     async def upsert_market_feed(

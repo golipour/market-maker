@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,6 +21,10 @@ from mm.registry.models import (
 )
 from mm.registry.schema import DEFAULT_PLATFORM_SETTINGS_ID, REGISTRY_DDL, REGISTRY_MIGRATIONS
 
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY = False
+_REGISTRY_SCHEMA_ADVISORY_LOCK_KEY = 89_423_712
+
 
 class PostgresRegistryStore(MemoryRegistryStore):
     """Registry store backed by Postgres.
@@ -34,11 +39,32 @@ class PostgresRegistryStore(MemoryRegistryStore):
         self.connect_timeout_s = max(1, int(connect_timeout_s))
 
     def ensure_schema(self) -> None:
+        """Apply DDL/migrations once per process; serialize across workers via advisory lock."""
+
+        global _SCHEMA_READY
+        if _SCHEMA_READY:
+            return
+        with _SCHEMA_LOCK:
+            if _SCHEMA_READY:
+                return
+            self._ensure_schema_once()
+            _SCHEMA_READY = True
+
+    def _ensure_schema_once(self) -> None:
         with self._connection() as conn:
             with conn.cursor() as cur:
-                # Base tables/indexes first; migrations add columns on existing DBs.
                 cur.execute(REGISTRY_DDL)
-                cur.execute(REGISTRY_MIGRATIONS)
+                cur.execute(
+                    "SELECT pg_advisory_lock(%s)",
+                    (_REGISTRY_SCHEMA_ADVISORY_LOCK_KEY,),
+                )
+                try:
+                    cur.execute(REGISTRY_MIGRATIONS)
+                finally:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (_REGISTRY_SCHEMA_ADVISORY_LOCK_KEY,),
+                    )
                 cur.execute(
                     """
                     INSERT INTO registry_platform_settings (settings_id)

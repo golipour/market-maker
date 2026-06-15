@@ -32,6 +32,7 @@ export function MarketFeedsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exchangeError, setExchangeError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -39,15 +40,24 @@ export function MarketFeedsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setExchangeError(null);
     try {
-      const [feeds, exchangeRows] = await Promise.all([
-        api.get<RegistryList<MarketFeed>>("/api/admin/registry/market-feeds"),
-        api.get<RegistryList<Exchange>>("/api/admin/registry/exchanges"),
-      ]);
+      const feeds = await api.get<RegistryList<MarketFeed>>("/api/admin/registry/market-feeds");
       setItems(feeds.items);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Failed to load market feeds — is the admin API running on :8080?",
+      );
+    }
+    try {
+      const exchangeRows = await api.get<RegistryList<Exchange>>("/api/admin/registry/exchanges");
       setExchanges(exchangeRows.items);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load market feeds");
+      setExchangeError(
+        err instanceof ApiError ? err.message : "Failed to load exchanges for the feed form",
+      );
     } finally {
       setLoading(false);
     }
@@ -132,6 +142,7 @@ export function MarketFeedsPage() {
         </button>
       </div>
       {error ? <div className="alert alert-error">{error}</div> : null}
+      {exchangeError ? <div className="alert alert-error">{exchangeError}</div> : null}
       {message ? <div className="alert alert-success">{message}</div> : null}
       {showForm ? (
         <form onSubmit={(e) => void onSubmit(e)} className="card form-card">

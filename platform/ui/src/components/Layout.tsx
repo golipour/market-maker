@@ -9,7 +9,6 @@ const NAV = [
   { to: "/presets", label: "Presets" },
   { to: "/feeds", label: "Market feeds" },
   { to: "/strategies", label: "Strategies" },
-  { to: "/allocations", label: "Wallets" },
   { to: "/workers", label: "Workers" },
   { to: "/settings", label: "Settings" },
   { to: "/commands", label: "Commands" },

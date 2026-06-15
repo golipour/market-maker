@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
+import { WalletPoolsPanel } from "../components/WalletPoolsPanel";
 import {
   ApiError,
   api,
@@ -15,7 +16,10 @@ import {
 } from "../api/client";
 
 const STRATEGY_STATUSES = ["draft", "active", "paused", "retired"] as const;
-const LEDGER_SOURCES = ["virtual", "physical"] as const;
+const SIZING_SOURCES = [
+  { value: "physical", label: "Physical — full exchange account balance" },
+  { value: "virtual", label: "Virtual — capital pool + attributed fills" },
+] as const;
 
 const EMPTY_FORM: StrategyUpsertPayload = {
   strategy_id: "",
@@ -28,7 +32,7 @@ const EMPTY_FORM: StrategyUpsertPayload = {
   status: "draft",
   config_overrides: {},
   wallet_id: null,
-  ledger_source: "virtual",
+  ledger_source: "physical",
 };
 
 export function StrategiesPage() {
@@ -52,22 +56,41 @@ export function StrategiesPage() {
   const loadList = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const failures: string[] = [];
     try {
-      const [strategies, accountRows, presetRows, walletRows] = await Promise.all([
-        api.get<RegistryList<Strategy>>("/api/admin/registry/strategies"),
-        api.get<RegistryList<Account>>("/api/admin/registry/accounts"),
-        api.get<RegistryList<Preset>>("/api/admin/registry/presets"),
-        api.get<RegistryList<Allocation>>("/api/admin/registry/allocations"),
-      ]);
+      const strategies = await api.get<RegistryList<Strategy>>("/api/admin/registry/strategies");
       setItems(strategies.items);
+    } catch (err) {
+      failures.push(
+        err instanceof ApiError ? `strategies: ${err.message}` : "strategies: failed to load",
+      );
+    }
+    try {
+      const accountRows = await api.get<RegistryList<Account>>("/api/admin/registry/accounts");
       setAccounts(accountRows.items);
+    } catch (err) {
+      failures.push(
+        err instanceof ApiError ? `accounts: ${err.message}` : "accounts: failed to load",
+      );
+    }
+    try {
+      const presetRows = await api.get<RegistryList<Preset>>("/api/admin/registry/presets");
       setPresets(presetRows.items);
+    } catch (err) {
+      failures.push(err instanceof ApiError ? `presets: ${err.message}` : "presets: failed to load");
+    }
+    try {
+      const walletRows = await api.get<RegistryList<Allocation>>("/api/admin/registry/allocations");
       setWallets(walletRows.items);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load strategies");
-    } finally {
-      setLoading(false);
+      failures.push(
+        err instanceof ApiError ? `capital pools: ${err.message}` : "capital pools: failed to load",
+      );
     }
+    if (failures.length > 0) {
+      setError(failures.join("; "));
+    }
+    setLoading(false);
   }, []);
 
   const loadDetail = useCallback(async (strategyId: string) => {
@@ -161,12 +184,28 @@ export function StrategiesPage() {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    const ledgerSource = form.ledger_source === "physical" ? "physical" : "virtual";
+    const walletId = ledgerSource === "virtual" ? form.wallet_id?.trim() || null : null;
+    if (ledgerSource === "virtual" && !walletId) {
+      const legacyPool = wallets.find((row) => row.strategy_id === form.strategy_id);
+      if (!legacyPool) {
+        setError(
+          "Virtual sizing requires a capital pool. Create one below or pick an existing pool.",
+        );
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
       const config_overrides = JSON.parse(overridesJson) as Record<string, unknown>;
-      const body: StrategyUpsertPayload = { ...form, config_overrides };
+      const body: StrategyUpsertPayload = {
+        ...form,
+        config_overrides,
+        ledger_source: ledgerSource,
+        wallet_id: walletId,
+      };
       const saved = await api.post<Strategy>("/api/admin/registry/strategies", body);
       setMessage(`Strategy ${saved.strategy_id} saved`);
       setShowForm(false);
@@ -189,7 +228,10 @@ export function StrategiesPage() {
     <>
       <header className="page-header">
         <h1>Strategies</h1>
-        <p>Registry strategies, resolved runtime config, and lifecycle controls.</p>
+        <p>
+          Bot instances, sizing ledger (physical account vs virtual capital pool), and linked
+          presets. Restart the worker after changes.
+        </p>
         <EditModeNote mode="hybrid" />
       </header>
 
@@ -305,47 +347,57 @@ export function StrategiesPage() {
                 ))}
               </select>
             </div>
-            <div className="form-field">
-              <label htmlFor="strategy-wallet">Wallet</label>
+            <div className="form-field form-field-full">
+              <label htmlFor="strategy-sizing">Sizing for MPC / risk</label>
               <select
-                id="strategy-wallet"
-                value={form.wallet_id ?? ""}
-                onChange={(e) =>
+                id="strategy-sizing"
+                value={form.ledger_source ?? "physical"}
+                onChange={(e) => {
+                  const ledger_source = e.target.value;
                   setForm((prev) => ({
                     ...prev,
-                    wallet_id: e.target.value || null,
-                  }))
-                }
+                    ledger_source,
+                    wallet_id: ledger_source === "physical" ? null : prev.wallet_id,
+                  }));
+                }}
               >
-                <option value="">No wallet (physical ledger only)</option>
-                {wallets
-                  .filter((row) => !form.account_id || row.account_id === form.account_id)
-                  .map((row) => (
-                    <option key={row.allocation_id} value={row.allocation_id}>
-                      {row.allocation_id} ({row.allocated_base} {row.base_asset} /{" "}
-                      {row.allocated_quote} {row.quote_asset})
-                    </option>
-                  ))}
-              </select>
-            </div>
-            <div className="form-field">
-              <label htmlFor="strategy-ledger-source">Ledger for MPC / risk</label>
-              <select
-                id="strategy-ledger-source"
-                value={form.ledger_source ?? "virtual"}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, ledger_source: e.target.value }))
-                }
-              >
-                {LEDGER_SOURCES.map((source) => (
-                  <option key={source} value={source}>
-                    {source === "virtual"
-                      ? "Virtual (wallet balances + attributed fills)"
-                      : "Physical (exchange account ledger)"}
+                {SIZING_SOURCES.map((source) => (
+                  <option key={source.value} value={source.value}>
+                    {source.label}
                   </option>
                 ))}
               </select>
             </div>
+            {form.ledger_source === "virtual" ? (
+              <div className="form-field form-field-full">
+                <label htmlFor="strategy-wallet">Capital pool</label>
+                <select
+                  id="strategy-wallet"
+                  required
+                  value={form.wallet_id ?? ""}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      wallet_id: e.target.value || null,
+                    }))
+                  }
+                >
+                  <option value="">Select pool…</option>
+                  {wallets
+                    .filter((row) => !form.account_id || row.account_id === form.account_id)
+                    .map((row) => (
+                      <option key={row.allocation_id} value={row.allocation_id}>
+                        {row.allocation_id} ({row.allocated_base} {row.base_asset} /{" "}
+                        {row.allocated_quote} {row.quote_asset})
+                      </option>
+                    ))}
+                </select>
+                <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "0.35rem" }}>
+                  Create pools in the section below. Virtual sizing uses pool balances plus fills
+                  attributed to this strategy&apos;s actor.
+                </p>
+              </div>
+            ) : null}
           </div>
           <div className="form-field">
             <label htmlFor="strategy-overrides">Config overrides (JSON)</label>
@@ -385,6 +437,7 @@ export function StrategiesPage() {
                 <th>Symbol</th>
                 <th>Account</th>
                 <th>Preset</th>
+                <th>Sizing</th>
                 <th>Status</th>
                 <th />
               </tr>
@@ -401,6 +454,11 @@ export function StrategiesPage() {
                   <td>{row.symbol}</td>
                   <td>{row.account_id}</td>
                   <td>{row.preset_id}</td>
+                  <td>
+                    {row.ledger_source === "virtual"
+                      ? `virtual${row.wallet_id ? ` (${row.wallet_id})` : ""}`
+                      : "physical"}
+                  </td>
                   <td>{row.status}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
@@ -490,8 +548,8 @@ export function StrategiesPage() {
                 <dd>{detail.status}</dd>
                 <dt>Wallet</dt>
                 <dd>{detail.wallet_id ?? "—"}</dd>
-                <dt>Ledger source</dt>
-                <dd>{detail.ledger_source ?? "virtual"}</dd>
+                <dt>Sizing</dt>
+                <dd>{detail.ledger_source === "virtual" ? "virtual (capital pool)" : "physical (exchange account)"}</dd>
               </dl>
 
               {Object.keys(detail.config_overrides ?? {}).length > 0 ? (
@@ -515,6 +573,8 @@ export function StrategiesPage() {
       </div>
 
       {loading ? <p className="loading">Loading…</p> : null}
+
+      <WalletPoolsPanel accounts={accounts} onWalletsChange={setWallets} />
     </>
   );
 }
