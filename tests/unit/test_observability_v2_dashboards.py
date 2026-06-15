@@ -28,6 +28,27 @@ def test_runtime_fill_rate_sql_keeps_private_fills_with_missing_symbol_column() 
     assert "COALESCE(e.symbol, e.payload->>'symbol') IN (${symbol:sqlstring})" not in sql
 
 
+def test_market_data_quality_uses_per_exchange_market_events() -> None:
+    dashboard = market_data_quality()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert "Local best bid / ask / VWAP" not in panels_by_title
+    assert "Global best bid / ask / VWAP" not in panels_by_title
+
+    price_sql = panels_by_title["Best bid / ask / VWAP by exchange"]["targets"][0]["rawSql"]
+    assert "role_exchange" not in price_sql
+    assert "event_type = 'MarketEvent'" in price_sql
+    assert "exchange || ' vwap'" in price_sql
+
+    volume_sql = panels_by_title["Buy / sell volume by exchange"]["targets"][0]["rawSql"]
+    assert "role_exchange" not in volume_sql
+    assert "exchange || ' buy_volume'" in volume_sql
+
+    step_sql = panels_by_title["Market events / step"]["targets"][0]["rawSql"]
+    assert "event_type = 'MarketEvent'" in step_sql
+    assert "StrategyDecision" not in step_sql
+
+
 def test_event_rate_panels_emit_zero_filled_series() -> None:
     dashboards = [
         runtime_overview(),

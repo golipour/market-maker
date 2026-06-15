@@ -600,6 +600,23 @@ def _event_step_source_sql(t_end_expr: str, fallback_ts_expr: str) -> str:
     return f"COALESCE({_step_time_sql(t_end_expr)}, {fallback_ts_expr})"
 
 
+def _market_event_scope_pairs_sql() -> str:
+    return """SELECT DISTINCT e.exchange, e.symbol
+  FROM mm_events e
+  WHERE e.event_type = 'MarketEvent'
+    AND e.exchange IS NOT NULL
+    AND e.symbol IS NOT NULL
+    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
+    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])"""
+
+
+def _market_event_scope_pair_metric_sql() -> str:
+    return f"""  SELECT scope.exchange || ' ' || scope.symbol AS metric
+  FROM (
+    {_market_event_scope_pairs_sql()}
+  ) AS scope"""
+
+
 def _mm_scope_pairs_sql() -> str:
     return f"""SELECT DISTINCT e.exchange, e.symbol
   FROM mm_events e
@@ -978,7 +995,7 @@ WHERE e.event_type = 'MarketEvent'
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2"""
-    metrics_sql = _mm_scope_pair_metric_sql()
+    metrics_sql = _market_event_scope_pair_metric_sql()
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
@@ -3156,15 +3173,18 @@ def runtime_overview() -> dict[str, Any]:
 
 def market_data_quality() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Raw orderbook/trade feed health before interval aggregation, plus local/global price-volume comparison.", y=0),
+        _text(
+            1,
+            "Scope",
+            "Raw orderbook/trade feed health before interval aggregation, plus per-exchange price and volume from persisted MarketEvent streams.",
+            y=0,
+        ),
         _panel(2, "Market events / step", "timeseries", PG_DS, _market_event_step_sql(), x=0, y=3, w=6, unit="ops"),
         _panel(3, "Raw feed freshness ms", "timeseries", PROM_DS, '(time() * 1000) - max by (exchange,symbol,kind)(mm_raw_market_event_timestamp_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=6, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
         _panel(4, "Raw receive lag latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=12, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
         _panel(5, "Raw event gap latest ms", "timeseries", PROM_DS, 'max by (exchange,symbol,kind)(mm_raw_market_event_gap_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}"})', x=18, y=3, w=6, unit="ms", legend="{{exchange}} {{kind}}"),
-        _panel(6, "Local best bid / ask / VWAP", "timeseries", PG_DS, _role_price_vwap_sql("local"), x=0, y=11),
-        _panel(7, "Global best bid / ask / VWAP", "timeseries", PG_DS, _role_price_vwap_sql("global"), x=12, y=11),
-        _panel(8, "Local buy / sell volume", "timeseries", PG_DS, _role_volume_sql("local"), x=0, y=19),
-        _panel(9, "Global buy / sell volume", "timeseries", PG_DS, _role_volume_sql("global"), x=12, y=19),
+        _panel(6, "Best bid / ask / VWAP by exchange", "timeseries", PG_DS, _exchange_price_vwap_sql(), x=0, y=11, w=24),
+        _panel(8, "Buy / sell volume by exchange", "timeseries", PG_DS, _exchange_volume_sql(), x=0, y=19, w=24),
     ]
     return _dashboard("mm-obs-v2-market-data", "MM Observability v2 / 01 Market Data Quality", panels, tags=["market-data"])
 
@@ -4171,6 +4191,55 @@ ask_step_plot AS (
   FROM selected
   WHERE EXISTS (SELECT 1 FROM ask_step)
 )"""
+
+
+def _exchange_price_vwap_sql() -> str:
+    best_bid = _numeric_sql("payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+    best_ask = _numeric_sql("payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
+    vwap = _numeric_sql("payload->>'vwap'", default="NULL")
+    filters = """event_type = 'MarketEvent'
+  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
+  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
+  AND $__timeFilter(ts)"""
+    return f"""SELECT ts AS "time", (exchange || ' best_bid') AS metric,
+       {best_bid} AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
+UNION ALL
+SELECT ts AS "time", (exchange || ' best_ask') AS metric,
+       {best_ask} AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
+UNION ALL
+SELECT ts AS "time", (exchange || ' vwap') AS metric,
+       {vwap} AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->>'vwap') IS NOT NULL
+ORDER BY 1"""
+
+
+def _exchange_volume_sql() -> str:
+    buy_volume = _numeric_sql("payload->>'buy_volume'", default="NULL")
+    sell_volume = _numeric_sql("payload->>'sell_volume'", default="NULL")
+    filters = """event_type = 'MarketEvent'
+  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
+  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
+  AND $__timeFilter(ts)"""
+    return f"""SELECT ts AS "time", (exchange || ' buy_volume') AS metric,
+       {buy_volume} AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->>'buy_volume') IS NOT NULL
+UNION ALL
+SELECT ts AS "time", (exchange || ' sell_volume') AS metric,
+       {sell_volume} AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->>'sell_volume') IS NOT NULL
+ORDER BY 1"""
 
 
 def _best_bid_ask_sql() -> str:
