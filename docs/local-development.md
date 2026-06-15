@@ -257,13 +257,25 @@ To align local dev with the example file:
 
 ### Ingestor feeds from registry
 
-Ingestor JSON can load `feeds[]` from Postgres instead of inline JSON:
+Ingestor and persistence JSON can load `feeds[]` from Postgres instead of inline JSON:
 
 ```json
 "load_feeds_from_registry": true
 ```
 
-in `market_maker.ingestor.example.json` (requires `MM_DATABASE_URL`). When false, `feeds[]` in the ingestor file is used as today.
+in both `market_maker.ingestor.example.json` and `market_maker.persistence.example.json` (requires `MM_DATABASE_URL`). When true, the inline `feeds[]` is replaced at startup from `registry_market_feeds` (active rows only).
+
+**Restart ingestor and persistence** after adding or changing market feeds in the UI — there is no hot reload.
+
+**Grafana Market Data Quality** only shows exchanges that are actually ingesting:
+
+| Panel source | What it needs |
+|--------------|----------------|
+| Raw feed freshness (Prometheus) | Ingestor running with that feed in its startup config |
+| Market events / step (Postgres) | Persistence subscribed to the same `market:events:…` topic |
+| Local / global bid-ask panels | A **running strategy** using that venue as local or global market (not registry feeds alone) |
+
+If you register Tabdeal/Wallex feeds in the UI but the ingestor still starts with only Nobitex in JSON (and without `load_feeds_from_registry`), Grafana will correctly show Nobitex only.
 
 ### Allocations = virtual wallets
 

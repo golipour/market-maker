@@ -1,5 +1,6 @@
 {
-  "_comment": "Standalone persistence subscriber. Run alongside ingestor and consumer runtimes.",
+  "_comment": "Standalone persistence subscriber. Set load_feeds_from_registry when feeds are managed in the platform UI (requires MM_DATABASE_URL and ingestor publishing the same topics).",
+  "load_feeds_from_registry": true,
   "feeds": [
     {
       "exchange": "nobitex",
@@ -7,7 +8,6 @@
       "interval_ms": 10000
     }
   ],
-  "exchanges": ["nobitex"],
   "actors": ["mpc-controller"],
   "bus": {
     "kind": "redis_streams",

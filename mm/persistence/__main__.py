@@ -11,11 +11,11 @@ import json
 import signal
 
 from mm.persistence.service import build_persistence_service
-from mm.persistence.service_config import load_persistence_service_config
+from mm.persistence.service_config import load_persistence_service_config_from_registry
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_persistence_service_config(args.config)
+    config = load_persistence_service_config_from_registry(args.config)
     service = await build_persistence_service(config)
     contract = config.as_contract()
     contract["type"] = "PersistenceConfigCheck"
