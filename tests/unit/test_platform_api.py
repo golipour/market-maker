@@ -49,6 +49,17 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
         "mm-obs-v2-portfolio-pnl",
         "mm-obs-v2-fill-spread-pnl",
     }
+    assert [d["title"] for d in body["dashboards"]] == [
+        "Market Data Quality",
+        "Orderbook Depth",
+        "Target Order Stems",
+        "Action Pipeline Side Counts",
+        "Optimizer Diagnostics",
+        "Model Parameters",
+        "Pipeline Time Profile",
+        "Portfolio And PnL",
+        "Fill Spread PnL",
+    ]
     assert body["solo_panels"] == []
 
 

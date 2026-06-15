@@ -143,15 +143,15 @@ async def _probe_url(url: str, *, expect_metrics: bool) -> tuple[bool, str]:
 
 def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
     rows = [
-        ("MM Observability v2 / 01 Market Data Quality", "mm-obs-v2-market-data"),
-        ("MM Observability v2 / 01B Orderbook Depth", "mm-obs-v2-orderbook-depth"),
-        ("MM Observability v2 / 05C Target Order Stems", "mm-obs-v2-target-order-stems"),
-        ("MM Observability v2 / 05D Action Pipeline Side Counts", "mm-obs-v2-action-pipeline-side-counts"),
-        ("MM Observability v2 / 04 Optimizer Diagnostics", "mm-obs-v2-optimizer"),
-        ("MM Observability v2 / 03B Model Parameters", "mm-obs-v2-model-parameters"),
-        ("MM Observability v2 / 02B Pipeline Time Profile", "mm-obs-v2-pipeline-time-profile"),
-        ("MM Observability v2 / 07 Portfolio And PnL", "mm-obs-v2-portfolio-pnl"),
-        ("MM Observability v2 / 07B Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
+        ("Market Data Quality", "mm-obs-v2-market-data"),
+        ("Orderbook Depth", "mm-obs-v2-orderbook-depth"),
+        ("Target Order Stems", "mm-obs-v2-target-order-stems"),
+        ("Action Pipeline Side Counts", "mm-obs-v2-action-pipeline-side-counts"),
+        ("Optimizer Diagnostics", "mm-obs-v2-optimizer"),
+        ("Model Parameters", "mm-obs-v2-model-parameters"),
+        ("Pipeline Time Profile", "mm-obs-v2-pipeline-time-profile"),
+        ("Portfolio And PnL", "mm-obs-v2-portfolio-pnl"),
+        ("Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
     ]
     return [
         {
