@@ -142,8 +142,8 @@ All example configs live in `mm/configs/`.
 
 | File | Used by | What it configures |
 |------|---------|-------------------|
-| `market_maker.ingestor.example.json` | `mm.ingestor` | Feeds (exchange/symbol/interval), exchange REST/WS settings, Redis bus, metrics `:8001` |
-| `market_maker.worker.example.json` | `mm.worker` | `worker_id`, registry (`MM_DATABASE_URL`), Redis bus, supervisor backoff, metrics `:8003` |
+| `market_maker.ingestor.example.json` | `mm.ingestor` | Feeds (exchange/symbol/interval), exchange REST/WS settings, Redis bus, metrics `:8001`. Optional `"load_feeds_from_registry": true` to read feeds from Postgres. |
+| `market_maker.worker.example.json` | `mm.worker` | `worker_id`, registry (`MM_DATABASE_URL`), Redis bus, supervisor backoff, metrics `:8003`. Strategy runtime comes from registry rows, not this file. |
 | `market_maker.persistence.example.json` | `mm.persistence` | Topics/feeds to persist, Postgres/Parquet env refs, metrics `:8002` |
 | `market_maker.runtime.consumer.example.json` | `mm.tools.print_events` | Full strategy runtime with `market_data_source: "bus"`, bot `mpc-controller`, metrics `:8000` |
 | `market_maker.runtime.example.json` | Monolith / reference | Complete single-process config (ingestion + strategy + persistence in one file) |
@@ -178,14 +178,90 @@ Each service must have a **distinct** `consumer_group` (ingestor, persistence, w
 When `run_local_stack` includes the worker and `MM_DATABASE_URL` is set, it calls `ensure_local_worker_registry()` which idempotently seeds:
 
 - Worker `worker-1` / assignment `worker-1-assignment`
+- Exchange `nobitex` (minimal `config`; see [Registry configuration vs monolith JSON](#registry-configuration-vs-monolith-json))
+- Account `account-nobitex-main` → `credential_ref: NOBITEX_API_TOKEN`
+- Market feed `nobitex` / `USDT_IRT` / `10000` ms (ingestor)
 - Strategy `mpc-usdt-local`, actor `mpc-controller`, symbol `USDT_IRT` on Nobitex
 - Preset `thin_local_liquidity_weighted_mpc` (minimal MPC preset)
+- Allocation / virtual wallet for `mpc-usdt-local` (initial USDT / IRT balances)
 
 Manual seed:
 
 ```bash
 python3 -m mm.tools.seed_local_registry
 ```
+
+---
+
+## Registry configuration vs monolith JSON
+
+In **Mode A** (worker + registry), strategy runtime is assembled from Postgres rows, not from a single `market_maker.runtime.example.json`. The monolith file remains the **field reference** and is still used by **Mode C/D** (`mm.runtime` / `print_events`).
+
+### Where to define what
+
+| Concept | Postgres registry | JSON files | `.env` |
+|---------|-------------------|------------|--------|
+| Exchange venue defaults (fees, private polling, bus vs local market) | `registry_exchanges.config` | `market_maker.runtime.example.json` → `exchanges.*` (monolith only) | — |
+| API credentials | `registry_accounts.credential_ref` | monolith `exchanges.*.private.api_*_env` | actual secret values (`NOBITEX_API_TOKEN`, …) |
+| Public market polling (depth, trades, poll interval) | `registry_market_feeds` (+ ingestor JSON fallback) | `market_maker.ingestor.example.json` → `feeds[]` | — |
+| Strategy logic (MPC, risk, execution) | `registry_strategy_presets` | monolith `strategy_presets.*` | — |
+| Strategy instance (symbol, account, preset, actor) | `registry_strategies` | monolith `bots.*` | — |
+| Virtual wallet (initial base/quote pool) | `registry_allocations` | — | — |
+| Worker assignment | `registry_worker_assignments` | `market_maker.worker.example.json` → `worker_id` | — |
+| Bus / metrics / scheduler defaults | `registry_platform_settings` | per-service JSON (`worker`, `ingestor`, …) | `MM_BUS_*`, `MM_ADMIN_*` |
+
+Control-plane UI path (recommended order): **Exchanges → Accounts → Market feeds → Presets → Strategies → Wallets (allocations) → Workers**.
+
+### Mapping `exchanges.nobitex` from the monolith example
+
+`mm/configs/market_maker.runtime.example.json` packs everything under one exchange block. In the decomposed registry path those responsibilities split:
+
+| Monolith field (`exchanges.nobitex`) | Registry / runtime location | Notes |
+|--------------------------------------|----------------------------|--------|
+| `market_data.mode` | Exchange `config.market_data.mode` | e.g. `rest` |
+| `market_data.depth_limit`, `trades_limit`, `poll_interval_ms` | **Market feed** row (ingestor) | Ingestor polls the exchange and publishes `market:events:…`. Not repeated on the worker exchange row when using the bus. |
+| `market_data` (worker view) | Exchange `config.market_data.market_data_source: "bus"` | Worker subscribes to Redis; it does not poll public books itself. |
+| `private.api_token_env` | Account `credential_ref` | Plain env name (`NOBITEX_API_TOKEN`) or JSON `{"api_token_env":"…","api_private_key_env":"…"}`. Merged at resolve time into `exchanges.*.private`. |
+| `private.api_private_key_env` | Account `credential_ref` (JSON form) | Same merge as above. |
+| `private.poll_interval_ms`, `fill_event_source` | Exchange `config.private` | Still venue defaults for private-state polling. |
+| `fees.maker_fee` | Exchange `config.fees` | Used when building worker runtime JSON. |
+| `_comment`, `_options` | — | Documentation only; runtime ignores them. |
+
+**Local seed is intentionally minimal** (`mm/tools/seed_local_registry.py`): it sets `market_data_source: "bus"`, basic `private` + `fees`, and relies on defaults for anything omitted. That is why the **Exchanges** UI shows fewer keys than the monolith example — not because the schema dropped fields.
+
+Omitted exchange fields fall back to runtime defaults when the worker resolves config, for example:
+
+| Field | Example JSON | Default if missing |
+|-------|--------------|-------------------|
+| `depth_limit` | 100 | 10 |
+| `trades_limit` | 200 | 100 |
+| `poll_interval_ms` (market) | 2000 | 1000 (mostly irrelevant when `market_data_source` is `bus`) |
+| `private.poll_interval_ms` | 10000 | 5000 |
+
+To align local dev with the example file:
+
+1. **Exchanges → nobitex → Edit** — paste `private` and `fees` from the example (and any exchange-level `market_data` you still want on the worker).
+2. **Market feeds** — set `depth_limit`, `trades_limit`, `poll_interval_ms` for the ingestor feed (seed creates `nobitex` / `USDT_IRT` / `10000` ms).
+3. **Accounts** — ensure `credential_ref` matches your `.env` vars.
+4. **Strategies → select strategy → runtime-config** — inspect the **fully merged** JSON the worker actually loads.
+
+### Ingestor feeds from registry
+
+Ingestor JSON can load `feeds[]` from Postgres instead of inline JSON:
+
+```json
+"load_feeds_from_registry": true
+```
+
+in `market_maker.ingestor.example.json` (requires `MM_DATABASE_URL`). When false, `feeds[]` in the ingestor file is used as today.
+
+### Allocations = virtual wallets
+
+`registry_allocations` defines an **initial base/quote wallet** per strategy instance. The MPC and risk engine rebalance **inside that pool**, not against the full exchange account balance. Fills update wallet holdings; breaches halt the actor when the wallet goes negative. Physical exchange ledger remains for reconciliation.
+
+### Exchange status in the UI
+
+`active` / `disabled` on an exchange row is an operator flag in the registry. **`active`** means the venue is registered and its `config` is merged into strategy runtime. **`disabled`** is reserved for future enforcement; the worker does not yet refuse strategies on disabled venues.
 
 ---
 
@@ -298,7 +374,7 @@ python3 -m mm.api.admin
 | `GET /api/admin/status` | Yes* | Env/config summary |
 | `GET /metrics` | No | Prometheus metrics |
 | `POST /api/admin/commands` | Yes* | Publish pause/kill_switch/dry_run/etc. to `admin:commands` |
-| `GET/POST /api/admin/registry/...` | Yes* | Strategy/worker/account CRUD |
+| `GET/POST /api/admin/registry/...` | Yes* | Exchanges, accounts, presets, market feeds, strategies, allocations, workers, platform settings |
 | `GET /api/admin/platform/services` | Yes* | Health probes for stack services |
 | `GET /api/admin/platform/grafana` | Yes* | Grafana embed URLs for UI |
 | `GET /ui/` | No | Static platform UI (if `platform/ui/dist` exists) |
@@ -354,7 +430,21 @@ Set `MM_PLATFORM_CORS_ORIGINS` if you use a non-default Vite port.
 
 ### UI pages
 
-Overview, Strategies, Allocations, Workers, Commands, Observability (Grafana iframes + service health cards).
+| Page | Purpose |
+|------|---------|
+| Overview | Service health summary |
+| Exchanges | Venue `config` (private polling, fees, bus vs local); view/edit JSON |
+| Accounts | `credential_ref` → env var names (secrets stay in `.env`) |
+| Presets | Reusable MPC / risk / execution templates |
+| Market feeds | Ingestor subscriptions (`depth_limit`, `poll_interval_ms`, …) |
+| Strategies | Strategy instances; runtime-config preview; start/pause |
+| Wallets (allocations) | Virtual wallet initial base/quote per strategy |
+| Workers | Worker assignments and lease heartbeats |
+| Settings | Platform-wide bus / observability / scheduler defaults |
+| Commands | Admin bus commands (pause, kill switch, …) |
+| Observability | Grafana embeds + service probes |
+
+Local dev: build `platform/ui/dist` or use Vite dev server (see above). Set **Admin token** in the sidebar if `MM_ADMIN_TOKEN` is configured.
 
 ---
 
@@ -406,6 +496,7 @@ MM_BUS_KIND=redis_streams python3 -m mm.api.admin
 | `/ui/` 404 | UI not built | `cd platform/ui && npm run build` |
 | Prometheus targets down | Python processes not running | Start stack; check ports 8000–8003, 8080 |
 | Worker starts but no decisions | Missing private API token | Set `NOBITEX_*` in `.env` |
+| Exchange UI shows sparse config vs `runtime.example.json` | Seed is minimal; fields split across registry | See [Registry configuration vs monolith JSON](#registry-configuration-vs-monolith-json); use Strategies → runtime-config to verify merge |
 | Duplicate `--skip` ignored | Old CLI bug | Use `--skip a b` or repeated `--skip` (fixed in current tree) |
 
 ---
