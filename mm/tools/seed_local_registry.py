@@ -69,6 +69,10 @@ def _local_preset_config() -> dict[str, Any]:
             "enabled": True,
             "dry_run": True,
             "actor_id": LOCAL_ACTOR_ID,
+            "orderbook_grid": {
+                "spread_step": 20.0,
+                "spread_max": 200.0,
+            },
             "local_price_model": {"kind": "residual"},
             "local_market_flow_model": {"kind": "gamma"},
             "optimizer": {"kind": "monte_carlo_mpc_tensor_batched", "horizon": 2},

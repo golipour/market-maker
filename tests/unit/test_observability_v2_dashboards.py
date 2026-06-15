@@ -163,46 +163,49 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     depth_expected = {
-        "Local orderbook depth": (0, 3, "MarketEvent", "m.exchange = ctx.exchange"),
-        "Global orderbook depth": (12, 3, "MarketEvent", "gates.value->>'role' = 'global'"),
-        "Local clean orderbook depth": (0, 11, "cleared_orderbook", "e.exchange AS exchange"),
-        "Global clean orderbook depth": (12, 11, "global_cleared_orderbook", "gates.value->>'role' = 'global'"),
-        "Local action ladder depth": (0, 19, "ARRAY['action_pipeline', 'ladder', 'orders']", "WHERE role = 'local'"),
-        "Global action ladder depth": (12, 19, "ARRAY['action_pipeline', 'ladder', 'orders']", "WHERE role = 'global'"),
+        "Orderbook depth": (0, 9, "MarketEvent", "m.exchange = ctx.exchange"),
+        "Clean orderbook depth": (0, 17, "cleared_orderbook", "ctx.diag_payload AS payload"),
+        "Action ladder depth": (0, 25, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
     }
     for title, (x, y, expected_sql, role_sql) in depth_expected.items():
         panel = panels_by_title[title]
         assert panel["type"] == "xychart"
-        assert panel["gridPos"] == {"h": 8, "w": 12, "x": x, "y": y}
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
+        assert panel["gridPos"]["w"] == 24
         sql = panel["targets"][0]["rawSql"]
         assert expected_sql in sql
         assert role_sql in sql
-        if "action ladder depth" in title:
+        if "action ladder depth" in title.lower():
             assert "jsonb_typeof" in sql
             assert "orders_sample" in sql
 
+    assert "Ladder grid vs orders" in panels_by_title
+    assert "Local orderbook depth" not in panels_by_title
+    assert "Global marginal ladder" not in panels_by_title
+
     expected = {
-        "Local marginal ladder": (0, 27, "ladder", "WHERE role = 'local'"),
-        "Global marginal ladder": (12, 27, "ladder", "WHERE role = 'global'"),
-        "Local after venue rounding": (0, 37, "rules_valid", "WHERE role = 'local'"),
-        "Global after venue rounding": (12, 37, "rules_valid", "WHERE role = 'global'"),
-        "Local exchange-accepted placements": (0, 47, "router_accepted", "WHERE role = 'local'"),
-        "Global exchange-accepted placements": (12, 47, "router_accepted", "WHERE role = 'global'"),
+        "Marginal ladder": (0, 33, "ladder"),
+        "After venue rounding": (0, 43, "rules_valid"),
+        "Exchange-accepted placements": (12, 43, "router_accepted"),
     }
-    for title, (x, y, stage, role_sql) in expected.items():
+    for title, (x, y, stage) in expected.items():
         panel = panels_by_title[title]
         assert panel["type"] == "xychart"
-        assert panel["gridPos"] == {"h": 10, "w": 12, "x": x, "y": y}
+        assert panel["gridPos"]["x"] == x
+        assert panel["gridPos"]["y"] == y
 
         sql = panel["targets"][0]["rawSql"]
         assert f"ARRAY['action_pipeline', '{stage}', 'orders']" in sql
         assert "ControllerDiagnostics" in sql
-        assert "role_exchanges" in sql
-        assert role_sql in sql
+        assert "role_exchanges" not in sql
+        assert "exchange:sqlstring" in sql
         assert "'${target_frame_mode}' = 'latest'" in sql
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
         assert "jsonb_typeof" in sql
         assert "ELSE '[]'::jsonb" in sql
+        if stage == "ladder":
+            assert "action_pipeline', 'continuous', 'bid'" in sql
 
     vars_by_name = {var["name"]: var for var in dashboard["templating"]["list"]}
     assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"

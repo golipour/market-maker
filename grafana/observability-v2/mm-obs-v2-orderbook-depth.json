@@ -11,19 +11,62 @@
   "panels": [
     {
       "gridPos": {
-        "h": 3,
+        "h": 4,
         "w": 24,
         "x": 0,
         "y": 0
       },
       "id": 1,
       "options": {
-        "content": "Depth curves use `price - mid` on the x-axis, so zero is the selected frame mid. Bid and ask depth are shown together on each chart.",
+        "content": "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per `orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side). See **Ladder grid vs orders** for the active grid and plotted order counts.",
         "mode": "markdown"
       },
       "title": "Scope",
       "transparent": true,
       "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 14,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\ngrid AS (\n  SELECT\n    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid']), 0) AS bid_grid_levels,\n    COALESCE(jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask']), 0) AS ask_grid_levels,\n    MAX(CASE\n  WHEN trim(COALESCE(elem->>'spread_quote', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(elem->>'spread_quote', ''))::double precision\n  ELSE NULL\nEND) FILTER (WHERE elem ? 'spread_quote') AS spread_max_quote,\n    MIN(CASE\n  WHEN trim(COALESCE(elem->>'spread_quote', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(elem->>'spread_quote', ''))::double precision\n  ELSE NULL\nEND) FILTER (WHERE elem ? 'spread_quote') AS spread_step_quote\n  FROM latest l\n  LEFT JOIN LATERAL jsonb_array_elements(\n    COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)\n  ) AS elem ON TRUE\n),\nladder AS (\n  SELECT\n    COUNT(*) FILTER (WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'bid' AND CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND > 0) AS ladder_bid_orders,\n    COUNT(*) FILTER (WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'ask' AND CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND > 0) AS ladder_ask_orders,\n    COALESCE(MAX(l.payload #>> ARRAY['action_pipeline', 'ladder', 'order_count']), '0') AS ladder_order_count\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND) AS o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n)\nSELECT\n  g.bid_grid_levels,\n  g.ask_grid_levels,\n  g.spread_step_quote,\n  g.spread_max_quote,\n  l.ladder_bid_orders,\n  l.ladder_ask_orders,\n  l.ladder_order_count\nFROM grid g\nCROSS JOIN ladder l",
+          "refId": "A"
+        }
+      ],
+      "title": "Ladder grid vs orders",
+      "type": "table",
+      "description": "Grid rungs come from controller `orderbook_grid`. Ladder orders are marginal sizes at those rungs for the selected exchange.",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
     },
     {
       "datasource": {
@@ -160,9 +203,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
-        "y": 3
+        "y": 9
       },
       "id": 2,
       "options": {
@@ -192,7 +235,7 @@
           "refId": "A"
         }
       ],
-      "title": "Local orderbook depth",
+      "title": "Orderbook depth",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -346,197 +389,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 3
+        "w": 24,
+        "x": 0,
+        "y": 17
       },
       "id": 3,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         gates.key AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], ''))::double precision\n  ELSE NULL\nEND,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  LEFT JOIN LATERAL (\n    SELECT gates.key\n    FROM jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n    WHERE gates.value->>'role' = 'global'\n    LIMIT 1\n  ) gates ON TRUE\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n     AND gates.key IS NOT NULL\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           (\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload #>> ARRAY['orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           NULLIF(ctx.mid, 0.0),\n           0.0\n         ) AS mid,\n         ctx.spread_max,\n         m.payload\n  FROM ctx\n  LEFT JOIN LATERAL (\n    SELECT m.payload, m.ts\n    FROM mm_events m\n    WHERE m.event_type = 'MarketEvent'\n      AND m.exchange = ctx.exchange\n      AND m.symbol = ctx.symbol\n      AND m.payload->>'t_end_ms' IS NOT NULL\n      AND (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) <= ctx.t_end_ms\n      AND $__timeFilter(m.ts)\n    ORDER BY (CASE\n  WHEN trim(COALESCE(m.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(m.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) DESC, m.ts DESC\n    LIMIT 1\n  ) m ON TRUE\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
-          "refId": "A"
-        }
-      ],
-      "title": "Global orderbook depth",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "side"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineStyle": {
-              "fill": "solid"
-            },
-            "lineWidth": 2,
-            "pointSize": {
-              "fixed": 4,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "lines",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "spread"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price - mid"
-              },
-              {
-                "id": "custom.axisCenteredZero",
-                "value": true
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
-            },
-            "properties": [
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "bid"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "displayName",
-                "value": "Bid"
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "ask"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "displayName",
-                "value": "Ask"
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 11
-      },
-      "id": 4,
       "options": {
         "legend": {
           "calcs": [],
@@ -564,7 +421,7 @@
           "refId": "A"
         }
       ],
-      "title": "Local clean orderbook depth",
+      "title": "Clean orderbook depth",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -718,14 +575,190 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 11
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "mapping": "auto",
+        "series": [],
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM latest l\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'bid'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'ask'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "refId": "A"
+        }
+      ],
+      "title": "Action ladder depth",
+      "type": "xychart",
+      "pluginVersion": "13.0.0",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "side"
+            ],
+            "keepFields": false,
+            "naming": {
+              "mode": "as_is",
+              "asLabels": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "qty",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 0,
+            "pointSize": {
+              "fixed": 6,
+              "max": 20,
+              "min": 1
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "points",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "price"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "price"
+              },
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*bid$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*ask$"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^axis range$"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": false
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "black",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 33
       },
       "id": 5,
       "options": {
         "legend": {
-          "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
@@ -746,11 +779,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH ctx AS (\n  SELECT e.ts AS diag_ts,\n         e.payload AS diag_payload,\n         gates.key AS exchange,\n         e.symbol,\n         e.actor_id,\n         CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE 0.0\nEND AS t_end_ms,\n         COALESCE(\n           (\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','bids','0','price'], ''))::double precision\n  ELSE NULL\nEND +\n             CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['global_cleared_orderbook','asks','0','price'], ''))::double precision\n  ELSE NULL\nEND\n           ) / 2.0,\n           CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_mid'], ''))::double precision\n  ELSE NULL\nEND,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM mm_events e\n  \n  LEFT JOIN LATERAL (\n    SELECT gates.key\n    FROM jsonb_each(COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates(key, value)\n    WHERE gates.value->>'role' = 'global'\n    LIMIT 1\n  ) gates ON TRUE\n  WHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n     AND gates.key IS NOT NULL\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT ctx.mid, ctx.spread_max, ctx.diag_payload AS payload\n  FROM ctx\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(b->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(b->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(b->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'global_cleared_orderbook'->'bids', '[]'::jsonb)) AS b\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(a->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(a->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(a->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM selected, LATERAL jsonb_array_elements(COALESCE(payload->'global_cleared_orderbook'->'asks', '[]'::jsonb)) AS a\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IN (\n      SELECT grid.price\n      FROM (\n        SELECT CASE\n          WHEN trim(COALESCE(elem->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n          THEN trim(COALESCE(elem->>'price', ''))::double precision\n          ELSE NULL\n        END AS price\n        FROM latest l\n        CROSS JOIN LATERAL jsonb_array_elements(\n          COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)\n          || COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask'], '[]'::jsonb)\n        ) AS elem\n      ) AS grid\n      WHERE grid.price IS NOT NULL\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
           "refId": "A"
         }
       ],
-      "title": "Global clean orderbook depth",
+      "title": "Marginal ladder",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -758,7 +791,7 @@
           "id": "partitionByValues",
           "options": {
             "fields": [
-              "side"
+              "series"
             ],
             "keepFields": false,
             "naming": {
@@ -767,7 +800,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "Marginal ladder orders on the controller spread grid (pre-cap) for the selected exchange."
     },
     {
       "datasource": {
@@ -790,20 +824,16 @@
               "tooltip": false,
               "viz": false
             },
-            "lineInterpolation": "linear",
-            "lineStyle": {
-              "fill": "solid"
-            },
-            "lineWidth": 2,
+            "lineWidth": 0,
             "pointSize": {
-              "fixed": 4,
+              "fixed": 6,
               "max": 20,
               "min": 1
             },
             "scaleDistribution": {
               "type": "linear"
             },
-            "show": "lines",
+            "show": "points",
             "spanNulls": false
           },
           "unit": "short",
@@ -813,43 +843,23 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "spread"
+              "options": "price"
             },
             "properties": [
               {
                 "id": "custom.axisLabel",
-                "value": "price - mid"
-              },
-              {
-                "id": "custom.axisCenteredZero",
-                "value": true
+                "value": "price"
               },
               {
                 "id": "decimals",
-                "value": 1
+                "value": 6
               }
             ]
           },
           {
             "matcher": {
               "id": "byRegexp",
-              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
-            },
-            "properties": [
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "bid"
+              "options": ".*bid$"
             },
             "properties": [
               {
@@ -864,10 +874,6 @@
                 "value": 0
               },
               {
-                "id": "displayName",
-                "value": "Bid"
-              },
-              {
                 "id": "min",
                 "value": 0
               }
@@ -875,8 +881,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "ask"
+              "id": "byRegexp",
+              "options": ".*ask$"
             },
             "properties": [
               {
@@ -891,27 +897,45 @@
                 "value": 0
               },
               {
-                "id": "displayName",
-                "value": "Ask"
-              },
-              {
                 "id": "min",
                 "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^axis range$"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": false
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "black",
+                  "mode": "fixed"
+                }
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 10,
         "w": 12,
         "x": 0,
-        "y": 19
+        "y": 43
       },
       "id": 6,
       "options": {
         "legend": {
-          "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
@@ -932,11 +956,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM latest l\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'bid'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'ask'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
           "refId": "A"
         }
       ],
-      "title": "Local action ladder depth",
+      "title": "After venue rounding",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
@@ -944,7 +968,7 @@
           "id": "partitionByValues",
           "options": {
             "fields": [
-              "side"
+              "series"
             ],
             "keepFields": false,
             "naming": {
@@ -976,20 +1000,16 @@
               "tooltip": false,
               "viz": false
             },
-            "lineInterpolation": "linear",
-            "lineStyle": {
-              "fill": "solid"
-            },
-            "lineWidth": 2,
+            "lineWidth": 0,
             "pointSize": {
-              "fixed": 4,
+              "fixed": 6,
               "max": 20,
               "min": 1
             },
             "scaleDistribution": {
               "type": "linear"
             },
-            "show": "lines",
+            "show": "points",
             "spanNulls": false
           },
           "unit": "short",
@@ -999,43 +1019,23 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "spread"
+              "options": "price"
             },
             "properties": [
               {
                 "id": "custom.axisLabel",
-                "value": "price - mid"
-              },
-              {
-                "id": "custom.axisCenteredZero",
-                "value": true
+                "value": "price"
               },
               {
                 "id": "decimals",
-                "value": 1
+                "value": 6
               }
             ]
           },
           {
             "matcher": {
               "id": "byRegexp",
-              "options": "^(value|bid|ask|Bid|Ask|value bid|value ask)$"
-            },
-            "properties": [
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "bid"
+              "options": ".*bid$"
             },
             "properties": [
               {
@@ -1050,10 +1050,6 @@
                 "value": 0
               },
               {
-                "id": "displayName",
-                "value": "Bid"
-              },
-              {
                 "id": "min",
                 "value": 0
               }
@@ -1061,8 +1057,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "ask"
+              "id": "byRegexp",
+              "options": ".*ask$"
             },
             "properties": [
               {
@@ -1077,27 +1073,45 @@
                 "value": 0
               },
               {
-                "id": "displayName",
-                "value": "Ask"
-              },
-              {
                 "id": "min",
                 "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^axis range$"
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": false
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "black",
+                  "mode": "fixed"
+                }
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 8,
+        "h": 10,
         "w": 12,
         "x": 12,
-        "y": 19
+        "y": 43
       },
       "id": 7,
       "options": {
         "legend": {
-          "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
@@ -1118,1067 +1132,11 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'global_mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'global_mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['global_cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['global_cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['global_cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['global_cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max\n  FROM latest l\n),\nbid_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'bid'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\nask_levels AS (\n  SELECT CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND = 'ask'\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\nbid_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN bid_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= -selected.spread_max\n    AND (l.price - selected.mid) <= 0\n),\nask_step AS (\n  SELECT (l.price - selected.mid) AS spread,\n         SUM(l.qty) OVER (ORDER BY l.price ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value\n  FROM selected\n  JOIN ask_levels l ON TRUE\n  WHERE l.price IS NOT NULL\n    AND l.qty > 0\n    AND (l.price - selected.mid) >= 0\n    AND (l.price - selected.mid) <= selected.spread_max\n),\nbid_step_plot AS (\n  SELECT spread, value FROM bid_step\n  UNION ALL\n  SELECT -selected.spread_max,\n         (SELECT value FROM bid_step ORDER BY spread ASC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM bid_step)\n),\nask_step_plot AS (\n  SELECT spread, value FROM ask_step\n  UNION ALL\n  SELECT selected.spread_max,\n         (SELECT value FROM ask_step ORDER BY spread DESC LIMIT 1)\n  FROM selected\n  WHERE EXISTS (SELECT 1 FROM ask_step)\n)\nSELECT 'bid'::text AS side,\n       spread,\n       value\nFROM bid_step_plot\nUNION ALL\nSELECT 'ask'::text AS side,\n       spread,\n       value\nFROM ask_step_plot\nORDER BY side, spread",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
           "refId": "A"
         }
       ],
-      "title": "Global action ladder depth",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "side"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 0,
-        "y": 27
-      },
-      "id": 8,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Local marginal ladder",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "series"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 27
-      },
-      "id": 9,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Global marginal ladder",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "series"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 0,
-        "y": 37
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Local after venue rounding",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "series"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 37
-      },
-      "id": 11,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Global after venue rounding",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "series"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 0,
-        "y": 47
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'local'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Local exchange-accepted placements",
-      "type": "xychart",
-      "pluginVersion": "13.0.0",
-      "transformations": [
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "series"
-            ],
-            "keepFields": false,
-            "naming": {
-              "mode": "as_is",
-              "asLabels": false
-            }
-          }
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "qty",
-            "axisPlacement": "auto",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "show": "points",
-            "spanNulls": false
-          },
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "price"
-            },
-            "properties": [
-              {
-                "id": "custom.axisLabel",
-                "value": "price"
-              },
-              {
-                "id": "decimals",
-                "value": 6
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*bid$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "green",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": ".*ask$"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "red",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisSoftMin",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 47
-      },
-      "id": 13,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "mapping": "auto",
-        "series": [],
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nrole_exchanges AS (\n  SELECT 'local'::text AS role,\n         l.exchange AS exchange\n  FROM latest l\n  WHERE l.exchange IS NOT NULL\n  UNION\n  SELECT gates.value->>'role' AS role,\n         gates.key AS exchange\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_each(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['execution_gates', 'venue_gates']) = 'object' THEN l.payload #> ARRAY['execution_gates', 'venue_gates']\n  ELSE '{}'::jsonb\nEND\n  ) AS gates(key, value)\n  WHERE gates.value->>'role' IN ('local', 'global')\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', '') IN (\n      SELECT exchange FROM role_exchanges WHERE role = 'global'\n    )\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
-          "refId": "A"
-        }
-      ],
-      "title": "Global exchange-accepted placements",
+      "title": "Exchange-accepted placements",
       "type": "xychart",
       "pluginVersion": "13.0.0",
       "transformations": [
