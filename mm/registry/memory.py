@@ -113,8 +113,7 @@ class MemoryRegistryStore:
         status: str = "active",
     ) -> AccountRecord:
         exchange_key = exchange.lower().strip()
-        if exchange_key not in self._exchanges:
-            raise RegistryNotFoundError(f"exchange {exchange!r} not found")
+        self.get_exchange(exchange_key)
         now = _utcnow()
         previous = self._accounts.get(account_id)
         record = AccountRecord(
@@ -181,11 +180,9 @@ class MemoryRegistryStore:
         status: str = "draft",
         config_overrides: dict[str, Any] | None = None,
     ) -> StrategyRecord:
-        if account_id not in self._accounts:
-            raise RegistryNotFoundError(f"account {account_id!r} not found")
-        if preset_id not in self._presets:
-            raise RegistryNotFoundError(f"preset {preset_id!r} not found")
-        for other in self._strategies.values():
+        self.get_account(account_id)
+        self.get_preset(preset_id)
+        for other in self.list_strategies():
             if other.actor_id == actor_id and other.strategy_id != strategy_id:
                 raise RegistryConflictError(f"actor_id {actor_id!r} already assigned")
         now = _utcnow()
@@ -246,11 +243,8 @@ class MemoryRegistryStore:
         halt_on_breach: bool = True,
         status: str = "active",
     ) -> AllocationRecord:
-        if strategy_id not in self._strategies:
-            raise RegistryNotFoundError(f"strategy {strategy_id!r} not found")
-        if account_id not in self._accounts:
-            raise RegistryNotFoundError(f"account {account_id!r} not found")
-        strategy = self._strategies[strategy_id]
+        strategy = self.get_strategy(strategy_id)
+        self.get_account(account_id)
         if strategy.actor_id != actor_id:
             raise ValueError(
                 f"allocation actor_id {actor_id!r} does not match strategy actor {strategy.actor_id!r}"
@@ -259,7 +253,7 @@ class MemoryRegistryStore:
             raise ValueError(
                 f"allocation account_id {account_id!r} does not match strategy account {strategy.account_id!r}"
             )
-        for other in self._allocations.values():
+        for other in self.list_allocations():
             if other.strategy_id == strategy_id and other.allocation_id != (allocation_id or other.allocation_id):
                 raise RegistryConflictError(f"allocation already exists for strategy {strategy_id!r}")
         key = allocation_id or uuid.uuid4().hex
@@ -305,12 +299,11 @@ class MemoryRegistryStore:
         status: str = "active",
     ) -> MarketFeedRecord:
         ex = exchange.lower().strip()
-        if ex not in self._exchanges:
-            raise RegistryNotFoundError(f"exchange {exchange!r} not found")
+        self.get_exchange(ex)
         sym = symbol.strip()
         if interval_ms <= 0:
             raise ValueError("interval_ms must be positive")
-        for other in self._market_feeds.values():
+        for other in self.list_market_feeds():
             if (
                 other.exchange == ex
                 and other.symbol == sym
