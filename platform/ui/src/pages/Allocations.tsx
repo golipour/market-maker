@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
   api,
@@ -29,6 +30,7 @@ export function AllocationsPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [form, setForm] = useState<AllocationUpsertPayload>(EMPTY_FORM);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +61,8 @@ export function AllocationsPage() {
     void load();
   }, [load]);
 
+  const selected = items.find((row) => row.allocation_id === selectedId) ?? null;
+
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_FORM);
@@ -69,6 +73,7 @@ export function AllocationsPage() {
 
   function openEdit(row: Allocation) {
     setEditingId(row.allocation_id);
+    setSelectedId(row.allocation_id);
     setForm({
       allocation_id: row.allocation_id,
       strategy_id: row.strategy_id,
@@ -117,6 +122,7 @@ export function AllocationsPage() {
       setMessage(`Allocation ${saved.allocation_id} saved`);
       setShowForm(false);
       setEditingId(null);
+      setSelectedId(saved.allocation_id);
       setForm(EMPTY_FORM);
       await load();
     } catch (err) {
@@ -319,7 +325,10 @@ export function AllocationsPage() {
                 </td>
                 <td>{row.halt_on_breach ? "yes" : "no"}</td>
                 <td>{row.status}</td>
-                <td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button type="button" className="btn" onClick={() => setSelectedId(row.allocation_id)}>
+                    View
+                  </button>{" "}
                   <button type="button" className="btn" onClick={() => openEdit(row)}>
                     Edit
                   </button>
@@ -336,6 +345,17 @@ export function AllocationsPage() {
           </tbody>
         </table>
       </div>
+      {selected && !showForm ? (
+        <section className="card" style={{ marginTop: "1rem" }}>
+          <h3>{selected.allocation_id}</h3>
+          <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+            Virtual wallet for strategy <code>{selected.strategy_id}</code>. Initial balances are
+            the capital pool the MPC may spend; live held/free amounts are published on{" "}
+            <code>portfolio:allocation:{selected.actor_id}</code> when the worker runs.
+          </p>
+          <JsonBlock value={selected} />
+        </section>
+      ) : null}
     </>
   );
 }

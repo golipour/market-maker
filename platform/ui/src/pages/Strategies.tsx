@@ -322,6 +322,7 @@ export function StrategiesPage() {
                 <th>Account</th>
                 <th>Preset</th>
                 <th>Status</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -337,11 +338,23 @@ export function StrategiesPage() {
                   <td>{row.account_id}</td>
                   <td>{row.preset_id}</td>
                   <td>{row.status}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedId(row.strategy_id);
+                      }}
+                    >
+                      View
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!loading && items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ color: "var(--text-muted)" }}>
+                  <td colSpan={7} style={{ color: "var(--text-muted)" }}>
                     No strategies registered. Seed via registry or create one above.
                   </td>
                 </tr>

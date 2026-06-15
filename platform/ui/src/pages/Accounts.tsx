@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
   api,
@@ -7,6 +8,9 @@ import {
   type Exchange,
   type RegistryList,
 } from "../api/client";
+
+const STATUSES = ["active", "disabled"] as const;
+const ROLES = ["trading"] as const;
 
 const EMPTY: AccountUpsertPayload = {
   account_id: "",
@@ -19,7 +23,9 @@ const EMPTY: AccountUpsertPayload = {
 export function AccountsPage() {
   const [items, setItems] = useState<Account[]>([]);
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<AccountUpsertPayload>(EMPTY);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -47,15 +53,41 @@ export function AccountsPage() {
     void load();
   }, [load]);
 
+  const selected = items.find((row) => row.account_id === selectedId) ?? null;
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY);
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
+  function openEdit(row: Account) {
+    setEditingId(row.account_id);
+    setForm({
+      account_id: row.account_id,
+      exchange: row.exchange,
+      credential_ref: row.credential_ref,
+      role: row.role,
+      status: row.status,
+    });
+    setSelectedId(row.account_id);
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError(null);
     try {
-      await api.post<Account>("/api/admin/registry/accounts", form);
-      setMessage(`Account ${form.account_id} saved`);
+      const saved = await api.post<Account>("/api/admin/registry/accounts", form);
+      setMessage(`Account ${saved.account_id} saved`);
       setShowForm(false);
-      setForm(EMPTY);
+      setEditingId(null);
+      setSelectedId(saved.account_id);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Save failed");
@@ -68,10 +100,15 @@ export function AccountsPage() {
     <>
       <header className="page-header">
         <h1>Accounts</h1>
-        <p>Trading accounts linked to exchanges; credentials via env refs only.</p>
+        <p>
+          Trading accounts linked to exchanges. Secrets stay in <code>.env</code>;{" "}
+          <code>credential_ref</code> is an env var name or JSON with{" "}
+          <code>api_token_env</code> / <code>api_private_key_env</code> keys merged into exchange
+          private config at runtime.
+        </p>
       </header>
       <div className="page-toolbar">
-        <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
           New account
         </button>
         <button type="button" className="btn" onClick={() => void load()}>
@@ -82,13 +119,14 @@ export function AccountsPage() {
       {message ? <div className="alert alert-success">{message}</div> : null}
       {showForm ? (
         <form onSubmit={(e) => void onSubmit(e)} className="card form-card">
-          <h3>New account</h3>
+          <h3>{editingId ? `Edit ${editingId}` : "New account"}</h3>
           <div className="form-grid">
             <div className="form-field">
               <label htmlFor="acc-id">Account ID</label>
               <input
                 id="acc-id"
                 required
+                readOnly={Boolean(editingId)}
                 value={form.account_id}
                 onChange={(e) => setForm((p) => ({ ...p, account_id: e.target.value }))}
               />
@@ -114,17 +152,52 @@ export function AccountsPage() {
               <input
                 id="acc-cred"
                 required
-                placeholder="NOBITEX_API_TOKEN"
+                placeholder='NOBITEX_API_TOKEN or {"api_token_env":"…","api_private_key_env":"…"}'
                 value={form.credential_ref}
                 onChange={(e) => setForm((p) => ({ ...p, credential_ref: e.target.value }))}
               />
+            </div>
+            <div className="form-field">
+              <label htmlFor="acc-role">Role</label>
+              <select
+                id="acc-role"
+                value={form.role ?? "trading"}
+                onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
+              >
+                {ROLES.map((role) => (
+                  <option key={role} value={role}>
+                    {role}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="acc-status">Status</label>
+              <select
+                id="acc-status"
+                value={form.status ?? "active"}
+                onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}
+              >
+                {STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="form-actions">
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </button>
-            <button type="button" className="btn" onClick={() => setShowForm(false)}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setShowForm(false);
+                setEditingId(null);
+              }}
+            >
               Cancel
             </button>
           </div>
@@ -138,7 +211,9 @@ export function AccountsPage() {
               <th>Account</th>
               <th>Exchange</th>
               <th>Credential ref</th>
+              <th>Role</th>
               <th>Status</th>
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -146,13 +221,41 @@ export function AccountsPage() {
               <tr key={row.account_id}>
                 <td>{row.account_id}</td>
                 <td>{row.exchange}</td>
-                <td>{row.credential_ref}</td>
+                <td style={{ fontSize: "0.9rem", maxWidth: "14rem", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {row.credential_ref}
+                </td>
+                <td>{row.role}</td>
                 <td>{row.status}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button type="button" className="btn" onClick={() => setSelectedId(row.account_id)}>
+                    View
+                  </button>{" "}
+                  <button type="button" className="btn" onClick={() => openEdit(row)}>
+                    Edit
+                  </button>
+                </td>
               </tr>
             ))}
+            {!loading && items.length === 0 ? (
+              <tr>
+                <td colSpan={6} style={{ color: "var(--text-muted)" }}>
+                  No accounts configured.
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>
+      {selected && !showForm ? (
+        <section className="card" style={{ marginTop: "1rem" }}>
+          <h3>{selected.account_id}</h3>
+          <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+            At resolve time, <code>credential_ref</code> is merged into{" "}
+            <code>exchanges.{selected.exchange}.private</code> for strategies on this account.
+          </p>
+          <JsonBlock value={selected} />
+        </section>
+      ) : null}
     </>
   );
 }

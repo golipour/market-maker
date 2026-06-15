@@ -8,6 +8,8 @@ import {
   type RegistryList,
 } from "../api/client";
 
+const STATUSES = ["active", "disabled"] as const;
+
 const EMPTY: PresetUpsertPayload = {
   preset_id: "",
   config: {},
@@ -16,9 +18,10 @@ const EMPTY: PresetUpsertPayload = {
 
 export function PresetsPage() {
   const [items, setItems] = useState<Preset[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<PresetUpsertPayload>(EMPTY);
   const [configJson, setConfigJson] = useState("{}");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -44,17 +47,41 @@ export function PresetsPage() {
 
   const selected = items.find((row) => row.preset_id === selectedId) ?? null;
 
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY);
+    setConfigJson("{}");
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
+  function openEdit(row: Preset) {
+    setEditingId(row.preset_id);
+    setForm({
+      preset_id: row.preset_id,
+      config: row.config,
+      version: row.version,
+      status: row.status,
+    });
+    setConfigJson(JSON.stringify(row.config ?? {}, null, 2));
+    setSelectedId(row.preset_id);
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
     setError(null);
     try {
       const config = JSON.parse(configJson) as Record<string, unknown>;
-      await api.post<Preset>("/api/admin/registry/presets", { ...form, config });
-      setMessage(`Preset ${form.preset_id} saved`);
+      const saved = await api.post<Preset>("/api/admin/registry/presets", { ...form, config });
+      setMessage(`Preset ${saved.preset_id} saved`);
       setShowForm(false);
-      setForm(EMPTY);
-      setConfigJson("{}");
+      setEditingId(null);
+      setSelectedId(saved.preset_id);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Save failed (check JSON)");
@@ -67,10 +94,10 @@ export function PresetsPage() {
     <>
       <header className="page-header">
         <h1>Presets</h1>
-        <p>Reusable strategy logic templates (MPC, risk, execution) without symbol binding.</p>
+        <p>Reusable strategy logic templates (MPC, risk, execution) without symbol or account binding.</p>
       </header>
       <div className="page-toolbar">
-        <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)}>
+        <button type="button" className="btn btn-primary" onClick={openCreate}>
           New preset
         </button>
         <button type="button" className="btn" onClick={() => void load()}>
@@ -81,23 +108,38 @@ export function PresetsPage() {
       {message ? <div className="alert alert-success">{message}</div> : null}
       {showForm ? (
         <form onSubmit={(e) => void onSubmit(e)} className="card form-card">
-          <h3>New preset</h3>
+          <h3>{editingId ? `Edit ${editingId}` : "New preset"}</h3>
           <div className="form-grid">
             <div className="form-field">
               <label htmlFor="preset-id">Preset ID</label>
               <input
                 id="preset-id"
                 required
+                readOnly={Boolean(editingId)}
                 value={form.preset_id}
                 onChange={(e) => setForm((p) => ({ ...p, preset_id: e.target.value }))}
               />
+            </div>
+            <div className="form-field">
+              <label htmlFor="preset-status">Status</label>
+              <select
+                id="preset-status"
+                value={form.status ?? "active"}
+                onChange={(e) => setForm((p) => ({ ...p, status: e.target.value }))}
+              >
+                {STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="form-field">
             <label htmlFor="preset-config">Config JSON</label>
             <textarea
               id="preset-config"
-              rows={12}
+              rows={14}
               value={configJson}
               onChange={(e) => setConfigJson(e.target.value)}
             />
@@ -106,7 +148,14 @@ export function PresetsPage() {
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save"}
             </button>
-            <button type="button" className="btn" onClick={() => setShowForm(false)}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setShowForm(false);
+                setEditingId(null);
+              }}
+            >
               Cancel
             </button>
           </div>
@@ -120,6 +169,7 @@ export function PresetsPage() {
               <th>Preset</th>
               <th>Version</th>
               <th>Status</th>
+              <th>Config keys</th>
               <th />
             </tr>
           </thead>
@@ -129,19 +179,37 @@ export function PresetsPage() {
                 <td>{row.preset_id}</td>
                 <td>{row.version}</td>
                 <td>{row.status}</td>
-                <td>
+                <td style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                  {Object.keys(row.config ?? {}).join(", ") || "—"}
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>
                   <button type="button" className="btn" onClick={() => setSelectedId(row.preset_id)}>
-                    View config
+                    View
+                  </button>{" "}
+                  <button type="button" className="btn" onClick={() => openEdit(row)}>
+                    Edit
                   </button>
                 </td>
               </tr>
             ))}
+            {!loading && items.length === 0 ? (
+              <tr>
+                <td colSpan={5} style={{ color: "var(--text-muted)" }}>
+                  No presets configured.
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>
-      {selected ? (
+      {selected && !showForm ? (
         <section className="card" style={{ marginTop: "1rem" }}>
           <h3>{selected.preset_id}</h3>
+          <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+            Version {selected.version} · status {selected.status}. Merged with strategy{" "}
+            <code>config_overrides</code> at runtime.
+          </p>
+          <h4>Config</h4>
           <JsonBlock value={selected.config} />
         </section>
       ) : null}
