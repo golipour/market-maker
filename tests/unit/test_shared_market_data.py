@@ -98,7 +98,7 @@ async def test_ingestor_publishes_market_events_to_redis_bus(monkeypatch: pytest
 
     await ingestor.start()
     try:
-        engine = ingestor.engines[config.feeds[0].feed_key()]
+        engine = ingestor.engines[config.feeds[0].poll_source_key()]
         await asyncio.sleep(0.05)
         from mm.core.payload_schema import market_event_event
 

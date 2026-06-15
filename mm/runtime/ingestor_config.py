@@ -46,6 +46,37 @@ class IngestorFeedConfig:
     def feed_key(self) -> str:
         return f"{self.normalized_exchange()}:{self.symbol}:{self.interval_ms}"
 
+    def poll_source_key(self) -> str:
+        return f"{self.normalized_exchange()}:{self.symbol}"
+
+
+def group_feeds_by_poll_source(
+    feeds: tuple[IngestorFeedConfig, ...],
+) -> dict[str, tuple[IngestorFeedConfig, ...]]:
+    """Group frame-interval feeds that share one exchange/symbol poll source."""
+
+    grouped: dict[str, list[IngestorFeedConfig]] = {}
+    for feed in feeds:
+        grouped.setdefault(feed.poll_source_key(), []).append(feed)
+    result: dict[str, tuple[IngestorFeedConfig, ...]] = {}
+    for key, rows in grouped.items():
+        primary = rows[0]
+        poll_signature = (
+            primary.mode,
+            primary.depth_limit,
+            primary.trades_limit,
+            primary.poll_interval_ms,
+        )
+        for row in rows[1:]:
+            other = (row.mode, row.depth_limit, row.trades_limit, row.poll_interval_ms)
+            if other != poll_signature:
+                raise ValueError(
+                    f"conflicting poll settings for {key}: "
+                    f"{poll_signature} vs {other}; use one market source per exchange/symbol"
+                )
+        result[key] = tuple(rows)
+    return result
+
 
 @dataclass(frozen=True, slots=True)
 class IngestorRuntimeConfig:

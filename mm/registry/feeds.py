@@ -26,7 +26,12 @@ def ingestor_feeds_from_registry(
 ) -> tuple[IngestorFeedConfig, ...]:
     feeds = store.list_market_feeds()
     if active_only:
-        feeds = [row for row in feeds if row.status == "active"]
+        active_sources = {
+            row.source_id for row in store.list_market_sources() if row.status == "active"
+        }
+        feeds = [
+            row for row in feeds if row.status == "active" and row.source_id in active_sources
+        ]
     if not feeds:
         raise ValueError("registry has no market feeds configured")
     return tuple(market_feed_record_to_ingestor_feed(row) for row in feeds)

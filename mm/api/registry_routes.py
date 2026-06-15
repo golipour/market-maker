@@ -70,15 +70,21 @@ class PlatformSettingsRequest(BaseModel):
     scheduler: dict[str, Any] | None = None
 
 
-class MarketFeedUpsertRequest(BaseModel):
-    feed_id: str | None = None
+class MarketSourceUpsertRequest(BaseModel):
+    source_id: str | None = None
     exchange: str
     symbol: str
-    interval_ms: int
     mode: str = "rest"
     depth_limit: int = 10
     trades_limit: int = 100
     poll_interval_ms: int = 1000
+    status: str = "active"
+
+
+class MarketFeedUpsertRequest(BaseModel):
+    feed_id: str | None = None
+    source_id: str
+    interval_ms: int
     status: str = "active"
 
 
@@ -467,6 +473,48 @@ def create_registry_router(
         _audit(user, "registry.allocation.upsert", "accepted", record.as_dict())
         return record.as_dict()
 
+    @router.get("/market-sources")
+    async def list_market_sources(
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> JSONResponse:
+        rows = store.list_market_sources()
+        return JSONResponse(content=to_jsonable({"items": [row.as_dict() for row in rows]}))
+
+    @router.get("/market-sources/{source_id}")
+    async def get_market_source(
+        source_id: str,
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> JSONResponse:
+        try:
+            record = store.get_market_source(source_id)
+        except RegistryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(content=to_jsonable(record.as_dict()))
+
+    @router.post("/market-sources")
+    async def upsert_market_source(
+        body: MarketSourceUpsertRequest,
+        user: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            record = store.upsert_market_source(
+                source_id=body.source_id,
+                exchange=body.exchange,
+                symbol=body.symbol,
+                mode=body.mode,
+                depth_limit=body.depth_limit,
+                trades_limit=body.trades_limit,
+                poll_interval_ms=body.poll_interval_ms,
+                status=body.status,
+            )
+        except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(user, "registry.market_source.upsert", "accepted", record.as_dict())
+        return record.as_dict()
+
     @router.get("/market-feeds")
     async def list_market_feeds(
         _: str = Depends(require_auth),
@@ -496,13 +544,8 @@ def create_registry_router(
         try:
             record = store.upsert_market_feed(
                 feed_id=body.feed_id,
-                exchange=body.exchange,
-                symbol=body.symbol,
+                source_id=body.source_id,
                 interval_ms=body.interval_ms,
-                mode=body.mode,
-                depth_limit=body.depth_limit,
-                trades_limit=body.trades_limit,
-                poll_interval_ms=body.poll_interval_ms,
                 status=body.status,
             )
         except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:

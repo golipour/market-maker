@@ -79,11 +79,12 @@ class StrategyPresetRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class MarketFeedRecord:
-    feed_id: str
+class MarketSourceRecord:
+    """Shared exchange polling config for one exchange/symbol pair."""
+
+    source_id: str
     exchange: str
     symbol: str
-    interval_ms: int
     mode: str = "rest"
     depth_limit: int = 10
     trades_limit: int = 100
@@ -94,15 +95,48 @@ class MarketFeedRecord:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "feed_id": self.feed_id,
+            "source_id": self.source_id,
             "exchange": self.exchange,
             "symbol": self.symbol,
-            "interval_ms": self.interval_ms,
             "mode": self.mode,
             "depth_limit": self.depth_limit,
             "trades_limit": self.trades_limit,
             "poll_interval_ms": self.poll_interval_ms,
             "status": self.status,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MarketFeedRecord:
+    """Aggregation interval published from a shared market source."""
+
+    feed_id: str
+    source_id: str
+    interval_ms: int
+    status: MarketFeedStatus = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    exchange: str = ""
+    symbol: str = ""
+    mode: str = "rest"
+    depth_limit: int = 10
+    trades_limit: int = 100
+    poll_interval_ms: int = 1000
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "feed_id": self.feed_id,
+            "source_id": self.source_id,
+            "interval_ms": self.interval_ms,
+            "status": self.status,
+            "exchange": self.exchange,
+            "symbol": self.symbol,
+            "mode": self.mode,
+            "depth_limit": self.depth_limit,
+            "trades_limit": self.trades_limit,
+            "poll_interval_ms": self.poll_interval_ms,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

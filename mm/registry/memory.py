@@ -11,6 +11,7 @@ from mm.registry.models import (
     AllocationRecord,
     ExchangeRecord,
     MarketFeedRecord,
+    MarketSourceRecord,
     PlatformSettingsRecord,
     StrategyPresetRecord,
     StrategyRecord,
@@ -34,6 +35,7 @@ class MemoryRegistryStore:
         self._presets: dict[str, StrategyPresetRecord] = {}
         self._strategies: dict[str, StrategyRecord] = {}
         self._allocations: dict[str, AllocationRecord] = {}
+        self._market_sources: dict[str, MarketSourceRecord] = {}
         self._market_feeds: dict[str, MarketFeedRecord] = {}
         self._assignments: dict[str, WorkerAssignmentRecord] = {}
         self._platform = PlatformSettingsRecord(settings_id=DEFAULT_PLATFORM_SETTINGS_ID)
@@ -318,51 +320,40 @@ class MemoryRegistryStore:
         self._allocations[key] = record
         return record
 
-    def list_market_feeds(self) -> list[MarketFeedRecord]:
-        return sorted(self._market_feeds.values(), key=lambda row: row.feed_id)
+    def list_market_sources(self) -> list[MarketSourceRecord]:
+        return sorted(self._market_sources.values(), key=lambda row: row.source_id)
 
-    def get_market_feed(self, feed_id: str) -> MarketFeedRecord:
+    def get_market_source(self, source_id: str) -> MarketSourceRecord:
         try:
-            return self._market_feeds[feed_id]
+            return self._market_sources[source_id]
         except KeyError as exc:
-            raise RegistryNotFoundError(f"market feed {feed_id!r} not found") from exc
+            raise RegistryNotFoundError(f"market source {source_id!r} not found") from exc
 
-    def upsert_market_feed(
+    def upsert_market_source(
         self,
         *,
-        feed_id: str | None = None,
+        source_id: str | None = None,
         exchange: str,
         symbol: str,
-        interval_ms: int,
         mode: str = "rest",
         depth_limit: int = 10,
         trades_limit: int = 100,
         poll_interval_ms: int = 1000,
         status: str = "active",
-    ) -> MarketFeedRecord:
+    ) -> MarketSourceRecord:
         ex = exchange.lower().strip()
         self.get_exchange(ex)
         sym = symbol.strip()
-        if interval_ms <= 0:
-            raise ValueError("interval_ms must be positive")
-        for other in self.list_market_feeds():
-            if (
-                other.exchange == ex
-                and other.symbol == sym
-                and other.interval_ms == interval_ms
-                and other.feed_id != (feed_id or other.feed_id)
-            ):
-                raise RegistryConflictError(
-                    f"market feed already exists for {ex}:{sym}:{interval_ms}"
-                )
-        key = feed_id or f"{ex}-{sym}-{interval_ms}"
+        for other in self.list_market_sources():
+            if other.exchange == ex and other.symbol == sym and other.source_id != (source_id or other.source_id):
+                raise RegistryConflictError(f"market source already exists for {ex}:{sym}")
+        key = source_id or f"{ex}-{sym}"
         now = _utcnow()
-        previous = self._market_feeds.get(key)
-        record = MarketFeedRecord(
-            feed_id=key,
+        previous = self._market_sources.get(key)
+        record = MarketSourceRecord(
+            source_id=key,
             exchange=ex,
             symbol=sym,
-            interval_ms=int(interval_ms),
             mode=str(mode or "rest"),
             depth_limit=max(1, int(depth_limit)),
             trades_limit=max(1, int(trades_limit)),
@@ -371,8 +362,71 @@ class MemoryRegistryStore:
             created_at=previous.created_at if previous else now,
             updated_at=now,
         )
-        self._market_feeds[key] = record
+        self._market_sources[key] = record
         return record
+
+    def _enrich_market_feed(self, record: MarketFeedRecord) -> MarketFeedRecord:
+        source = self.get_market_source(record.source_id)
+        return MarketFeedRecord(
+            feed_id=record.feed_id,
+            source_id=record.source_id,
+            interval_ms=record.interval_ms,
+            status=record.status,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            exchange=source.exchange,
+            symbol=source.symbol,
+            mode=source.mode,
+            depth_limit=source.depth_limit,
+            trades_limit=source.trades_limit,
+            poll_interval_ms=source.poll_interval_ms,
+        )
+
+    def list_market_feeds(self) -> list[MarketFeedRecord]:
+        return sorted(
+            (self._enrich_market_feed(row) for row in self._market_feeds.values()),
+            key=lambda row: row.feed_id,
+        )
+
+    def get_market_feed(self, feed_id: str) -> MarketFeedRecord:
+        try:
+            return self._enrich_market_feed(self._market_feeds[feed_id])
+        except KeyError as exc:
+            raise RegistryNotFoundError(f"market feed {feed_id!r} not found") from exc
+
+    def upsert_market_feed(
+        self,
+        *,
+        feed_id: str | None = None,
+        source_id: str,
+        interval_ms: int,
+        status: str = "active",
+    ) -> MarketFeedRecord:
+        source = self.get_market_source(source_id)
+        if interval_ms <= 0:
+            raise ValueError("interval_ms must be positive")
+        for other in self._market_feeds.values():
+            if (
+                other.source_id == source.source_id
+                and other.interval_ms == interval_ms
+                and other.feed_id != (feed_id or other.feed_id)
+            ):
+                raise RegistryConflictError(
+                    f"market feed already exists for {source.exchange}:{source.symbol}:{interval_ms}"
+                )
+        key = feed_id or f"{source.source_id}-{interval_ms}"
+        now = _utcnow()
+        previous = self._market_feeds.get(key)
+        record = MarketFeedRecord(
+            feed_id=key,
+            source_id=source.source_id,
+            interval_ms=int(interval_ms),
+            status=status,  # type: ignore[arg-type]
+            created_at=previous.created_at if previous else now,
+            updated_at=now,
+        )
+        self._market_feeds[key] = record
+        return self._enrich_market_feed(record)
 
     def patch_strategy(
         self,

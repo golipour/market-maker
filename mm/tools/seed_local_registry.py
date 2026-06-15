@@ -141,12 +141,19 @@ def seed_local_worker_registry(
         wallet_id=wallet_id,
         ledger_source="virtual",
     )
-    store.upsert_market_feed(
-        feed_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}-10000",
+    store.upsert_market_source(
+        source_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}",
         exchange=LOCAL_EXCHANGE,
         symbol=LOCAL_SYMBOL,
-        interval_ms=10_000,
         mode="rest",
+        poll_interval_ms=2000,
+        depth_limit=100,
+        trades_limit=200,
+    )
+    store.upsert_market_feed(
+        feed_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}-10000",
+        source_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}",
+        interval_ms=10_000,
     )
     store.upsert_worker_assignment(
         assignment_id=LOCAL_WORKER_ASSIGNMENT_ID,

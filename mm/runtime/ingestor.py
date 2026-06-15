@@ -12,7 +12,11 @@ from mm.exchanges.factory import PublicMarketDataAdapterSelection, select_public
 from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
-from mm.runtime.ingestor_config import IngestorFeedConfig, IngestorRuntimeConfig
+from mm.runtime.ingestor_config import (
+    IngestorFeedConfig,
+    IngestorRuntimeConfig,
+    group_feeds_by_poll_source,
+)
 from mm.runtime.pipeline import build_symbol_engine
 
 
@@ -72,32 +76,36 @@ async def build_ingestor_components(
     scheduler = IntervalScheduler(WallClock(), max_concurrency=config.scheduler.max_concurrency)
     engines: dict[str, SymbolEngine] = {}
     selections: dict[str, PublicMarketDataAdapterSelection] = {}
+    poll_source_groups = group_feeds_by_poll_source(config.feeds)
 
-    for feed in config.feeds:
+    for source_key, feed_group in poll_source_groups.items():
+        primary = feed_group[0]
+        intervals_ms = sorted({feed.interval_ms for feed in feed_group})
         selection = select_public_market_data_adapter(
-            feed.normalized_exchange(),
-            feed.symbol,
-            mode=feed.mode,
-            depth_limit=feed.depth_limit,
-            trades_limit=feed.trades_limit,
-            poll_interval_ms=feed.poll_interval_ms,
+            primary.normalized_exchange(),
+            primary.symbol,
+            mode=primary.mode,
+            depth_limit=primary.depth_limit,
+            trades_limit=primary.trades_limit,
+            poll_interval_ms=primary.poll_interval_ms,
         )
         engine = build_symbol_engine(
-            exchange=feed.normalized_exchange(),
-            symbol=feed.symbol,
+            exchange=primary.normalized_exchange(),
+            symbol=primary.symbol,
             adapter=selection.adapter,
             bus=runtime_bus,
         )
-        await engine.publish_on_intervals(scheduler, [feed.interval_ms])
-        key = feed.feed_key()
-        engines[key] = engine
-        selections[key] = selection
+        await engine.publish_on_intervals(scheduler, intervals_ms)
+        engines[source_key] = engine
+        selections[source_key] = selection
 
     log_event(
         "ingestor_build_complete",
         {
             "feed_count": len(config.feeds),
+            "poll_source_count": len(poll_source_groups),
             "feeds": [feed.market_event_topic() for feed in config.feeds],
+            "poll_sources": list(poll_source_groups.keys()),
             "bus_kind": config.bus.kind,
             "stream_prefix": config.bus.stream_prefix,
         },

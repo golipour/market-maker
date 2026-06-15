@@ -7,7 +7,7 @@ const NAV = [
   { to: "/exchanges", label: "Exchanges" },
   { to: "/accounts", label: "Accounts" },
   { to: "/presets", label: "Presets" },
-  { to: "/feeds", label: "Market feeds" },
+  { to: "/feeds", label: "Market data" },
   { to: "/strategies", label: "Strategies" },
   { to: "/workers", label: "Workers" },
   { to: "/settings", label: "Settings" },

@@ -132,11 +132,10 @@ export interface PresetUpsertPayload {
   status?: string;
 }
 
-export interface MarketFeed {
-  feed_id: string;
+export interface MarketSource {
+  source_id: string;
   exchange: string;
   symbol: string;
-  interval_ms: number;
   mode: string;
   depth_limit: number;
   trades_limit: number;
@@ -144,15 +143,34 @@ export interface MarketFeed {
   status: string;
 }
 
-export interface MarketFeedUpsertPayload {
-  feed_id?: string;
+export interface MarketSourceUpsertPayload {
+  source_id?: string;
   exchange: string;
   symbol: string;
-  interval_ms: number;
   mode?: string;
   depth_limit?: number;
   trades_limit?: number;
   poll_interval_ms?: number;
+  status?: string;
+}
+
+export interface MarketFeed {
+  feed_id: string;
+  source_id: string;
+  interval_ms: number;
+  status: string;
+  exchange: string;
+  symbol: string;
+  mode: string;
+  depth_limit: number;
+  trades_limit: number;
+  poll_interval_ms: number;
+}
+
+export interface MarketFeedUpsertPayload {
+  feed_id?: string;
+  source_id: string;
+  interval_ms: number;
   status?: string;
 }
 

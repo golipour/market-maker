@@ -14,6 +14,7 @@ from mm.registry.models import (
     AllocationRecord,
     ExchangeRecord,
     MarketFeedRecord,
+    MarketSourceRecord,
     PlatformSettingsRecord,
     StrategyPresetRecord,
     StrategyRecord,
@@ -651,15 +652,103 @@ class PostgresRegistryStore(MemoryRegistryStore):
             conn.commit()
         return record
 
+    def list_market_sources(self) -> list[MarketSourceRecord]:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source_id, exchange, symbol, mode, depth_limit, trades_limit,
+                           poll_interval_ms, status, created_at, updated_at
+                    FROM registry_market_sources
+                    ORDER BY source_id
+                    """
+                )
+                rows = cur.fetchall()
+        return [_market_source_from_row(row) for row in rows]
+
+    def get_market_source(self, source_id: str) -> MarketSourceRecord:
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source_id, exchange, symbol, mode, depth_limit, trades_limit,
+                           poll_interval_ms, status, created_at, updated_at
+                    FROM registry_market_sources
+                    WHERE source_id = %s
+                    """,
+                    (source_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RegistryNotFoundError(f"market source {source_id!r} not found")
+        return _market_source_from_row(row)
+
+    def upsert_market_source(
+        self,
+        *,
+        source_id: str | None = None,
+        exchange: str,
+        symbol: str,
+        mode: str = "rest",
+        depth_limit: int = 10,
+        trades_limit: int = 100,
+        poll_interval_ms: int = 1000,
+        status: str = "active",
+    ) -> MarketSourceRecord:
+        record = super().upsert_market_source(
+            source_id=source_id,
+            exchange=exchange,
+            symbol=symbol,
+            mode=mode,
+            depth_limit=depth_limit,
+            trades_limit=trades_limit,
+            poll_interval_ms=poll_interval_ms,
+            status=status,
+        )
+        with self._connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO registry_market_sources (
+                        source_id, exchange, symbol, mode, depth_limit, trades_limit,
+                        poll_interval_ms, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (source_id) DO UPDATE SET
+                        exchange = EXCLUDED.exchange,
+                        symbol = EXCLUDED.symbol,
+                        mode = EXCLUDED.mode,
+                        depth_limit = EXCLUDED.depth_limit,
+                        trades_limit = EXCLUDED.trades_limit,
+                        poll_interval_ms = EXCLUDED.poll_interval_ms,
+                        status = EXCLUDED.status,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        record.source_id,
+                        record.exchange,
+                        record.symbol,
+                        record.mode,
+                        record.depth_limit,
+                        record.trades_limit,
+                        record.poll_interval_ms,
+                        record.status,
+                        record.created_at,
+                        record.updated_at,
+                    ),
+                )
+            conn.commit()
+        return record
+
     def list_market_feeds(self) -> list[MarketFeedRecord]:
         with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT feed_id, exchange, symbol, interval_ms, mode, depth_limit,
-                           trades_limit, poll_interval_ms, status, created_at, updated_at
-                    FROM registry_market_feeds
-                    ORDER BY feed_id
+                    SELECT f.feed_id, f.source_id, f.interval_ms, f.status, f.created_at, f.updated_at,
+                           s.exchange, s.symbol, s.mode, s.depth_limit, s.trades_limit, s.poll_interval_ms
+                    FROM registry_market_feeds f
+                    JOIN registry_market_sources s ON s.source_id = f.source_id
+                    ORDER BY f.feed_id
                     """
                 )
                 rows = cur.fetchall()
@@ -670,10 +759,11 @@ class PostgresRegistryStore(MemoryRegistryStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT feed_id, exchange, symbol, interval_ms, mode, depth_limit,
-                           trades_limit, poll_interval_ms, status, created_at, updated_at
-                    FROM registry_market_feeds
-                    WHERE feed_id = %s
+                    SELECT f.feed_id, f.source_id, f.interval_ms, f.status, f.created_at, f.updated_at,
+                           s.exchange, s.symbol, s.mode, s.depth_limit, s.trades_limit, s.poll_interval_ms
+                    FROM registry_market_feeds f
+                    JOIN registry_market_sources s ON s.source_id = f.source_id
+                    WHERE f.feed_id = %s
                     """,
                     (feed_id,),
                 )
@@ -686,24 +776,14 @@ class PostgresRegistryStore(MemoryRegistryStore):
         self,
         *,
         feed_id: str | None = None,
-        exchange: str,
-        symbol: str,
+        source_id: str,
         interval_ms: int,
-        mode: str = "rest",
-        depth_limit: int = 10,
-        trades_limit: int = 100,
-        poll_interval_ms: int = 1000,
         status: str = "active",
     ) -> MarketFeedRecord:
         record = super().upsert_market_feed(
             feed_id=feed_id,
-            exchange=exchange,
-            symbol=symbol,
+            source_id=source_id,
             interval_ms=interval_ms,
-            mode=mode,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
             status=status,
         )
         with self._connection() as conn:
@@ -711,36 +791,25 @@ class PostgresRegistryStore(MemoryRegistryStore):
                 cur.execute(
                     """
                     INSERT INTO registry_market_feeds (
-                        feed_id, exchange, symbol, interval_ms, mode, depth_limit,
-                        trades_limit, poll_interval_ms, status, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        feed_id, source_id, interval_ms, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (feed_id) DO UPDATE SET
-                        exchange = EXCLUDED.exchange,
-                        symbol = EXCLUDED.symbol,
+                        source_id = EXCLUDED.source_id,
                         interval_ms = EXCLUDED.interval_ms,
-                        mode = EXCLUDED.mode,
-                        depth_limit = EXCLUDED.depth_limit,
-                        trades_limit = EXCLUDED.trades_limit,
-                        poll_interval_ms = EXCLUDED.poll_interval_ms,
                         status = EXCLUDED.status,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
                         record.feed_id,
-                        record.exchange,
-                        record.symbol,
+                        record.source_id,
                         record.interval_ms,
-                        record.mode,
-                        record.depth_limit,
-                        record.trades_limit,
-                        record.poll_interval_ms,
                         record.status,
                         record.created_at,
                         record.updated_at,
                     ),
                 )
             conn.commit()
-        return record
+        return self.get_market_feed(record.feed_id)
 
     def list_worker_assignments(self) -> list[WorkerAssignmentRecord]:
         with self._connection() as conn:
@@ -987,19 +1056,35 @@ def _allocation_from_row(row: tuple[Any, ...]) -> AllocationRecord:
     )
 
 
+def _market_source_from_row(row: tuple[Any, ...]) -> MarketSourceRecord:
+    return MarketSourceRecord(
+        source_id=row[0],
+        exchange=row[1],
+        symbol=row[2],
+        mode=str(row[3] or "rest"),
+        depth_limit=int(row[4] or 10),
+        trades_limit=int(row[5] or 100),
+        poll_interval_ms=int(row[6] or 1000),
+        status=row[7],
+        created_at=row[8],
+        updated_at=row[9],
+    )
+
+
 def _market_feed_from_row(row: tuple[Any, ...]) -> MarketFeedRecord:
     return MarketFeedRecord(
         feed_id=row[0],
-        exchange=row[1],
-        symbol=row[2],
-        interval_ms=int(row[3]),
-        mode=str(row[4] or "rest"),
-        depth_limit=int(row[5] or 10),
-        trades_limit=int(row[6] or 100),
-        poll_interval_ms=int(row[7] or 1000),
-        status=row[8],
-        created_at=row[9],
-        updated_at=row[10],
+        source_id=row[1],
+        interval_ms=int(row[2]),
+        status=row[3],
+        created_at=row[4],
+        updated_at=row[5],
+        exchange=row[6],
+        symbol=row[7],
+        mode=str(row[8] or "rest"),
+        depth_limit=int(row[9] or 10),
+        trades_limit=int(row[10] or 100),
+        poll_interval_ms=int(row[11] or 1000),
     )
 
 
