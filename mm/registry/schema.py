@@ -79,6 +79,23 @@ CREATE TABLE IF NOT EXISTS registry_allocations (
 CREATE INDEX IF NOT EXISTS registry_allocations_account_idx ON registry_allocations (account_id);
 CREATE INDEX IF NOT EXISTS registry_allocations_actor_idx ON registry_allocations (actor_id);
 
+CREATE TABLE IF NOT EXISTS registry_market_feeds (
+    feed_id TEXT PRIMARY KEY,
+    exchange TEXT NOT NULL REFERENCES registry_exchanges(exchange),
+    symbol TEXT NOT NULL,
+    interval_ms INT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'rest',
+    depth_limit INT NOT NULL DEFAULT 10,
+    trades_limit INT NOT NULL DEFAULT 100,
+    poll_interval_ms INT NOT NULL DEFAULT 1000,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS registry_market_feeds_exchange_idx ON registry_market_feeds (exchange);
+CREATE UNIQUE INDEX IF NOT EXISTS registry_market_feeds_unique_feed
+ON registry_market_feeds (exchange, symbol, interval_ms);
+
 CREATE TABLE IF NOT EXISTS registry_platform_settings (
     settings_id TEXT PRIMARY KEY,
     bus JSONB NOT NULL DEFAULT '{}'::jsonb,

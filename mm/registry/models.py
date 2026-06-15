@@ -9,6 +9,7 @@ from typing import Any, Literal
 ExchangeStatus = Literal["active", "disabled"]
 AccountStatus = Literal["active", "disabled"]
 PresetStatus = Literal["active", "disabled"]
+MarketFeedStatus = Literal["active", "disabled"]
 StrategyStatus = Literal["draft", "active", "paused", "retired"]
 AllocationStatus = Literal["active", "paused", "retired"]
 WorkerAssignmentStatus = Literal["active", "released", "expired"]
@@ -71,6 +72,36 @@ class StrategyPresetRecord:
             "version": self.version,
             "status": self.status,
             "config": dict(self.config),
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MarketFeedRecord:
+    feed_id: str
+    exchange: str
+    symbol: str
+    interval_ms: int
+    mode: str = "rest"
+    depth_limit: int = 10
+    trades_limit: int = 100
+    poll_interval_ms: int = 1000
+    status: MarketFeedStatus = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "feed_id": self.feed_id,
+            "exchange": self.exchange,
+            "symbol": self.symbol,
+            "interval_ms": self.interval_ms,
+            "mode": self.mode,
+            "depth_limit": self.depth_limit,
+            "trades_limit": self.trades_limit,
+            "poll_interval_ms": self.poll_interval_ms,
+            "status": self.status,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

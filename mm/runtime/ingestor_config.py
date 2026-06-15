@@ -94,6 +94,28 @@ def load_ingestor_config(path: str | Path) -> IngestorRuntimeConfig:
     return ingestor_config_from_mapping(payload)
 
 
+def load_ingestor_config_from_registry(
+    path: str | Path,
+    *,
+    database_url: str | None = None,
+) -> IngestorRuntimeConfig:
+    """Load ingestor config, optionally sourcing ``feeds`` from the registry."""
+
+    from mm.registry.feeds import merge_registry_feeds_into_mapping
+    from mm.registry.store import build_registry_store, registry_database_url
+
+    payload = json.loads(Path(path).read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("ingestor config file must contain a JSON object")
+    if payload.get("load_feeds_from_registry"):
+        url = (database_url or registry_database_url() or "").strip()
+        if not url:
+            raise ValueError("load_feeds_from_registry requires MM_DATABASE_URL")
+        store = build_registry_store(database_url=url)
+        payload = merge_registry_feeds_into_mapping(payload, store)
+    return ingestor_config_from_mapping(payload)
+
+
 def ingestor_config_from_mapping(payload: dict[str, Any]) -> IngestorRuntimeConfig:
     feeds_payload = payload.get("feeds")
     if not isinstance(feeds_payload, list) or not feeds_payload:

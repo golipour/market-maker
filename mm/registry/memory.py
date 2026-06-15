@@ -10,6 +10,7 @@ from mm.registry.models import (
     AccountRecord,
     AllocationRecord,
     ExchangeRecord,
+    MarketFeedRecord,
     PlatformSettingsRecord,
     StrategyPresetRecord,
     StrategyRecord,
@@ -33,6 +34,7 @@ class MemoryRegistryStore:
         self._presets: dict[str, StrategyPresetRecord] = {}
         self._strategies: dict[str, StrategyRecord] = {}
         self._allocations: dict[str, AllocationRecord] = {}
+        self._market_feeds: dict[str, MarketFeedRecord] = {}
         self._assignments: dict[str, WorkerAssignmentRecord] = {}
         self._platform = PlatformSettingsRecord(settings_id=DEFAULT_PLATFORM_SETTINGS_ID)
 
@@ -278,6 +280,63 @@ class MemoryRegistryStore:
             updated_at=now,
         )
         self._allocations[key] = record
+        return record
+
+    def list_market_feeds(self) -> list[MarketFeedRecord]:
+        return sorted(self._market_feeds.values(), key=lambda row: row.feed_id)
+
+    def get_market_feed(self, feed_id: str) -> MarketFeedRecord:
+        try:
+            return self._market_feeds[feed_id]
+        except KeyError as exc:
+            raise RegistryNotFoundError(f"market feed {feed_id!r} not found") from exc
+
+    def upsert_market_feed(
+        self,
+        *,
+        feed_id: str | None = None,
+        exchange: str,
+        symbol: str,
+        interval_ms: int,
+        mode: str = "rest",
+        depth_limit: int = 10,
+        trades_limit: int = 100,
+        poll_interval_ms: int = 1000,
+        status: str = "active",
+    ) -> MarketFeedRecord:
+        ex = exchange.lower().strip()
+        if ex not in self._exchanges:
+            raise RegistryNotFoundError(f"exchange {exchange!r} not found")
+        sym = symbol.strip()
+        if interval_ms <= 0:
+            raise ValueError("interval_ms must be positive")
+        for other in self._market_feeds.values():
+            if (
+                other.exchange == ex
+                and other.symbol == sym
+                and other.interval_ms == interval_ms
+                and other.feed_id != (feed_id or other.feed_id)
+            ):
+                raise RegistryConflictError(
+                    f"market feed already exists for {ex}:{sym}:{interval_ms}"
+                )
+        key = feed_id or f"{ex}-{sym}-{interval_ms}"
+        now = _utcnow()
+        previous = self._market_feeds.get(key)
+        record = MarketFeedRecord(
+            feed_id=key,
+            exchange=ex,
+            symbol=sym,
+            interval_ms=int(interval_ms),
+            mode=str(mode or "rest"),
+            depth_limit=max(1, int(depth_limit)),
+            trades_limit=max(1, int(trades_limit)),
+            poll_interval_ms=max(1, int(poll_interval_ms)),
+            status=status,  # type: ignore[arg-type]
+            created_at=previous.created_at if previous else now,
+            updated_at=now,
+        )
+        self._market_feeds[key] = record
         return record
 
     def patch_strategy(

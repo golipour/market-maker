@@ -66,6 +66,18 @@ class PlatformSettingsRequest(BaseModel):
     scheduler: dict[str, Any] | None = None
 
 
+class MarketFeedUpsertRequest(BaseModel):
+    feed_id: str | None = None
+    exchange: str
+    symbol: str
+    interval_ms: int
+    mode: str = "rest"
+    depth_limit: int = 10
+    trades_limit: int = 100
+    poll_interval_ms: int = 1000
+    status: str = "active"
+
+
 class WorkerAssignmentUpsertRequest(BaseModel):
     assignment_id: str | None = None
     worker_id: str
@@ -412,6 +424,48 @@ def create_registry_router(
         except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit(user, "registry.allocation.upsert", "accepted", record.as_dict())
+        return record.as_dict()
+
+    @router.get("/market-feeds")
+    async def list_market_feeds(
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        rows = store.list_market_feeds()
+        return {"items": [row.as_dict() for row in rows]}
+
+    @router.get("/market-feeds/{feed_id}")
+    async def get_market_feed(
+        feed_id: str,
+        _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            return store.get_market_feed(feed_id).as_dict()
+        except RegistryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/market-feeds")
+    async def upsert_market_feed(
+        body: MarketFeedUpsertRequest,
+        user: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
+    ) -> dict[str, Any]:
+        try:
+            record = store.upsert_market_feed(
+                feed_id=body.feed_id,
+                exchange=body.exchange,
+                symbol=body.symbol,
+                interval_ms=body.interval_ms,
+                mode=body.mode,
+                depth_limit=body.depth_limit,
+                trades_limit=body.trades_limit,
+                poll_interval_ms=body.poll_interval_ms,
+                status=body.status,
+            )
+        except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(user, "registry.market_feed.upsert", "accepted", record.as_dict())
         return record.as_dict()
 
     @router.get("/worker-assignments")

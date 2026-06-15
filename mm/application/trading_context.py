@@ -10,6 +10,7 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.strategy import StrategyInputFrame
 from mm.core.wallet import inventory_cash_from_snapshot, inventory_cash_from_venue_ledger
+from mm.portfolio.wallet import StrategyWallet
 
 
 def live_orders_from_managers(order_managers: Mapping[str, AbstractOrderManager]) -> dict[str, Order]:
@@ -58,5 +59,21 @@ def trading_state_from_ledger(
         actor_id=actor_id,
         cash=cash,
         inventory=inventory,
+        open_orders=dict(open_orders),
+    )
+
+
+def trading_state_from_wallet(
+    wallet: StrategyWallet,
+    *,
+    actor_id: str,
+    open_orders: Mapping[str, Order],
+) -> TradingState:
+    """Build MPC/risk state from the strategy virtual wallet (not the exchange ledger)."""
+
+    return TradingState(
+        actor_id=actor_id,
+        cash=max(0.0, wallet.free_quote),
+        inventory=max(0.0, wallet.free_base),
         open_orders=dict(open_orders),
     )

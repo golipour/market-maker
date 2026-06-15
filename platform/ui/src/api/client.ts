@@ -59,6 +59,8 @@ export const api = {
     }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  patch: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
 };
 
 export interface ServiceProbe {
@@ -101,6 +103,75 @@ export interface RegistryList<T> {
   items: T[];
 }
 
+export interface Exchange {
+  exchange: string;
+  status: string;
+  capabilities?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+}
+
+export interface ExchangeUpsertPayload {
+  exchange: string;
+  status?: string;
+  capabilities?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+}
+
+export interface PresetUpsertPayload {
+  preset_id: string;
+  config: Record<string, unknown>;
+  version?: number;
+  status?: string;
+}
+
+export interface MarketFeed {
+  feed_id: string;
+  exchange: string;
+  symbol: string;
+  interval_ms: number;
+  mode: string;
+  depth_limit: number;
+  trades_limit: number;
+  poll_interval_ms: number;
+  status: string;
+}
+
+export interface MarketFeedUpsertPayload {
+  feed_id?: string;
+  exchange: string;
+  symbol: string;
+  interval_ms: number;
+  mode?: string;
+  depth_limit?: number;
+  trades_limit?: number;
+  poll_interval_ms?: number;
+  status?: string;
+}
+
+export interface PlatformSettings {
+  settings_id: string;
+  bus: Record<string, unknown>;
+  persistence: Record<string, unknown>;
+  observability: Record<string, unknown>;
+  scheduler: Record<string, unknown>;
+}
+
+export interface WorkerAssignmentUpsertPayload {
+  assignment_id?: string;
+  worker_id: string;
+  strategy_ids: string[];
+  lease_ttl_seconds?: number;
+  status?: string;
+}
+
+export interface AccountUpsertPayload {
+  account_id: string;
+  exchange: string;
+  credential_ref: string;
+  role?: string;
+  status?: string;
+}
+
 export interface Strategy {
   strategy_id: string;
   actor_id: string;
@@ -110,6 +181,53 @@ export interface Strategy {
   quoting_exchange: string;
   liquidity_exchange: string;
   status: string;
+  config_overrides?: Record<string, unknown>;
+}
+
+export interface StrategyRuntimeConfig {
+  strategy_id: string;
+  runtime_config: Record<string, unknown>;
+  resolved_contract: Record<string, unknown>;
+}
+
+export interface Account {
+  account_id: string;
+  exchange: string;
+  credential_ref: string;
+  role: string;
+  status: string;
+}
+
+export interface Preset {
+  preset_id: string;
+  version: number;
+  status: string;
+  config: Record<string, unknown>;
+}
+
+export interface StrategyUpsertPayload {
+  strategy_id: string;
+  actor_id: string;
+  account_id: string;
+  symbol: string;
+  preset_id: string;
+  quoting_exchange: string;
+  liquidity_exchange: string;
+  status?: string;
+  config_overrides?: Record<string, unknown>;
+}
+
+export interface AllocationUpsertPayload {
+  allocation_id?: string;
+  strategy_id: string;
+  actor_id: string;
+  account_id: string;
+  quote_asset?: string;
+  base_asset?: string;
+  allocated_quote?: number;
+  allocated_base?: number;
+  halt_on_breach?: boolean;
+  status?: string;
 }
 
 export interface Allocation {
@@ -129,9 +247,9 @@ export interface WorkerAssignment {
   assignment_id: string;
   worker_id: string;
   strategy_ids: string[];
-  lease_ttl_seconds: number;
+  lease_expires_at?: string | null;
+  heartbeat_at?: string | null;
   status: string;
-  heartbeat_at_ms?: number;
 }
 
 export interface AdminStatus {

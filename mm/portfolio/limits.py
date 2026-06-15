@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mm.core.risk_limits import VenueRiskLimits
+from mm.portfolio.wallet import StrategyWallet
 from mm.registry.models import AllocationRecord
 
 
@@ -61,20 +62,18 @@ def merge_allocation_into_venue_limits(
     limits: VenueRiskLimits,
     record: AllocationRecord | None,
 ) -> VenueRiskLimits:
-    if record is None or record.status != "active":
-        return limits
-    max_inventory = limits.max_inventory
-    if record.allocated_base > 0:
-        max_inventory = min(max_inventory, record.allocated_base)
-    max_open_notional = limits.max_open_notional
-    if record.allocated_quote > 0:
-        max_open_notional = min(max_open_notional, record.allocated_quote)
-    return VenueRiskLimits(
-        min_inventory=limits.min_inventory,
-        max_inventory=max_inventory,
-        min_cash=limits.min_cash,
-        max_open_notional=max_open_notional,
-        max_order_notional=limits.max_order_notional,
-        max_market_data_age_ms=limits.max_market_data_age_ms,
-        max_private_state_age_ms=limits.max_private_state_age_ms,
+    """Deprecated: virtual wallets replace cap merging. Returns limits unchanged."""
+
+    _ = record
+    return limits
+
+
+def wallet_initial_caps(wallet: StrategyWallet) -> AllocationCaps:
+    """Legacy risk hook: expose wallet totals for transition checks."""
+
+    return AllocationCaps(
+        max_base_inventory=wallet.held_base + wallet.locked_base,
+        max_quote_exposure=wallet.held_quote + wallet.locked_quote,
+        attributed_base=wallet.held_base,
+        attributed_quote_used=max(0.0, wallet.locked_quote),
     )

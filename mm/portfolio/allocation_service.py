@@ -1,109 +1,80 @@
-"""Portfolio allocation tracking and enforcement."""
+"""Portfolio allocation tracking and enforcement via virtual strategy wallets."""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.order_manager import AbstractOrderManager
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import SymbolBinding
-from mm.core.wallet import order_collateral_from_open_orders
 from mm.observability import counter_inc, gauge, log_event
 from mm.observability import schema as obs_schema
-from mm.portfolio.limits import AllocationCaps, AllocationUsage
+from mm.portfolio.limits import AllocationCaps, wallet_initial_caps
+from mm.portfolio.wallet import StrategyWallet
 from mm.registry.models import AllocationRecord
 from mm.runtime.control import RuntimeControlPlane
 
 
 @dataclass(slots=True)
-class ActorAllocationTracker:
+class ActorWalletTracker:
     record: AllocationRecord
     binding: SymbolBinding
-    usage: AllocationUsage | None = None
+    wallet: StrategyWallet | None = None
 
     def __post_init__(self) -> None:
-        if self.usage is None:
-            self.usage = AllocationUsage(actor_id=self.record.actor_id)
+        if self.wallet is None:
+            self.wallet = StrategyWallet.from_allocation(self.record, self.binding)
 
     def apply_fill(self, fill: Fill) -> None:
-        if fill.actor_id.strip() != self.record.actor_id:
-            return
-        qty = max(0.0, float(fill.qty))
-        price = max(0.0, float(fill.price))
-        fee = max(0.0, float(fill.fee))
-        side = str(fill.side).lower().strip()
-        if side == "buy":
-            self.usage.attributed_base += qty
-            self.usage.attributed_quote -= price * qty + fee
-        elif side == "sell":
-            self.usage.attributed_base -= qty
-            self.usage.attributed_quote += price * qty - fee
-        self.usage.realized_pnl_quote = self.usage.attributed_quote
+        assert self.wallet is not None
+        self.wallet.apply_fill(fill)
 
     def refresh_open_order_locks(self, order_managers: dict[str, AbstractOrderManager]) -> None:
-        manager = order_managers.get(self.binding.local.exchange.lower().strip())
-        if manager is None:
-            self.usage.locked_base = 0.0
-            self.usage.locked_quote = 0.0
-            return
-        actor_orders = {
-            order_id: open_order
-            for order_id, open_order in manager.live_orders.items()
-            if (open_order.actor_id or "").strip() == self.record.actor_id
-        }
-        locked_base, locked_quote = order_collateral_from_open_orders(
-            actor_orders,
-            trading_symbol=self.binding.local.symbol,
-            base_asset=self.binding.local.base_asset,
-            quote_asset=self.binding.local.quote_asset,
-        )
-        self.usage.locked_base = locked_base
-        self.usage.locked_quote = locked_quote
+        assert self.wallet is not None
+        self.wallet.refresh_open_order_locks(order_managers)
 
     def caps(self) -> AllocationCaps:
-        return AllocationCaps.from_record(self.record, self.usage)
+        assert self.wallet is not None
+        return wallet_initial_caps(self.wallet)
 
     def breach_reasons(self) -> tuple[str, ...]:
         if self.record.status != "active":
             return ()
-        reasons: list[str] = []
-        if self.record.allocated_base > 0 and self.usage.used_base > self.record.allocated_base + 1e-9:
-            reasons.append("allocation_base_exceeded")
-        if self.record.allocated_quote > 0 and self.usage.used_quote > self.record.allocated_quote + 1e-9:
-            reasons.append("allocation_quote_exceeded")
-        return tuple(reasons)
+        assert self.wallet is not None
+        return self.wallet.breach_reasons()
 
     def snapshot_payload(self) -> dict[str, Any]:
-        caps = self.caps()
-        usage = self.usage.as_dict()
-        limits = {
-            "allocated_base": self.record.allocated_base,
-            "allocated_quote": self.record.allocated_quote,
-        }
+        assert self.wallet is not None
+        wallet_view = self.wallet.as_dict()
         return {
             "type": "PortfolioAllocationSnapshot",
             "allocation_id": self.record.allocation_id,
             "strategy_id": self.record.strategy_id,
             "actor_id": self.record.actor_id,
             "account_id": self.record.account_id,
-            "limits": limits,
-            "usage": usage,
+            "wallet": wallet_view,
+            "initial_wallet": {
+                "base": self.wallet.initial_base,
+                "quote": self.wallet.initial_quote,
+                "base_asset": self.wallet.base_asset,
+                "quote_asset": self.wallet.quote_asset,
+            },
             "breach_reasons": list(self.breach_reasons()),
             "halt_on_breach": self.record.halt_on_breach,
             "timestamp_ms": int(time.time() * 1000),
-            "caps": {
-                "max_base_inventory": caps.max_base_inventory,
-                "max_quote_exposure": caps.max_quote_exposure,
-            },
         }
 
 
+# Backward-compatible alias for tests and imports.
+ActorAllocationTracker = ActorWalletTracker
+
+
 class PortfolioAllocationService:
-    """Track per-actor allocation usage, publish portfolio views, and enforce halts."""
+    """Track per-actor virtual wallets, publish portfolio views, and enforce halts."""
 
     def __init__(
         self,
@@ -117,17 +88,16 @@ class PortfolioAllocationService:
         self.bus = bus
         self.order_managers = order_managers
         self.control_plane = control_plane
-        self._trackers: dict[str, ActorAllocationTracker] = {}
+        self._trackers: dict[str, ActorWalletTracker] = {}
         for record in allocations:
             if record.status != "active":
                 continue
             binding = bindings.get(record.actor_id)
             if binding is None:
                 continue
-            self._trackers[record.actor_id] = ActorAllocationTracker(
+            self._trackers[record.actor_id] = ActorWalletTracker(
                 record=record,
                 binding=binding,
-                usage=AllocationUsage(actor_id=record.actor_id),
             )
         self._tasks: list[asyncio.Task] = []
         self._stopped = asyncio.Event()
@@ -135,9 +105,12 @@ class PortfolioAllocationService:
             dict.fromkeys(tracker.binding.local.exchange.lower().strip() for tracker in self._trackers.values())
         )
 
-    def usage_for(self, actor_id: str) -> AllocationUsage | None:
+    def wallet_for(self, actor_id: str) -> StrategyWallet | None:
         tracker = self._trackers.get(actor_id.strip())
-        return tracker.usage if tracker is not None else None
+        if tracker is None:
+            return None
+        tracker.refresh_open_order_locks(self.order_managers)
+        return tracker.wallet
 
     def caps_for(self, actor_id: str) -> AllocationCaps | None:
         tracker = self._trackers.get(actor_id.strip())
@@ -198,14 +171,14 @@ class PortfolioAllocationService:
             },
         )
 
-    async def _after_usage_update(self, tracker: ActorAllocationTracker) -> None:
+    async def _after_usage_update(self, tracker: ActorWalletTracker) -> None:
         tracker.refresh_open_order_locks(self.order_managers)
         self._export_metrics(tracker)
         payload = tracker.snapshot_payload()
         await self.bus.publish(f"portfolio:allocation:{tracker.record.actor_id}", payload)
         await self._enforce_breach(tracker)
 
-    async def _enforce_breach(self, tracker: ActorAllocationTracker) -> None:
+    async def _enforce_breach(self, tracker: ActorWalletTracker) -> None:
         reasons = tracker.breach_reasons()
         if not reasons:
             if self.control_plane is not None:
@@ -223,7 +196,9 @@ class PortfolioAllocationService:
             reasons=reasons,
         )
 
-    def _export_metrics(self, tracker: ActorAllocationTracker) -> None:
+    def _export_metrics(self, tracker: ActorWalletTracker) -> None:
+        assert tracker.wallet is not None
+        wallet = tracker.wallet
         labels = {
             "actor_id": tracker.record.actor_id,
             "account_id": tracker.record.account_id,
@@ -231,31 +206,31 @@ class PortfolioAllocationService:
         }
         gauge(
             obs_schema.MM_ALLOCATION_USED_BASE,
-            tracker.usage.used_base,
+            wallet.held_base,
             labels=labels,
-            help="Attributed base usage for a strategy allocation",
+            help="Strategy wallet held base",
         )
         gauge(
             obs_schema.MM_ALLOCATION_USED_QUOTE,
-            tracker.usage.used_quote,
+            wallet.held_quote,
             labels=labels,
-            help="Attributed quote usage for a strategy allocation",
+            help="Strategy wallet held quote",
         )
         gauge(
             obs_schema.MM_ALLOCATION_LIMIT_BASE,
-            tracker.record.allocated_base,
+            wallet.initial_base,
             labels=labels,
-            help="Allocated base inventory cap",
+            help="Strategy wallet initial base",
         )
         gauge(
             obs_schema.MM_ALLOCATION_LIMIT_QUOTE,
-            tracker.record.allocated_quote,
+            wallet.initial_quote,
             labels=labels,
-            help="Allocated quote capital cap",
+            help="Strategy wallet initial quote",
         )
         gauge(
             obs_schema.MM_ALLOCATION_REALIZED_PNL_QUOTE,
-            tracker.usage.realized_pnl_quote,
+            wallet.held_quote - wallet.initial_quote,
             labels=labels,
-            help="Attributed realized PnL in quote terms from fills",
+            help="Wallet quote PnL vs initial allocation",
         )

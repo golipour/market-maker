@@ -11,11 +11,11 @@ import json
 import signal
 
 from mm.runtime.ingestor import IngestorComponents, build_ingestor_components
-from mm.runtime.ingestor_config import load_ingestor_config
+from mm.runtime.ingestor_config import load_ingestor_config_from_registry
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_ingestor_config(args.config)
+    config = load_ingestor_config_from_registry(args.config)
     ingestor = await build_ingestor_components(config)
     contract = config.as_contract()
     contract["type"] = "IngestorConfigCheck"

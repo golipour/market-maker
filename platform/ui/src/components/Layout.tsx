@@ -4,9 +4,14 @@ import { getToken, setToken } from "../api/client";
 
 const NAV = [
   { to: "/", label: "Overview" },
+  { to: "/exchanges", label: "Exchanges" },
+  { to: "/accounts", label: "Accounts" },
+  { to: "/presets", label: "Presets" },
+  { to: "/feeds", label: "Market feeds" },
   { to: "/strategies", label: "Strategies" },
-  { to: "/allocations", label: "Allocations" },
+  { to: "/allocations", label: "Wallets" },
   { to: "/workers", label: "Workers" },
+  { to: "/settings", label: "Settings" },
   { to: "/commands", label: "Commands" },
   { to: "/observability", label: "Observability" },
 ];

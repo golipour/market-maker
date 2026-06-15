@@ -20,7 +20,8 @@ from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.core.wallet import order_collateral_from_open_orders, reported_wallet_total
 from mm.execution.plan import RiskResult
 from mm.observability import counter_inc, gauge
-from mm.portfolio.limits import AllocationCaps
+from mm.portfolio.limits import AllocationCaps, wallet_initial_caps
+from mm.portfolio.wallet import StrategyWallet, venue_ledger_from_strategy_wallet
 from mm.risk.engine import RiskLimits, _proposed_order_count
 from mm.risk.models import TargetBookRiskResult, VenueTransitionExposure
 from mm.runtime.config import LiquiditySourcingRuntimeConfig
@@ -116,9 +117,9 @@ def _risk_rejected_sides(reason: str) -> set[str]:
         return {"buy"}
     if normalized in {"insufficient_base_for_ask_orders", "min_inventory"}:
         return {"sell"}
-    if normalized in {"allocation_quote_exceeded"}:
+    if normalized in {"allocation_quote_exceeded", "wallet_quote_deficit", "wallet_quote_locked_exceeds_held"}:
         return {"buy"}
-    if normalized in {"allocation_base_exceeded"}:
+    if normalized in {"allocation_base_exceeded", "wallet_base_deficit", "wallet_base_locked_exceeds_held"}:
         return {"buy"}
     return set()
 
@@ -251,6 +252,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
     clock_ms: Any = None
     kill_switch: bool = False
     allocation_caps_provider: Any | None = None
+    strategy_wallet_provider: Any | None = None
 
     def __post_init__(self) -> None:
         if self.clock_ms is None:
@@ -261,9 +263,24 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         gauge("mm_kill_switch_state", 1.0 if self.kill_switch else 0.0)
 
     def _allocation_caps_for(self, actor_id: str) -> AllocationCaps | None:
+        if self.strategy_wallet_provider is not None:
+            wallet = self.strategy_wallet_provider()
+            if wallet is not None:
+                return wallet_initial_caps(wallet)
         if self.allocation_caps_provider is None:
             return None
         return self.allocation_caps_provider()
+
+    def _local_ledger_for_risk(self, ledger: JointLedgerSnapshot) -> VenueLedger:
+        if self.strategy_wallet_provider is None:
+            return ledger.local
+        wallet = self.strategy_wallet_provider()
+        if wallet is None:
+            return ledger.local
+        return venue_ledger_from_strategy_wallet(
+            wallet,
+            live_orders=ledger.local.live_orders,
+        )
 
     def validate(self, actions: list[Action], state: TradingState, event: MarketEvent) -> list[Action]:
         return self.validate_with_result(actions, state, event).approved_list
@@ -356,7 +373,7 @@ class NetDeltaRiskEngine(AbstractRiskEngine):
         venue_diagnostics: dict[str, Any] = {}
 
         local_ok, local_reasons, local_exposure = evaluate_venue_target_transition(
-            ledger=ledger.local,
+            ledger=self._local_ledger_for_risk(ledger),
             target=target_book.local,
             limits=self.limits.local,
             release_unattributed=target_book.local.policy == "replace",

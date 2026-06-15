@@ -97,8 +97,10 @@ def build_strategy_slot(
     )
     actor_id = config.controller.actor_id
     allocation = allocation_service.allocation_for(actor_id) if allocation_service is not None else None
+    strategy_wallet_provider = None
     allocation_caps_provider = None
     if allocation_service is not None:
+        strategy_wallet_provider = lambda actor_id=actor_id: allocation_service.wallet_for(actor_id)
         allocation_caps_provider = lambda actor_id=actor_id: allocation_service.caps_for(actor_id)
     strategy_runner = build_strategy_runner(
         config,
@@ -108,6 +110,7 @@ def build_strategy_slot(
         control_plane=control_plane,
         allocation=allocation,
         allocation_caps_provider=allocation_caps_provider,
+        strategy_wallet_provider=strategy_wallet_provider,
     )
     return StrategySlot(
         strategy_id=strategy_id,

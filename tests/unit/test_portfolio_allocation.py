@@ -5,20 +5,21 @@ import pytest
 from mm.bus.memory import InMemoryBus
 from mm.core.models.execution import Fill
 from mm.core.risk_limits import VenueRiskLimits
-from mm.portfolio.allocation_service import ActorAllocationTracker, PortfolioAllocationService
-from mm.portfolio.limits import AllocationCaps, merge_allocation_into_venue_limits
+from mm.core.models.target_book import TargetOrder, VenueTargetBook
+from mm.portfolio.allocation_service import ActorWalletTracker, PortfolioAllocationService
+from mm.portfolio.limits import merge_allocation_into_venue_limits
+from mm.portfolio.wallet import StrategyWallet, venue_ledger_from_strategy_wallet
 from mm.registry.memory import MemoryRegistryStore
 from mm.registry.models import AllocationRecord
 from mm.risk.net_delta import evaluate_venue_target_transition
-from mm.runtime.build_options import RuntimeBuildOptions
-from mm.runtime.config import ControllerRuntimeConfig, MarketMakerRuntimeConfig
+from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig
 from mm.runtime.control import RuntimeControlPlane
-from mm.worker.worker import LoadedStrategy, build_worker_components, load_worker_allocations
+from mm.worker.worker import build_worker_components
 from mm.worker.worker_config import worker_config_from_mapping
 from tests.unit.test_multi_strategy_worker import _seed_worker_registry
 
 
-def test_merge_allocation_into_venue_limits_caps_inventory_and_notional() -> None:
+def test_merge_allocation_into_venue_limits_is_noop_for_virtual_wallets() -> None:
     record = AllocationRecord(
         allocation_id="a1",
         strategy_id="btc-maker",
@@ -27,15 +28,13 @@ def test_merge_allocation_into_venue_limits_caps_inventory_and_notional() -> Non
         allocated_quote=1_000_000.0,
         allocated_base=2.5,
     )
-    merged = merge_allocation_into_venue_limits(
-        VenueRiskLimits(max_inventory=10_000.0, max_open_notional=5_000_000.0),
-        record,
-    )
-    assert merged.max_inventory == 2.5
-    assert merged.max_open_notional == 1_000_000.0
+    limits = VenueRiskLimits(max_inventory=10_000.0, max_open_notional=5_000_000.0)
+    merged = merge_allocation_into_venue_limits(limits, record)
+    assert merged.max_inventory == 10_000.0
+    assert merged.max_open_notional == 5_000_000.0
 
 
-def test_actor_allocation_tracker_attributes_fills() -> None:
+def test_strategy_wallet_tracks_fills_and_locks() -> None:
     from mm.runtime.config import MarketDataSourceConfig
 
     config = MarketMakerRuntimeConfig(
@@ -50,7 +49,7 @@ def test_actor_allocation_tracker_attributes_fills() -> None:
         allocated_quote=1_000_000.0,
         allocated_base=2.0,
     )
-    tracker = ActorAllocationTracker(record=record, binding=config.binding)
+    tracker = ActorWalletTracker(record=record, binding=config.binding)
     tracker.apply_fill(
         Fill(
             exchange_order_id="1",
@@ -64,28 +63,24 @@ def test_actor_allocation_tracker_attributes_fills() -> None:
             timestamp_ms=1,
         )
     )
-    assert tracker.usage.attributed_base == 1.0
-    assert tracker.usage.attributed_quote == pytest.approx(-100.1)
+    assert tracker.wallet is not None
+    assert tracker.wallet.held_base == 3.0
+    assert tracker.wallet.held_quote == pytest.approx(999_899.9)
 
 
-def test_evaluate_venue_target_transition_rejects_allocation_quote_breach() -> None:
-    from mm.core.models.ledger import VenueLedger
-    from mm.core.models.target_book import TargetOrder, VenueTargetBook
-
-    ledger = VenueLedger(
+def test_evaluate_venue_target_transition_rejects_insufficient_wallet_quote() -> None:
+    wallet = StrategyWallet(
+        actor_id="btc-maker-actor",
         exchange="nobitex",
         symbol="BTC_IRT",
         base_asset="BTC",
         quote_asset="IRT",
-        available_base=10.0,
-        available_quote=1_000_000.0,
-        locked_base=0.0,
-        locked_quote=0.0,
-        balances={},
-        live_orders={},
-        last_snapshot_ms=1,
-        last_private_event_ms=1,
+        initial_base=0.0,
+        initial_quote=50.0,
+        held_base=0.0,
+        held_quote=50.0,
     )
+    ledger = venue_ledger_from_strategy_wallet(wallet)
     target = VenueTargetBook(
         exchange="nobitex",
         symbol="BTC_IRT",
@@ -99,19 +94,14 @@ def test_evaluate_venue_target_transition_rejects_allocation_quote_breach() -> N
         ledger=ledger,
         target=target,
         limits=VenueRiskLimits(),
-        allocation=AllocationCaps(
-            max_quote_exposure=50.0,
-            attributed_quote_used=40.0,
-        ),
+        allocation=None,
     )
     assert not ok
-    assert "allocation_quote_exceeded" in reasons
+    assert "insufficient_quote_for_bid_orders" in reasons
 
 
 @pytest.mark.asyncio
-async def test_portfolio_allocation_service_halts_actor_on_breach(monkeypatch: pytest.MonkeyPatch) -> None:
-    from mm.runtime.config import MarketDataSourceConfig
-
+async def test_portfolio_allocation_service_halts_actor_on_wallet_breach(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
     bus = InMemoryBus()
     control_plane = RuntimeControlPlane(bus=bus)
@@ -128,8 +118,9 @@ async def test_portfolio_allocation_service_halts_actor_on_breach(monkeypatch: p
         allocated_base=1.0,
         halt_on_breach=True,
     )
-    tracker = ActorAllocationTracker(record=record, binding=config.binding)
-    tracker.usage.locked_quote = 150.0
+    tracker = ActorWalletTracker(record=record, binding=config.binding)
+    assert tracker.wallet is not None
+    tracker.wallet.held_quote = -1.0
     service = PortfolioAllocationService(
         bus=bus,
         allocations=(record,),
@@ -183,3 +174,7 @@ async def test_worker_loads_allocations_from_registry(monkeypatch: pytest.Monkey
     )
     assert worker.allocation_service is not None
     assert len(worker.allocation_service._trackers) == 2
+    wallet = worker.allocation_service.wallet_for("btc-maker-actor")
+    assert wallet is not None
+    assert wallet.initial_base == 2.0
+    assert wallet.held_base == 2.0

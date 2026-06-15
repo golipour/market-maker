@@ -113,6 +113,23 @@ def seed_local_worker_registry(
         symbol=LOCAL_SYMBOL,
         status="active",
     )
+    store.upsert_market_feed(
+        feed_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}-10000",
+        exchange=LOCAL_EXCHANGE,
+        symbol=LOCAL_SYMBOL,
+        interval_ms=10_000,
+        mode="rest",
+    )
+    store.upsert_allocation(
+        allocation_id=f"{strategy_id}-wallet",
+        strategy_id=strategy_id,
+        actor_id=LOCAL_ACTOR_ID,
+        account_id=LOCAL_ACCOUNT_ID,
+        quote_asset="IRT",
+        base_asset="USDT",
+        allocated_quote=50_000_000.0,
+        allocated_base=10_000.0,
+    )
     store.upsert_worker_assignment(
         assignment_id=LOCAL_WORKER_ASSIGNMENT_ID,
         worker_id=worker_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -18,7 +19,7 @@ from mm.execution.plan import (
     stage_report_with_rejections,
 )
 from mm.application.frame_preparation import clean_strategy_frame
-from mm.application.trading_context import trading_state_from_ledger
+from mm.application.trading_context import trading_state_from_ledger, trading_state_from_wallet
 from mm.bus.base import AbstractEventBus
 from mm.controller.context import DecisionContext, execution_blocked_reasons
 from mm.core.interfaces.order_manager import AbstractOrderManager
@@ -32,6 +33,7 @@ from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
 from mm.risk.net_delta import NetDeltaRiskEngine, target_book_result_to_risk_result
+from mm.portfolio.wallet import StrategyWallet
 from mm.runtime.config import (
     ControllerRuntimeConfig,
     ExecutionRuntimeConfig,
@@ -75,6 +77,7 @@ class StrategyRunner:
     bus: AbstractEventBus | None = None
     control_plane: RuntimeControlPlane | None = None
     run_id: str = ""
+    strategy_wallet_provider: Callable[[], StrategyWallet | None] | None = None
     _engine: MpcStrategyEngine = field(init=False, repr=False)
     _diagnostics: DiagnosticsPublisher = field(init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
@@ -173,11 +176,19 @@ class StrategyRunner:
         ledger = joint_frame.ledger
         open_orders = _live_orders_from_ledger(ledger)
         clean_frame = clean_strategy_frame(frame, open_orders)
-        trading_state = trading_state_from_ledger(
-            ledger,
-            actor_id=self.config.actor_id,
-            open_orders=open_orders,
-        )
+        wallet = self.strategy_wallet_provider() if self.strategy_wallet_provider is not None else None
+        if wallet is not None:
+            trading_state = trading_state_from_wallet(
+                wallet,
+                actor_id=self.config.actor_id,
+                open_orders=open_orders,
+            )
+        else:
+            trading_state = trading_state_from_ledger(
+                ledger,
+                actor_id=self.config.actor_id,
+                open_orders=open_orders,
+            )
 
         ctx = DecisionContext(
             config=self.config,
