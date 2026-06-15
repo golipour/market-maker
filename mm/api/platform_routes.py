@@ -151,6 +151,7 @@ def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
         ("Model Parameters", "mm-obs-v2-model-parameters"),
         ("Pipeline Time Profile", "mm-obs-v2-pipeline-time-profile"),
         ("Portfolio And PnL", "mm-obs-v2-portfolio-pnl"),
+        ("Exchange Accounts", "mm-obs-v2-exchange-account"),
         ("Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
     ]
     return [

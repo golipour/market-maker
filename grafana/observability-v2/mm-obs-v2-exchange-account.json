@@ -1,0 +1,631 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "Physical exchange account data from persisted snapshots. Account balances come from PrivateStateSnapshot (REST wallet poll on private:state:{exchange}:snapshot). Per-symbol trading inventory, locked funds, and open orders come from VenueLedgerSnapshot (ledger:snapshot:{exchange}). This is separate from the virtual strategy wallet shown in Portfolio And PnL.",
+        "mode": "markdown"
+      },
+      "title": "Scope",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT EXTRACT(EPOCH FROM (now() - max(e.ts)))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'PrivateStateSnapshot'\n  AND e.topic LIKE 'private:state:%:snapshot'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)",
+          "refId": "A"
+        }
+      ],
+      "title": "Private snapshot age",
+      "type": "stat",
+      "description": "Seconds since the latest PrivateStateSnapshot in the selected time range.",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown'), COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))\n    COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') AS exchange,\n    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,\n    e.ts,\n    e.payload\n  FROM mm_events e\n  WHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  ORDER BY COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown'), COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC\n)\nSELECT sum(jsonb_object_length(COALESCE(payload->'open_orders', '{}'::jsonb)))::double precision AS value\nFROM latest",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest open orders",
+      "type": "stat",
+      "description": "Open order count from the latest VenueLedgerSnapshot per exchange/symbol.",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown'))\n    COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') AS exchange,\n    e.ts,\n    e.payload\n  FROM mm_events e\n  WHERE e.event_type = 'PrivateStateSnapshot'\n  AND e.topic LIKE 'private:state:%:snapshot'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  ORDER BY COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown'), e.ts DESC\n)\nSELECT\n  exchange,\n  asset,\n  (balance->>'free')::double precision AS free,\n  (balance->>'locked')::double precision AS locked,\n  (balance->>'total')::double precision AS total,\n  ts AS snapshot_time\nFROM latest\nCROSS JOIN LATERAL jsonb_each(COALESCE(payload->'balances', '{}'::jsonb)) AS b(asset, balance)\nORDER BY exchange, asset",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest account balances",
+      "type": "table",
+      "description": "Most recent wallet balances per asset from PrivateStateSnapshot.",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') || ' ' || asset AS metric,\n  (balance->>'total')::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'balances', '{}'::jsonb)) AS b(asset, balance)\nWHERE e.event_type = 'PrivateStateSnapshot'\n  AND e.topic LIKE 'private:state:%:snapshot'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Account asset totals",
+      "type": "timeseries",
+      "description": "Total balance per asset from exchange wallet polls.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') || ' ' || asset AS metric,\n  (balance->>'locked')::double precision AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'balances', '{}'::jsonb)) AS b(asset, balance)\nWHERE e.event_type = 'PrivateStateSnapshot'\n  AND e.topic LIKE 'private:state:%:snapshot'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Account locked balances",
+      "type": "timeseries",
+      "description": "Locked balance per asset (orders, holds) from exchange wallet polls.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' available_base' AS metric,\n  (e.payload->>'available_base')::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' locked_base' AS metric,\n  (e.payload->>'locked_base')::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Trading inventory (base)",
+      "type": "timeseries",
+      "description": "Per-symbol base asset available and locked from VenueLedgerSnapshot.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' available_quote' AS metric,\n  (e.payload->>'available_quote')::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nUNION ALL\nSELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' locked_quote' AS metric,\n  (e.payload->>'locked_quote')::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Trading cash (quote)",
+      "type": "timeseries",
+      "description": "Per-symbol quote asset available and locked from VenueLedgerSnapshot.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  e.ts AS time,\n  COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS metric,\n  jsonb_object_length(COALESCE(e.payload->'open_orders', '{}'::jsonb))::double precision AS value\nFROM mm_events e\nWHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Open orders",
+      "type": "timeseries",
+      "description": "Live open order count tracked by the venue ledger service.",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown'), COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))\n    COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') AS exchange,\n    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,\n    e.ts,\n    e.payload\n  FROM mm_events e\n  WHERE e.event_type = 'VenueLedgerSnapshot'\n  AND e.topic LIKE 'ledger:snapshot:%'\n  AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  ORDER BY COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown'), COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC\n)\nSELECT\n  exchange,\n  symbol,\n  (payload->>'available_base')::double precision AS available_base,\n  (payload->>'locked_base')::double precision AS locked_base,\n  (payload->>'available_quote')::double precision AS available_quote,\n  (payload->>'locked_quote')::double precision AS locked_quote,\n  jsonb_object_length(COALESCE(payload->'open_orders', '{}'::jsonb)) AS open_orders,\n  ts AS snapshot_time\nFROM latest\nORDER BY exchange, symbol",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest venue ledger",
+      "type": "table",
+      "description": "Most recent per-symbol trading ledger snapshot.",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false
+        },
+        "showHeader": true
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "market-maker",
+    "observability-v2",
+    "portfolio",
+    "exchange-account"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Exchange",
+        "multi": true,
+        "name": "exchange",
+        "options": [],
+        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Symbol",
+        "multi": true,
+        "name": "symbol",
+        "options": [],
+        "query": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE actor_id IS NOT NULL\n    AND actor_id <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor_id",
+        "options": [],
+        "query": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE actor_id IS NOT NULL\n    AND actor_id <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT run_id\nFROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE run_id IS NOT NULL AND run_id <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Run",
+        "multi": true,
+        "name": "run_id",
+        "options": [],
+        "query": "SELECT run_id\nFROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE run_id IS NOT NULL AND run_id <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Diagnostics topic",
+        "multi": false,
+        "name": "diagnostics_topic",
+        "options": [],
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target books topic",
+        "multi": false,
+        "name": "target_books_topic",
+        "options": [],
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "postgres-mm"
+        },
+        "definition": "SELECT interval_ms\nFROM (\n  SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n    AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n  GROUP BY 1\n) ranked\nORDER BY latest_ts DESC",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Interval ms",
+        "multi": false,
+        "name": "interval_ms",
+        "options": [],
+        "query": "SELECT interval_ms\nFROM (\n  SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n    AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n  GROUP BY 1\n) ranked\nORDER BY latest_ts DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MM Observability v2 / 07A Exchange Accounts",
+  "uid": "mm-obs-v2-exchange-account",
+  "version": 1,
+  "weekStart": ""
+}

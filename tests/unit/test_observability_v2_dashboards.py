@@ -4,6 +4,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     action_pipeline_side_counts,
     controller_health,
     dashboards,
+    exchange_account,
     execution_errors,
     fill_spread_pnl,
     liquidity_sourcing,
@@ -509,6 +510,26 @@ def test_action_pipeline_side_counts_dashboard_splits_bid_and_ask() -> None:
     assert "risk_approved_target" in removed_sql
     assert "rules_valid" in removed_sql
     assert "router_accepted" in removed_sql
+
+
+def test_exchange_account_dashboard_uses_physical_snapshot_sources() -> None:
+    dashboard = exchange_account()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert dashboard["uid"] == "mm-obs-v2-exchange-account"
+    balances_sql = panels_by_title["Latest account balances"]["targets"][0]["rawSql"]
+    assert "PrivateStateSnapshot" in balances_sql
+    assert "private:state:%:snapshot" in balances_sql
+
+    venue_sql = panels_by_title["Latest venue ledger"]["targets"][0]["rawSql"]
+    assert "VenueLedgerSnapshot" in venue_sql
+    assert "ledger:snapshot:%" in venue_sql
+    assert "available_base" in venue_sql
+    assert "open_orders" in venue_sql
+
+    inventory_sql = panels_by_title["Trading inventory (base)"]["targets"][0]["rawSql"]
+    assert "available_base" in inventory_sql
+    assert "locked_base" in inventory_sql
 
 
 def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:

@@ -47,6 +47,7 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
         "mm-obs-v2-model-parameters",
         "mm-obs-v2-pipeline-time-profile",
         "mm-obs-v2-portfolio-pnl",
+        "mm-obs-v2-exchange-account",
         "mm-obs-v2-fill-spread-pnl",
     }
     assert [d["title"] for d in body["dashboards"]] == [
@@ -58,6 +59,7 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
         "Model Parameters",
         "Pipeline Time Profile",
         "Portfolio And PnL",
+        "Exchange Accounts",
         "Fill Spread PnL",
     ]
     assert body["solo_panels"] == []

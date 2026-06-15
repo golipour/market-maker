@@ -4298,6 +4298,277 @@ def execution_errors() -> dict[str, Any]:
     )
 
 
+def _exchange_account_private_exchange_expr() -> str:
+    return (
+        "COALESCE(e.exchange, e.payload->>'exchange', "
+        "substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown')"
+    )
+
+
+def _exchange_account_venue_exchange_expr() -> str:
+    return (
+        "COALESCE(e.exchange, e.payload->>'exchange', "
+        "substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown')"
+    )
+
+
+def _exchange_account_private_filter() -> str:
+    exchange = _exchange_account_private_exchange_expr()
+    return f"""e.event_type = 'PrivateStateSnapshot'
+  AND e.topic LIKE 'private:state:%:snapshot'
+  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND $__timeFilter(e.ts)"""
+
+
+def _exchange_account_venue_filter() -> str:
+    exchange = _exchange_account_venue_exchange_expr()
+    return f"""e.event_type = 'VenueLedgerSnapshot'
+  AND e.topic LIKE 'ledger:snapshot:%'
+  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND $__timeFilter(e.ts)"""
+
+
+def _exchange_account_latest_balances_sql() -> str:
+    exchange = _exchange_account_private_exchange_expr()
+    return f"""WITH latest AS (
+  SELECT DISTINCT ON ({exchange})
+    {exchange} AS exchange,
+    e.ts,
+    e.payload
+  FROM mm_events e
+  WHERE {_exchange_account_private_filter()}
+  ORDER BY {exchange}, e.ts DESC
+)
+SELECT
+  exchange,
+  asset,
+  (balance->>'free')::double precision AS free,
+  (balance->>'locked')::double precision AS locked,
+  (balance->>'total')::double precision AS total,
+  ts AS snapshot_time
+FROM latest
+CROSS JOIN LATERAL jsonb_each(COALESCE(payload->'balances', '{{}}'::jsonb)) AS b(asset, balance)
+ORDER BY exchange, asset"""
+
+
+def _exchange_account_balance_timeseries_sql(field: str) -> str:
+    exchange = _exchange_account_private_exchange_expr()
+    return f"""SELECT
+  e.ts AS time,
+  {exchange} || ' ' || asset AS metric,
+  (balance->>'{field}')::double precision AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'balances', '{{}}'::jsonb)) AS b(asset, balance)
+WHERE {_exchange_account_private_filter()}
+ORDER BY 1"""
+
+
+def _exchange_account_private_snapshot_age_sql() -> str:
+    exchange = _exchange_account_private_exchange_expr()
+    return f"""SELECT EXTRACT(EPOCH FROM (now() - max(e.ts)))::double precision AS value
+FROM mm_events e
+WHERE {_exchange_account_private_filter()}"""
+
+
+def _exchange_account_venue_field_timeseries_sql(*fields: str) -> str:
+    exchange = _exchange_account_venue_exchange_expr()
+    unions = []
+    for field in fields:
+        unions.append(
+            f"""SELECT
+  e.ts AS time,
+  {exchange} || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' {field}' AS metric,
+  (e.payload->>'{field}')::double precision AS value
+FROM mm_events e
+WHERE {_exchange_account_venue_filter()}"""
+        )
+    return "\nUNION ALL\n".join(unions) + "\nORDER BY 1"
+
+
+def _exchange_account_open_orders_timeseries_sql() -> str:
+    exchange = _exchange_account_venue_exchange_expr()
+    return f"""SELECT
+  e.ts AS time,
+  {exchange} || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS metric,
+  jsonb_object_length(COALESCE(e.payload->'open_orders', '{{}}'::jsonb))::double precision AS value
+FROM mm_events e
+WHERE {_exchange_account_venue_filter()}
+ORDER BY 1"""
+
+
+def _exchange_account_latest_venue_ledger_sql() -> str:
+    exchange = _exchange_account_venue_exchange_expr()
+    return f"""WITH latest AS (
+  SELECT DISTINCT ON ({exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))
+    {exchange} AS exchange,
+    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,
+    e.ts,
+    e.payload
+  FROM mm_events e
+  WHERE {_exchange_account_venue_filter()}
+  ORDER BY {exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC
+)
+SELECT
+  exchange,
+  symbol,
+  (payload->>'available_base')::double precision AS available_base,
+  (payload->>'locked_base')::double precision AS locked_base,
+  (payload->>'available_quote')::double precision AS available_quote,
+  (payload->>'locked_quote')::double precision AS locked_quote,
+  jsonb_object_length(COALESCE(payload->'open_orders', '{{}}'::jsonb)) AS open_orders,
+  ts AS snapshot_time
+FROM latest
+ORDER BY exchange, symbol"""
+
+
+def _exchange_account_latest_open_orders_sql() -> str:
+    exchange = _exchange_account_venue_exchange_expr()
+    return f"""WITH latest AS (
+  SELECT DISTINCT ON ({exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))
+    {exchange} AS exchange,
+    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,
+    e.ts,
+    e.payload
+  FROM mm_events e
+  WHERE {_exchange_account_venue_filter()}
+  ORDER BY {exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC
+)
+SELECT sum(jsonb_object_length(COALESCE(payload->'open_orders', '{{}}'::jsonb)))::double precision AS value
+FROM latest"""
+
+
+def exchange_account() -> dict[str, Any]:
+    panels = [
+        _text(
+            1,
+            "Scope",
+            (
+                "Physical exchange account data from persisted snapshots. "
+                "Account balances come from PrivateStateSnapshot (REST wallet poll on private:state:{exchange}:snapshot). "
+                "Per-symbol trading inventory, locked funds, and open orders come from VenueLedgerSnapshot "
+                "(ledger:snapshot:{exchange}). This is separate from the virtual strategy wallet shown in Portfolio And PnL."
+            ),
+            y=0,
+            h=4,
+        ),
+        _panel(
+            2,
+            "Private snapshot age",
+            "stat",
+            PG_DS,
+            _exchange_account_private_snapshot_age_sql(),
+            x=0,
+            y=4,
+            w=6,
+            h=4,
+            fmt="table",
+            unit="s",
+            decimals=0,
+            description="Seconds since the latest PrivateStateSnapshot in the selected time range.",
+        ),
+        _panel(
+            3,
+            "Latest open orders",
+            "stat",
+            PG_DS,
+            _exchange_account_latest_open_orders_sql(),
+            x=6,
+            y=4,
+            w=6,
+            h=4,
+            fmt="table",
+            decimals=0,
+            description="Open order count from the latest VenueLedgerSnapshot per exchange/symbol.",
+        ),
+        _panel(
+            4,
+            "Latest account balances",
+            "table",
+            PG_DS,
+            _exchange_account_latest_balances_sql(),
+            x=0,
+            y=8,
+            w=24,
+            h=10,
+            fmt="table",
+            description="Most recent wallet balances per asset from PrivateStateSnapshot.",
+        ),
+        _panel(
+            5,
+            "Account asset totals",
+            "timeseries",
+            PG_DS,
+            _exchange_account_balance_timeseries_sql("total"),
+            x=0,
+            y=18,
+            description="Total balance per asset from exchange wallet polls.",
+        ),
+        _panel(
+            6,
+            "Account locked balances",
+            "timeseries",
+            PG_DS,
+            _exchange_account_balance_timeseries_sql("locked"),
+            x=12,
+            y=18,
+            description="Locked balance per asset (orders, holds) from exchange wallet polls.",
+        ),
+        _panel(
+            7,
+            "Trading inventory (base)",
+            "timeseries",
+            PG_DS,
+            _exchange_account_venue_field_timeseries_sql("available_base", "locked_base"),
+            x=0,
+            y=26,
+            description="Per-symbol base asset available and locked from VenueLedgerSnapshot.",
+        ),
+        _panel(
+            8,
+            "Trading cash (quote)",
+            "timeseries",
+            PG_DS,
+            _exchange_account_venue_field_timeseries_sql("available_quote", "locked_quote"),
+            x=12,
+            y=26,
+            description="Per-symbol quote asset available and locked from VenueLedgerSnapshot.",
+        ),
+        _panel(
+            9,
+            "Open orders",
+            "timeseries",
+            PG_DS,
+            _exchange_account_open_orders_timeseries_sql(),
+            x=0,
+            y=34,
+            w=24,
+            h=8,
+            decimals=0,
+            description="Live open order count tracked by the venue ledger service.",
+        ),
+        _panel(
+            10,
+            "Latest venue ledger",
+            "table",
+            PG_DS,
+            _exchange_account_latest_venue_ledger_sql(),
+            x=0,
+            y=42,
+            w=24,
+            h=10,
+            fmt="table",
+            description="Most recent per-symbol trading ledger snapshot.",
+        ),
+    ]
+    return _dashboard(
+        "mm-obs-v2-exchange-account",
+        "MM Observability v2 / 07A Exchange Accounts",
+        panels,
+        tags=["portfolio", "exchange-account"],
+    )
+
+
 def portfolio_pnl() -> dict[str, Any]:
     panels = [
         _text(1, "Scope", "Inventory, cash, total marked value, wealth, and step economics.", y=0),
@@ -5894,6 +6165,7 @@ def dashboards() -> list[dict[str, Any]]:
         risk_execution(),
         execution_errors(),
         portfolio_pnl(),
+        exchange_account(),
         fill_spread_pnl(),
         liquidity_sourcing(),
         runtime_logs(),

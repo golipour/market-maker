@@ -33,6 +33,16 @@ def symbol_var_query(*, include_market_facts: bool = True) -> str:
         """SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts
   FROM mm_events
   WHERE event_type = 'JointStrategyFrame'""",
+        """SELECT symbol, ts
+  FROM mm_events
+  WHERE event_type = 'VenueLedgerSnapshot'
+    AND symbol IS NOT NULL
+    AND symbol <> ''""",
+        """SELECT payload->>'symbol' AS symbol, ts
+  FROM mm_events
+  WHERE event_type = 'VenueLedgerSnapshot'
+    AND payload->>'symbol' IS NOT NULL
+    AND payload->>'symbol' <> ''""",
     ]
     if include_market_facts:
         sources.append(
@@ -79,6 +89,20 @@ def exchange_var_query(*, include_market_facts: bool = True) -> str:
   WHERE event_type = 'MarketEvent'
     AND exchange IS NOT NULL
     AND exchange <> ''""",
+        """SELECT exchange, ts
+  FROM mm_events
+  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')
+    AND exchange IS NOT NULL
+    AND exchange <> ''""",
+        """SELECT COALESCE(
+      exchange,
+      payload->>'exchange',
+      substring(topic from '^private:state:([^:]+):snapshot$'),
+      substring(topic from '^ledger:snapshot:([^:]+)$')
+    ) AS exchange,
+    ts
+  FROM mm_events
+  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')""",
     ]
     if include_market_facts:
         sources.append(
