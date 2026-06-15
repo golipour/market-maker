@@ -109,6 +109,9 @@ def market_event_event(event: Any) -> dict[str, Any]:
         vwap=float(event.vwap),
         imbalance=float(event.imbalance),
         microprice=float(event.microprice),
+        book_buy_vwap=float(event.book_buy_vwap),
+        book_sell_vwap=float(event.book_sell_vwap),
+        book_vwap_depth=float(event.book_vwap_depth),
     )
 
 
@@ -142,6 +145,9 @@ def market_event_from_payload(payload: Any) -> Any | None:
             vwap=float(payload.get("vwap") or 0.0),
             imbalance=float(payload.get("imbalance") or 0.0),
             microprice=float(payload.get("microprice") or 0.0),
+            book_buy_vwap=float(payload.get("book_buy_vwap") or 0.0),
+            book_sell_vwap=float(payload.get("book_sell_vwap") or 0.0),
+            book_vwap_depth=float(payload.get("book_vwap_depth") or 0.0),
         )
     except (KeyError, TypeError, ValueError):
         return None

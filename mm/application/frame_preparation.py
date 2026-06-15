@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from mm.aggregation.features import book_vwaps
 from mm.application.orderbook_view import subtract_own_orders
 from mm.core.models.execution import Order
 from mm.core.models.market import MarketEvent
@@ -40,6 +41,7 @@ def clean_strategy_frame(
 
 
 def _replace_event_orderbook(event: MarketEvent, orderbook) -> MarketEvent:
+    book_buy_vwap, book_sell_vwap, book_vwap_depth = book_vwaps(orderbook)
     return MarketEvent(
         exchange=event.exchange,
         symbol=event.symbol,
@@ -53,4 +55,7 @@ def _replace_event_orderbook(event: MarketEvent, orderbook) -> MarketEvent:
         vwap=event.vwap,
         imbalance=event.imbalance,
         microprice=event.microprice,
+        book_buy_vwap=book_buy_vwap,
+        book_sell_vwap=book_sell_vwap,
+        book_vwap_depth=book_vwap_depth,
     )

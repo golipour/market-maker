@@ -84,6 +84,8 @@ def test_market_event_payload_is_versioned_and_round_trips() -> None:
     assert round_tripped.exchange == event.exchange
     assert round_tripped.t_end_ms == event.t_end_ms
     assert round_tripped.orderbook.bids[0].price == 100.0
+    assert round_tripped.book_buy_vwap == event.book_buy_vwap
+    assert round_tripped.book_sell_vwap == event.book_sell_vwap
 
 
 def test_target_book_models_emit_versioned_payloads() -> None:

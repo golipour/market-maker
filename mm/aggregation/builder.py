@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mm.aggregation.features import microprice, top_imbalance, volume_by_side, vwap
+from mm.aggregation.features import book_vwaps, microprice, top_imbalance, volume_by_side, vwap
 from mm.core.models.market import MarketEvent
 from mm.ingestion.orderbook import OrderbookManager
 from mm.ingestion.trade_buffer import RollingTradeBuffer
@@ -23,6 +23,7 @@ class MarketEventBuilder:
         book = self.orderbook_manager.snapshot_at(t_end_ms)
         trades = self.trade_buffer.slice(t_start_ms, t_end_ms)
         buy_volume, sell_volume = volume_by_side(trades)
+        book_buy_vwap, book_sell_vwap, book_vwap_depth = book_vwaps(book)
         return MarketEvent(
             exchange=self.exchange,
             symbol=self.symbol,
@@ -36,5 +37,8 @@ class MarketEventBuilder:
             vwap=vwap(trades),
             imbalance=top_imbalance(book),
             microprice=microprice(book),
+            book_buy_vwap=book_buy_vwap,
+            book_sell_vwap=book_sell_vwap,
+            book_vwap_depth=book_vwap_depth,
         )
 

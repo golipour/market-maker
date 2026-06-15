@@ -3176,7 +3176,11 @@ def market_data_quality() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Raw orderbook/trade feed health before interval aggregation, plus per-exchange price and volume from persisted MarketEvent streams.",
+            "Raw feed health from Prometheus; prices/volumes from persisted `MarketEvent` rows. "
+            "`best_bid`/`best_ask` are top-of-book (L1). "
+            "`buy_vwap`/`sell_vwap` walk the stored orderbook snapshot up to `min(total_bid_qty, total_ask_qty)` base units "
+            "(levels fetched per feed `depth_limit`). "
+            "`trade_vwap` is the interval trade VWAP over `[t_start_ms, t_end_ms]` and is omitted when no trades fired.",
             y=0,
         ),
         _panel(2, "Market events / step", "timeseries", PG_DS, _market_event_step_sql(), x=0, y=3, w=6, unit="ops"),
@@ -4196,7 +4200,9 @@ ask_step_plot AS (
 def _exchange_price_vwap_sql() -> str:
     best_bid = _numeric_sql("payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
     best_ask = _numeric_sql("payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
-    vwap = _numeric_sql("payload->>'vwap'", default="NULL")
+    book_buy_vwap = _numeric_sql("payload->>'book_buy_vwap'", default="NULL")
+    book_sell_vwap = _numeric_sql("payload->>'book_sell_vwap'", default="NULL")
+    trade_vwap = _numeric_sql("NULLIF(payload->>'vwap', '0')", default="NULL")
     filters = """event_type = 'MarketEvent'
   AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
   AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
@@ -4213,11 +4219,23 @@ FROM mm_events
 WHERE {filters}
   AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
 UNION ALL
-SELECT ts AS "time", (exchange || ' vwap') AS metric,
-       {vwap} AS value
+SELECT ts AS "time", (exchange || ' buy_vwap') AS metric,
+       NULLIF({book_buy_vwap}, 0.0) AS value
 FROM mm_events
 WHERE {filters}
-  AND (payload->>'vwap') IS NOT NULL
+  AND (payload->>'book_buy_vwap') IS NOT NULL
+UNION ALL
+SELECT ts AS "time", (exchange || ' sell_vwap') AS metric,
+       NULLIF({book_sell_vwap}, 0.0) AS value
+FROM mm_events
+WHERE {filters}
+  AND (payload->>'book_sell_vwap') IS NOT NULL
+UNION ALL
+SELECT ts AS "time", (exchange || ' trade_vwap') AS metric,
+       {trade_vwap} AS value
+FROM mm_events
+WHERE {filters}
+  AND NULLIF(payload->>'vwap', '0') IS NOT NULL
 ORDER BY 1"""
 
 

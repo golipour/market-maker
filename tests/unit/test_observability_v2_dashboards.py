@@ -38,7 +38,10 @@ def test_market_data_quality_uses_per_exchange_market_events() -> None:
     price_sql = panels_by_title["Best bid / ask / VWAP by exchange"]["targets"][0]["rawSql"]
     assert "role_exchange" not in price_sql
     assert "event_type = 'MarketEvent'" in price_sql
-    assert "exchange || ' vwap'" in price_sql
+    assert "exchange || ' buy_vwap'" in price_sql
+    assert "exchange || ' sell_vwap'" in price_sql
+    assert "exchange || ' trade_vwap'" in price_sql
+    assert "NULLIF(payload->>'vwap', '0')" in price_sql
 
     volume_sql = panels_by_title["Buy / sell volume by exchange"]["targets"][0]["rawSql"]
     assert "role_exchange" not in volume_sql

@@ -48,6 +48,9 @@ if msgspec is not None:
         vwap: float
         imbalance: float
         microprice: float
+        book_buy_vwap: float = 0.0
+        book_sell_vwap: float = 0.0
+        book_vwap_depth: float = 0.0
 
 else:
 
@@ -92,4 +95,7 @@ else:
         vwap: float
         imbalance: float
         microprice: float
+        book_buy_vwap: float = 0.0
+        book_sell_vwap: float = 0.0
+        book_vwap_depth: float = 0.0
 

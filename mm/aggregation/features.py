@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mm.core.models.market import RawOrderbook, RawTrade
+from mm.pricing.orderbook_ref import vwap_from_raw_orderbook
 
 
 def volume_by_side(trades: tuple[RawTrade, ...]) -> tuple[float, float]:
@@ -34,4 +35,22 @@ def microprice(book: RawOrderbook) -> float:
     if denom <= 0:
         return float((bid.price + ask.price) / 2.0)
     return float((bid.price * ask.qty + ask.price * bid.qty) / denom)
+
+
+def book_vwap_depth(book: RawOrderbook) -> float:
+    """Base qty used when walking the snapshot for book buy/sell VWAP."""
+
+    total_bid = sum(max(0.0, float(level.qty)) for level in book.bids)
+    total_ask = sum(max(0.0, float(level.qty)) for level in book.asks)
+    return min(total_bid, total_ask)
+
+
+def book_vwaps(book: RawOrderbook) -> tuple[float, float, float]:
+    """Return ``(buy_vwap, sell_vwap, depth_base)`` from the stored orderbook."""
+
+    depth = book_vwap_depth(book)
+    if depth <= 0.0 or not book.bids or not book.asks:
+        return 0.0, 0.0, 0.0
+    buy_vwap, sell_vwap = vwap_from_raw_orderbook(book, target_depth=depth)
+    return float(buy_vwap), float(sell_vwap), float(depth)
 
