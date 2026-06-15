@@ -392,6 +392,184 @@ def _stem_order_qty_price_panel(
     return panel
 
 
+def _stem_spread_bucket_panel(
+    id_: int,
+    title: str,
+    expr: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 8,
+    h: int = 10,
+    description: str | None = None,
+) -> dict[str, Any]:
+    panel: dict[str, Any] = {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                    "axisBorderShow": False,
+                    "axisCenteredZero": False,
+                    "axisColorMode": "text",
+                    "axisLabel": "qty",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.85,
+                    "fillOpacity": 85,
+                    "hideFrom": {"legend": False, "tooltip": False, "viz": False},
+                    "lineWidth": 1,
+                    "scaleDistribution": {"type": "linear"},
+                    "show": "bars",
+                    "spanNulls": False,
+                },
+                "unit": "short",
+                "decimals": 3,
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "spread"},
+                    "properties": [
+                        {"id": "custom.axisLabel", "value": "spread from mid"},
+                        {"id": "custom.axisCenteredZero", "value": True},
+                        {"id": "decimals", "value": 1},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byRegexp", "options": "^(bid|.* bid)$"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byRegexp", "options": "^(ask|.* ask)$"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+            ],
+        },
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+            "mapping": "auto",
+            "series": [],
+            "tooltip": {"mode": "multi", "sort": "none"},
+        },
+        "targets": [_target(PG_DS, expr, fmt="table")],
+        "title": title,
+        "type": "xychart",
+        "pluginVersion": "13.0.0",
+        "transformations": [
+            {
+                "id": "partitionByValues",
+                "options": {
+                    "fields": ["series"],
+                    "keepFields": False,
+                    "naming": {"mode": "as_is", "asLabels": False},
+                },
+            }
+        ],
+    }
+    if description:
+        panel["description"] = description
+    return panel
+
+
+def _stem_spread_bucket_panel(
+    id_: int,
+    title: str,
+    expr: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 8,
+    h: int = 10,
+    description: str | None = None,
+) -> dict[str, Any]:
+    panel: dict[str, Any] = {
+        "datasource": PG_DS,
+        "fieldConfig": {
+            "defaults": {
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                    "axisBorderShow": False,
+                    "axisCenteredZero": False,
+                    "axisColorMode": "text",
+                    "axisLabel": "qty",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.85,
+                    "fillOpacity": 85,
+                    "hideFrom": {"legend": False, "tooltip": False, "viz": False},
+                    "lineWidth": 1,
+                    "scaleDistribution": {"type": "linear"},
+                    "show": "bars",
+                    "spanNulls": False,
+                },
+                "unit": "short",
+                "decimals": 3,
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "spread"},
+                    "properties": [
+                        {"id": "custom.axisLabel", "value": "spread from mid"},
+                        {"id": "custom.axisCenteredZero", "value": True},
+                        {"id": "decimals", "value": 1},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byRegexp", "options": "^(bid|.* bid)$"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+                {
+                    "matcher": {"id": "byRegexp", "options": "^(ask|.* ask)$"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                        {"id": "custom.axisSoftMin", "value": 0},
+                        {"id": "min", "value": 0},
+                    ],
+                },
+            ],
+        },
+        "gridPos": {"h": h, "w": w, "x": x, "y": y},
+        "id": id_,
+        "options": {
+            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True},
+            "mapping": "auto",
+            "series": [],
+            "tooltip": {"mode": "multi", "sort": "none"},
+        },
+        "targets": [_target(PG_DS, expr, fmt="table")],
+        "title": title,
+        "type": "xychart",
+        "pluginVersion": "13.0.0",
+        "transformations": [
+            {
+                "id": "partitionByValues",
+                "options": {
+                    "fields": ["series"],
+                    "keepFields": False,
+                    "naming": {"mode": "as_is", "asLabels": False},
+                },
+            }
+        ],
+    }
+    if description:
+        panel["description"] = description
+    return panel
+
+
 def _execution_command_panel(id_: int, title: str, expr: str, *, y: int) -> dict[str, Any]:
     panel = _panel(id_, title, "timeseries", PG_DS, expr, x=0, y=y, w=24)
     panel["fieldConfig"]["overrides"] = [
@@ -2665,6 +2843,159 @@ FROM axis_rows
 ORDER BY price, series"""
 
 
+def _latest_action_pipeline_stage_spread_bucket_sql(
+    stage: str,
+    *,
+    field: str = "orders",
+    reason: str | None = None,
+    include_reason_in_series: bool = False,
+    role: str | None = None,
+) -> str:
+    if role is not None and role not in {"local", "global"}:
+        raise ValueError(f"unknown action pipeline role: {role}")
+    side = _side_sql("o.value->>'side'")
+    series = side
+    if include_reason_in_series:
+        series = f"(COALESCE(NULLIF(o.value->>'reason', ''), 'unknown') || ' ' || {side})"
+    price = _numeric_sql("o.value->>'price'", default="NULL")
+    qty = _numeric_sql("o.value->>'qty'")
+    orders_expr = _action_pipeline_orders_array_sql(stage, field=field)
+    reason_filter = ""
+    if reason is not None:
+        reason_filter = f"\n    AND COALESCE(o.value->>'reason', '') = '{reason}'"
+    role_filter = _pipeline_exchange_filter("o.value->>'exchange'", role=role)
+    grid_price_filter = ""
+    if stage == "ladder":
+        grid_price_filter = f"""
+    AND {price} IN (
+      SELECT grid.price
+      FROM (
+        SELECT CASE
+          WHEN trim(COALESCE(elem->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'
+          THEN trim(COALESCE(elem->>'price', ''))::double precision
+          ELSE NULL
+        END AS price
+        FROM latest l
+        CROSS JOIN LATERAL jsonb_array_elements(
+          COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)
+          || COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask'], '[]'::jsonb)
+        ) AS elem
+      ) AS grid
+      WHERE grid.price IS NOT NULL
+    )"""
+    role_exchanges_cte = _role_exchanges_cte() if role is not None else ""
+    state_mid_path = "global_mid" if role == "global" else "mid"
+    clean_payload_path = "global_cleared_orderbook" if role == "global" else "cleared_orderbook"
+    clean_bid = _numeric_sql(
+        f"l.payload #>> ARRAY['{clean_payload_path}', 'bids', '0', 'price']",
+        default="NULL",
+    )
+    clean_ask = _numeric_sql(
+        f"l.payload #>> ARRAY['{clean_payload_path}', 'asks', '0', 'price']",
+        default="NULL",
+    )
+    spread_max = _numeric_sql("'${spread_max}'", default="100.0")
+    spread_buckets = _numeric_sql("'${spread_buckets}'", default="40")
+    return f"""WITH latest AS (
+  SELECT e.exchange,
+         e.payload
+  FROM mm_events e
+  WHERE e.topic = '${{diagnostics_topic}}'
+    AND e.event_type = 'ControllerDiagnostics'
+    AND (
+      '${{target_frame_mode}}' = 'latest'
+      OR e.event_id = ${{target_frame_event_id:sqlstring}}
+    )
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+){role_exchanges_cte},
+selected AS (
+  SELECT COALESCE(
+           {_numeric_sql(f"l.payload #>> ARRAY['state', '{state_mid_path}']", default="NULL")},
+           ({clean_bid} + {clean_ask}) / 2.0,
+           0.0
+         ) AS mid,
+         GREATEST({spread_max}, 1.0) AS spread_max,
+         GREATEST({spread_buckets}, 1)::int AS bucket_count
+  FROM latest l
+),
+bucket_width AS (
+  SELECT spread_max / bucket_count::double precision AS width
+  FROM selected
+),
+orders AS (
+  SELECT {series} AS series,
+         {price} AS price,
+         {qty} AS value
+  FROM latest l
+  CROSS JOIN LATERAL jsonb_array_elements(
+    {orders_expr}
+  ) AS o(value)
+  WHERE {side} IN ('bid', 'ask')
+    AND {price} IS NOT NULL{reason_filter}{role_filter}{grid_price_filter}
+),
+order_buckets AS (
+  SELECT o.series,
+         CASE
+           WHEN (o.price - s.mid) <= 0 THEN -LEAST(
+             CEIL(ABS(o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,
+             s.spread_max
+           )
+           ELSE LEAST(
+             CEIL((o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,
+             s.spread_max
+           )
+         END AS spread,
+         SUM(o.value) AS value
+  FROM orders o
+  CROSS JOIN selected s
+  CROSS JOIN bucket_width w
+  WHERE o.value > 0
+  GROUP BY 1, 2
+),
+series_names AS (
+  SELECT DISTINCT series FROM orders WHERE value > 0
+  UNION ALL SELECT 'bid' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'bid')
+  UNION ALL SELECT 'ask' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'ask')
+),
+bucket_grid AS (
+  SELECT gs AS bucket_idx,
+         s.spread_max,
+         w.width
+  FROM selected s
+  CROSS JOIN bucket_width w
+  CROSS JOIN generate_series(1, s.bucket_count) AS gs
+),
+all_buckets AS (
+  SELECT 'bid'::text AS side_key, (-g.bucket_idx * g.width) AS spread
+  FROM bucket_grid g
+  UNION ALL
+  SELECT 'ask'::text AS side_key, (g.bucket_idx * g.width) AS spread
+  FROM bucket_grid g
+),
+filled AS (
+  SELECT sn.series,
+         ab.spread,
+         COALESCE(ob.value, 0.0) AS value
+  FROM series_names sn
+  CROSS JOIN all_buckets ab
+  LEFT JOIN order_buckets ob
+    ON ob.series = sn.series
+   AND ob.spread = ab.spread
+  WHERE (sn.series = 'bid' AND ab.side_key = 'bid')
+     OR (sn.series = 'ask' AND ab.side_key = 'ask')
+     OR (sn.series LIKE '% bid' AND ab.side_key = 'bid')
+     OR (sn.series LIKE '% ask' AND ab.side_key = 'ask')
+)
+SELECT series, spread, value
+FROM filled
+ORDER BY spread, series"""
+
+
 def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str | None = "local") -> str:
     if role is not None and role not in {"local", "global"}:
         raise ValueError(f"unknown action pipeline depth role: {role}")
@@ -3307,35 +3638,36 @@ def orderbook_depth() -> dict[str, Any]:
             1,
             "Scope",
             "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. "
-            "Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per "
-            "`orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side).",
+            "Depth curves use `price - mid` on the x-axis. **Marginal ladder**, **After venue rounding**, "
+            "and **Exchange-accepted placements** use uniform spread buckets (Spread max / Spread buckets) "
+            "with bid/ask bars aligned across panels.",
             y=0,
             h=4,
         ),
         _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw", role=None), x=0, y=4, w=24),
         _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean", role=None), x=0, y=12, w=24),
         _xy_depth_panel(4, "Action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role=None), x=0, y=20, w=24),
-        _stem_order_qty_price_panel(
+        _stem_spread_bucket_panel(
             5,
             "Marginal ladder",
-            _latest_action_pipeline_stage_orders_sql("ladder", role=None),
+            _latest_action_pipeline_stage_spread_bucket_sql("ladder", role=None),
             x=0,
             y=28,
             w=24,
             description="Marginal ladder orders on the controller spread grid (pre-cap) for the selected exchange.",
         ),
-        _stem_order_qty_price_panel(
+        _stem_spread_bucket_panel(
             6,
             "After venue rounding",
-            _latest_action_pipeline_stage_orders_sql("rules_valid", role=None),
+            _latest_action_pipeline_stage_spread_bucket_sql("rules_valid", role=None),
             x=0,
             y=38,
             w=12,
         ),
-        _stem_order_qty_price_panel(
+        _stem_spread_bucket_panel(
             7,
             "Exchange-accepted placements",
-            _latest_action_pipeline_stage_orders_sql("router_accepted", role=None),
+            _latest_action_pipeline_stage_spread_bucket_sql("router_accepted", role=None),
             x=12,
             y=38,
             w=12,
@@ -3348,6 +3680,7 @@ def orderbook_depth() -> dict[str, Any]:
         tags=["orderbook"],
         extra_templating=[
             _custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100"),
+            _custom_var("spread_buckets", "Spread buckets", "20,40,60,80"),
             _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
             _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
         ],
@@ -3798,7 +4131,11 @@ def target_order_stems() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Live or pinned strategy-to-execution ladder, split local left and global right. Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the selected target frame. Every chart uses its venue raw-ladder price/qty frame; bid is green, ask is red, and hidden black axis anchors keep scales aligned.",
+            "Live or pinned strategy-to-execution ladder, split local left and global right. "
+            "Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the "
+            "selected target frame. Each chart plots marginal qty in uniform spread buckets "
+            "(`spread from mid`, width = Spread max / Spread buckets) so every stage shares the "
+            "same horizontal range. Bid is green, ask is red.",
             y=0,
         ),
     ]
@@ -3810,10 +4147,10 @@ def target_order_stems() -> dict[str, Any]:
             if title == "09 Removed by risk / collateral":
                 role_title = f"09 Removed by {role} risk / collateral"
             panels.append(
-                _stem_order_qty_price_panel(
+                _stem_spread_bucket_panel(
                     panel_id,
                     f"{role.title()} {role_title}",
-                    _latest_action_pipeline_stage_orders_sql(
+                    _latest_action_pipeline_stage_spread_bucket_sql(
                         stage,
                         field=field,
                         reason=reason,
@@ -3824,6 +4161,10 @@ def target_order_stems() -> dict[str, Any]:
                     y=y,
                     w=12,
                     h=stem_h,
+                    description=(
+                        "Marginal order qty per uniform spread bucket from mid. "
+                        "Adjust Spread max / Spread buckets variables to widen or refine bars."
+                    ),
                 )
             )
             panel_id += 1
@@ -3833,6 +4174,8 @@ def target_order_stems() -> dict[str, Any]:
         panels,
         tags=["actions", "execution"],
         extra_templating=[
+            _custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100"),
+            _custom_var("spread_buckets", "Spread buckets", "20,40,60,80"),
             _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
             _query_var("target_frame_event_id", "Target frame", _target_stems_frame_query(), refresh=2),
         ],

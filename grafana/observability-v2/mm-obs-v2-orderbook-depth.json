@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. Depth curves use `price - mid` on the x-axis. **Marginal ladder** plots one point per `orderbook_grid` rung with positive marginal qty (at most `ceil(spread_max / spread_step)` per side).",
+        "content": "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. Depth curves use `price - mid` on the x-axis. **Marginal ladder**, **After venue rounding**, and **Exchange-accepted placements** use uniform spread buckets (Spread max / Spread buckets) with bid/ask bars aligned across panels.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -599,21 +599,19 @@
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.85,
+            "fillOpacity": 85,
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
+            "lineWidth": 1,
             "scaleDistribution": {
               "type": "linear"
             },
-            "show": "points",
+            "show": "bars",
             "spanNulls": false
           },
           "unit": "short",
@@ -623,23 +621,27 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "price"
+              "options": "spread"
             },
             "properties": [
               {
                 "id": "custom.axisLabel",
-                "value": "price"
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
               },
               {
                 "id": "decimals",
-                "value": 6
+                "value": 1
               }
             ]
           },
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*bid$"
+              "options": "^(bid|.* bid)$"
             },
             "properties": [
               {
@@ -662,7 +664,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*ask$"
+              "options": "^(ask|.* ask)$"
             },
             "properties": [
               {
@@ -679,29 +681,6 @@
               {
                 "id": "min",
                 "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
               }
             ]
           }
@@ -736,7 +715,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IN (\n      SELECT grid.price\n      FROM (\n        SELECT CASE\n          WHEN trim(COALESCE(elem->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n          THEN trim(COALESCE(elem->>'price', ''))::double precision\n          ELSE NULL\n        END AS price\n        FROM latest l\n        CROSS JOIN LATERAL jsonb_array_elements(\n          COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)\n          || COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask'], '[]'::jsonb)\n        ) AS elem\n      ) AS grid\n      WHERE grid.price IS NOT NULL\n    )\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_buckets}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_buckets}', ''))::double precision\n  ELSE 40\nEND, 1)::int AS bucket_count\n  FROM latest l\n),\nbucket_width AS (\n  SELECT spread_max / bucket_count::double precision AS width\n  FROM selected\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IN (\n      SELECT grid.price\n      FROM (\n        SELECT CASE\n          WHEN trim(COALESCE(elem->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n          THEN trim(COALESCE(elem->>'price', ''))::double precision\n          ELSE NULL\n        END AS price\n        FROM latest l\n        CROSS JOIN LATERAL jsonb_array_elements(\n          COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'bid'], '[]'::jsonb)\n          || COALESCE(l.payload #> ARRAY['action_pipeline', 'continuous', 'ask'], '[]'::jsonb)\n        ) AS elem\n      ) AS grid\n      WHERE grid.price IS NOT NULL\n    )\n),\norder_buckets AS (\n  SELECT o.series,\n         CASE\n           WHEN (o.price - s.mid) <= 0 THEN -LEAST(\n             CEIL(ABS(o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n           ELSE LEAST(\n             CEIL((o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n         END AS spread,\n         SUM(o.value) AS value\n  FROM orders o\n  CROSS JOIN selected s\n  CROSS JOIN bucket_width w\n  WHERE o.value > 0\n  GROUP BY 1, 2\n),\nseries_names AS (\n  SELECT DISTINCT series FROM orders WHERE value > 0\n  UNION ALL SELECT 'bid' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'bid')\n  UNION ALL SELECT 'ask' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'ask')\n),\nbucket_grid AS (\n  SELECT gs AS bucket_idx,\n         s.spread_max,\n         w.width\n  FROM selected s\n  CROSS JOIN bucket_width w\n  CROSS JOIN generate_series(1, s.bucket_count) AS gs\n),\nall_buckets AS (\n  SELECT 'bid'::text AS side_key, (-g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n  UNION ALL\n  SELECT 'ask'::text AS side_key, (g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n),\nfilled AS (\n  SELECT sn.series,\n         ab.spread,\n         COALESCE(ob.value, 0.0) AS value\n  FROM series_names sn\n  CROSS JOIN all_buckets ab\n  LEFT JOIN order_buckets ob\n    ON ob.series = sn.series\n   AND ob.spread = ab.spread\n  WHERE (sn.series = 'bid' AND ab.side_key = 'bid')\n     OR (sn.series = 'ask' AND ab.side_key = 'ask')\n     OR (sn.series LIKE '% bid' AND ab.side_key = 'bid')\n     OR (sn.series LIKE '% ask' AND ab.side_key = 'ask')\n)\nSELECT series, spread, value\nFROM filled\nORDER BY spread, series",
           "refId": "A"
         }
       ],
@@ -776,21 +755,19 @@
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.85,
+            "fillOpacity": 85,
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
+            "lineWidth": 1,
             "scaleDistribution": {
               "type": "linear"
             },
-            "show": "points",
+            "show": "bars",
             "spanNulls": false
           },
           "unit": "short",
@@ -800,23 +777,27 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "price"
+              "options": "spread"
             },
             "properties": [
               {
                 "id": "custom.axisLabel",
-                "value": "price"
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
               },
               {
                 "id": "decimals",
-                "value": 6
+                "value": 1
               }
             ]
           },
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*bid$"
+              "options": "^(bid|.* bid)$"
             },
             "properties": [
               {
@@ -839,7 +820,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*ask$"
+              "options": "^(ask|.* ask)$"
             },
             "properties": [
               {
@@ -856,29 +837,6 @@
               {
                 "id": "min",
                 "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
               }
             ]
           }
@@ -913,7 +871,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_buckets}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_buckets}', ''))::double precision\n  ELSE 40\nEND, 1)::int AS bucket_count\n  FROM latest l\n),\nbucket_width AS (\n  SELECT spread_max / bucket_count::double precision AS width\n  FROM selected\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'rules_valid', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\norder_buckets AS (\n  SELECT o.series,\n         CASE\n           WHEN (o.price - s.mid) <= 0 THEN -LEAST(\n             CEIL(ABS(o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n           ELSE LEAST(\n             CEIL((o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n         END AS spread,\n         SUM(o.value) AS value\n  FROM orders o\n  CROSS JOIN selected s\n  CROSS JOIN bucket_width w\n  WHERE o.value > 0\n  GROUP BY 1, 2\n),\nseries_names AS (\n  SELECT DISTINCT series FROM orders WHERE value > 0\n  UNION ALL SELECT 'bid' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'bid')\n  UNION ALL SELECT 'ask' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'ask')\n),\nbucket_grid AS (\n  SELECT gs AS bucket_idx,\n         s.spread_max,\n         w.width\n  FROM selected s\n  CROSS JOIN bucket_width w\n  CROSS JOIN generate_series(1, s.bucket_count) AS gs\n),\nall_buckets AS (\n  SELECT 'bid'::text AS side_key, (-g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n  UNION ALL\n  SELECT 'ask'::text AS side_key, (g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n),\nfilled AS (\n  SELECT sn.series,\n         ab.spread,\n         COALESCE(ob.value, 0.0) AS value\n  FROM series_names sn\n  CROSS JOIN all_buckets ab\n  LEFT JOIN order_buckets ob\n    ON ob.series = sn.series\n   AND ob.spread = ab.spread\n  WHERE (sn.series = 'bid' AND ab.side_key = 'bid')\n     OR (sn.series = 'ask' AND ab.side_key = 'ask')\n     OR (sn.series LIKE '% bid' AND ab.side_key = 'bid')\n     OR (sn.series LIKE '% ask' AND ab.side_key = 'ask')\n)\nSELECT series, spread, value\nFROM filled\nORDER BY spread, series",
           "refId": "A"
         }
       ],
@@ -952,21 +910,19 @@
             "axisColorMode": "text",
             "axisLabel": "qty",
             "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.85,
+            "fillOpacity": 85,
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "lineWidth": 0,
-            "pointSize": {
-              "fixed": 6,
-              "max": 20,
-              "min": 1
-            },
+            "lineWidth": 1,
             "scaleDistribution": {
               "type": "linear"
             },
-            "show": "points",
+            "show": "bars",
             "spanNulls": false
           },
           "unit": "short",
@@ -976,23 +932,27 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "price"
+              "options": "spread"
             },
             "properties": [
               {
                 "id": "custom.axisLabel",
-                "value": "price"
+                "value": "spread from mid"
+              },
+              {
+                "id": "custom.axisCenteredZero",
+                "value": true
               },
               {
                 "id": "decimals",
-                "value": 6
+                "value": 1
               }
             ]
           },
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*bid$"
+              "options": "^(bid|.* bid)$"
             },
             "properties": [
               {
@@ -1015,7 +975,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".*ask$"
+              "options": "^(ask|.* ask)$"
             },
             "properties": [
               {
@@ -1032,29 +992,6 @@
               {
                 "id": "min",
                 "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "^axis range$"
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": true,
-                  "tooltip": true,
-                  "viz": false
-                }
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "black",
-                  "mode": "fixed"
-                }
               }
             ]
           }
@@ -1089,7 +1026,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_points AS (\n  SELECT CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(axis_o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'ladder', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS axis_o(value)\n  WHERE CASE\n  WHEN trim(COALESCE(axis_o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(axis_o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(axis_o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\naxis_frame AS (\n  SELECT MIN(price) AS price_min,\n         MAX(price) AS price_max,\n         GREATEST(MAX(value), 0.0) AS qty_max\n  FROM axis_points\n  WHERE value > 0\n),\naxis_rows AS (\n  SELECT 'axis range' AS series, price_min AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, 0.0 AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_min AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_min IS NOT NULL\n  UNION ALL\n  SELECT 'axis range' AS series, price_max AS price, qty_max AS value\n  FROM axis_frame\n  WHERE price_max IS NOT NULL\n),\ngrouped AS (\n  SELECT series, price, SUM(value) AS value\n  FROM orders\n  WHERE value > 0\n  GROUP BY 1, 2\n)\nSELECT series, price, value\nFROM grouped\nUNION ALL\nSELECT series, price, value\nFROM axis_rows\nORDER BY price, series",
+          "rawSql": "WITH latest AS (\n  SELECT e.exchange,\n         e.payload\n  FROM mm_events e\n  WHERE e.topic = '${diagnostics_topic}'\n    AND e.event_type = 'ControllerDiagnostics'\n    AND (\n      '${target_frame_mode}' = 'latest'\n      OR e.event_id = ${target_frame_event_id:sqlstring}\n    )\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n    AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\nselected AS (\n  SELECT COALESCE(\n           CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['state', 'mid'], ''))::double precision\n  ELSE NULL\nEND,\n           (CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'bids', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND + CASE\n  WHEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(l.payload #>> ARRAY['cleared_orderbook', 'asks', '0', 'price'], ''))::double precision\n  ELSE NULL\nEND) / 2.0,\n           0.0\n         ) AS mid,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_max}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_max}', ''))::double precision\n  ELSE 100.0\nEND, 1.0) AS spread_max,\n         GREATEST(CASE\n  WHEN trim(COALESCE('${spread_buckets}', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE('${spread_buckets}', ''))::double precision\n  ELSE 40\nEND, 1)::int AS bucket_count\n  FROM latest l\n),\nbucket_width AS (\n  SELECT spread_max / bucket_count::double precision AS width\n  FROM selected\n),\norders AS (\n  SELECT CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS series,\n         CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n         CASE\n  WHEN trim(COALESCE(o.value->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS value\n  FROM latest l\n  CROSS JOIN LATERAL jsonb_array_elements(\n    CASE\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders']\n  WHEN jsonb_typeof(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) = 'array' AND jsonb_array_length(l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']) > 0 THEN l.payload #> ARRAY['action_pipeline', 'router_accepted', 'orders_sample']\n  ELSE '[]'::jsonb\nEND\n  ) AS o(value)\n  WHERE CASE lower(trim(COALESCE(o.value->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND IN ('bid', 'ask')\n    AND CASE\n  WHEN trim(COALESCE(o.value->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(o.value->>'price', ''))::double precision\n  ELSE NULL\nEND IS NOT NULL\n    AND COALESCE(o.value->>'exchange', l.exchange, '') = ANY(ARRAY[${exchange:sqlstring}]::text[])\n),\norder_buckets AS (\n  SELECT o.series,\n         CASE\n           WHEN (o.price - s.mid) <= 0 THEN -LEAST(\n             CEIL(ABS(o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n           ELSE LEAST(\n             CEIL((o.price - s.mid) / NULLIF(w.width, 0.0)) * w.width,\n             s.spread_max\n           )\n         END AS spread,\n         SUM(o.value) AS value\n  FROM orders o\n  CROSS JOIN selected s\n  CROSS JOIN bucket_width w\n  WHERE o.value > 0\n  GROUP BY 1, 2\n),\nseries_names AS (\n  SELECT DISTINCT series FROM orders WHERE value > 0\n  UNION ALL SELECT 'bid' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'bid')\n  UNION ALL SELECT 'ask' WHERE NOT EXISTS (SELECT 1 FROM orders WHERE value > 0 AND series = 'ask')\n),\nbucket_grid AS (\n  SELECT gs AS bucket_idx,\n         s.spread_max,\n         w.width\n  FROM selected s\n  CROSS JOIN bucket_width w\n  CROSS JOIN generate_series(1, s.bucket_count) AS gs\n),\nall_buckets AS (\n  SELECT 'bid'::text AS side_key, (-g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n  UNION ALL\n  SELECT 'ask'::text AS side_key, (g.bucket_idx * g.width) AS spread\n  FROM bucket_grid g\n),\nfilled AS (\n  SELECT sn.series,\n         ab.spread,\n         COALESCE(ob.value, 0.0) AS value\n  FROM series_names sn\n  CROSS JOIN all_buckets ab\n  LEFT JOIN order_buckets ob\n    ON ob.series = sn.series\n   AND ob.spread = ab.spread\n  WHERE (sn.series = 'bid' AND ab.side_key = 'bid')\n     OR (sn.series = 'ask' AND ab.side_key = 'ask')\n     OR (sn.series LIKE '% bid' AND ab.side_key = 'bid')\n     OR (sn.series LIKE '% ask' AND ab.side_key = 'ask')\n)\nSELECT series, spread, value\nFROM filled\nORDER BY spread, series",
           "refId": "A"
         }
       ],
@@ -1314,6 +1251,42 @@
           }
         ],
         "query": "2000,5000,10000,20000,500,200,100",
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "20",
+          "value": "20"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Spread buckets",
+        "multi": false,
+        "name": "spread_buckets",
+        "options": [
+          {
+            "selected": true,
+            "text": "20",
+            "value": "20"
+          },
+          {
+            "selected": false,
+            "text": "40",
+            "value": "40"
+          },
+          {
+            "selected": false,
+            "text": "60",
+            "value": "60"
+          },
+          {
+            "selected": false,
+            "text": "80",
+            "value": "80"
+          }
+        ],
+        "query": "20,40,60,80",
         "type": "custom"
       },
       {

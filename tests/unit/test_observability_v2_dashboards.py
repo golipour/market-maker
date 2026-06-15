@@ -192,6 +192,7 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     for title, (x, y, stage) in expected.items():
         panel = panels_by_title[title]
         assert panel["type"] == "xychart"
+        assert panel["fieldConfig"]["defaults"]["custom"]["show"] == "bars"
         assert panel["gridPos"]["x"] == x
         assert panel["gridPos"]["y"] == y
 
@@ -204,12 +205,16 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
         assert "jsonb_typeof" in sql
         assert "ELSE '[]'::jsonb" in sql
+        assert "bucket_grid AS" in sql
+        assert "generate_series" in sql
+        assert "'axis range' AS series" not in sql
         if stage == "ladder":
             assert "action_pipeline', 'continuous', 'bid'" in sql
 
     vars_by_name = {var["name"]: var for var in dashboard["templating"]["list"]}
     assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"
     assert vars_by_name["target_frame_event_id"]["label"] == "Target frame"
+    assert vars_by_name["spread_buckets"]["label"] == "Spread buckets"
 
 
 def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None:
@@ -599,28 +604,17 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     for title in stem_titles:
         panel = panels_by_title[title]
         assert panel["type"] == "xychart"
-        assert panel["fieldConfig"]["defaults"]["custom"]["show"] == "points"
-        assert panel["fieldConfig"]["defaults"]["custom"]["lineWidth"] == 0
+        assert panel["fieldConfig"]["defaults"]["custom"]["show"] == "bars"
         assert panel["transformations"][0]["options"]["fields"] == ["series"]
-        price_override = next(
+        spread_override = next(
             override
             for override in panel["fieldConfig"]["overrides"]
-            if override["matcher"]["options"] == "price"
+            if override["matcher"]["options"] == "spread"
         )
-        assert {"id": "decimals", "value": 6} in price_override["properties"]
-        axis_override = next(
-            override
-            for override in panel["fieldConfig"]["overrides"]
-            if override["matcher"]["options"] == "^axis range$"
-        )
-        assert {
-            "id": "custom.hideFrom",
-            "value": {"legend": True, "tooltip": True, "viz": False},
-        } in axis_override["properties"]
-        assert "black" in str(axis_override["properties"])
+        assert {"id": "custom.axisCenteredZero", "value": True} in spread_override["properties"]
         overrides = str(panel["fieldConfig"]["overrides"])
-        assert ".*bid$" in overrides
-        assert ".*ask$" in overrides
+        assert ".* bid)$" in overrides or "bid" in overrides
+        assert "ask" in overrides
         assert "green" in overrides
         assert "red" in overrides
 
@@ -632,6 +626,10 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     assert frame_var["label"] == "Target frame"
     assert "e.event_id AS __value" in frame_var["query"]
     assert "ControllerDiagnostics" in frame_var["query"]
+    spread_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "spread_max")
+    assert spread_var["label"] == "Spread max"
+    bucket_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "spread_buckets")
+    assert bucket_var["label"] == "Spread buckets"
 
     for title in stem_titles:
         stage, field, reason, role = stage_by_title[title]
@@ -646,9 +644,11 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         assert "ControllerDiagnostics" in sql
         assert "'${target_frame_mode}' = 'latest'" in sql
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
-        assert "axis_frame AS" in sql
-        assert "'axis range' AS series" in sql
-        assert "FROM axis_rows" in sql
+        assert "bucket_grid AS" in sql
+        assert "generate_series" in sql
+        assert "spread_max" in sql
+        assert "'axis range' AS series" not in sql
+        assert "FROM axis_rows" not in sql
         assert "price::text" not in sql
 
 
