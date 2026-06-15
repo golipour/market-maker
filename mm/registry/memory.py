@@ -179,12 +179,23 @@ class MemoryRegistryStore:
         liquidity_exchange: str,
         status: str = "draft",
         config_overrides: dict[str, Any] | None = None,
+        wallet_id: str | None = None,
+        ledger_source: str = "virtual",
     ) -> StrategyRecord:
         self.get_account(account_id)
         self.get_preset(preset_id)
         for other in self.list_strategies():
             if other.actor_id == actor_id and other.strategy_id != strategy_id:
                 raise RegistryConflictError(f"actor_id {actor_id!r} already assigned")
+        normalized_wallet_id = (wallet_id or "").strip() or None
+        normalized_ledger_source = _normalize_ledger_source(ledger_source)
+        if normalized_ledger_source == "virtual" and normalized_wallet_id:
+            wallet = self.get_allocation(normalized_wallet_id)
+            if wallet.account_id != account_id:
+                raise ValueError(
+                    f"wallet {normalized_wallet_id!r} account {wallet.account_id!r} "
+                    f"does not match strategy account {account_id!r}"
+                )
         now = _utcnow()
         previous = self._strategies.get(strategy_id)
         record = StrategyRecord(
@@ -201,10 +212,13 @@ class MemoryRegistryStore:
                 if config_overrides is not None
                 else (previous.config_overrides if previous else {})
             ),
+            wallet_id=normalized_wallet_id,
+            ledger_source=normalized_ledger_source,  # type: ignore[arg-type]
             created_at=previous.created_at if previous else now,
             updated_at=now,
         )
         self._strategies[strategy_id] = record
+        self._sync_strategy_wallet(record)
         return record
 
     def list_allocations(self) -> list[AllocationRecord]:
@@ -229,12 +243,32 @@ class MemoryRegistryStore:
                 return record
         raise RegistryNotFoundError(f"allocation for actor {actor_id!r} not found")
 
+    def _sync_strategy_wallet(self, strategy: StrategyRecord) -> None:
+        wallet_id = (strategy.wallet_id or "").strip()
+        if not wallet_id:
+            return
+        wallet = self.get_allocation(wallet_id)
+        self._allocations[wallet_id] = AllocationRecord(
+            allocation_id=wallet.allocation_id,
+            strategy_id=None,
+            actor_id=strategy.actor_id.strip(),
+            account_id=wallet.account_id,
+            quote_asset=wallet.quote_asset,
+            base_asset=wallet.base_asset,
+            allocated_quote=wallet.allocated_quote,
+            allocated_base=wallet.allocated_base,
+            halt_on_breach=wallet.halt_on_breach,
+            status=wallet.status,
+            created_at=wallet.created_at,
+            updated_at=_utcnow(),
+        )
+
     def upsert_allocation(
         self,
         *,
         allocation_id: str | None = None,
-        strategy_id: str,
-        actor_id: str,
+        strategy_id: str | None = None,
+        actor_id: str = "",
         account_id: str,
         quote_asset: str = "",
         base_asset: str = "",
@@ -243,25 +277,33 @@ class MemoryRegistryStore:
         halt_on_breach: bool = True,
         status: str = "active",
     ) -> AllocationRecord:
-        strategy = self.get_strategy(strategy_id)
+        normalized_strategy_id = (strategy_id or "").strip() or None
         self.get_account(account_id)
-        if strategy.actor_id != actor_id:
-            raise ValueError(
-                f"allocation actor_id {actor_id!r} does not match strategy actor {strategy.actor_id!r}"
-            )
-        if strategy.account_id != account_id:
-            raise ValueError(
-                f"allocation account_id {account_id!r} does not match strategy account {strategy.account_id!r}"
-            )
-        for other in self.list_allocations():
-            if other.strategy_id == strategy_id and other.allocation_id != (allocation_id or other.allocation_id):
-                raise RegistryConflictError(f"allocation already exists for strategy {strategy_id!r}")
+        if normalized_strategy_id is not None:
+            strategy = self.get_strategy(normalized_strategy_id)
+            if actor_id.strip() and strategy.actor_id != actor_id:
+                raise ValueError(
+                    f"allocation actor_id {actor_id!r} does not match strategy actor {strategy.actor_id!r}"
+                )
+            if strategy.account_id != account_id:
+                raise ValueError(
+                    f"allocation account_id {account_id!r} does not match strategy account {strategy.account_id!r}"
+                )
+            actor_id = strategy.actor_id
+            for other in self.list_allocations():
+                if (
+                    other.strategy_id == normalized_strategy_id
+                    and other.allocation_id != (allocation_id or other.allocation_id)
+                ):
+                    raise RegistryConflictError(
+                        f"allocation already exists for strategy {normalized_strategy_id!r}"
+                    )
         key = allocation_id or uuid.uuid4().hex
         now = _utcnow()
         previous = self._allocations.get(key)
         record = AllocationRecord(
             allocation_id=key,
-            strategy_id=strategy_id,
+            strategy_id=normalized_strategy_id,
             actor_id=actor_id.strip(),
             account_id=account_id,
             quote_asset=str(quote_asset or "").strip(),
@@ -352,6 +394,8 @@ class MemoryRegistryStore:
             config_overrides=(
                 config_overrides if config_overrides is not None else current.config_overrides
             ),
+            wallet_id=current.wallet_id,
+            ledger_source=current.ledger_source,
         )
 
     def list_worker_assignments(self) -> list[WorkerAssignmentRecord]:
@@ -444,3 +488,10 @@ class MemoryRegistryStore:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_ledger_source(value: str) -> str:
+    normalized = str(value or "virtual").strip().lower()
+    if normalized not in ("virtual", "physical"):
+        raise ValueError("ledger_source must be 'virtual' or 'physical'")
+    return normalized

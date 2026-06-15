@@ -150,6 +150,38 @@ def test_registry_allocation_crud() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_physical_ledger_skips_virtual_wallet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
+    store = MemoryRegistryStore()
+    assignment_id, _ = _seed_worker_registry(store)
+    wallet_id = store.upsert_allocation(
+        account_id="nobitex-main",
+        allocated_quote=1_000_000.0,
+        allocated_base=2.0,
+    ).allocation_id
+    store.upsert_strategy(
+        strategy_id="btc-maker",
+        actor_id="btc-maker-actor",
+        account_id="nobitex-main",
+        symbol="BTC_IRT",
+        preset_id="test_preset",
+        quoting_exchange="nobitex",
+        liquidity_exchange="nobitex",
+        status="active",
+        wallet_id=wallet_id,
+        ledger_source="physical",
+    )
+    worker = await build_worker_components(
+        worker_config_from_mapping({"worker_id": "worker-1", "assignment_id": assignment_id}),
+        store=store,
+        bus=InMemoryBus(),
+    )
+    btc_slot = next(slot for slot in worker.slots if slot.strategy_id == "btc-maker")
+    assert btc_slot.strategy_runner is not None
+    assert btc_slot.strategy_runner.strategy_wallet_provider is None
+
+
+@pytest.mark.asyncio
 async def test_worker_loads_allocations_from_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
     store = MemoryRegistryStore()

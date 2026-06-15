@@ -6,6 +6,7 @@ import {
   ApiError,
   api,
   type Account,
+  type Allocation,
   type Preset,
   type RegistryList,
   type Strategy,
@@ -14,6 +15,7 @@ import {
 } from "../api/client";
 
 const STRATEGY_STATUSES = ["draft", "active", "paused", "retired"] as const;
+const LEDGER_SOURCES = ["virtual", "physical"] as const;
 
 const EMPTY_FORM: StrategyUpsertPayload = {
   strategy_id: "",
@@ -25,12 +27,15 @@ const EMPTY_FORM: StrategyUpsertPayload = {
   liquidity_exchange: "nobitex",
   status: "draft",
   config_overrides: {},
+  wallet_id: null,
+  ledger_source: "virtual",
 };
 
 export function StrategiesPage() {
   const [items, setItems] = useState<Strategy[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [wallets, setWallets] = useState<Allocation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Strategy | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<StrategyRuntimeConfig | null>(null);
@@ -48,14 +53,16 @@ export function StrategiesPage() {
     setLoading(true);
     setError(null);
     try {
-      const [strategies, accountRows, presetRows] = await Promise.all([
+      const [strategies, accountRows, presetRows, walletRows] = await Promise.all([
         api.get<RegistryList<Strategy>>("/api/admin/registry/strategies"),
         api.get<RegistryList<Account>>("/api/admin/registry/accounts"),
         api.get<RegistryList<Preset>>("/api/admin/registry/presets"),
+        api.get<RegistryList<Allocation>>("/api/admin/registry/allocations"),
       ]);
       setItems(strategies.items);
       setAccounts(accountRows.items);
       setPresets(presetRows.items);
+      setWallets(walletRows.items);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load strategies");
     } finally {
@@ -129,6 +136,8 @@ export function StrategiesPage() {
       liquidity_exchange: row.liquidity_exchange,
       status: row.status,
       config_overrides: row.config_overrides ?? {},
+      wallet_id: row.wallet_id ?? null,
+      ledger_source: row.ledger_source ?? "virtual",
     });
     setOverridesJson(JSON.stringify(row.config_overrides ?? {}, null, 2));
     setSelectedId(row.strategy_id);
@@ -296,6 +305,47 @@ export function StrategiesPage() {
                 ))}
               </select>
             </div>
+            <div className="form-field">
+              <label htmlFor="strategy-wallet">Wallet</label>
+              <select
+                id="strategy-wallet"
+                value={form.wallet_id ?? ""}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    wallet_id: e.target.value || null,
+                  }))
+                }
+              >
+                <option value="">No wallet (physical ledger only)</option>
+                {wallets
+                  .filter((row) => !form.account_id || row.account_id === form.account_id)
+                  .map((row) => (
+                    <option key={row.allocation_id} value={row.allocation_id}>
+                      {row.allocation_id} ({row.allocated_base} {row.base_asset} /{" "}
+                      {row.allocated_quote} {row.quote_asset})
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="strategy-ledger-source">Ledger for MPC / risk</label>
+              <select
+                id="strategy-ledger-source"
+                value={form.ledger_source ?? "virtual"}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, ledger_source: e.target.value }))
+                }
+              >
+                {LEDGER_SOURCES.map((source) => (
+                  <option key={source} value={source}>
+                    {source === "virtual"
+                      ? "Virtual (wallet balances + attributed fills)"
+                      : "Physical (exchange account ledger)"}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="form-field">
             <label htmlFor="strategy-overrides">Config overrides (JSON)</label>
@@ -438,6 +488,10 @@ export function StrategiesPage() {
                 </dd>
                 <dt>Status</dt>
                 <dd>{detail.status}</dd>
+                <dt>Wallet</dt>
+                <dd>{detail.wallet_id ?? "—"}</dd>
+                <dt>Ledger source</dt>
+                <dd>{detail.ledger_source ?? "virtual"}</dd>
               </dl>
 
               {Object.keys(detail.config_overrides ?? {}).length > 0 ? (

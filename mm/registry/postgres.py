@@ -18,7 +18,7 @@ from mm.registry.models import (
     StrategyRecord,
     WorkerAssignmentRecord,
 )
-from mm.registry.schema import DEFAULT_PLATFORM_SETTINGS_ID, REGISTRY_DDL
+from mm.registry.schema import DEFAULT_PLATFORM_SETTINGS_ID, REGISTRY_DDL, REGISTRY_MIGRATIONS
 
 
 class PostgresRegistryStore(MemoryRegistryStore):
@@ -37,6 +37,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
         with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(REGISTRY_DDL)
+                cur.execute(REGISTRY_MIGRATIONS)
                 cur.execute(
                     """
                     INSERT INTO registry_platform_settings (settings_id)
@@ -349,7 +350,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
                     """
                     SELECT strategy_id, actor_id, account_id, symbol, preset_id,
                            quoting_exchange, liquidity_exchange, status, config_overrides,
-                           created_at, updated_at
+                           wallet_id, ledger_source, created_at, updated_at
                     FROM registry_strategies
                     ORDER BY strategy_id
                     """
@@ -364,7 +365,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
                     """
                     SELECT strategy_id, actor_id, account_id, symbol, preset_id,
                            quoting_exchange, liquidity_exchange, status, config_overrides,
-                           created_at, updated_at
+                           wallet_id, ledger_source, created_at, updated_at
                     FROM registry_strategies
                     WHERE strategy_id = %s
                     """,
@@ -387,31 +388,21 @@ class PostgresRegistryStore(MemoryRegistryStore):
         liquidity_exchange: str,
         status: str = "draft",
         config_overrides: dict[str, Any] | None = None,
+        wallet_id: str | None = None,
+        ledger_source: str = "virtual",
     ) -> StrategyRecord:
-        self.get_account(account_id)
-        self.get_preset(preset_id)
-        previous = None
-        try:
-            previous = self.get_strategy(strategy_id)
-        except RegistryNotFoundError:
-            pass
-        now = _utcnow()
-        record = StrategyRecord(
+        record = super().upsert_strategy(
             strategy_id=strategy_id,
             actor_id=actor_id,
             account_id=account_id,
             symbol=symbol,
             preset_id=preset_id,
-            quoting_exchange=quoting_exchange.lower().strip(),
-            liquidity_exchange=liquidity_exchange.lower().strip(),
-            status=status,  # type: ignore[arg-type]
-            config_overrides=dict(
-                config_overrides
-                if config_overrides is not None
-                else (previous.config_overrides if previous else {})
-            ),
-            created_at=previous.created_at if previous else now,
-            updated_at=now,
+            quoting_exchange=quoting_exchange,
+            liquidity_exchange=liquidity_exchange,
+            status=status,
+            config_overrides=config_overrides,
+            wallet_id=wallet_id,
+            ledger_source=ledger_source,
         )
         with self._connection() as conn:
             with conn.cursor() as cur:
@@ -426,8 +417,8 @@ class PostgresRegistryStore(MemoryRegistryStore):
                     INSERT INTO registry_strategies (
                         strategy_id, actor_id, account_id, symbol, preset_id,
                         quoting_exchange, liquidity_exchange, status, config_overrides,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                        wallet_id, ledger_source, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
                     ON CONFLICT (strategy_id) DO UPDATE SET
                         actor_id = EXCLUDED.actor_id,
                         account_id = EXCLUDED.account_id,
@@ -437,6 +428,8 @@ class PostgresRegistryStore(MemoryRegistryStore):
                         liquidity_exchange = EXCLUDED.liquidity_exchange,
                         status = EXCLUDED.status,
                         config_overrides = EXCLUDED.config_overrides,
+                        wallet_id = EXCLUDED.wallet_id,
+                        ledger_source = EXCLUDED.ledger_source,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -449,11 +442,26 @@ class PostgresRegistryStore(MemoryRegistryStore):
                         record.liquidity_exchange,
                         record.status,
                         _json(record.config_overrides),
+                        record.wallet_id,
+                        record.ledger_source,
                         record.created_at,
                         record.updated_at,
                     ),
                 )
             conn.commit()
+        if record.wallet_id:
+            with self._connection() as conn:
+                with conn.cursor() as cur:
+                    wallet = self.get_allocation(record.wallet_id)
+                    cur.execute(
+                        """
+                        UPDATE registry_allocations
+                        SET actor_id = %s, strategy_id = NULL, updated_at = %s
+                        WHERE allocation_id = %s
+                        """,
+                        (record.actor_id, record.updated_at, wallet.allocation_id),
+                    )
+                conn.commit()
         return record
 
     def patch_strategy(
@@ -462,6 +470,8 @@ class PostgresRegistryStore(MemoryRegistryStore):
         *,
         status: str | None = None,
         config_overrides: dict[str, Any] | None = None,
+        wallet_id: str | None = None,
+        ledger_source: str | None = None,
     ) -> StrategyRecord:
         current = self.get_strategy(strategy_id)
         return self.upsert_strategy(
@@ -476,6 +486,8 @@ class PostgresRegistryStore(MemoryRegistryStore):
             config_overrides=(
                 config_overrides if config_overrides is not None else current.config_overrides
             ),
+            wallet_id=wallet_id if wallet_id is not None else current.wallet_id,
+            ledger_source=ledger_source if ledger_source is not None else current.ledger_source,
         )
 
     def list_allocations(self) -> list[AllocationRecord]:
@@ -551,8 +563,8 @@ class PostgresRegistryStore(MemoryRegistryStore):
         self,
         *,
         allocation_id: str | None = None,
-        strategy_id: str,
-        actor_id: str,
+        strategy_id: str | None = None,
+        actor_id: str = "",
         account_id: str,
         quote_asset: str = "",
         base_asset: str = "",
@@ -924,8 +936,10 @@ def _strategy_from_row(row: tuple[Any, ...]) -> StrategyRecord:
         liquidity_exchange=row[6],
         status=row[7],
         config_overrides=dict(row[8] or {}),
-        created_at=row[9],
-        updated_at=row[10],
+        wallet_id=row[9],
+        ledger_source=row[10] or "virtual",  # type: ignore[arg-type]
+        created_at=row[11],
+        updated_at=row[12],
     )
 
 

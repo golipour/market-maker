@@ -12,7 +12,7 @@ from mm.env_loader import load_mm_env
 from mm.observability import configure_observability, log_event
 from mm.portfolio.virtual_ledger_service import VirtualLedgerService
 from mm.registry.memory import RegistryNotFoundError
-from mm.registry.models import AllocationRecord, WorkerAssignmentRecord
+from mm.registry.models import WorkerAssignmentRecord
 from mm.registry.runtime_config import runtime_config_from_registry
 from mm.registry.store import RegistryStore, build_registry_store
 from mm.runtime.build_options import RuntimeBuildOptions
@@ -22,6 +22,7 @@ from mm.runtime.control import RuntimeControlPlane
 from mm.worker.account_pool import SharedAccountPool, build_shared_account_pool
 from mm.worker.strategy_slot import StrategySlot, build_strategy_slot
 from mm.worker.supervisor import StrategyBackoffConfig, StrategySupervisor
+from mm.worker.wallet_resolve import load_worker_virtual_allocations
 from mm.worker.worker_config import WorkerRuntimeConfig
 
 
@@ -30,6 +31,7 @@ class LoadedStrategy:
     strategy_id: str
     account_id: str
     config: MarketMakerRuntimeConfig
+    ledger_source: str = "virtual"
 
 
 @dataclass(slots=True)
@@ -120,24 +122,12 @@ def load_worker_strategies(
                 strategy_id=strategy_id,
                 account_id=strategy.account_id,
                 config=runtime_config,
+                ledger_source=strategy.ledger_source,
             )
         )
     if not loaded:
         raise ValueError("worker has no active strategies to run")
     return tuple(loaded)
-
-
-def load_worker_allocations(
-    store: RegistryStore,
-    strategies: tuple[LoadedStrategy, ...],
-) -> tuple[AllocationRecord, ...]:
-    allocations: list[AllocationRecord] = []
-    for item in strategies:
-        try:
-            allocations.append(store.get_allocation_for_strategy(item.strategy_id))
-        except RegistryNotFoundError:
-            continue
-    return tuple(allocations)
 
 
 def _merge_bus_config(
@@ -209,7 +199,10 @@ async def build_worker_components(
     )
     account_pool = build_shared_account_pool(strategy_triples, bus=runtime_bus, options=options)
     control_plane = RuntimeControlPlane(bus=runtime_bus)
-    allocations = load_worker_allocations(registry, strategies)
+    allocations = load_worker_virtual_allocations(
+        registry,
+        tuple(item.strategy_id for item in strategies),
+    )
     bindings = {
         item.config.controller.actor_id: item.config.binding
         for item in strategies
@@ -234,6 +227,7 @@ async def build_worker_components(
             account_pool=account_pool,
             control_plane=control_plane,
             virtual_ledger_service=virtual_ledger_service,
+            ledger_source=item.ledger_source,
         )
         for item in strategies
     )

@@ -52,11 +52,15 @@ class StrategyUpsertRequest(BaseModel):
     liquidity_exchange: str
     status: str = "draft"
     config_overrides: dict[str, Any] = Field(default_factory=dict)
+    wallet_id: str | None = None
+    ledger_source: str = "virtual"
 
 
 class StrategyPatchRequest(BaseModel):
     status: str | None = None
     config_overrides: dict[str, Any] | None = None
+    wallet_id: str | None = None
+    ledger_source: str | None = None
 
 
 class PlatformSettingsRequest(BaseModel):
@@ -88,8 +92,8 @@ class WorkerAssignmentUpsertRequest(BaseModel):
 
 class AllocationUpsertRequest(BaseModel):
     allocation_id: str | None = None
-    strategy_id: str
-    actor_id: str
+    strategy_id: str | None = None
+    actor_id: str = ""
     account_id: str
     quote_asset: str = ""
     base_asset: str = ""
@@ -285,6 +289,8 @@ def create_registry_router(
                 liquidity_exchange=body.liquidity_exchange,
                 status=body.status,
                 config_overrides=body.config_overrides,
+                wallet_id=body.wallet_id,
+                ledger_source=body.ledger_source,
             )
         except RegistryNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -316,6 +322,8 @@ def create_registry_router(
                 strategy_id,
                 status=body.status,
                 config_overrides=body.config_overrides,
+                wallet_id=body.wallet_id,
+                ledger_source=body.ledger_source,
             )
         except RegistryNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -182,6 +182,8 @@ export interface Strategy {
   liquidity_exchange: string;
   status: string;
   config_overrides?: Record<string, unknown>;
+  wallet_id?: string | null;
+  ledger_source?: string;
 }
 
 export interface StrategyRuntimeConfig {
@@ -215,12 +217,14 @@ export interface StrategyUpsertPayload {
   liquidity_exchange: string;
   status?: string;
   config_overrides?: Record<string, unknown>;
+  wallet_id?: string | null;
+  ledger_source?: string;
 }
 
 export interface AllocationUpsertPayload {
   allocation_id?: string;
-  strategy_id: string;
-  actor_id: string;
+  strategy_id?: string | null;
+  actor_id?: string;
   account_id: string;
   quote_asset?: string;
   base_asset?: string;
@@ -232,7 +236,7 @@ export interface AllocationUpsertPayload {
 
 export interface Allocation {
   allocation_id: string;
-  strategy_id: string;
+  strategy_id: string | null;
   actor_id: string;
   account_id: string;
   quote_asset: string;

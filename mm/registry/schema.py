@@ -42,10 +42,13 @@ CREATE TABLE IF NOT EXISTS registry_strategies (
     liquidity_exchange TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     config_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+    wallet_id TEXT,
+    ledger_source TEXT NOT NULL DEFAULT 'virtual',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS registry_strategies_account_idx ON registry_strategies (account_id);
+CREATE INDEX IF NOT EXISTS registry_strategies_wallet_idx ON registry_strategies (wallet_id);
 CREATE INDEX IF NOT EXISTS registry_strategies_preset_idx ON registry_strategies (preset_id);
 CREATE INDEX IF NOT EXISTS registry_strategies_status_idx ON registry_strategies (status);
 
@@ -64,7 +67,7 @@ ON registry_worker_assignments (worker_id, status);
 
 CREATE TABLE IF NOT EXISTS registry_allocations (
     allocation_id TEXT PRIMARY KEY,
-    strategy_id TEXT NOT NULL UNIQUE REFERENCES registry_strategies(strategy_id),
+    strategy_id TEXT REFERENCES registry_strategies(strategy_id),
     actor_id TEXT NOT NULL,
     account_id TEXT NOT NULL REFERENCES registry_accounts(account_id),
     quote_asset TEXT NOT NULL DEFAULT '',
@@ -78,6 +81,9 @@ CREATE TABLE IF NOT EXISTS registry_allocations (
 );
 CREATE INDEX IF NOT EXISTS registry_allocations_account_idx ON registry_allocations (account_id);
 CREATE INDEX IF NOT EXISTS registry_allocations_actor_idx ON registry_allocations (actor_id);
+CREATE UNIQUE INDEX IF NOT EXISTS registry_allocations_strategy_id_unique
+ON registry_allocations (strategy_id)
+WHERE strategy_id IS NOT NULL AND strategy_id <> '';
 
 CREATE TABLE IF NOT EXISTS registry_market_feeds (
     feed_id TEXT PRIMARY KEY,
@@ -107,3 +113,14 @@ CREATE TABLE IF NOT EXISTS registry_platform_settings (
 """
 
 DEFAULT_PLATFORM_SETTINGS_ID = "default"
+
+REGISTRY_MIGRATIONS = """
+ALTER TABLE registry_strategies ADD COLUMN IF NOT EXISTS wallet_id TEXT;
+ALTER TABLE registry_strategies ADD COLUMN IF NOT EXISTS ledger_source TEXT NOT NULL DEFAULT 'virtual';
+ALTER TABLE registry_allocations ALTER COLUMN strategy_id DROP NOT NULL;
+ALTER TABLE registry_allocations DROP CONSTRAINT IF EXISTS registry_allocations_strategy_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS registry_allocations_strategy_id_unique
+ON registry_allocations (strategy_id)
+WHERE strategy_id IS NOT NULL AND strategy_id <> '';
+CREATE INDEX IF NOT EXISTS registry_strategies_wallet_idx ON registry_strategies (wallet_id);
+"""

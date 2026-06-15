@@ -15,7 +15,7 @@ const ALLOCATION_STATUSES = ["active", "paused", "retired"] as const;
 
 const EMPTY_FORM: AllocationUpsertPayload = {
   allocation_id: "",
-  strategy_id: "",
+  strategy_id: null,
   actor_id: "",
   account_id: "",
   quote_asset: "IRT",
@@ -95,7 +95,7 @@ export function AllocationsPage() {
   function onStrategyChange(strategyId: string) {
     const strategy = strategies.find((row) => row.strategy_id === strategyId);
     if (!strategy) {
-      setForm((prev) => ({ ...prev, strategy_id: strategyId }));
+      setForm((prev) => ({ ...prev, strategy_id: strategyId || null }));
       return;
     }
     setForm((prev) => ({
@@ -103,7 +103,7 @@ export function AllocationsPage() {
       strategy_id: strategyId,
       actor_id: strategy.actor_id,
       account_id: strategy.account_id,
-      allocation_id: prev.allocation_id || `${strategyId}-allocation`,
+      allocation_id: prev.allocation_id || `${strategyId}-wallet`,
     }));
   }
 
@@ -116,6 +116,8 @@ export function AllocationsPage() {
       const body: AllocationUpsertPayload = {
         ...form,
         allocation_id: form.allocation_id?.trim() || undefined,
+        strategy_id: form.strategy_id?.trim() || null,
+        actor_id: form.actor_id?.trim() || "",
         allocated_quote: Number(form.allocated_quote) || 0,
         allocated_base: Number(form.allocated_base) || 0,
       };
@@ -136,14 +138,17 @@ export function AllocationsPage() {
   return (
     <>
       <header className="page-header">
-        <h1>Allocations</h1>
-        <p>Virtual wallet per strategy instance — initial base/quote the MPC rebalances within.</p>
+        <h1>Wallets</h1>
+        <p>
+          Standalone capital pools for an account. Assign a wallet on the Strategies page and
+          choose virtual vs physical ledger per strategy.
+        </p>
         <EditModeNote mode="form" />
       </header>
 
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>
-          New allocation
+          New wallet
         </button>
         <button type="button" className="btn" onClick={() => void load()}>
           Refresh
@@ -155,40 +160,15 @@ export function AllocationsPage() {
 
       {showForm ? (
         <form onSubmit={(e) => void onSubmit(e)} className="card form-card">
-          <h3>{editingId ? `Edit ${editingId}` : "New allocation"}</h3>
+          <h3>{editingId ? `Edit ${editingId}` : "New wallet"}</h3>
           <div className="form-grid">
             <div className="form-field">
-              <label htmlFor="alloc-id">Allocation ID</label>
+              <label htmlFor="alloc-id">Wallet ID</label>
               <input
                 id="alloc-id"
                 value={form.allocation_id ?? ""}
                 onChange={(e) => setForm((prev) => ({ ...prev, allocation_id: e.target.value }))}
-                placeholder="auto from strategy if empty"
-              />
-            </div>
-            <div className="form-field">
-              <label htmlFor="alloc-strategy">Strategy</label>
-              <select
-                id="alloc-strategy"
-                required
-                value={form.strategy_id}
-                onChange={(e) => onStrategyChange(e.target.value)}
-              >
-                <option value="">Select strategy…</option>
-                {strategies.map((row) => (
-                  <option key={row.strategy_id} value={row.strategy_id}>
-                    {row.strategy_id} ({row.symbol})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="form-field">
-              <label htmlFor="alloc-actor">Actor ID</label>
-              <input
-                id="alloc-actor"
-                required
-                value={form.actor_id}
-                onChange={(e) => setForm((prev) => ({ ...prev, actor_id: e.target.value }))}
+                placeholder="e.g. nobitex-usdt-pool"
               />
             </div>
             <div className="form-field">
@@ -206,6 +186,30 @@ export function AllocationsPage() {
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="alloc-strategy">Legacy strategy link (optional)</label>
+              <select
+                id="alloc-strategy"
+                value={form.strategy_id ?? ""}
+                onChange={(e) => onStrategyChange(e.target.value)}
+              >
+                <option value="">None — assign from Strategies page</option>
+                {strategies.map((row) => (
+                  <option key={row.strategy_id} value={row.strategy_id}>
+                    {row.strategy_id} ({row.symbol})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="alloc-actor">Actor ID (optional)</label>
+              <input
+                id="alloc-actor"
+                value={form.actor_id ?? ""}
+                onChange={(e) => setForm((prev) => ({ ...prev, actor_id: e.target.value }))}
+                placeholder="Set automatically when assigned to a strategy"
+              />
             </div>
             <div className="form-field">
               <label htmlFor="alloc-quote-asset">Quote asset</label>
@@ -279,7 +283,7 @@ export function AllocationsPage() {
           </div>
           <div className="form-actions">
             <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving…" : "Save allocation"}
+              {saving ? "Saving…" : "Save wallet"}
             </button>
             <button
               type="button"
@@ -301,8 +305,8 @@ export function AllocationsPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Allocation</th>
-              <th>Strategy</th>
+              <th>Wallet</th>
+              <th>Legacy strategy</th>
               <th>Actor</th>
               <th>Account</th>
               <th>Initial quote</th>
@@ -316,7 +320,7 @@ export function AllocationsPage() {
             {items.map((row) => (
               <tr key={row.allocation_id}>
                 <td>{row.allocation_id}</td>
-                <td>{row.strategy_id}</td>
+                <td>{row.strategy_id ?? "—"}</td>
                 <td>{row.actor_id}</td>
                 <td>{row.account_id}</td>
                 <td>
@@ -351,9 +355,10 @@ export function AllocationsPage() {
         <section className="card" style={{ marginTop: "1rem" }}>
           <h3>{selected.allocation_id}</h3>
           <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
-            Virtual wallet for strategy <code>{selected.strategy_id}</code>. Initial balances are
-            the capital pool the MPC may spend; live held/free amounts are published on{" "}
-            <code>portfolio:allocation:{selected.actor_id}</code> when the worker runs.
+            Initial capital pool for account <code>{selected.account_id}</code>. Assign this wallet
+            on a strategy and set ledger source to <code>virtual</code> to size MPC from wallet
+            balances. Live held/free amounts publish on{" "}
+            <code>portfolio:allocation:{selected.actor_id || "…"}</code> when the worker runs.
           </p>
           <JsonBlock value={selected} />
         </section>

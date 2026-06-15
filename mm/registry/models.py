@@ -12,6 +12,7 @@ PresetStatus = Literal["active", "disabled"]
 MarketFeedStatus = Literal["active", "disabled"]
 StrategyStatus = Literal["draft", "active", "paused", "retired"]
 AllocationStatus = Literal["active", "paused", "retired"]
+LedgerSource = Literal["virtual", "physical"]
 WorkerAssignmentStatus = Literal["active", "released", "expired"]
 
 
@@ -118,6 +119,8 @@ class StrategyRecord:
     liquidity_exchange: str
     status: StrategyStatus = "draft"
     config_overrides: dict[str, Any] = field(default_factory=dict)
+    wallet_id: str | None = None
+    ledger_source: LedgerSource = "virtual"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -132,6 +135,8 @@ class StrategyRecord:
             "liquidity_exchange": self.liquidity_exchange,
             "status": self.status,
             "config_overrides": dict(self.config_overrides),
+            "wallet_id": self.wallet_id,
+            "ledger_source": self.ledger_source,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
@@ -140,7 +145,7 @@ class StrategyRecord:
 @dataclass(frozen=True, slots=True)
 class AllocationRecord:
     allocation_id: str
-    strategy_id: str
+    strategy_id: str | None
     actor_id: str
     account_id: str
     quote_asset: str = ""

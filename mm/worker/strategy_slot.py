@@ -62,6 +62,7 @@ def build_strategy_slot(
     account_pool: SharedAccountPool,
     control_plane: RuntimeControlPlane,
     virtual_ledger_service: VirtualLedgerService | None = None,
+    ledger_source: str = "virtual",
 ) -> StrategySlot:
     if config.controller is None or not config.controller.enabled:
         return StrategySlot(strategy_id=strategy_id, account_id=account_id, config=config)
@@ -96,9 +97,14 @@ def build_strategy_slot(
         max_global_private_age_ms=max_global_private_age_ms,
     )
     actor_id = config.controller.actor_id
-    allocation = virtual_ledger_service.allocation_for(actor_id) if virtual_ledger_service is not None else None
+    use_virtual_ledger = ledger_source.strip().lower() == "virtual"
+    allocation = (
+        virtual_ledger_service.allocation_for(actor_id)
+        if use_virtual_ledger and virtual_ledger_service is not None
+        else None
+    )
     strategy_wallet_provider = None
-    if virtual_ledger_service is not None:
+    if use_virtual_ledger and virtual_ledger_service is not None and allocation is not None:
         strategy_wallet_provider = lambda actor_id=actor_id: virtual_ledger_service.wallet_for(actor_id)
     strategy_runner = build_strategy_runner(
         config,
