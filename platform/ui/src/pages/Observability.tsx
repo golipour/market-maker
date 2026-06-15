@@ -55,19 +55,7 @@ export function ObservabilityPage() {
             viewer access (see docker-compose Grafana env vars).
           </div>
 
-          <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Key metrics</h2>
-          <div className="grafana-solo-grid">
-            {config.solo_panels.map((panel) => (
-              <GrafanaPanel
-                key={`${panel.uid}-${panel.panel_id}`}
-                title={panel.title}
-                embedUrl={panel.embed_url}
-                variant="solo"
-              />
-            ))}
-          </div>
-
-          <h2 style={{ fontSize: "1rem", margin: "1.5rem 0 0.75rem" }}>Dashboards</h2>
+          <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Dashboards</h2>
           <div className="dashboard-tabs">
             {config.dashboards.map((dashboard) => (
               <button
