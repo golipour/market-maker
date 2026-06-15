@@ -1,4 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { CredentialRefEditor } from "../components/CredentialRefEditor";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -8,6 +10,14 @@ import {
   type Exchange,
   type RegistryList,
 } from "../api/client";
+import {
+  credentialFormFromRef,
+  credentialRefFromForm,
+  credentialRefSummary,
+  EMPTY_CREDENTIAL_FORM,
+  resolvedCredentialKeys,
+  type CredentialFormState,
+} from "../lib/credentialRef";
 
 const STATUSES = ["active", "disabled"] as const;
 const ROLES = ["trading"] as const;
@@ -25,6 +35,7 @@ export function AccountsPage() {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<AccountUpsertPayload>(EMPTY);
+  const [credentials, setCredentials] = useState<CredentialFormState>(EMPTY_CREDENTIAL_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +69,7 @@ export function AccountsPage() {
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY);
+    setCredentials(EMPTY_CREDENTIAL_FORM);
     setShowForm(true);
     setMessage(null);
     setError(null);
@@ -72,6 +84,7 @@ export function AccountsPage() {
       role: row.role,
       status: row.status,
     });
+    setCredentials(credentialFormFromRef(row.credential_ref));
     setSelectedId(row.account_id);
     setShowForm(true);
     setMessage(null);
@@ -83,14 +96,20 @@ export function AccountsPage() {
     setSaving(true);
     setError(null);
     try {
-      const saved = await api.post<Account>("/api/admin/registry/accounts", form);
+      const credential_ref = credentialRefFromForm(credentials);
+      const body: AccountUpsertPayload = { ...form, credential_ref };
+      const saved = await api.post<Account>("/api/admin/registry/accounts", body);
       setMessage(`Account ${saved.account_id} saved`);
       setShowForm(false);
       setEditingId(null);
       setSelectedId(saved.account_id);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Save failed");
+      if (err instanceof SyntaxError) {
+        setError("Credential JSON must be valid");
+      } else {
+        setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Save failed");
+      }
     } finally {
       setSaving(false);
     }
@@ -101,11 +120,10 @@ export function AccountsPage() {
       <header className="page-header">
         <h1>Accounts</h1>
         <p>
-          Trading accounts linked to exchanges. Secrets stay in <code>.env</code>;{" "}
-          <code>credential_ref</code> is an env var name or JSON with{" "}
-          <code>api_token_env</code> / <code>api_private_key_env</code> keys merged into exchange
-          private config at runtime.
+          Trading accounts linked to exchanges. Values live in <code>.env</code>; this UI stores
+          only env <em>variable names</em> merged into <code>exchanges.*.private</code> at runtime.
         </p>
+        <EditModeNote mode="form" />
       </header>
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>
@@ -147,16 +165,7 @@ export function AccountsPage() {
                 ))}
               </select>
             </div>
-            <div className="form-field">
-              <label htmlFor="acc-cred">Credential ref</label>
-              <input
-                id="acc-cred"
-                required
-                placeholder='NOBITEX_API_TOKEN or {"api_token_env":"…","api_private_key_env":"…"}'
-                value={form.credential_ref}
-                onChange={(e) => setForm((p) => ({ ...p, credential_ref: e.target.value }))}
-              />
-            </div>
+            <CredentialRefEditor value={credentials} onChange={setCredentials} />
             <div className="form-field">
               <label htmlFor="acc-role">Role</label>
               <select
@@ -210,7 +219,7 @@ export function AccountsPage() {
             <tr>
               <th>Account</th>
               <th>Exchange</th>
-              <th>Credential ref</th>
+              <th>Credentials (.env)</th>
               <th>Role</th>
               <th>Status</th>
               <th />
@@ -221,9 +230,7 @@ export function AccountsPage() {
               <tr key={row.account_id}>
                 <td>{row.account_id}</td>
                 <td>{row.exchange}</td>
-                <td style={{ fontSize: "0.9rem", maxWidth: "14rem", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {row.credential_ref}
-                </td>
+                <td style={{ fontSize: "0.9rem" }}>{credentialRefSummary(row.credential_ref)}</td>
                 <td>{row.role}</td>
                 <td>{row.status}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
@@ -250,10 +257,13 @@ export function AccountsPage() {
         <section className="card" style={{ marginTop: "1rem" }}>
           <h3>{selected.account_id}</h3>
           <p style={{ color: "var(--text-muted)", marginBottom: "0.75rem" }}>
-            At resolve time, <code>credential_ref</code> is merged into{" "}
-            <code>exchanges.{selected.exchange}.private</code> for strategies on this account.
+            Merged into <code>exchanges.{selected.exchange}.private</code> for strategies on this
+            account.
           </p>
-          <JsonBlock value={selected} />
+          <h4>Resolved private env keys</h4>
+          <JsonBlock value={resolvedCredentialKeys(selected.credential_ref)} maxHeight="120px" />
+          <h4 style={{ marginTop: "1rem" }}>Stored credential_ref</h4>
+          <JsonBlock value={selected.credential_ref} maxHeight="120px" />
         </section>
       ) : null}
     </>

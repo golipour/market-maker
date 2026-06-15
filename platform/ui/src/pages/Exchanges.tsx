@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -108,6 +109,7 @@ export function ExchangesPage() {
           for use; <code>disabled</code> is an operator flag (the worker does not auto-block
           strategies on disabled venues yet).
         </p>
+        <EditModeNote mode="hybrid" />
       </header>
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>

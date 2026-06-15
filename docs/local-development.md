@@ -202,7 +202,7 @@ In **Mode A** (worker + registry), strategy runtime is assembled from Postgres r
 | Concept | Postgres registry | JSON files | `.env` |
 |---------|-------------------|------------|--------|
 | Exchange venue defaults (fees, private polling, bus vs local market) | `registry_exchanges.config` | `market_maker.runtime.example.json` → `exchanges.*` (monolith only) | — |
-| API credentials | `registry_accounts.credential_ref` | monolith `exchanges.*.private.api_*_env` | actual secret values (`NOBITEX_API_TOKEN`, …) |
+| API credentials | `registry_accounts.credential_ref` (env names or JSON with `api_token_env` / `api_key_env` / `api_private_key_env`) | monolith `exchanges.*.private.api_*_env` | actual secret values in `.env` |
 | Public market polling (depth, trades, poll interval) | `registry_market_feeds` (+ ingestor JSON fallback) | `market_maker.ingestor.example.json` → `feeds[]` | — |
 | Strategy logic (MPC, risk, execution) | `registry_strategy_presets` | monolith `strategy_presets.*` | — |
 | Strategy instance (symbol, account, preset, actor) | `registry_strategies` | monolith `bots.*` | — |
@@ -211,6 +211,16 @@ In **Mode A** (worker + registry), strategy runtime is assembled from Postgres r
 | Bus / metrics / scheduler defaults | `registry_platform_settings` | per-service JSON (`worker`, `ingestor`, …) | `MM_BUS_*`, `MM_ADMIN_*` |
 
 Control-plane UI path (recommended order): **Exchanges → Accounts → Market feeds → Presets → Strategies → Wallets (allocations) → Workers**.
+
+### UI edit patterns
+
+| Page | Edit style | Why |
+|------|------------|-----|
+| Accounts, Market feeds, Wallets, Workers | **Form** | Scalar binding fields |
+| Presets, Platform settings | **JSON** | Large nested runtime blobs |
+| Exchanges, Strategies | **Hybrid** | Form for identity/status; JSON for nested `config` / `config_overrides` |
+
+**Accounts credentials:** use *API token + private key* for Nobitex/Tabdeal/Wallex (maps to `api_token_env` + `api_private_key_env` in stored `credential_ref` JSON). Single-token mode maps one env var to `api_token_env`. Advanced JSON supports `api_key_env` where the venue uses API key + secret instead of token.
 
 ### Mapping `exchanges.nobitex` from the monolith example
 

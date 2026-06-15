@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -152,6 +153,7 @@ export function WorkersPage() {
       <header className="page-header">
         <h1>Workers</h1>
         <p>Strategy worker lease assignments and heartbeats.</p>
+        <EditModeNote mode="form" />
       </header>
 
       <div className="page-toolbar">

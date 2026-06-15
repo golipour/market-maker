@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import { ApiError, api, type PlatformSettings } from "../api/client";
 
@@ -60,6 +61,7 @@ export function PlatformSettingsPage() {
       <header className="page-header">
         <h1>Platform settings</h1>
         <p>Shared bus, persistence, observability, and scheduler defaults for workers.</p>
+        <EditModeNote mode="json" />
       </header>
       {error ? <div className="alert alert-error">{error}</div> : null}
       {message ? <div className="alert alert-success">{message}</div> : null}

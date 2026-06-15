@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -137,6 +138,7 @@ export function AllocationsPage() {
       <header className="page-header">
         <h1>Allocations</h1>
         <p>Virtual wallet per strategy instance — initial base/quote the MPC rebalances within.</p>
+        <EditModeNote mode="form" />
       </header>
 
       <div className="page-toolbar">

@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -120,6 +121,7 @@ export function MarketFeedsPage() {
           <code>market:events:{"{exchange}"}:{"{symbol}"}:{"{interval_ms}"}</code>. These fields
           correspond to <code>exchanges.*.market_data</code> in the monolith JSON.
         </p>
+        <EditModeNote mode="form" />
       </header>
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>

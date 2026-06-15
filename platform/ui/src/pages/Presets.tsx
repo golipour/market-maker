@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -95,6 +96,7 @@ export function PresetsPage() {
       <header className="page-header">
         <h1>Presets</h1>
         <p>Reusable strategy logic templates (MPC, risk, execution) without symbol or account binding.</p>
+        <EditModeNote mode="json" />
       </header>
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>

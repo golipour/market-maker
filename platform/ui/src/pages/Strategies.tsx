@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import {
   ApiError,
@@ -177,6 +178,7 @@ export function StrategiesPage() {
       <header className="page-header">
         <h1>Strategies</h1>
         <p>Registry strategies, resolved runtime config, and lifecycle controls.</p>
+        <EditModeNote mode="hybrid" />
       </header>
 
       <div className="page-toolbar">
