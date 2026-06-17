@@ -725,33 +725,29 @@ class PostgresRegistryStore(MemoryRegistryStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT f.feed_id, f.source_id, f.interval_ms, f.status, f.created_at, f.updated_at,
-                           s.exchange, s.symbol, s.mode, s.depth_limit, s.trades_limit, s.poll_interval_ms
-                    FROM registry_market_feeds f
-                    JOIN registry_market_sources s ON s.source_id = f.source_id
-                    ORDER BY f.feed_id
+                    SELECT feed_id, source_id, interval_ms, status, created_at, updated_at
+                    FROM registry_market_feeds
+                    ORDER BY feed_id
                     """
                 )
                 rows = cur.fetchall()
-        return [_market_feed_from_row(row) for row in rows]
+        return [self._enrich_market_feed(_market_feed_stored_from_row(row)) for row in rows]
 
     def get_market_feed(self, feed_id: str) -> MarketFeedRecord:
         with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT f.feed_id, f.source_id, f.interval_ms, f.status, f.created_at, f.updated_at,
-                           s.exchange, s.symbol, s.mode, s.depth_limit, s.trades_limit, s.poll_interval_ms
-                    FROM registry_market_feeds f
-                    JOIN registry_market_sources s ON s.source_id = f.source_id
-                    WHERE f.feed_id = %s
+                    SELECT feed_id, source_id, interval_ms, status, created_at, updated_at
+                    FROM registry_market_feeds
+                    WHERE feed_id = %s
                     """,
                     (feed_id,),
                 )
                 row = cur.fetchone()
         if row is None:
             raise RegistryNotFoundError(f"market feed {feed_id!r} not found")
-        return _market_feed_from_row(row)
+        return self._enrich_market_feed(_market_feed_stored_from_row(row))
 
     def upsert_market_feed(
         self,
@@ -1048,7 +1044,7 @@ def _market_source_from_row(row: tuple[Any, ...]) -> MarketSourceRecord:
     )
 
 
-def _market_feed_from_row(row: tuple[Any, ...]) -> MarketFeedRecord:
+def _market_feed_stored_from_row(row: tuple[Any, ...]) -> MarketFeedRecord:
     return MarketFeedRecord(
         feed_id=row[0],
         source_id=row[1],
@@ -1056,12 +1052,6 @@ def _market_feed_from_row(row: tuple[Any, ...]) -> MarketFeedRecord:
         status=row[3],
         created_at=row[4],
         updated_at=row[5],
-        exchange=row[6],
-        symbol=row[7],
-        mode=str(row[8] or "rest"),
-        depth_limit=int(row[9] or 10),
-        trades_limit=int(row[10] or 100),
-        poll_interval_ms=int(row[11] or 1000),
     )
 
 

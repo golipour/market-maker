@@ -348,8 +348,15 @@ table.data-table tbody tr:hover {
   height: 220px;
 }
 
+.grafana-panel--full {
+  display: flex;
+  flex-direction: column;
+}
+
 .grafana-panel--full iframe {
-  height: 480px;
+  /* Fill viewport below page chrome (header, tabs, alerts, panel bar). */
+  height: calc(100vh - 13rem);
+  min-height: 36rem;
 }
 
 .dashboard-tabs {
