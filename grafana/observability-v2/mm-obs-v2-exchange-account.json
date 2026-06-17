@@ -604,14 +604,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT interval_ms\nFROM (\n  SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n    AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n  GROUP BY 1\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n    SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, ts AS latest_ts\n    FROM mm_events\n    WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n      AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n    UNION ALL\n    SELECT interval_ms::text AS interval_ms, ts AS latest_ts\n    FROM mm_market_facts\n    WHERE interval_ms IS NOT NULL\n  ) sources\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT interval_ms\nFROM (\n  SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n    AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n  GROUP BY 1\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n    SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, ts AS latest_ts\n    FROM mm_events\n    WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n      AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n    UNION ALL\n    SELECT interval_ms::text AS interval_ms, ts AS latest_ts\n    FROM mm_market_facts\n    WHERE interval_ms IS NOT NULL\n  ) sources\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"

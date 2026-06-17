@@ -10,9 +10,33 @@ MM_SCOPE_EVENT_TYPES = (
     "'StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook'"
 )
 
-_INTERVAL_MS_EXPR = (
+INTERVAL_MS_EXPR = (
     "COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$'))"
 )
+_INTERVAL_MS_EXPR = INTERVAL_MS_EXPR
+
+
+def interval_ms_events_filter_sql(*, table_ref: str = "") -> str:
+    """Match Grafana ``interval_ms`` variable against MarketEvent rows (optional filter)."""
+
+    prefix = f"{table_ref}." if table_ref else ""
+    expr = (
+        f"COALESCE(NULLIF({prefix}payload->>'interval_ms', ''), "
+        f"substring({prefix}topic from ':([0-9]+)$'))"
+    )
+    return (
+        f"(NULLIF('${{interval_ms}}', '') IS NULL OR "
+        f"{expr} = NULLIF('${{interval_ms}}', ''))"
+    )
+
+
+def interval_ms_facts_filter_sql() -> str:
+    """Match Grafana ``interval_ms`` variable against ``mm_market_facts`` rows."""
+
+    return (
+        "(NULLIF('${interval_ms}', '') IS NULL OR "
+        "interval_ms::text = NULLIF('${interval_ms}', ''))"
+    )
 
 
 def symbol_var_query(*, include_market_facts: bool = True) -> str:
@@ -139,11 +163,18 @@ ORDER BY latest_ts DESC"""
 def interval_ms_var_query() -> str:
     return f"""SELECT interval_ms
 FROM (
-  SELECT {_INTERVAL_MS_EXPR} AS interval_ms, max(ts) AS latest_ts
-  FROM mm_events
-  WHERE {_INTERVAL_MS_EXPR} IS NOT NULL
-    AND {_INTERVAL_MS_EXPR} <> ''
-  GROUP BY 1
+  SELECT interval_ms, max(latest_ts) AS latest_ts
+  FROM (
+    SELECT {_INTERVAL_MS_EXPR} AS interval_ms, ts AS latest_ts
+    FROM mm_events
+    WHERE {_INTERVAL_MS_EXPR} IS NOT NULL
+      AND {_INTERVAL_MS_EXPR} <> ''
+    UNION ALL
+    SELECT interval_ms::text AS interval_ms, ts AS latest_ts
+    FROM mm_market_facts
+    WHERE interval_ms IS NOT NULL
+  ) sources
+  GROUP BY interval_ms
 ) ranked
 ORDER BY latest_ts DESC"""
 

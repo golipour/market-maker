@@ -16,6 +16,8 @@ from mm.tools.grafana_dashboard_variables import (
     actor_id_var_query,
     diagnostics_topic_var_query,
     exchange_var_query,
+    interval_ms_events_filter_sql,
+    interval_ms_facts_filter_sql,
     interval_ms_var_query,
     run_id_var_query,
     symbol_var_query,
@@ -813,13 +815,29 @@ def _event_step_source_sql(t_end_expr: str, fallback_ts_expr: str) -> str:
 
 
 def _market_event_scope_pairs_sql() -> str:
-    return """SELECT DISTINCT e.exchange, e.symbol
+    return f"""SELECT DISTINCT e.exchange, e.symbol
   FROM mm_events e
   WHERE e.event_type = 'MarketEvent'
     AND e.exchange IS NOT NULL
     AND e.symbol IS NOT NULL
-    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])"""
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND {interval_ms_events_filter_sql(table_ref="e")}"""
+
+
+def _market_facts_scope_filter_sql() -> str:
+    return f"""exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND $__timeFilter(ts)
+  AND {interval_ms_facts_filter_sql()}"""
+
+
+def _market_event_scope_filter_sql() -> str:
+    return f"""event_type = 'MarketEvent'
+  AND exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND $__timeFilter(ts)
+  AND {interval_ms_events_filter_sql()}"""
 
 
 def _market_event_scope_pair_metric_sql() -> str:
@@ -1202,10 +1220,7 @@ def _market_event_step_sql() -> str:
   (e.exchange || ' ' || e.symbol) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
-WHERE e.event_type = 'MarketEvent'
-  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-  AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
-  AND $__timeFilter(e.ts)
+WHERE {_market_event_scope_filter_sql()}
 GROUP BY 1, 2"""
     metrics_sql = _market_event_scope_pair_metric_sql()
     return _zero_filled_step_sql(data_sql, metrics_sql)
@@ -3563,7 +3578,8 @@ def market_data_quality() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Per-exchange prices/volumes from persisted `MarketEvent` rows (post-aggregation). "
+            "Per exchange+symbol prices/volumes from `mm_market_facts` (best bid/ask, volumes) "
+            "and `MarketEvent` payloads (book/trade VWAP). Series respect the **Interval ms** filter. "
             "Raw ingest health is covered below and in the three Prometheus panels. "
             "Use **Price series** / **Volume series** to toggle bid, ask, VWAP, and volume lines.",
             y=0,
@@ -4725,6 +4741,7 @@ def _orderbook_depth_sql(kind: str, *, role: str | None = "local") -> str:
       AND m.payload->>'t_end_ms' IS NOT NULL
       AND ({raw_t_end_ms}) <= ctx.t_end_ms
       AND $__timeFilter(m.ts)
+      AND {interval_ms_events_filter_sql(table_ref="m")}
     ORDER BY ({raw_t_end_ms}) DESC, m.ts DESC
     LIMIT 1
   ) m ON TRUE
@@ -4901,39 +4918,36 @@ ask_step_plot AS (
 
 
 def _exchange_price_vwap_sql() -> str:
-    best_bid = _numeric_sql("payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
-    best_ask = _numeric_sql("payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
     book_buy_vwap = _numeric_sql("payload->>'book_buy_vwap'", default="NULL")
     book_sell_vwap = _numeric_sql("payload->>'book_sell_vwap'", default="NULL")
     trade_vwap = _numeric_sql("NULLIF(payload->>'vwap', '0')", default="NULL")
-    filters = """event_type = 'MarketEvent'
-  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-  AND $__timeFilter(ts)"""
+    event_symbol = "COALESCE(symbol, payload->>'symbol')"
+    market_filters = _market_facts_scope_filter_sql()
+    event_filters = _market_event_scope_filter_sql()
     return f"""WITH all_series AS (
-  SELECT ts AS "time", (exchange || ' best_bid') AS metric, {best_bid} AS value, 'best_bid'::text AS series
-  FROM mm_events
-  WHERE {filters}
-    AND (payload->'orderbook'->'bids'->0->>'price') IS NOT NULL
+  SELECT ts AS "time", (exchange || ' ' || symbol || ' best_bid') AS metric, best_bid AS value, 'best_bid'::text AS series
+  FROM mm_market_facts
+  WHERE {market_filters}
+    AND best_bid IS NOT NULL
   UNION ALL
-  SELECT ts AS "time", (exchange || ' best_ask') AS metric, {best_ask} AS value, 'best_ask'::text AS series
-  FROM mm_events
-  WHERE {filters}
-    AND (payload->'orderbook'->'asks'->0->>'price') IS NOT NULL
+  SELECT ts AS "time", (exchange || ' ' || symbol || ' best_ask') AS metric, best_ask AS value, 'best_ask'::text AS series
+  FROM mm_market_facts
+  WHERE {market_filters}
+    AND best_ask IS NOT NULL
   UNION ALL
-  SELECT ts AS "time", (exchange || ' buy_vwap') AS metric, NULLIF({book_buy_vwap}, 0.0) AS value, 'buy_vwap'::text AS series
+  SELECT ts AS "time", (exchange || ' ' || {event_symbol} || ' buy_vwap') AS metric, NULLIF({book_buy_vwap}, 0.0) AS value, 'buy_vwap'::text AS series
   FROM mm_events
-  WHERE {filters}
+  WHERE {event_filters}
     AND (payload->>'book_buy_vwap') IS NOT NULL
   UNION ALL
-  SELECT ts AS "time", (exchange || ' sell_vwap') AS metric, NULLIF({book_sell_vwap}, 0.0) AS value, 'sell_vwap'::text AS series
+  SELECT ts AS "time", (exchange || ' ' || {event_symbol} || ' sell_vwap') AS metric, NULLIF({book_sell_vwap}, 0.0) AS value, 'sell_vwap'::text AS series
   FROM mm_events
-  WHERE {filters}
+  WHERE {event_filters}
     AND (payload->>'book_sell_vwap') IS NOT NULL
   UNION ALL
-  SELECT ts AS "time", (exchange || ' trade_vwap') AS metric, {trade_vwap} AS value, 'trade_vwap'::text AS series
+  SELECT ts AS "time", (exchange || ' ' || {event_symbol} || ' trade_vwap') AS metric, {trade_vwap} AS value, 'trade_vwap'::text AS series
   FROM mm_events
-  WHERE {filters}
+  WHERE {event_filters}
     AND NULLIF(payload->>'vwap', '0') IS NOT NULL
 )
 SELECT "time", metric, value
@@ -4943,22 +4957,17 @@ ORDER BY 1"""
 
 
 def _exchange_volume_sql() -> str:
-    buy_volume = _numeric_sql("payload->>'buy_volume'", default="NULL")
-    sell_volume = _numeric_sql("payload->>'sell_volume'", default="NULL")
-    filters = """event_type = 'MarketEvent'
-  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-  AND $__timeFilter(ts)"""
+    market_filters = _market_facts_scope_filter_sql()
     return f"""WITH all_series AS (
-  SELECT ts AS "time", (exchange || ' buy_volume') AS metric, {buy_volume} AS value, 'buy_volume'::text AS series
-  FROM mm_events
-  WHERE {filters}
-    AND (payload->>'buy_volume') IS NOT NULL
+  SELECT ts AS "time", (exchange || ' ' || symbol || ' buy_volume') AS metric, buy_volume AS value, 'buy_volume'::text AS series
+  FROM mm_market_facts
+  WHERE {market_filters}
+    AND buy_volume IS NOT NULL
   UNION ALL
-  SELECT ts AS "time", (exchange || ' sell_volume') AS metric, {sell_volume} AS value, 'sell_volume'::text AS series
-  FROM mm_events
-  WHERE {filters}
-    AND (payload->>'sell_volume') IS NOT NULL
+  SELECT ts AS "time", (exchange || ' ' || symbol || ' sell_volume') AS metric, sell_volume AS value, 'sell_volume'::text AS series
+  FROM mm_market_facts
+  WHERE {market_filters}
+    AND sell_volume IS NOT NULL
 )
 SELECT "time", metric, value
 FROM all_series

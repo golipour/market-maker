@@ -28,4 +28,5 @@ def test_interval_ms_var_query_orders_by_recency() -> None:
     sql = interval_ms_var_query()
 
     assert "interval_ms" in sql
+    assert "mm_market_facts" in sql
     assert "ORDER BY latest_ts DESC" in sql
