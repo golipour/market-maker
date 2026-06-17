@@ -477,8 +477,8 @@
       {
         "current": {
           "selected": false,
-          "text": "All",
-          "value": "$__all"
+          "text": [],
+          "value": []
         },
         "datasource": {
           "type": "postgres",
@@ -499,8 +499,8 @@
       {
         "current": {
           "selected": false,
-          "text": "All",
-          "value": "$__all"
+          "text": [],
+          "value": []
         },
         "datasource": {
           "type": "postgres",
@@ -619,7 +619,7 @@
     ]
   },
   "time": {
-    "from": "now-6h",
+    "from": "now-15m",
     "to": "now"
   },
   "timepicker": {},

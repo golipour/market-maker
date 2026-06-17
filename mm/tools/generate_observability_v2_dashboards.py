@@ -30,6 +30,8 @@ OUT = ROOT / "grafana" / "observability-v2"
 PROM_DS = {"type": "prometheus", "uid": "prometheus-mm"}
 PG_DS = {"type": "postgres", "uid": "postgres-mm"}
 LOKI_DS = {"type": "loki", "uid": "loki-mm"}
+DEFAULT_DASHBOARD_TIME_FROM = "now-15m"
+DEFAULT_DASHBOARD_TIME_TO = "now"
 
 
 def _target(
@@ -630,7 +632,7 @@ def _dashboard(
         "style": "dark",
         "tags": ["market-maker", "observability-v2", *tags],
         "templating": {"list": [*_templating(), *(extra_templating or [])]},
-        "time": {"from": "now-6h", "to": "now"},
+        "time": {"from": DEFAULT_DASHBOARD_TIME_FROM, "to": DEFAULT_DASHBOARD_TIME_TO},
         "timepicker": {},
         "timezone": "browser",
         "title": title,
@@ -647,12 +649,14 @@ def _templating() -> list[dict[str, Any]]:
             "Exchange",
             exchange_var_query(),
             multi=True,
+            default_all=False,
         ),
         _query_var(
             "symbol",
             "Symbol",
             symbol_var_query(),
             multi=True,
+            default_all=False,
         ),
         _query_var(
             "actor_id",
@@ -671,9 +675,23 @@ def _templating() -> list[dict[str, Any]]:
     ]
 
 
-def _query_var(name: str, label: str, query: str, *, multi: bool = False, refresh: int = 1) -> dict[str, Any]:
+def _query_var(
+    name: str,
+    label: str,
+    query: str,
+    *,
+    multi: bool = False,
+    refresh: int = 1,
+    default_all: bool = True,
+) -> dict[str, Any]:
+    if multi and not default_all:
+        current: dict[str, Any] = {"selected": False, "text": [], "value": []}
+    elif multi:
+        current = {"selected": False, "text": "All", "value": "$__all"}
+    else:
+        current = {}
     return {
-        "current": {"selected": False, "text": "All", "value": "$__all"} if multi else {},
+        "current": current,
         "datasource": PG_DS,
         "definition": query,
         "hide": 0,
