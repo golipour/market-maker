@@ -100,18 +100,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS registry_market_sources_unique_pair
 ON registry_market_sources (exchange, symbol);
 CREATE INDEX IF NOT EXISTS registry_market_sources_exchange_idx ON registry_market_sources (exchange);
 
-CREATE TABLE IF NOT EXISTS registry_market_feeds (
-    feed_id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES registry_market_sources(source_id),
-    interval_ms INT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS registry_market_feeds_unique_interval
-ON registry_market_feeds (source_id, interval_ms);
-CREATE INDEX IF NOT EXISTS registry_market_feeds_source_idx ON registry_market_feeds (source_id);
-
 CREATE TABLE IF NOT EXISTS registry_platform_settings (
     settings_id TEXT PRIMARY KEY,
     bus JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -149,9 +137,23 @@ CREATE TABLE IF NOT EXISTS registry_market_sources (
 CREATE UNIQUE INDEX IF NOT EXISTS registry_market_sources_unique_pair
 ON registry_market_sources (exchange, symbol);
 
-DO $migrate_market_sources$
+DO $migrate_market_feeds$
 BEGIN
-  IF EXISTS (
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'registry_market_feeds'
+  ) THEN
+    CREATE TABLE registry_market_feeds (
+      feed_id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL REFERENCES registry_market_sources(source_id),
+      interval_ms INT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  ELSIF EXISTS (
     SELECT 1
     FROM information_schema.columns
     WHERE table_schema = current_schema()
@@ -194,10 +196,6 @@ BEGIN
 
     DROP INDEX IF EXISTS registry_market_feeds_exchange_idx;
     DROP INDEX IF EXISTS registry_market_feeds_unique_feed;
-    CREATE UNIQUE INDEX IF NOT EXISTS registry_market_feeds_unique_interval
-    ON registry_market_feeds (source_id, interval_ms);
-    CREATE INDEX IF NOT EXISTS registry_market_feeds_source_idx
-    ON registry_market_feeds (source_id);
 
     IF NOT EXISTS (
       SELECT 1
@@ -211,6 +209,19 @@ BEGIN
       FOREIGN KEY (source_id) REFERENCES registry_market_sources(source_id);
     END IF;
   END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'registry_market_feeds'
+      AND column_name = 'source_id'
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS registry_market_feeds_unique_interval
+    ON registry_market_feeds (source_id, interval_ms);
+    CREATE INDEX IF NOT EXISTS registry_market_feeds_source_idx
+    ON registry_market_feeds (source_id);
+  END IF;
 END
-$migrate_market_sources$;
+$migrate_market_feeds$;
 """
