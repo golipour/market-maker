@@ -136,21 +136,17 @@ export interface MarketSource {
   source_id: string;
   exchange: string;
   symbol: string;
+  status: string;
   mode: string;
   depth_limit: number;
   trades_limit: number;
   poll_interval_ms: number;
-  status: string;
 }
 
 export interface MarketSourceUpsertPayload {
   source_id?: string;
   exchange: string;
   symbol: string;
-  mode?: string;
-  depth_limit?: number;
-  trades_limit?: number;
-  poll_interval_ms?: number;
   status?: string;
 }
 

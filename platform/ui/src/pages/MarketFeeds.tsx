@@ -18,10 +18,6 @@ const EMPTY_SOURCE: MarketSourceUpsertPayload = {
   source_id: "",
   exchange: "",
   symbol: "USDT_IRT",
-  mode: "rest",
-  depth_limit: 100,
-  trades_limit: 200,
-  poll_interval_ms: 2000,
   status: "active",
 };
 
@@ -101,10 +97,6 @@ export function MarketFeedsPage() {
       source_id: row.source_id,
       exchange: row.exchange,
       symbol: row.symbol,
-      mode: row.mode,
-      depth_limit: row.depth_limit,
-      trades_limit: row.trades_limit,
-      poll_interval_ms: row.poll_interval_ms,
       status: row.status,
     });
     setSelectedSourceId(row.source_id);
@@ -146,9 +138,6 @@ export function MarketFeedsPage() {
       const body: MarketSourceUpsertPayload = {
         ...sourceForm,
         source_id: sourceForm.source_id?.trim() || undefined,
-        depth_limit: Number(sourceForm.depth_limit),
-        trades_limit: Number(sourceForm.trades_limit),
-        poll_interval_ms: Number(sourceForm.poll_interval_ms),
       };
       const saved = await api.post<MarketSource>("/api/admin/registry/market-sources", body);
       setMessage(`Market source ${saved.source_id} saved`);
@@ -191,10 +180,11 @@ export function MarketFeedsPage() {
       <header className="page-header">
         <h1>Market data</h1>
         <p>
-          One <strong>market source</strong> polls each exchange/symbol pair (REST/WebSocket settings).
-          Multiple <strong>frame intervals</strong> publish aggregated{" "}
-          <code>market:events:{"{exchange}"}:{"{symbol}"}:{"{interval_ms}"}</code> topics from the
-          same source without duplicate API polling.
+          One <strong>market source</strong> identifies an exchange/symbol pair for the ingestor.
+          Poll/depth/trades/mode come from the exchange&apos;s <code>config.market_data</code>{" "}
+          (edit under <strong>Exchanges</strong>). Multiple <strong>frame intervals</strong> publish
+          aggregated <code>market:events:…</code> topics from the same source without duplicate API
+          polling.
         </p>
         <EditModeNote mode="form" />
       </header>
@@ -217,6 +207,9 @@ export function MarketFeedsPage() {
         {showSourceForm ? (
           <form onSubmit={(e) => void onSubmitSource(e)} className="card form-card">
             <h3>{editingSourceId ? `Edit ${editingSourceId}` : "New market source"}</h3>
+            <p style={{ color: "var(--text-muted)", marginTop: 0 }}>
+              Polling settings are inherited from the exchange&apos;s <code>market_data</code> config.
+            </p>
             <div className="form-grid">
               <div className="form-field">
                 <label htmlFor="source-id">Source ID</label>
@@ -251,50 +244,6 @@ export function MarketFeedsPage() {
                   required
                   value={sourceForm.symbol}
                   onChange={(e) => setSourceForm((p) => ({ ...p, symbol: e.target.value }))}
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="source-mode">Mode</label>
-                <input
-                  id="source-mode"
-                  value={sourceForm.mode ?? "rest"}
-                  onChange={(e) => setSourceForm((p) => ({ ...p, mode: e.target.value }))}
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="source-depth">Depth limit</label>
-                <input
-                  id="source-depth"
-                  type="number"
-                  min={1}
-                  value={sourceForm.depth_limit ?? 100}
-                  onChange={(e) =>
-                    setSourceForm((p) => ({ ...p, depth_limit: Number(e.target.value) }))
-                  }
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="source-trades">Trades limit</label>
-                <input
-                  id="source-trades"
-                  type="number"
-                  min={1}
-                  value={sourceForm.trades_limit ?? 200}
-                  onChange={(e) =>
-                    setSourceForm((p) => ({ ...p, trades_limit: Number(e.target.value) }))
-                  }
-                />
-              </div>
-              <div className="form-field">
-                <label htmlFor="source-poll">Poll interval (ms)</label>
-                <input
-                  id="source-poll"
-                  type="number"
-                  min={1}
-                  value={sourceForm.poll_interval_ms ?? 2000}
-                  onChange={(e) =>
-                    setSourceForm((p) => ({ ...p, poll_interval_ms: Number(e.target.value) }))
-                  }
                 />
               </div>
               <div className="form-field">
@@ -337,8 +286,8 @@ export function MarketFeedsPage() {
                 <th>Source</th>
                 <th>Exchange</th>
                 <th>Symbol</th>
-                <th>Poll</th>
-                <th>Mode</th>
+                <th>Poll (from exchange)</th>
+                <th>Depth</th>
                 <th>Status</th>
                 <th />
               </tr>
@@ -350,7 +299,7 @@ export function MarketFeedsPage() {
                   <td>{row.exchange}</td>
                   <td>{row.symbol}</td>
                   <td>{row.poll_interval_ms} ms</td>
-                  <td>{row.mode}</td>
+                  <td>{row.depth_limit}</td>
                   <td>{row.status}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
@@ -384,6 +333,8 @@ export function MarketFeedsPage() {
               <code>
                 market:raw:{selectedSource.exchange}:{selectedSource.symbol}:orderbook
               </code>
+              . Poll {selectedSource.poll_interval_ms} ms, depth {selectedSource.depth_limit},{" "}
+              trades {selectedSource.trades_limit} from exchange <code>market_data</code>.
             </p>
             <JsonBlock value={selectedSource} />
           </section>

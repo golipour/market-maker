@@ -80,15 +80,14 @@ class StrategyPresetRecord:
 
 @dataclass(frozen=True, slots=True)
 class MarketSourceRecord:
-    """Shared exchange polling config for one exchange/symbol pair."""
+    """Shared exchange/symbol identity for ingestor polling.
+
+    Poll/depth/trades/mode settings are inherited from ``registry_exchanges.config.market_data``.
+    """
 
     source_id: str
     exchange: str
     symbol: str
-    mode: str = "rest"
-    depth_limit: int = 10
-    trades_limit: int = 100
-    poll_interval_ms: int = 1000
     status: MarketFeedStatus = "active"
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -98,10 +97,6 @@ class MarketSourceRecord:
             "source_id": self.source_id,
             "exchange": self.exchange,
             "symbol": self.symbol,
-            "mode": self.mode,
-            "depth_limit": self.depth_limit,
-            "trades_limit": self.trades_limit,
-            "poll_interval_ms": self.poll_interval_ms,
             "status": self.status,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),

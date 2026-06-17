@@ -17,6 +17,7 @@ from mm.registry.models import (
     StrategyRecord,
     WorkerAssignmentRecord,
 )
+from mm.registry.market_data import enrich_market_feed_record
 from mm.registry.schema import DEFAULT_PLATFORM_SETTINGS_ID
 
 
@@ -335,10 +336,6 @@ class MemoryRegistryStore:
         source_id: str | None = None,
         exchange: str,
         symbol: str,
-        mode: str = "rest",
-        depth_limit: int = 10,
-        trades_limit: int = 100,
-        poll_interval_ms: int = 1000,
         status: str = "active",
     ) -> MarketSourceRecord:
         ex = exchange.lower().strip()
@@ -354,10 +351,6 @@ class MemoryRegistryStore:
             source_id=key,
             exchange=ex,
             symbol=sym,
-            mode=str(mode or "rest"),
-            depth_limit=max(1, int(depth_limit)),
-            trades_limit=max(1, int(trades_limit)),
-            poll_interval_ms=max(1, int(poll_interval_ms)),
             status=status,  # type: ignore[arg-type]
             created_at=previous.created_at if previous else now,
             updated_at=now,
@@ -367,20 +360,8 @@ class MemoryRegistryStore:
 
     def _enrich_market_feed(self, record: MarketFeedRecord) -> MarketFeedRecord:
         source = self.get_market_source(record.source_id)
-        return MarketFeedRecord(
-            feed_id=record.feed_id,
-            source_id=record.source_id,
-            interval_ms=record.interval_ms,
-            status=record.status,
-            created_at=record.created_at,
-            updated_at=record.updated_at,
-            exchange=source.exchange,
-            symbol=source.symbol,
-            mode=source.mode,
-            depth_limit=source.depth_limit,
-            trades_limit=source.trades_limit,
-            poll_interval_ms=source.poll_interval_ms,
-        )
+        exchange = self.get_exchange(source.exchange)
+        return enrich_market_feed_record(source=source, exchange=exchange, record=record)
 
     def list_market_feeds(self) -> list[MarketFeedRecord]:
         return sorted(

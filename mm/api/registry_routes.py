@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from mm.core.events import to_jsonable
 
+from mm.registry.market_data import market_data_settings_from_exchange, market_source_as_dict
 from mm.registry.audit import record_admin_audit
 from mm.registry.memory import RegistryConflictError, RegistryNotFoundError
 from mm.registry.runtime_config import runtime_config_mapping_from_registry
@@ -74,10 +75,6 @@ class MarketSourceUpsertRequest(BaseModel):
     source_id: str | None = None
     exchange: str
     symbol: str
-    mode: str = "rest"
-    depth_limit: int = 10
-    trades_limit: int = 100
-    poll_interval_ms: int = 1000
     status: str = "active"
 
 
@@ -479,7 +476,11 @@ def create_registry_router(
         store: RegistryStore = Depends(_store),
     ) -> JSONResponse:
         rows = store.list_market_sources()
-        return JSONResponse(content=to_jsonable({"items": [row.as_dict() for row in rows]}))
+        items = []
+        for row in rows:
+            exchange = store.get_exchange(row.exchange)
+            items.append(market_source_as_dict(exchange, row))
+        return JSONResponse(content=to_jsonable({"items": items}))
 
     @router.get("/market-sources/{source_id}")
     async def get_market_source(
@@ -489,9 +490,10 @@ def create_registry_router(
     ) -> JSONResponse:
         try:
             record = store.get_market_source(source_id)
+            exchange = store.get_exchange(record.exchange)
         except RegistryNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse(content=to_jsonable(record.as_dict()))
+        return JSONResponse(content=to_jsonable(market_source_as_dict(exchange, record)))
 
     @router.post("/market-sources")
     async def upsert_market_source(
@@ -504,16 +506,14 @@ def create_registry_router(
                 source_id=body.source_id,
                 exchange=body.exchange,
                 symbol=body.symbol,
-                mode=body.mode,
-                depth_limit=body.depth_limit,
-                trades_limit=body.trades_limit,
-                poll_interval_ms=body.poll_interval_ms,
                 status=body.status,
             )
+            exchange = store.get_exchange(record.exchange)
         except (RegistryNotFoundError, RegistryConflictError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _audit(user, "registry.market_source.upsert", "accepted", record.as_dict())
-        return record.as_dict()
+        payload = market_source_as_dict(exchange, record)
+        _audit(user, "registry.market_source.upsert", "accepted", payload)
+        return payload
 
     @router.get("/market-feeds")
     async def list_market_feeds(

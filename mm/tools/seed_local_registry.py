@@ -51,6 +51,9 @@ def _local_exchange_config() -> dict[str, Any]:
         "market_data": {
             "mode": "rest",
             "market_data_source": "bus",
+            "poll_interval_ms": 2000,
+            "depth_limit": 100,
+            "trades_limit": 200,
         },
         "private": {
             "mode": "rest",
@@ -145,10 +148,6 @@ def seed_local_worker_registry(
         source_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}",
         exchange=LOCAL_EXCHANGE,
         symbol=LOCAL_SYMBOL,
-        mode="rest",
-        poll_interval_ms=2000,
-        depth_limit=100,
-        trades_limit=200,
     )
     store.upsert_market_feed(
         feed_id=f"{LOCAL_EXCHANGE}-{LOCAL_SYMBOL}-10000",

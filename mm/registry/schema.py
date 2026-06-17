@@ -88,10 +88,6 @@ CREATE TABLE IF NOT EXISTS registry_market_sources (
     source_id TEXT PRIMARY KEY,
     exchange TEXT NOT NULL REFERENCES registry_exchanges(exchange),
     symbol TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'rest',
-    depth_limit INT NOT NULL DEFAULT 10,
-    trades_limit INT NOT NULL DEFAULT 100,
-    poll_interval_ms INT NOT NULL DEFAULT 1000,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -126,16 +122,17 @@ CREATE TABLE IF NOT EXISTS registry_market_sources (
     source_id TEXT PRIMARY KEY,
     exchange TEXT NOT NULL REFERENCES registry_exchanges(exchange),
     symbol TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'rest',
-    depth_limit INT NOT NULL DEFAULT 10,
-    trades_limit INT NOT NULL DEFAULT 100,
-    poll_interval_ms INT NOT NULL DEFAULT 1000,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS registry_market_sources_unique_pair
 ON registry_market_sources (exchange, symbol);
+
+ALTER TABLE registry_market_sources DROP COLUMN IF EXISTS mode;
+ALTER TABLE registry_market_sources DROP COLUMN IF EXISTS depth_limit;
+ALTER TABLE registry_market_sources DROP COLUMN IF EXISTS trades_limit;
+ALTER TABLE registry_market_sources DROP COLUMN IF EXISTS poll_interval_ms;
 
 DO $migrate_market_feeds$
 BEGIN
@@ -161,17 +158,12 @@ BEGIN
       AND column_name = 'exchange'
   ) THEN
     INSERT INTO registry_market_sources (
-      source_id, exchange, symbol, mode, depth_limit, trades_limit,
-      poll_interval_ms, status, created_at, updated_at
+      source_id, exchange, symbol, status, created_at, updated_at
     )
     SELECT DISTINCT ON (lower(exchange), symbol)
       lower(exchange) || '-' || symbol,
       lower(exchange),
       symbol,
-      mode,
-      depth_limit,
-      trades_limit,
-      poll_interval_ms,
       status,
       created_at,
       updated_at

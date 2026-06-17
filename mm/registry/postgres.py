@@ -657,8 +657,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT source_id, exchange, symbol, mode, depth_limit, trades_limit,
-                           poll_interval_ms, status, created_at, updated_at
+                    SELECT source_id, exchange, symbol, status, created_at, updated_at
                     FROM registry_market_sources
                     ORDER BY source_id
                     """
@@ -671,8 +670,7 @@ class PostgresRegistryStore(MemoryRegistryStore):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT source_id, exchange, symbol, mode, depth_limit, trades_limit,
-                           poll_interval_ms, status, created_at, updated_at
+                    SELECT source_id, exchange, symbol, status, created_at, updated_at
                     FROM registry_market_sources
                     WHERE source_id = %s
                     """,
@@ -689,20 +687,12 @@ class PostgresRegistryStore(MemoryRegistryStore):
         source_id: str | None = None,
         exchange: str,
         symbol: str,
-        mode: str = "rest",
-        depth_limit: int = 10,
-        trades_limit: int = 100,
-        poll_interval_ms: int = 1000,
         status: str = "active",
     ) -> MarketSourceRecord:
         record = super().upsert_market_source(
             source_id=source_id,
             exchange=exchange,
             symbol=symbol,
-            mode=mode,
-            depth_limit=depth_limit,
-            trades_limit=trades_limit,
-            poll_interval_ms=poll_interval_ms,
             status=status,
         )
         with self._connection() as conn:
@@ -710,16 +700,11 @@ class PostgresRegistryStore(MemoryRegistryStore):
                 cur.execute(
                     """
                     INSERT INTO registry_market_sources (
-                        source_id, exchange, symbol, mode, depth_limit, trades_limit,
-                        poll_interval_ms, status, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        source_id, exchange, symbol, status, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (source_id) DO UPDATE SET
                         exchange = EXCLUDED.exchange,
                         symbol = EXCLUDED.symbol,
-                        mode = EXCLUDED.mode,
-                        depth_limit = EXCLUDED.depth_limit,
-                        trades_limit = EXCLUDED.trades_limit,
-                        poll_interval_ms = EXCLUDED.poll_interval_ms,
                         status = EXCLUDED.status,
                         updated_at = EXCLUDED.updated_at
                     """,
@@ -727,10 +712,6 @@ class PostgresRegistryStore(MemoryRegistryStore):
                         record.source_id,
                         record.exchange,
                         record.symbol,
-                        record.mode,
-                        record.depth_limit,
-                        record.trades_limit,
-                        record.poll_interval_ms,
                         record.status,
                         record.created_at,
                         record.updated_at,
@@ -1061,13 +1042,9 @@ def _market_source_from_row(row: tuple[Any, ...]) -> MarketSourceRecord:
         source_id=row[0],
         exchange=row[1],
         symbol=row[2],
-        mode=str(row[3] or "rest"),
-        depth_limit=int(row[4] or 10),
-        trades_limit=int(row[5] or 100),
-        poll_interval_ms=int(row[6] or 1000),
-        status=row[7],
-        created_at=row[8],
-        updated_at=row[9],
+        status=row[3],
+        created_at=row[4],
+        updated_at=row[5],
     )
 
 
