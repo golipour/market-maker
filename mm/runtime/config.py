@@ -141,6 +141,8 @@ class PrivateRuntimeConfig:
     api_key_env: str | None = None
     api_private_key: str | None = None
     api_private_key_env: str | None = None
+    api_passphrase: str | None = None
+    api_passphrase_env: str | None = None
     poll_interval_ms: int = 5000
     fill_event_source: FillEventSource = "exchange_fill_history"
 
@@ -187,6 +189,15 @@ class PrivateRuntimeConfig:
             return os.environ.get(f"{exchange.upper()}_API_PRIVATE_KEY")
         return None
 
+    def resolved_api_passphrase(self, exchange: str | None = None) -> str | None:
+        if self.api_passphrase:
+            return self.api_passphrase
+        if self.api_passphrase_env:
+            return os.environ.get(self.api_passphrase_env)
+        if exchange:
+            return os.environ.get(f"{exchange.upper()}_API_PASSPHRASE")
+        return None
+
     def resolved_api_credentials(self, exchange: str | None = None) -> Any:
         exchange_key = str(exchange or "").lower().strip()
         api_key = self.resolved_api_key(exchange_key or None)
@@ -207,6 +218,13 @@ class PrivateRuntimeConfig:
             bitpin_api_key = api_key or self.resolved_api_token(exchange_key or None)
             if bitpin_api_key and api_private_key:
                 return BitpinApiKeyAuth(bitpin_api_key, api_private_key)
+        if exchange_key == "kucoin":
+            from mm.exchanges.kucoin.private_rest import KucoinApiKeyAuth
+
+            kucoin_api_key = api_key or self.resolved_api_token(exchange_key or None)
+            api_passphrase = self.resolved_api_passphrase(exchange_key or None)
+            if kucoin_api_key and api_private_key and api_passphrase:
+                return KucoinApiKeyAuth(kucoin_api_key, api_private_key, api_passphrase)
         return self.resolved_api_token(exchange_key or None)
 
 
@@ -1259,6 +1277,8 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         api_key_env=payload.get("api_key_env"),
         api_private_key=payload.get("api_private_key"),
         api_private_key_env=payload.get("api_private_key_env"),
+        api_passphrase=payload.get("api_passphrase"),
+        api_passphrase_env=payload.get("api_passphrase_env"),
         poll_interval_ms=int(payload.get("poll_interval_ms", 5000)),
         fill_event_source=str(payload.get("fill_event_source", "exchange_fill_history")),
     )
