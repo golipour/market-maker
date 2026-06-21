@@ -2,7 +2,7 @@
 numpy
 torch
 scipy
-msgspec
+msgspec>=0.20
 requests
 websockets
 cryptography
