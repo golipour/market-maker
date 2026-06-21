@@ -21,17 +21,5 @@ uvicorn
 # Observability (optional at runtime; imported lazily when enabled)
 opentelemetry-api
 opentelemetry-sdk
-<<<<<<< HEAD
 fastapi>=0.100
 uvicorn>=0.23
-=======
-opentelemetry-exporter-otlp
-
-# Analysis / tooling (optional; used by mm/integrations/trade_stats.py)
-matplotlib
-
-# Tests
-pytest
-pytest-asyncio
-pyyaml
->>>>>>> 17ee577 (Update requirements to include new dependencies for enhanced functionality)
