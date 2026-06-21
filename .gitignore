@@ -7,6 +7,9 @@ __pycache__/
 # Runtime event lake (Parquet / JSONL); set MM_PARQUET_ROOT to repo-root data/parquet
 /data/
 
+# Failed Postgres write batches (reingest with mm.tools.reingest_postgres_spool)
+/persistence_spool/
+
 # Local runtime logs
 /logs/
 

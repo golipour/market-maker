@@ -25,7 +25,7 @@ services:
       - redis-data:/data
 
   db:
-    image: postgres:16
+    image: postgres:17
     container_name: postgres
     restart: "no"
     shm_size: 128mb
