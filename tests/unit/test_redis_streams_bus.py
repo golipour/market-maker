@@ -15,6 +15,8 @@ class SharedFakeRedis:
         self._counter = 0
         self._condition = asyncio.Condition()
         self.xread_started = asyncio.Event()
+        self.active_xreads = 0
+        self.max_concurrent_xreads = 0
 
     async def xadd(self, stream, fields, **kwargs):
         async with self._condition:
@@ -25,23 +27,28 @@ class SharedFakeRedis:
             return message_id
 
     async def xread(self, streams, *, block=None, count=None):
-        async with self._condition:
-            start_indexes = {
-                stream: self._start_index(stream, last_id)
-                for stream, last_id in streams.items()
-            }
-            self.xread_started.set()
-            while True:
-                for stream, start_index in start_indexes.items():
-                    messages = self.streams.get(stream, [])
-                    if len(messages) > start_index:
-                        limit = count or len(messages)
-                        return [(stream, messages[start_index : start_index + limit])]
-                timeout = None if block is None else max(0.001, float(block) / 1000.0)
-                try:
-                    await asyncio.wait_for(self._condition.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
-                    return []
+        self.active_xreads += 1
+        self.max_concurrent_xreads = max(self.max_concurrent_xreads, self.active_xreads)
+        try:
+            async with self._condition:
+                start_indexes = {
+                    stream: self._start_index(stream, last_id)
+                    for stream, last_id in streams.items()
+                }
+                self.xread_started.set()
+                while True:
+                    for stream, start_index in start_indexes.items():
+                        messages = self.streams.get(stream, [])
+                        if len(messages) > start_index:
+                            limit = count or len(messages)
+                            return [(stream, messages[start_index : start_index + limit])]
+                    timeout = None if block is None else max(0.001, float(block) / 1000.0)
+                    try:
+                        await asyncio.wait_for(self._condition.wait(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        return []
+        finally:
+            self.active_xreads -= 1
 
     async def aclose(self):
         pass
@@ -206,6 +213,29 @@ async def test_redis_streams_bus_subscribe_receives_cross_process_stream_events(
 
     assert event["command"] == "kill_switch"
     assert event["enabled"] is True
+
+    await publisher.close()
+    await subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_bus_shares_remote_reader_for_same_topic() -> None:
+    redis = SharedFakeRedis()
+    publisher = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    subscriber = RedisStreamsBus(stream_prefix="test", read_block_ms=10)
+    publisher._redis = redis
+    subscriber._redis = redis
+    topic = "strategy:decisions"
+    queue_a = subscriber.subscribe_queue(topic)
+    queue_b = subscriber.subscribe_queue(topic)
+    await asyncio.wait_for(redis.xread_started.wait(), timeout=1.0)
+
+    event = {"type": "StrategyDecision", "actor_id": "a1"}
+    await publisher.publish(topic, event)
+
+    assert await asyncio.wait_for(queue_a.get(), timeout=1.0) == event
+    assert await asyncio.wait_for(queue_b.get(), timeout=1.0) == event
+    assert redis.max_concurrent_xreads == 1
 
     await publisher.close()
     await subscriber.close()

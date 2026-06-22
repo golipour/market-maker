@@ -161,7 +161,12 @@ def test_runtime_config_parses_bus_persistence_and_observability() -> None:
     config = runtime_config_from_mapping(
         {
             **venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
-            "bus": {"kind": "redis_streams", "stream_prefix": "test-mm", "max_stream_length": 10},
+            "bus": {
+                "kind": "redis_streams",
+                "stream_prefix": "test-mm",
+                "max_stream_length": 10,
+                "max_connections": 750,
+            },
             "persistence": {"enabled": True, "topics": ["strategy:decisions"], "batch_size": 5},
             "observability": {"run_id": "run-1", "otel_enabled": True},
         }
@@ -169,6 +174,7 @@ def test_runtime_config_parses_bus_persistence_and_observability() -> None:
 
     assert config.bus.kind == "redis_streams"
     assert config.bus.stream_prefix == "test-mm"
+    assert config.bus.max_connections == 750
     assert config.persistence.enabled is True
     assert config.persistence.topics == ("strategy:decisions",)
     assert config.observability.run_id == "run-1"

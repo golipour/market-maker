@@ -21,5 +21,6 @@ def build_event_bus(config: BusRuntimeConfig, *, run_id: str = "") -> AbstractEv
             run_id=run_id,
             max_queue_size=config.max_queue_size,
             backpressure_policy=config.backpressure_policy,
+            max_connections=config.max_connections,
         )
     raise ValueError(f"unsupported bus kind: {config.kind}")

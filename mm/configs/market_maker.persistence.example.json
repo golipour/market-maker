@@ -16,7 +16,8 @@
     "consumer_group": "persistence",
     "consumer_name": "persistence-1",
     "max_stream_length": 100000,
-    "read_block_ms": 1000
+    "read_block_ms": 1000,
+    "max_connections": 500
   },
   "persistence": {
     "enabled": true,

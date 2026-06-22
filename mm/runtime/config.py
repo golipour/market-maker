@@ -254,6 +254,7 @@ class BusRuntimeConfig:
     consumer_name: str = "runtime"
     max_stream_length: int | None = 100_000
     read_block_ms: int = 1_000
+    max_connections: int = 500
     max_queue_size: int = 1024
     backpressure_policy: BusBackpressurePolicy = "block"
 
@@ -266,6 +267,8 @@ class BusRuntimeConfig:
             raise ValueError("bus.backpressure_policy must be block, drop_oldest, or drop_newest")
         if self.max_stream_length is not None and self.max_stream_length <= 0:
             raise ValueError("bus.max_stream_length must be positive or null")
+        if self.max_connections < 1:
+            raise ValueError("bus.max_connections must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1296,6 +1299,7 @@ def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
         consumer_name=str(payload.get("consumer_name", "runtime")),
         max_stream_length=int(max_stream_length) if max_stream_length is not None else None,
         read_block_ms=int(payload.get("read_block_ms", 1000)),
+        max_connections=int(payload.get("max_connections", 500)),
         max_queue_size=int(payload.get("max_queue_size", 1024)),
         backpressure_policy=str(payload.get("backpressure_policy", "block")),  # type: ignore[arg-type]
     )

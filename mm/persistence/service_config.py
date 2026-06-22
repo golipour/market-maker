@@ -158,6 +158,7 @@ class PersistenceServiceConfig:
                 "stream_prefix": self.bus.stream_prefix,
                 "consumer_group": self.bus.consumer_group,
                 "consumer_name": self.bus.consumer_name,
+                "max_connections": self.bus.max_connections,
             },
             "persistence": {
                 "enabled": self.persistence.enabled,

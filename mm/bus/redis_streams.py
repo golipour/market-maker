@@ -44,6 +44,7 @@ class RedisStreamsBus(AbstractEventBus):
         run_id: str = "",
         max_queue_size: int = 1024,
         backpressure_policy: BusBackpressurePolicy = "block",
+        max_connections: int = 500,
     ):
         self.url = url
         self.stream_prefix = stream_prefix.strip(":") or "mm"
@@ -52,10 +53,12 @@ class RedisStreamsBus(AbstractEventBus):
         self.run_id = run_id
         self._max_queue_size = int(max_queue_size)
         self._backpressure_policy = backpressure_policy
+        self.max_connections = max(1, int(max_connections))
         self._instance_id = uuid.uuid4().hex
         self._redis: Any | None = None
         self._closed = False
         self._forward_tasks: set[asyncio.Task] = set()
+        self._remote_tasks_by_topic: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, list[TrackedSubscriberQueue]] = defaultdict(list)
         self._subscriber_ids = itertools.count(1)
         self._last_error_log_monotonic: dict[tuple[str, str], float] = {}
@@ -96,7 +99,7 @@ class RedisStreamsBus(AbstractEventBus):
 
     def subscribe_queue(self, topic: str) -> TrackedSubscriberQueue:
         queue = self._subscribe_local_queue(topic)
-        self._track_forward_task(asyncio.create_task(self._forward_remote_stream(topic, queue)))
+        self._ensure_remote_subscription(topic)
         return queue
 
     def _subscribe_local_queue(self, topic: str) -> TrackedSubscriberQueue:
@@ -110,17 +113,12 @@ class RedisStreamsBus(AbstractEventBus):
 
     async def subscribe(self, topic: str) -> AsyncIterator[Any]:
         queue = self._subscribe_local_queue(topic)
-        task = asyncio.create_task(self._forward_remote_stream(topic, queue))
-        self._track_forward_task(task)
+        self._ensure_remote_subscription(topic)
         try:
             while not self._closed:
                 yield await queue.get()
         finally:
-            subscribers = self._subscribers.get(topic)
-            if subscribers and queue in subscribers:
-                subscribers.remove(queue)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await self._remove_subscriber(topic, queue)
 
     async def subscribe_envelopes(self, topic: str, *, start_id: str = "0-0") -> AsyncIterator[Any]:
         """Read envelopes from a topic, useful for replay and persistence daemons."""
@@ -146,6 +144,7 @@ class RedisStreamsBus(AbstractEventBus):
         if self._forward_tasks:
             await asyncio.gather(*self._forward_tasks, return_exceptions=True)
         self._forward_tasks.clear()
+        self._remote_tasks_by_topic.clear()
         if self._redis is not None:
             await self._redis.aclose()
             self._redis = None
@@ -159,20 +158,43 @@ class RedisStreamsBus(AbstractEventBus):
         self._forward_tasks.add(task)
         task.add_done_callback(self._forward_tasks.discard)
 
-    async def _forward_remote_stream(self, topic: str, queue: TrackedSubscriberQueue) -> None:
+    def _ensure_remote_subscription(self, topic: str) -> None:
+        task = self._remote_tasks_by_topic.get(topic)
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._forward_remote_stream(topic))
+        self._remote_tasks_by_topic[topic] = task
+        self._track_forward_task(task)
+
+    async def _remove_subscriber(self, topic: str, queue: TrackedSubscriberQueue) -> None:
+        subscribers = self._subscribers.get(topic)
+        if subscribers and queue in subscribers:
+            subscribers.remove(queue)
+        if subscribers:
+            return
+        self._subscribers.pop(topic, None)
+        task = self._remote_tasks_by_topic.pop(topic, None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _forward_remote_stream(self, topic: str) -> None:
         while not self._closed:
             try:
                 async for envelope in self.subscribe_envelopes(topic, start_id="$"):
                     if getattr(envelope, "source", "") == self._source:
                         continue
                     event = _parse_remote_stream_payload(topic, envelope.payload)
-                    await deliver_to_subscriber(
-                        queue,
-                        event,
-                        max_queue_size=self._max_queue_size,
-                        policy=self._backpressure_policy,
-                    )
-                    record_subscriber_queue_metrics([queue])
+                    subscribers = list(self._subscribers.get(topic, ()))
+                    for queue in subscribers:
+                        await deliver_to_subscriber(
+                            queue,
+                            event,
+                            max_queue_size=self._max_queue_size,
+                            policy=self._backpressure_policy,
+                        )
+                    if subscribers:
+                        record_subscriber_queue_metrics(subscribers)
                 if not self._closed:
                     await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
             except asyncio.CancelledError:
@@ -185,7 +207,11 @@ class RedisStreamsBus(AbstractEventBus):
         if self._redis is None:
             import redis.asyncio as aioredis
 
-            self._redis = aioredis.from_url(self.url, decode_responses=True)
+            self._redis = aioredis.from_url(
+                self.url,
+                decode_responses=True,
+                max_connections=self.max_connections,
+            )
         return self._redis
 
     def _stream(self, topic: str) -> str:
