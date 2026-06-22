@@ -163,8 +163,12 @@ def build_frame_sync_status(
     now_ms: int,
     max_local_private_age_ms: int = 120_000,
     max_global_private_age_ms: int = 120_000,
+    max_local_market_age_ms: int = 0,
+    max_global_market_age_ms: int = 0,
 ) -> FrameSyncStatus:
     """Compute runtime synchronization readiness for a joint strategy frame."""
+
+    from mm.application.frame_freshness import global_market_age_ms, local_market_age_ms
 
     has_global_venue = binding.global_ is not None
     sourcing_active = (
@@ -172,13 +176,19 @@ def build_frame_sync_status(
     )
     global_market_required = sourcing_active and has_global_venue
 
-    local_market_ready = True
+    local_age = local_market_age_ms(frame, now_ms=now_ms)
+    local_market_ready = max_local_market_age_ms <= 0 or local_age <= max_local_market_age_ms
     if global_market_required:
         global_market_ready = frame.global_ is not None and frame.global_status == "ready"
     elif has_global_venue:
         global_market_ready = frame.global_status in {"ready", "disabled", "missing", "stale"}
     else:
         global_market_ready = True
+
+    if max_global_market_age_ms > 0 and frame.global_ is not None:
+        global_age = global_market_age_ms(frame, now_ms=now_ms)
+        if global_age is not None and global_age > max_global_market_age_ms:
+            global_market_ready = False
 
     local_private_ready = _venue_private_ready(
         ledger.local if ledger is not None else None,
@@ -230,6 +240,8 @@ def joint_strategy_frame_from_input(
     now_ms: int | None = None,
     max_local_private_age_ms: int = 120_000,
     max_global_private_age_ms: int = 120_000,
+    max_local_market_age_ms: int = 0,
+    max_global_market_age_ms: int = 0,
     input_frame: StrategyInputFrame | None = None,
     physical_ledger: JointLedgerSnapshot | None = None,
     ledger_source: str = "physical",
@@ -261,6 +273,8 @@ def joint_strategy_frame_from_input(
         now_ms=created_at_ms,
         max_local_private_age_ms=max_local_private_age_ms,
         max_global_private_age_ms=max_global_private_age_ms,
+        max_local_market_age_ms=max_local_market_age_ms,
+        max_global_market_age_ms=max_global_market_age_ms,
     )
     return JointStrategyFrame(
         local_market=frame.local,

@@ -115,6 +115,8 @@
       "interval_ms": 10000,
       "max_global_lag_ms": 2000,
       "global_grace_ms": 250,
+      "max_local_market_age_ms": 10000,
+      "max_global_market_age_ms": 10000,
       "liquidity_sourcing": {
         "_comment": "off = observe the liquidity exchange only for pricing; simulate = include it in model/objective but never route liquidity orders; live = include it and allow live liquidity orders. If liquidity_exchange equals quoting_exchange, this resolves to off internally.",
         "_options": {"mode": ["off", "simulate", "live"]},

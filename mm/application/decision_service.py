@@ -58,4 +58,6 @@ def build_strategy_runner(
         control_plane=control_plane,
         run_id=config.observability.run_id,
         strategy_wallet_provider=strategy_wallet_provider,
+        max_local_market_age_ms=config.resolved_max_local_market_age_ms(),
+        max_global_market_age_ms=config.resolved_max_global_market_age_ms(),
     )

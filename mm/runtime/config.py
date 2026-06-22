@@ -611,6 +611,8 @@ class MarketMakerRuntimeConfig:
     interval_ms: int = 5000
     max_global_lag_ms: int = 2000
     global_grace_ms: int = 250
+    max_local_market_age_ms: int | None = None
+    max_global_market_age_ms: int | None = None
     scheduler: SchedulerRuntimeConfig = field(default_factory=SchedulerRuntimeConfig)
     local_private: PrivateRuntimeConfig | None = None
     global_private: PrivateRuntimeConfig | None = None
@@ -646,6 +648,24 @@ class MarketMakerRuntimeConfig:
     @property
     def joint_frame_topic(self) -> str:
         return f"strategy:joint:frames:{self.local.normalized_exchange()}:{self.local.symbol}:{self.interval_ms}"
+
+    def resolved_max_local_market_age_ms(self) -> int:
+        """Max allowed ``now_ms - local.t_end_ms`` before dropping a market frame.
+
+        Defaults to one decision interval so normal cadence passes while backlog
+        catch-up frames are rejected.
+        """
+
+        if self.max_local_market_age_ms is not None:
+            return max(0, int(self.max_local_market_age_ms))
+        return self.interval_ms
+
+    def resolved_max_global_market_age_ms(self) -> int:
+        if self.max_global_market_age_ms is not None:
+            return max(0, int(self.max_global_market_age_ms))
+        if self.global_ is None:
+            return 0
+        return self.interval_ms
 
     @property
     def resolved_persistence_topics(self) -> tuple[str, ...]:
@@ -778,6 +798,8 @@ class MarketMakerRuntimeConfig:
             "interval_ms": self.interval_ms,
             "max_global_lag_ms": self.max_global_lag_ms,
             "global_grace_ms": self.global_grace_ms,
+            "max_local_market_age_ms": self.resolved_max_local_market_age_ms(),
+            "max_global_market_age_ms": self.resolved_max_global_market_age_ms(),
             "liquidity_sourcing": self.liquidity_sourcing.as_dict(),
             "execution": self.execution.as_dict(),
             "joint_strategy_frame": {
@@ -916,6 +938,8 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         interval_ms=int(preset.get("interval_ms", payload.get("interval_ms", 5000))),
         max_global_lag_ms=int(preset.get("max_global_lag_ms", payload.get("max_global_lag_ms", 2000))),
         global_grace_ms=int(preset.get("global_grace_ms", payload.get("global_grace_ms", 250))),
+        max_local_market_age_ms=_optional_int(preset.get("max_local_market_age_ms", payload.get("max_local_market_age_ms"))),
+        max_global_market_age_ms=_optional_int(preset.get("max_global_market_age_ms", payload.get("max_global_market_age_ms"))),
         local_private=_private_from_mapping(local_private_payload),
         global_private=_private_from_mapping(global_private_payload),
         controller=_controller_from_mapping(controller_payload),
@@ -1577,6 +1601,12 @@ def _global_risk_from_mapping(payload: dict[str, Any] | None) -> GlobalVenueRisk
 
 def _dict_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _orderbook_grid_from_mapping(payload: dict[str, Any]) -> OrderbookGridConfig:

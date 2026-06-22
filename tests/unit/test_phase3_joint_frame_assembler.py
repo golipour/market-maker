@@ -182,6 +182,44 @@ async def test_joint_frame_uses_ledger_service_for_wallet_state() -> None:
     assert joint.ledger is not None
     assert joint.ledger.local.available_base == pytest.approx(1.0)
     assert joint.ledger.freshness.local_market_age_ms == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_joint_frame_assembler_skips_stale_market_frames() -> None:
+    bus = InMemoryBus()
+    local_queue: asyncio.Queue[MarketEvent] = asyncio.Queue()
+
+    config = _runtime_config(global_=False)
+    input_assembler = StrategyInputFrameAssembler(
+        local_queue=local_queue,
+        max_global_lag_ms=1000,
+        global_grace_ms=0,
+        clock_ms=lambda: 1_000_000,
+    )
+    assembler = JointStrategyFrameAssembler(
+        input_assembler=input_assembler,
+        binding=config.binding,
+        liquidity_sourcing=config.liquidity_sourcing,
+        bus=bus,
+        joint_output_topic=config.joint_frame_topic,
+        clock_ms=lambda: 1_000_000,
+        max_local_market_age_ms=5_000,
+    )
+    joint_queue = bus.subscribe_queue(config.joint_frame_topic)
+
+    stale_event = _event_for("nobitex", "BTC_IRT", t_start_ms=990_000, t_end_ms=995_000)
+    await local_queue.put(market_event_payload(stale_event))
+
+    assert assembler.should_skip_input_frame(
+        await input_assembler.build_frame(stale_event)
+    ) == "stale_local_market_frame"
+
+    await assembler.start()
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(joint_queue.get(), timeout=0.2)
+    finally:
+        await assembler.stop()
     assert joint.sync_status.ledger_fresh is True
 
 

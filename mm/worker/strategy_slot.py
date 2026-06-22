@@ -105,6 +105,8 @@ def build_strategy_slot(
         ledger_service=ledger_service,
         max_local_private_age_ms=max_local_private_age_ms,
         max_global_private_age_ms=max_global_private_age_ms,
+        max_local_market_age_ms=config.resolved_max_local_market_age_ms(),
+        max_global_market_age_ms=config.resolved_max_global_market_age_ms(),
         strategy_wallet_provider=strategy_wallet_provider,
     )
     strategy_runner = build_strategy_runner(

@@ -317,6 +317,8 @@ async def build_runtime_components(
             ledger_service=ledger_service,
             max_local_private_age_ms=max_local_private_age_ms,
             max_global_private_age_ms=max_global_private_age_ms,
+            max_local_market_age_ms=config.resolved_max_local_market_age_ms(),
+            max_global_market_age_ms=config.resolved_max_global_market_age_ms(),
         )
 
         control_plane = RuntimeControlPlane(bus=runtime_bus)

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from mm.application.frame_freshness import local_market_age_ms, stale_market_frame_reason
 from mm.application.venue_execution import (
     compute_venue_execution_gates,
     prepare_execution_joint_book,
@@ -78,6 +79,8 @@ class StrategyRunner:
     control_plane: RuntimeControlPlane | None = None
     run_id: str = ""
     strategy_wallet_provider: Callable[[], StrategyWallet | None] | None = None
+    max_local_market_age_ms: int = 0
+    max_global_market_age_ms: int = 0
     _engine: MpcStrategyEngine = field(init=False, repr=False)
     _diagnostics: DiagnosticsPublisher = field(init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
@@ -124,6 +127,20 @@ class StrategyRunner:
                         },
                     )
                     continue
+                skip_reason = self._stale_frame_reason(frame)
+                if skip_reason is not None:
+                    log_event(
+                        "strategy_runner_frame_skipped",
+                        {
+                            "actor_id": self.config.actor_id,
+                            "reason": skip_reason,
+                            "t_end_ms": frame.t_end_ms,
+                            "local_market_age_ms": self._local_market_age_ms(frame),
+                            "max_local_market_age_ms": self.max_local_market_age_ms,
+                            "max_global_market_age_ms": self.max_global_market_age_ms,
+                        },
+                    )
+                    continue
                 try:
                     await self.on_joint_frame(frame)
                 except Exception as exc:
@@ -139,6 +156,23 @@ class StrategyRunner:
                     )
         except asyncio.CancelledError:
             raise
+
+    def _local_market_age_ms(self, joint_frame: JointStrategyFrame) -> int | None:
+        input_frame = joint_frame.input_frame
+        if input_frame is None:
+            return None
+        return local_market_age_ms(input_frame, now_ms=int(time.time() * 1000))
+
+    def _stale_frame_reason(self, joint_frame: JointStrategyFrame) -> str | None:
+        input_frame = joint_frame.input_frame
+        if input_frame is None:
+            return None
+        return stale_market_frame_reason(
+            input_frame,
+            now_ms=int(time.time() * 1000),
+            max_local_market_age_ms=self.max_local_market_age_ms,
+            max_global_market_age_ms=self.max_global_market_age_ms,
+        )
 
     async def on_joint_frame(self, joint_frame: JointStrategyFrame) -> list[Action]:
         frame = joint_frame.input_frame

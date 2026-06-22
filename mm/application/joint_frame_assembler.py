@@ -6,6 +6,10 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 
+from mm.application.frame_freshness import (
+    local_market_age_ms,
+    stale_market_frame_reason,
+)
 from mm.application.frame_assembler import StrategyInputFrameAssembler
 from mm.bus.base import AbstractEventBus
 from mm.core.adapters.joint import (
@@ -17,6 +21,7 @@ from mm.core.models.joint_strategy import JointStrategyFrame
 from mm.core.models.ledger import JointLedgerSnapshot, LedgerFreshness
 from mm.core.models.strategy import StrategyInputFrame
 from mm.exchanges.shared.provider_adapter import now_ms
+from mm.observability import log_event
 from mm.ledger.service import PortfolioLedgerService
 from mm.portfolio.wallet import StrategyWallet, joint_ledger_with_virtual_local
 from mm.runtime.config import LiquiditySourcingRuntimeConfig
@@ -48,6 +53,8 @@ class JointStrategyFrameAssembler:
         ledger_queue: asyncio.Queue | None = None,
         max_local_private_age_ms: int = 120_000,
         max_global_private_age_ms: int = 120_000,
+        max_local_market_age_ms: int = 0,
+        max_global_market_age_ms: int = 0,
         clock_ms: Callable[[], int] = now_ms,
         strategy_wallet_provider: Callable[[], StrategyWallet | None] | None = None,
     ) -> None:
@@ -60,6 +67,8 @@ class JointStrategyFrameAssembler:
         self.ledger_queue = ledger_queue
         self.max_local_private_age_ms = max(0, int(max_local_private_age_ms))
         self.max_global_private_age_ms = max(0, int(max_global_private_age_ms))
+        self.max_local_market_age_ms = max(0, int(max_local_market_age_ms))
+        self.max_global_market_age_ms = max(0, int(max_global_market_age_ms))
         self.clock_ms = clock_ms
         self.strategy_wallet_provider = strategy_wallet_provider
         self._latest_ledger: JointLedgerSnapshot | None = None
@@ -84,6 +93,15 @@ class JointStrategyFrameAssembler:
     async def next_joint_frame(self) -> JointStrategyFrame:
         input_frame = await self.input_assembler.next_frame()
         return self.build_joint_frame(input_frame)
+
+    def should_skip_input_frame(self, input_frame: StrategyInputFrame) -> str | None:
+        now_ms = self.clock_ms()
+        return stale_market_frame_reason(
+            input_frame,
+            now_ms=now_ms,
+            max_local_market_age_ms=self.max_local_market_age_ms,
+            max_global_market_age_ms=self.max_global_market_age_ms,
+        )
 
     def build_joint_frame(self, input_frame: StrategyInputFrame) -> JointStrategyFrame:
         now_ms = self.clock_ms()
@@ -135,6 +153,8 @@ class JointStrategyFrameAssembler:
             now_ms=now_ms,
             max_local_private_age_ms=self.max_local_private_age_ms,
             max_global_private_age_ms=self.max_global_private_age_ms,
+            max_local_market_age_ms=self.max_local_market_age_ms,
+            max_global_market_age_ms=self.max_global_market_age_ms,
             input_frame=input_frame,
             physical_ledger=physical_ledger if wallet is not None else None,
             ledger_source=ledger_source,
@@ -151,6 +171,24 @@ class JointStrategyFrameAssembler:
         try:
             while not self._stopped.is_set():
                 input_frame = await self.input_assembler.next_frame()
+                skip_reason = self.should_skip_input_frame(input_frame)
+                if skip_reason is not None:
+                    log_event(
+                        "joint_frame_skipped",
+                        {
+                            "reason": skip_reason,
+                            "exchange": input_frame.local.exchange,
+                            "symbol": input_frame.local.symbol,
+                            "t_end_ms": input_frame.local.t_end_ms,
+                            "local_market_age_ms": local_market_age_ms(
+                                input_frame,
+                                now_ms=self.clock_ms(),
+                            ),
+                            "max_local_market_age_ms": self.max_local_market_age_ms,
+                            "max_global_market_age_ms": self.max_global_market_age_ms,
+                        },
+                    )
+                    continue
                 joint = self.build_joint_frame(input_frame)
                 if self.bus is not None and self.joint_output_topic:
                     await self.bus.publish(self.joint_output_topic, joint)
