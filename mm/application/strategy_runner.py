@@ -173,9 +173,24 @@ class StrategyRunner:
         self._sync_control_plane_to_risk()
 
         clean_started = time.monotonic_ns()
-        physical_ledger = joint_frame.ledger
+        physical_ledger = joint_frame.physical_ledger or joint_frame.ledger
         wallet = self.strategy_wallet_provider() if self.strategy_wallet_provider is not None else None
-        if wallet is not None:
+        if joint_frame.physical_ledger is not None:
+            strategy_ledger = joint_frame.ledger
+            open_orders = _live_orders_from_ledger(strategy_ledger)
+            if wallet is not None:
+                trading_state = trading_state_from_wallet(
+                    wallet,
+                    actor_id=self.config.actor_id,
+                    open_orders=open_orders,
+                )
+            else:
+                trading_state = trading_state_from_ledger(
+                    strategy_ledger,
+                    actor_id=self.config.actor_id,
+                    open_orders=open_orders,
+                )
+        elif wallet is not None:
             strategy_ledger = joint_ledger_with_virtual_local(physical_ledger, wallet)
             open_orders = _live_orders_from_ledger(strategy_ledger)
             trading_state = trading_state_from_wallet(
@@ -203,6 +218,7 @@ class StrategyRunner:
             binding=self.binding,
             ledger=strategy_ledger,
             physical_ledger=physical_ledger,
+            ledger_source=joint_frame.ledger_source,
             frame_sync_status=joint_frame.sync_status.as_payload(),
         )
         ctx.record_stage_latency("clean", _elapsed_ms(clean_started))

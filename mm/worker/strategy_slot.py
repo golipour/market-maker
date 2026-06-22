@@ -86,16 +86,6 @@ def build_strategy_slot(
     if config.controller is not None:
         max_local_private_age_ms = config.controller.risk.local.max_private_state_age_ms
         max_global_private_age_ms = config.controller.risk.global_.max_private_state_age_ms
-    frame_assembler = JointStrategyFrameAssembler(
-        input_assembler=frame_assembler_inner,
-        binding=config.binding,
-        liquidity_sourcing=config.liquidity_sourcing,
-        bus=bus,
-        joint_output_topic=config.joint_frame_topic,
-        ledger_service=ledger_service,
-        max_local_private_age_ms=max_local_private_age_ms,
-        max_global_private_age_ms=max_global_private_age_ms,
-    )
     actor_id = config.controller.actor_id
     use_virtual_ledger = ledger_source.strip().lower() == "virtual"
     allocation = (
@@ -106,6 +96,17 @@ def build_strategy_slot(
     strategy_wallet_provider = None
     if use_virtual_ledger and virtual_ledger_service is not None and allocation is not None:
         strategy_wallet_provider = lambda actor_id=actor_id: virtual_ledger_service.wallet_for(actor_id)
+    frame_assembler = JointStrategyFrameAssembler(
+        input_assembler=frame_assembler_inner,
+        binding=config.binding,
+        liquidity_sourcing=config.liquidity_sourcing,
+        bus=bus,
+        joint_output_topic=config.joint_frame_topic,
+        ledger_service=ledger_service,
+        max_local_private_age_ms=max_local_private_age_ms,
+        max_global_private_age_ms=max_global_private_age_ms,
+        strategy_wallet_provider=strategy_wallet_provider,
+    )
     strategy_runner = build_strategy_runner(
         config,
         bus=bus,

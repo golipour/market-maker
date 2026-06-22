@@ -18,6 +18,7 @@ from mm.diagnostics.models import (
     FrameDiagnostics,
     ModelScore,
     OptimizerDiagnostics,
+    PhysicalStateDiagnostics,
     RiskDiagnostics,
     StateDiagnostics,
     orderbook_snapshot_payload,
@@ -204,6 +205,7 @@ class DecisionContext:
     binding: SymbolBinding | None = None
     ledger: JointLedgerSnapshot | None = None
     physical_ledger: JointLedgerSnapshot | None = None
+    ledger_source: str = "physical"
     frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
@@ -273,6 +275,11 @@ class DecisionContext:
         if self.controller_error:
             warnings.append(self.controller_error)
         warnings.extend(self.extra_warnings)
+        ahead_ms = None
+        if self.frame_sync_status is not None:
+            ahead_ms = self.frame_sync_status.get("ledger_ahead_of_market_ms")
+        if ahead_ms is not None and int(ahead_ms) > 0:
+            warnings.append(f"ledger_ahead_of_market_ms:{int(ahead_ms)}")
 
         frame_diag = FrameDiagnostics(
             global_status=self.frame.global_status,
@@ -329,6 +336,8 @@ class DecisionContext:
                 if self.clean_frame.global_ is not None
                 else {}
             ),
+            ledger_source=self.ledger_source,
+            physical_state=self._physical_state_diagnostics(),
         )
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:
@@ -379,6 +388,24 @@ class DecisionContext:
             global_quote_wallet=global_quote.as_dict(),
             local_wealth=local_wealth,
             global_wealth=global_wealth,
+            ledger_source=self.ledger_source,
+        )
+
+    def _physical_state_diagnostics(self) -> PhysicalStateDiagnostics | None:
+        if self.physical_ledger is None or self.ledger_source == "physical":
+            return None
+        local_inventory, local_cash = inventory_cash_from_venue_ledger(self.physical_ledger.local)
+        global_inventory = 0.0
+        global_cash = 0.0
+        if self.physical_ledger.global_ is not None:
+            global_inventory, global_cash = inventory_cash_from_venue_ledger(self.physical_ledger.global_)
+        return PhysicalStateDiagnostics(
+            local_inventory=local_inventory,
+            local_cash=local_cash,
+            global_inventory=global_inventory,
+            global_cash=global_cash,
+            consolidated_base_inventory=float(self.physical_ledger.consolidated_base_inventory),
+            consolidated_quote_wealth=float(self.physical_ledger.consolidated_quote_wealth),
         )
 
     def _local_wallet_legs(self):

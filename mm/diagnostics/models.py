@@ -116,6 +116,17 @@ class StateDiagnostics:
     global_quote_wallet: dict[str, Any] = field(default_factory=dict)
     local_wealth: float = 0.0
     global_wealth: float | None = None
+    ledger_source: str = "physical"
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalStateDiagnostics:
+    local_inventory: float = 0.0
+    local_cash: float = 0.0
+    global_inventory: float = 0.0
+    global_cash: float = 0.0
+    consolidated_base_inventory: float = 0.0
+    consolidated_quote_wealth: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +169,8 @@ class ControllerDiagnostics:
     warnings: tuple[str, ...] = ()
     cleared_orderbook: dict[str, Any] = field(default_factory=dict)
     global_cleared_orderbook: dict[str, Any] = field(default_factory=dict)
+    ledger_source: str = "physical"
+    physical_state: PhysicalStateDiagnostics | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return controller_diagnostics_event(self)

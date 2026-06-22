@@ -22,6 +22,7 @@ class FrameSyncStatus:
     ledger_fresh: bool = True
     latency_skew_ms: int | None = None
     global_status: GlobalMarketStatus = "disabled"
+    ledger_ahead_of_market_ms: int | None = None
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class FrameSyncStatus:
             "ledger_fresh": self.ledger_fresh,
             "latency_skew_ms": self.latency_skew_ms,
             "global_status": self.global_status,
+            "ledger_ahead_of_market_ms": self.ledger_ahead_of_market_ms,
         }
 
 
@@ -42,6 +44,8 @@ class JointStrategyFrame:
     local_market: MarketEvent
     global_market: MarketEvent | None = None
     ledger: JointLedgerSnapshot | None = None
+    physical_ledger: JointLedgerSnapshot | None = None
+    ledger_source: str = "physical"
     mode: LiquiditySourcingMode = "single_venue"
     sync_status: FrameSyncStatus = field(default_factory=FrameSyncStatus)
     created_at_ms: int = 0
@@ -71,6 +75,10 @@ class JointStrategyFrame:
                 else None
             ),
             "ledger": self.ledger.as_payload() if self.ledger is not None else None,
+            "physical_ledger": (
+                self.physical_ledger.as_payload() if self.physical_ledger is not None else None
+            ),
+            "ledger_source": self.ledger_source,
             "mode": self.mode,
             "sync_status": self.sync_status.as_payload(),
             "created_at_ms": int(self.created_at_ms),

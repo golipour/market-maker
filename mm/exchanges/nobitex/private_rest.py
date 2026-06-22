@@ -30,6 +30,12 @@ class NobitexApiKeyAuth:
 NobitexAuth = str | NobitexApiKeyAuth
 
 
+def nobitex_wire_client_order_id(value: str | None, *, max_len: int = 32) -> str | None:
+    """Public alias for mapping runtime client order ids to Nobitex wire ``clientOrderId``."""
+
+    return _nobitex_client_order_id(value, max_len=max_len)
+
+
 def _nobitex_client_order_id(value: str | None, *, max_len: int = 32) -> str | None:
     """Map arbitrary runtime ids to Nobitex-safe ``clientOrderId``.
 
@@ -310,7 +316,7 @@ def place_market_order(
         "dstCurrency": dst,
         "amount": str(amount),
     }
-    cid = _nobitex_client_order_id(client_order_id)
+    cid = nobitex_wire_client_order_id(client_order_id)
     if cid:
         payload["clientOrderId"] = cid
     try:
@@ -343,7 +349,7 @@ def place_limit_order(
         "amount": str(amount),
         "price": str(api_price),
     }
-    cid = _nobitex_client_order_id(client_order_id)
+    cid = nobitex_wire_client_order_id(client_order_id)
     if cid:
         payload["clientOrderId"] = cid
     try:

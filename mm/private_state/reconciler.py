@@ -7,6 +7,7 @@ from mm.bus.base import AbstractEventBus
 from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.execution import Fill
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
+from mm.execution.order_attribution import OrderAttributionRegistry
 from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
 from mm.private_state.store import PrivateStateStore
 
@@ -29,6 +30,7 @@ class PrivateStateReconciler:
         bus: AbstractEventBus | None = None,
         store: PrivateStateStore | None = None,
         fill_event_source: FillEventSource = "exchange_fill_history",
+        attribution_registry: OrderAttributionRegistry | None = None,
     ):
         self.exchange = exchange.lower().strip()
         self.adapter = adapter
@@ -37,6 +39,7 @@ class PrivateStateReconciler:
             self.exchange,
             trading_symbol=getattr(adapter, "symbol", None),
         )
+        self.attribution_registry = attribution_registry
         if fill_event_source not in ("exchange_fill_history", "open_order_delta"):
             raise ValueError(
                 "fill_event_source must be 'exchange_fill_history' or 'open_order_delta'"
@@ -101,6 +104,7 @@ class PrivateStateReconciler:
                     )
                     if self.fill_event_source == "open_order_delta":
                         for fill in fills:
+                            fill = self._enrich_fill_actor_id(fill)
                             await self._publish(f"private:state:{self.exchange}:fills", fill)
                     merged = self.store.apply_snapshot(snap_in)
                     await self._publish_snapshot(merged)
@@ -144,11 +148,34 @@ class PrivateStateReconciler:
     async def _listen_fills(self) -> None:
         try:
             async for fill in self.adapter.fill_stream():
+                fill = self._enrich_fill_actor_id(fill)
                 snapshot = self.store.apply_fill(fill)
                 await self._publish(f"private:state:{self.exchange}:fills", fill)
                 await self._publish_snapshot(snapshot)
         except asyncio.CancelledError:
             raise
+
+    def _enrich_fill_actor_id(self, fill: Fill) -> Fill:
+        if (fill.actor_id or "").strip():
+            return fill
+        if self.attribution_registry is not None:
+            enriched = self.attribution_registry.enrich_fill(fill)
+            if (enriched.actor_id or "").strip():
+                return enriched
+        open_order = self.store.snapshot().open_orders.get(fill.exchange_order_id)
+        if open_order is not None and (open_order.actor_id or "").strip():
+            return Fill(
+                exchange_order_id=fill.exchange_order_id,
+                actor_id=str(open_order.actor_id),
+                exchange=fill.exchange,
+                symbol=fill.symbol,
+                side=fill.side,
+                price=fill.price,
+                qty=fill.qty,
+                fee=fill.fee,
+                timestamp_ms=fill.timestamp_ms,
+            )
+        return fill
 
     async def _listen_errors(self) -> None:
         try:

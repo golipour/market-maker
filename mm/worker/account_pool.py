@@ -16,6 +16,7 @@ from mm.exchanges.factory import (
 )
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import MarketMakerRuntimeConfig, ReconcileRuntimeConfig
+from mm.execution.order_attribution import OrderAttributionRegistry
 from mm.execution.reconcile import ReconcileConfig
 
 
@@ -28,6 +29,15 @@ class SharedAccountPool:
     execution_reconcilers: dict[str, ExecutionStateReconciler] = field(default_factory=dict)
     private_state_selections: dict[str, PrivateStateAdapterSelection] = field(default_factory=dict)
     order_command_selections: dict[str, OrderCommandAdapterSelection] = field(default_factory=dict)
+    order_attribution: dict[str, OrderAttributionRegistry] = field(default_factory=dict)
+
+    def attribution_for(self, exchange: str) -> OrderAttributionRegistry:
+        key = exchange.lower().strip()
+        registry = self.order_attribution.get(key)
+        if registry is None:
+            registry = OrderAttributionRegistry()
+            self.order_attribution[key] = registry
+        return registry
 
     async def start(self) -> None:
         for reconciler in self.execution_reconcilers.values():
@@ -92,11 +102,14 @@ def extend_shared_account_pool(
             poll_interval_ms=private_config.poll_interval_ms,
         )
         pool.private_state_selections[account_id] = private_selection
+        attribution_registry = pool.attribution_for(source.normalized_exchange())
+        private_selection.adapter.attribution_registry = attribution_registry
         private_reconciler = PrivateStateReconciler(
             exchange=source.normalized_exchange(),
             adapter=private_selection.adapter,
             bus=bus,
             fill_event_source=private_config.fill_event_source,
+            attribution_registry=attribution_registry,
         )
         if not options.enable_execution:
             break
@@ -120,6 +133,7 @@ def extend_shared_account_pool(
                 bus=bus,
                 limit_source=select_venue_order_limit_source(source.normalized_exchange()),
                 reconcile_config=_execution_reconcile_config(config),
+                attribution_registry=attribution_registry,
             )
             pool.order_managers[source.normalized_exchange()] = manager
         execution_reconciler = ExecutionStateReconciler(

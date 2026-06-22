@@ -4605,9 +4605,55 @@ def exchange_account() -> dict[str, Any]:
 
 def portfolio_pnl() -> dict[str, Any]:
     panels = [
-        _text(1, "Scope", "Inventory, cash, total marked value, wealth, and step economics.", y=0),
-        _panel(2, "Inventory", "timeseries", PG_DS, _portfolio_field_sql("local_inventory", "global_inventory"), x=0, y=3),
-        _panel(3, "Cash", "timeseries", PG_DS, _portfolio_field_sql("local_cash", "global_cash"), x=12, y=3),
+        _text(
+            1,
+            "Scope",
+            (
+                "Strategy portfolio from ControllerDiagnostics.state (virtual wallet when "
+                "ledger_source=virtual, otherwise exchange account). Physical exchange balances "
+                "are in physical_state when virtual mode is active. Exchange-account REST snapshots "
+                "remain on 07A Exchange Accounts."
+            ),
+            y=0,
+        ),
+        _panel(
+            2,
+            "Strategy inventory (virtual or physical)",
+            "timeseries",
+            PG_DS,
+            _portfolio_field_sql("local_inventory", "global_inventory"),
+            x=0,
+            y=3,
+        ),
+        _panel(
+            3,
+            "Strategy cash (virtual or physical)",
+            "timeseries",
+            PG_DS,
+            _portfolio_field_sql("local_cash", "global_cash"),
+            x=12,
+            y=3,
+        ),
+        _panel(
+            11,
+            "Physical exchange inventory (virtual mode only)",
+            "timeseries",
+            PG_DS,
+            _portfolio_physical_field_sql("local_inventory"),
+            x=0,
+            y=51,
+            w=12,
+        ),
+        _panel(
+            12,
+            "Physical exchange cash (virtual mode only)",
+            "timeseries",
+            PG_DS,
+            _portfolio_physical_field_sql("local_cash"),
+            x=12,
+            y=51,
+            w=12,
+        ),
         _panel(4, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=11),
         _panel(5, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=11),
         _panel(6, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=19),
@@ -5722,12 +5768,22 @@ ORDER BY ts DESC
 LIMIT {limit}"""
 
 
+def _portfolio_physical_field_sql(field: str) -> str:
+    value = _numeric_sql(f"e.payload #>> ARRAY['physical_state','{field}']", default="NULL")
+    return f"""SELECT e.ts AS "time", 'physical_{field}' AS metric,
+       {value} AS value
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+  AND e.payload #>> ARRAY['physical_state','{field}'] IS NOT NULL
+ORDER BY 1"""
+
+
 def _portfolio_field_sql(*fields: str) -> str:
     selects = []
     for field in fields:
         value = _numeric_sql(f"e.payload #>> ARRAY['state','{field}']", default="NULL")
         selects.append(
-            f"""SELECT e.ts AS "time", '{field}' AS metric,
+            f"""SELECT e.ts AS "time", 'strategy_{field}' AS metric,
        {value} AS value
 FROM mm_events e
 WHERE {_diagnostics_filter()}

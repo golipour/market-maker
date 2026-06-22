@@ -26,6 +26,7 @@ from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
+from mm.execution.order_attribution import OrderAttributionRegistry
 from mm.execution.reconcile import ReconcileConfig
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
 from mm.runtime.build_options import RuntimeBuildOptions
@@ -214,6 +215,15 @@ async def build_runtime_components(
     order_managers: dict[str, OrderManager] = {}
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = {}
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = {}
+    order_attribution: dict[str, OrderAttributionRegistry] = {}
+
+    def _attribution_for(exchange: str) -> OrderAttributionRegistry:
+        key = exchange.lower().strip()
+        registry = order_attribution.get(key)
+        if registry is None:
+            registry = OrderAttributionRegistry()
+            order_attribution[key] = registry
+        return registry
 
     if options.enable_private_state:
         for source in config.sources:
@@ -231,11 +241,14 @@ async def build_runtime_components(
                 poll_interval_ms=private_config.poll_interval_ms,
             )
             private_selections[source.role] = private_selection
+            attribution_registry = _attribution_for(source.normalized_exchange())
+            private_selection.adapter.attribution_registry = attribution_registry
             private_reconcilers[source.role] = PrivateStateReconciler(
                 exchange=source.normalized_exchange(),
                 adapter=private_selection.adapter,
                 bus=runtime_bus,
                 fill_event_source=private_config.fill_event_source,
+                attribution_registry=attribution_registry,
             )
             if not options.enable_execution:
                 continue
@@ -258,6 +271,7 @@ async def build_runtime_components(
                         bus=runtime_bus,
                         limit_source=select_venue_order_limit_source(source.normalized_exchange()),
                         reconcile_config=_execution_reconcile_config(config),
+                        attribution_registry=attribution_registry,
                     )
                     order_managers[source.normalized_exchange()] = manager
                 execution_reconcilers[source.role] = ExecutionStateReconciler(

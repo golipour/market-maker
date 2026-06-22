@@ -28,6 +28,7 @@ from mm.execution.plan import ExecutionSyncReport
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.execution.planning import plan_venue_target_book
 from mm.execution.reporting import execution_plan_to_sync_report
+from mm.execution.order_attribution import OrderAttributionRegistry, nobitex_wire_client_order_id
 from mm.execution.reconcile import ReconcileConfig
 from mm.execution.rules_gateway import ExchangeRulesGateway
 from mm.execution.router import OrderRouter
@@ -96,11 +97,13 @@ class OrderManager(AbstractOrderManager):
         clock_ms: Callable[[], int] = now_ms,
         limit_source: AbstractVenueOrderLimitSource | None = None,
         reconcile_config: ReconcileConfig | None = None,
+        attribution_registry: OrderAttributionRegistry | None = None,
     ):
         self.exchange = exchange.lower().strip()
         self.command_adapter = command_adapter
         self.bus = bus
         self.clock_ms = clock_ms
+        self._attribution_registry = attribution_registry
         self._limit_source: AbstractVenueOrderLimitSource = limit_source or NoOpVenueOrderLimitSource()
         self._reconcile_config = reconcile_config or ReconcileConfig()
         self._rules_gateway = ExchangeRulesGateway(self._limit_source)
@@ -473,6 +476,17 @@ class OrderManager(AbstractOrderManager):
                 order=order,
                 accepted_ms=timestamp_ms,
             )
+            if self._attribution_registry is not None:
+                wire_client_order_id = None
+                if self.exchange == "nobitex":
+                    wire_client_order_id = nobitex_wire_client_order_id(order.client_order_id)
+                self._attribution_registry.register(
+                    self.exchange,
+                    order_id,
+                    action.actor_id,
+                    client_order_id=order.client_order_id,
+                    wire_client_order_id=wire_client_order_id,
+                )
 
     def _symbols_for_action(self, action: Action) -> list[str | None]:
         symbols = {

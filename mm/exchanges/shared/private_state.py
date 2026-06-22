@@ -10,6 +10,7 @@ from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.instrument import split_symbol
 from mm.core.models.execution import Fill, Order
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
+from mm.execution.order_attribution import OrderAttributionRegistry
 from mm.exchanges.shared.provider_adapter import AsyncRateLimiter, now_ms
 
 # Drop dust and API rows where both legs are zero so snapshots and strategy frames stay small.
@@ -41,6 +42,7 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         self._seen_fill_qty_by_order: dict[str, float] = {}
         self._seen_fill_fee_by_order: dict[str, float] = {}
         self._fill_history_seeded = False
+        self.attribution_registry: OrderAttributionRegistry | None = None
 
     async def connect(self) -> None:
         self._connected = True
@@ -190,7 +192,12 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         if price <= 0.0 or remaining <= 0.0:
             return None
         status = str(row.get("status", "open") or "open").lower()
-        actor_id = _first_text(row, "actor_id", "actorId")
+        actor_id = _resolve_actor_id(
+            self.exchange,
+            row,
+            exchange_order_id=order_id,
+            attribution_registry=self.attribution_registry,
+        )
         client_order_id = _first_text(row, "clientOrderId", "client_order_id")
         return OpenOrder(
             exchange_order_id=order_id,
@@ -246,7 +253,12 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         if fee <= 1e-12 and cumulative_fee > 0.0:
             fee = cumulative_fee
         self._seen_fill_fee_by_order[order_id] = max(seen_fee, cumulative_fee)
-        actor_id = _first_text(row, "actor_id", "actorId")
+        actor_id = _resolve_actor_id(
+            self.exchange,
+            row,
+            exchange_order_id=order_id,
+            attribution_registry=self.attribution_registry,
+        )
         return Fill(
             exchange_order_id=order_id,
             actor_id=actor_id or "",
@@ -309,6 +321,26 @@ def _normalize_side(raw: str) -> str:
     if side.startswith("sell"):
         return "sell"
     return side
+
+
+def _resolve_actor_id(
+    exchange: str,
+    row: dict,
+    *,
+    exchange_order_id: str,
+    attribution_registry: OrderAttributionRegistry | None,
+) -> str:
+    actor_id = _first_text(row, "actor_id", "actorId")
+    if actor_id:
+        return actor_id
+    if attribution_registry is None:
+        return ""
+    client_order_id = _first_text(row, "clientOrderId", "client_order_id")
+    return attribution_registry.resolve_actor_id(
+        exchange,
+        exchange_order_id=exchange_order_id,
+        client_order_id=client_order_id,
+    )
 
 
 def _economy_canonical_assets(symbol: str) -> frozenset[str]:

@@ -231,6 +231,9 @@ def joint_strategy_frame_from_input(
     max_local_private_age_ms: int = 120_000,
     max_global_private_age_ms: int = 120_000,
     input_frame: StrategyInputFrame | None = None,
+    physical_ledger: JointLedgerSnapshot | None = None,
+    ledger_source: str = "physical",
+    sync_ledger: JointLedgerSnapshot | None = None,
 ) -> JointStrategyFrame:
     """Build a ledger-backed joint frame from aligned market events."""
 
@@ -252,7 +255,7 @@ def joint_strategy_frame_from_input(
         )
     sync_status = build_frame_sync_status(
         frame,
-        ledger=ledger,
+        ledger=sync_ledger or physical_ledger or ledger,
         binding=binding,
         liquidity_sourcing=liquidity_sourcing,
         now_ms=created_at_ms,
@@ -263,6 +266,8 @@ def joint_strategy_frame_from_input(
         local_market=frame.local,
         global_market=frame.global_,
         ledger=ledger,
+        physical_ledger=physical_ledger,
+        ledger_source=ledger_source,
         mode=mode,
         sync_status=sync_status,
         created_at_ms=created_at_ms,

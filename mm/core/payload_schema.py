@@ -717,6 +717,12 @@ def controller_diagnostics_event(diagnostics: Any) -> dict[str, Any]:
         warnings=list(diagnostics.warnings),
         cleared_orderbook=dict(diagnostics.cleared_orderbook),
         global_cleared_orderbook=dict(diagnostics.global_cleared_orderbook),
+        ledger_source=diagnostics.ledger_source,
+        physical_state=(
+            _controller_physical_state_payload(diagnostics.physical_state)
+            if diagnostics.physical_state is not None
+            else None
+        ),
     )
 
 
@@ -750,6 +756,18 @@ def _controller_state_payload(state: Any) -> dict[str, Any]:
         "global_quote_wallet": dict(state.global_quote_wallet),
         "local_wealth": state.local_wealth,
         "global_wealth": state.global_wealth,
+        "ledger_source": state.ledger_source,
+    }
+
+
+def _controller_physical_state_payload(state: Any) -> dict[str, Any]:
+    return {
+        "local_inventory": state.local_inventory,
+        "local_cash": state.local_cash,
+        "global_inventory": state.global_inventory,
+        "global_cash": state.global_cash,
+        "consolidated_base_inventory": state.consolidated_base_inventory,
+        "consolidated_quote_wealth": state.consolidated_quote_wealth,
     }
 
 
@@ -931,6 +949,12 @@ def joint_strategy_frame_event(frame: Any) -> dict[str, Any]:
             market_event_event(frame.global_market) if frame.global_market is not None else None
         ),
         ledger=joint_ledger_snapshot_event(frame.ledger),
+        physical_ledger=(
+            joint_ledger_snapshot_event(frame.physical_ledger)
+            if frame.physical_ledger is not None
+            else None
+        ),
+        ledger_source=str(frame.ledger_source or "physical"),
         mode=str(frame.mode),
         sync_status=frame.sync_status.as_payload(),
         created_at_ms=int(frame.created_at_ms),
@@ -965,6 +989,12 @@ def joint_strategy_frame_from_payload(payload: Any) -> Any | None:
             else None
         )
         ledger = joint_ledger_snapshot_from_payload(payload["ledger"])
+        physical_payload = payload.get("physical_ledger")
+        physical_ledger = (
+            joint_ledger_snapshot_from_payload(physical_payload)
+            if isinstance(physical_payload, dict)
+            else None
+        )
         input_frame = _strategy_input_frame_from_payload(input_payload)
         sync_payload = payload.get("sync_status")
         sync_status = (
@@ -976,6 +1006,8 @@ def joint_strategy_frame_from_payload(payload: Any) -> Any | None:
             local_market=local_market,
             global_market=global_market,
             ledger=ledger,
+            physical_ledger=physical_ledger,
+            ledger_source=str(payload.get("ledger_source") or "physical"),
             mode=payload.get("mode") or "single_venue",
             sync_status=sync_status,
             created_at_ms=int(payload.get("created_at_ms") or 0),
@@ -1060,6 +1092,7 @@ def _frame_sync_status_from_payload(payload: dict[str, Any]) -> Any:
         ledger_fresh=bool(payload.get("ledger_fresh", True)),
         latency_skew_ms=payload.get("latency_skew_ms"),
         global_status=payload.get("global_status") or "disabled",
+        ledger_ahead_of_market_ms=payload.get("ledger_ahead_of_market_ms"),
     )
 
 
