@@ -246,6 +246,8 @@ def test_joint_ledger_with_virtual_local_uses_wallet_not_physical_balances() -> 
     virtual_joint = joint_ledger_with_virtual_local(joint, wallet)
     assert virtual_joint.local.available_base == pytest.approx(1.0)
     assert virtual_joint.local.available_quote == pytest.approx(1_000_000.0)
+    assert virtual_joint.consolidated_base_inventory == pytest.approx(1.0)
+    assert virtual_joint.consolidated_quote_wealth == pytest.approx(1_000_000.0)
 
 
 def test_mpc_state_from_frame_uses_virtual_ledger_balances() -> None:

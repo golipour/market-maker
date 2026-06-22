@@ -28,7 +28,11 @@ from mm.execution.plan import ExecutionSyncReport
 from mm.execution.order_validation import NoOpVenueOrderLimitSource
 from mm.execution.planning import plan_venue_target_book
 from mm.execution.reporting import execution_plan_to_sync_report
-from mm.execution.order_attribution import OrderAttributionRegistry, nobitex_wire_client_order_id
+from mm.execution.order_attribution import (
+    OrderAttributionRegistry,
+    register_open_order_attribution,
+    wire_client_order_id_for_exchange,
+)
 from mm.execution.reconcile import ReconcileConfig
 from mm.execution.rules_gateway import ExchangeRulesGateway
 from mm.execution.router import OrderRouter
@@ -299,6 +303,7 @@ class OrderManager(AbstractOrderManager):
             if order.order.exchange.lower().strip() == self.exchange
         }
         self._reconcile_pending_with_confirmed()
+        self._sync_attribution_registry()
         return self.snapshot(timestamp_ms=snapshot.timestamp_ms)
 
     def apply_open_order(self, open_order: OpenOrder) -> ExecutionSnapshot:
@@ -310,6 +315,7 @@ class OrderManager(AbstractOrderManager):
         else:
             self._live_orders[open_order.exchange_order_id] = open_order
             self._pending_places.pop(open_order.exchange_order_id, None)
+            self._sync_attribution_registry(open_order=open_order)
         return self.snapshot(timestamp_ms=open_order.timestamp_ms)
 
     def apply_order_update(self, update: OrderUpdate) -> ExecutionSnapshot:
@@ -477,16 +483,46 @@ class OrderManager(AbstractOrderManager):
                 accepted_ms=timestamp_ms,
             )
             if self._attribution_registry is not None:
-                wire_client_order_id = None
-                if self.exchange == "nobitex":
-                    wire_client_order_id = nobitex_wire_client_order_id(order.client_order_id)
                 self._attribution_registry.register(
                     self.exchange,
                     order_id,
                     action.actor_id,
                     client_order_id=order.client_order_id,
-                    wire_client_order_id=wire_client_order_id,
+                    wire_client_order_id=wire_client_order_id_for_exchange(
+                        self.exchange,
+                        order.client_order_id,
+                    ),
                 )
+
+    def _sync_attribution_registry(self, *, open_order: OpenOrder | None = None) -> None:
+        if self._attribution_registry is None:
+            return
+        if open_order is not None:
+            register_open_order_attribution(
+                self._attribution_registry,
+                self.exchange,
+                open_order,
+            )
+            return
+        for pending in self._pending_places.values():
+            if pending.order is None or not (pending.actor_id or "").strip():
+                continue
+            self._attribution_registry.register(
+                self.exchange,
+                pending.exchange_order_id,
+                pending.actor_id or "",
+                client_order_id=pending.order.client_order_id,
+                wire_client_order_id=wire_client_order_id_for_exchange(
+                    self.exchange,
+                    pending.order.client_order_id,
+                ),
+            )
+        for live_order in self._live_orders.values():
+            register_open_order_attribution(
+                self._attribution_registry,
+                self.exchange,
+                live_order,
+            )
 
     def _symbols_for_action(self, action: Action) -> list[str | None]:
         symbols = {

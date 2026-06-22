@@ -13,6 +13,7 @@ from mm.exchanges.shared.provider_adapter import TransportMode
 MarketDataBuilder = Callable[..., PublicMarketDataAdapter]
 PrivateStateBuilder = Callable[..., AbstractPrivateStateAdapter]
 OrderCommandBuilder = Callable[..., AbstractOrderCommandAdapter]
+WireClientOrderIdFn = Callable[[str | None], str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class ExchangeRegistration:
     build_private_state: PrivateStateBuilder
     build_order_command: OrderCommandBuilder
     uses_trade_stats_limits: bool = False
+    wire_client_order_id: WireClientOrderIdFn | None = None
 
 
 _REGISTRY: dict[str, ExchangeRegistration] = {}

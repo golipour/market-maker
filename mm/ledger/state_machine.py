@@ -95,6 +95,25 @@ def build_joint_ledger_snapshot(
     )
 
 
+def joint_consolidated_wealth(
+    local: VenueLedger,
+    global_: VenueLedger | None,
+    *,
+    reference_price: float,
+) -> tuple[float, float]:
+    """Return consolidated base inventory and quote wealth for joint ledger fields."""
+
+    local_inventory, local_cash = _inventory_cash_from_venue_ledger(local)
+    global_inventory = 0.0
+    global_cash = 0.0
+    if global_ is not None:
+        global_inventory, global_cash = _inventory_cash_from_venue_ledger(global_)
+
+    consolidated_base = local_inventory + global_inventory
+    consolidated_quote = local_cash + global_cash + consolidated_base * float(reference_price)
+    return consolidated_base, consolidated_quote
+
+
 def _inventory_cash_from_venue_ledger(ledger: VenueLedger) -> tuple[float, float]:
     private = PrivateStateSnapshot(
         exchange=ledger.exchange,

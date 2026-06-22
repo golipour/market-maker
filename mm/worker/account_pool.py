@@ -16,7 +16,7 @@ from mm.exchanges.factory import (
 )
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import MarketMakerRuntimeConfig, ReconcileRuntimeConfig
-from mm.execution.order_attribution import OrderAttributionRegistry
+from mm.execution.order_attribution import OrderAttributionRegistry, load_attribution_registry
 from mm.execution.reconcile import ReconcileConfig
 
 
@@ -35,7 +35,7 @@ class SharedAccountPool:
         key = exchange.lower().strip()
         registry = self.order_attribution.get(key)
         if registry is None:
-            registry = OrderAttributionRegistry()
+            registry = load_attribution_registry(key)
             self.order_attribution[key] = registry
         return registry
 

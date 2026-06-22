@@ -26,7 +26,7 @@ from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
-from mm.execution.order_attribution import OrderAttributionRegistry
+from mm.execution.order_attribution import OrderAttributionRegistry, load_attribution_registry
 from mm.execution.reconcile import ReconcileConfig
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
 from mm.runtime.build_options import RuntimeBuildOptions
@@ -221,7 +221,7 @@ async def build_runtime_components(
         key = exchange.lower().strip()
         registry = order_attribution.get(key)
         if registry is None:
-            registry = OrderAttributionRegistry()
+            registry = load_attribution_registry(key)
             order_attribution[key] = registry
         return registry
 

@@ -12,6 +12,7 @@ from mm.core.models.instrument import SymbolBinding
 from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
 from mm.core.models.private import OpenOrder
 from mm.core.wallet import make_balance, order_collateral_from_open_orders
+from mm.ledger.state_machine import joint_consolidated_wealth
 from mm.registry.models import AllocationRecord
 
 
@@ -186,4 +187,14 @@ def joint_ledger_with_virtual_local(
         wallet,
         live_orders=joint.local.live_orders,
     )
-    return replace(joint, local=virtual_local)
+    consolidated_base, consolidated_quote = joint_consolidated_wealth(
+        virtual_local,
+        joint.global_,
+        reference_price=joint.reference_price,
+    )
+    return replace(
+        joint,
+        local=virtual_local,
+        consolidated_base_inventory=consolidated_base,
+        consolidated_quote_wealth=consolidated_quote,
+    )

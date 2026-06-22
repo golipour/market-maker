@@ -4,6 +4,7 @@ from typing import Any
 
 from mm.exchanges.nobitex import NobitexMarketDataAdapter, NobitexRestPrivateStateAdapter
 from mm.exchanges.nobitex.order_adapter import NobitexRestOrderCommandAdapter
+from mm.exchanges.nobitex.private_rest import nobitex_wire_client_order_id
 from mm.exchanges.registry import ExchangeRegistration
 from mm.exchanges.shared.provider_adapter import TransportMode
 
@@ -60,4 +61,5 @@ REGISTRATION = ExchangeRegistration(
     build_private_state=build_private_state,
     build_order_command=build_order_command,
     uses_trade_stats_limits=True,
+    wire_client_order_id=nobitex_wire_client_order_id,
 )

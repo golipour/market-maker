@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from mm.core.models.execution import Fill
-from mm.execution.order_attribution import OrderAttributionRegistry, nobitex_wire_client_order_id
+from mm.execution.order_attribution import (
+    OrderAttributionRegistry,
+    wire_client_order_id_for_exchange,
+)
+from mm.exchanges.nobitex.private_rest import nobitex_wire_client_order_id
 from mm.exchanges.nobitex.private_state import NobitexRestPrivateStateAdapter
 
 
@@ -52,6 +56,14 @@ def test_nobitex_fill_normalization_uses_attribution_registry() -> None:
 
     assert fill is not None
     assert fill.actor_id == "mpc-controller"
+
+
+def test_wire_client_order_id_for_exchange_uses_registration_hook() -> None:
+    assert (
+        wire_client_order_id_for_exchange("nobitex", "mpc-controller:buy:0")
+        == nobitex_wire_client_order_id("mpc-controller:buy:0")
+    )
+    assert wire_client_order_id_for_exchange("wallex", "actor:buy:0") == "actor:buy:0"
 
 
 def test_enrich_fill_preserves_existing_actor_id() -> None:

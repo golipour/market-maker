@@ -10,7 +10,7 @@ from mm.core.interfaces.private_state import AbstractPrivateStateAdapter
 from mm.core.models.instrument import split_symbol
 from mm.core.models.execution import Fill, Order
 from mm.core.models.private import Balance, OpenOrder, OrderUpdate, PrivateStateSnapshot
-from mm.execution.order_attribution import OrderAttributionRegistry
+from mm.execution.order_attribution import OrderAttributionRegistry, actor_id_from_runtime_client_order_id
 from mm.exchanges.shared.provider_adapter import AsyncRateLimiter, now_ms
 
 # Drop dust and API rows where both legs are zero so snapshots and strategy frames stay small.
@@ -336,11 +336,14 @@ def _resolve_actor_id(
     if attribution_registry is None:
         return ""
     client_order_id = _first_text(row, "clientOrderId", "client_order_id")
-    return attribution_registry.resolve_actor_id(
+    resolved = attribution_registry.resolve_actor_id(
         exchange,
         exchange_order_id=exchange_order_id,
         client_order_id=client_order_id,
     )
+    if resolved:
+        return resolved
+    return actor_id_from_runtime_client_order_id(client_order_id)
 
 
 def _economy_canonical_assets(symbol: str) -> frozenset[str]:
