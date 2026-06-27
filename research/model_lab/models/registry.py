@@ -32,6 +32,20 @@ DEFAULT_CONDITIONAL_CONFIG = {
 }
 
 
+def _production_flow_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Keep only kwargs accepted by each production torch flow model."""
+
+    merged = {**DEFAULT_FLOW_CONFIG, **config}
+    merged["kind"] = kind
+    if kind == "hurdle_lognormal":
+        return {k: merged[k] for k in ("kind", "decay", "init_p0", "init_mu", "init_sigma") if k in merged}
+    if kind in {"hurdle_gamma", "hurdle_weibull"}:
+        return {k: merged[k] for k in ("kind", "decay", "init_p0") if k in merged}
+    if kind in {"gamma", "weibull"}:
+        return {k: merged[k] for k in ("kind", "decay") if k in merged}
+    return merged
+
+
 def parse_model_spec(spec: str) -> tuple[str, str, dict[str, Any]]:
     """Parse ``family:kind`` or ``family:kind{json}``."""
 
@@ -86,7 +100,7 @@ def build_model(spec: str, *, overrides: dict[str, Any] | None = None) -> Online
         if kind not in _FLOW_KINDS:
             choices = sorted(_FLOW_KINDS | _EXPERIMENTAL_FLOW_KINDS)
             raise ValueError(f"unsupported flow kind {kind!r}; choices: {choices}")
-        merged = {**DEFAULT_FLOW_CONFIG, **config}
+        merged = _production_flow_config(kind, config)
         return ProductionFlowModel(kind=kind, config=merged, name=f"flow_{kind}")
 
     if family == "price":
@@ -114,7 +128,7 @@ def build_model(spec: str, *, overrides: dict[str, Any] | None = None) -> Online
 
 
 def build_flow_model(kind: str = "hurdle_lognormal", **config: Any) -> ProductionFlowModel:
-    merged = {**DEFAULT_FLOW_CONFIG, **config}
+    merged = _production_flow_config(kind, config)
     return ProductionFlowModel(kind=kind, config=merged, name=f"flow_{kind}")
 
 
