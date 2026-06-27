@@ -3,6 +3,7 @@
 | Notebook | Purpose |
 |----------|---------|
 | [production_models_walkforward.ipynb](production_models_walkforward.ipynb) | **Start here** — hurdle lognormal flow + conditional mechanical mixture price, walk-forward NLL |
+| [experiments_01_online_model_search.ipynb](experiments_01_online_model_search.ipynb) | Existing-model sweeps, regime diagnostics, paired NLL comparisons, and research-only candidate models |
 
 ## Run
 

@@ -7,9 +7,17 @@ from typing import Any
 from research.model_lab.core.protocol import OnlineModel
 from research.model_lab.models.adapters import ProductionFlowModel, ProductionPriceModel
 from research.model_lab.models.baselines import ConstantZeroFlowModel, GaussianMidRandomWalkModel
+from research.model_lab.models.experimental import (
+    BivariateHurdleLogNormalFlowModel,
+    FlowConditionedMidDeltaModel,
+    HurdleLogStudentTFlowModel,
+    StudentTMidDeltaModel,
+)
 
 _FLOW_KINDS = frozenset({"hurdle_lognormal", "hurdle_gamma", "hurdle_weibull", "gamma", "weibull"})
+_EXPERIMENTAL_FLOW_KINDS = frozenset({"hurdle_log_student_t", "bivariate_hurdle_lognormal"})
 _PRICE_KINDS = frozenset({"residual", "conditional_mechanical_mixture", "flow_gated_mixture"})
+_EXPERIMENTAL_PRICE_KINDS = frozenset({"student_t_mid_delta", "flow_conditioned_mid_delta"})
 
 DEFAULT_FLOW_CONFIG = {"decay": 0.95, "init_p0": 0.3, "init_mu": 0.0, "init_sigma": 1.0}
 DEFAULT_RESIDUAL_CONFIG = {"residual_decay": 0.95, "residual_sigma": 50.0}
@@ -61,14 +69,40 @@ def build_model(spec: str, *, overrides: dict[str, Any] | None = None) -> Online
         raise ValueError(f"unknown baseline kind {kind!r}")
 
     if family == "flow":
+        if kind == "hurdle_log_student_t":
+            merged = {**DEFAULT_FLOW_CONFIG, **{"init_df": 5.0}, **config}
+            return HurdleLogStudentTFlowModel(**merged)
+        if kind == "bivariate_hurdle_lognormal":
+            merged = {**DEFAULT_FLOW_CONFIG, **config}
+            return BivariateHurdleLogNormalFlowModel(
+                decay=float(merged["decay"]),
+                init_mu=float(merged["init_mu"]),
+                init_sigma=float(merged["init_sigma"]),
+                init_p00=float(merged.get("init_p00", 0.5)),
+                init_p10=float(merged.get("init_p10", 0.2)),
+                init_p01=float(merged.get("init_p01", 0.2)),
+                init_p11=float(merged.get("init_p11", 0.1)),
+            )
         if kind not in _FLOW_KINDS:
-            raise ValueError(f"unsupported flow kind {kind!r}; choices: {sorted(_FLOW_KINDS)}")
+            choices = sorted(_FLOW_KINDS | _EXPERIMENTAL_FLOW_KINDS)
+            raise ValueError(f"unsupported flow kind {kind!r}; choices: {choices}")
         merged = {**DEFAULT_FLOW_CONFIG, **config}
         return ProductionFlowModel(kind=kind, config=merged, name=f"flow_{kind}")
 
     if family == "price":
+        if kind == "student_t_mid_delta":
+            return StudentTMidDeltaModel(**{k: v for k, v in config.items() if k in {"decay", "initial_sigma", "df"}})
+        if kind == "flow_conditioned_mid_delta":
+            return FlowConditionedMidDeltaModel(
+                **{
+                    k: v
+                    for k, v in config.items()
+                    if k in {"decay", "variance_decay", "initial_sigma", "rls_p0"}
+                }
+            )
         if kind not in _PRICE_KINDS:
-            raise ValueError(f"unsupported price kind {kind!r}; choices: {sorted(_PRICE_KINDS)}")
+            choices = sorted(_PRICE_KINDS | _EXPERIMENTAL_PRICE_KINDS)
+            raise ValueError(f"unsupported price kind {kind!r}; choices: {choices}")
         if kind == "residual":
             merged = {**DEFAULT_RESIDUAL_CONFIG, **config}
             ref = float(merged.pop("reference_vwap_vol", 1000.0))
@@ -100,6 +134,10 @@ def list_builtin_models() -> list[str]:
     ]
     for kind in sorted(_FLOW_KINDS):
         out.append(f"flow:{kind}")
+    for kind in sorted(_EXPERIMENTAL_FLOW_KINDS):
+        out.append(f"flow:{kind}")
     for kind in sorted(_PRICE_KINDS):
+        out.append(f"price:{kind}")
+    for kind in sorted(_EXPERIMENTAL_PRICE_KINDS):
         out.append(f"price:{kind}")
     return out
