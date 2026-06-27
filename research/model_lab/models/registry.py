@@ -8,16 +8,30 @@ from research.model_lab.core.protocol import OnlineModel
 from research.model_lab.models.adapters import ProductionFlowModel, ProductionPriceModel
 from research.model_lab.models.baselines import ConstantZeroFlowModel, GaussianMidRandomWalkModel
 from research.model_lab.models.experimental import (
+    AR1MidDeltaModel,
     BivariateHurdleLogNormalFlowModel,
     FlowConditionedMidDeltaModel,
+    GARCHMidDeltaModel,
     HurdleLogStudentTFlowModel,
+    MicropriceDeltaModel,
+    SpreadNormMidDeltaModel,
+    StateConditionedHurdleFlowModel,
     StudentTMidDeltaModel,
+    TwoStateMidDeltaHMM,
 )
 
 _FLOW_KINDS = frozenset({"hurdle_lognormal", "hurdle_gamma", "hurdle_weibull", "gamma", "weibull"})
-_EXPERIMENTAL_FLOW_KINDS = frozenset({"hurdle_log_student_t", "bivariate_hurdle_lognormal"})
+_EXPERIMENTAL_FLOW_KINDS = frozenset({"hurdle_log_student_t", "bivariate_hurdle_lognormal", "state_conditioned_hurdle"})
 _PRICE_KINDS = frozenset({"residual", "conditional_mechanical_mixture", "flow_gated_mixture"})
-_EXPERIMENTAL_PRICE_KINDS = frozenset({"student_t_mid_delta", "flow_conditioned_mid_delta"})
+_EXPERIMENTAL_PRICE_KINDS = frozenset({
+    "student_t_mid_delta",
+    "flow_conditioned_mid_delta",
+    "ar1_mid_delta",
+    "garch_mid_delta",
+    "spread_norm_mid_delta",
+    "microprice_delta",
+    "hmm2_mid_delta",
+})
 
 DEFAULT_FLOW_CONFIG = {"decay": 0.95, "init_p0": 0.3, "init_mu": 0.0, "init_sigma": 1.0}
 DEFAULT_RESIDUAL_CONFIG = {"residual_decay": 0.95, "residual_sigma": 50.0}
@@ -97,6 +111,15 @@ def build_model(spec: str, *, overrides: dict[str, Any] | None = None) -> Online
                 init_p01=float(merged.get("init_p01", 0.2)),
                 init_p11=float(merged.get("init_p11", 0.1)),
             )
+        if kind == "state_conditioned_hurdle":
+            merged = {**DEFAULT_FLOW_CONFIG, **{"gate_decay": 0.99}, **config}
+            return StateConditionedHurdleFlowModel(
+                decay=float(merged["decay"]),
+                init_p0=float(merged["init_p0"]),
+                init_mu=float(merged["init_mu"]),
+                init_sigma=float(merged["init_sigma"]),
+                gate_decay=float(merged["gate_decay"]),
+            )
         if kind not in _FLOW_KINDS:
             choices = sorted(_FLOW_KINDS | _EXPERIMENTAL_FLOW_KINDS)
             raise ValueError(f"unsupported flow kind {kind!r}; choices: {choices}")
@@ -113,6 +136,18 @@ def build_model(spec: str, *, overrides: dict[str, Any] | None = None) -> Online
                     for k, v in config.items()
                     if k in {"decay", "variance_decay", "initial_sigma", "rls_p0"}
                 }
+            )
+        if kind == "ar1_mid_delta":
+            return AR1MidDeltaModel(**{k: v for k, v in config.items() if k in {"decay", "phi_decay", "initial_sigma"}})
+        if kind == "garch_mid_delta":
+            return GARCHMidDeltaModel(**{k: v for k, v in config.items() if k in {"omega", "alpha", "beta", "initial_sigma"}})
+        if kind == "spread_norm_mid_delta":
+            return SpreadNormMidDeltaModel(**{k: v for k, v in config.items() if k in {"decay", "initial_sigma"}})
+        if kind == "microprice_delta":
+            return MicropriceDeltaModel(**{k: v for k, v in config.items() if k in {"decay", "initial_sigma"}})
+        if kind == "hmm2_mid_delta":
+            return TwoStateMidDeltaHMM(
+                **{k: v for k, v in config.items() if k in {"decay", "initial_sigma_quiet", "initial_sigma_active"}}
             )
         if kind not in _PRICE_KINDS:
             choices = sorted(_PRICE_KINDS | _EXPERIMENTAL_PRICE_KINDS)

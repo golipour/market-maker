@@ -214,6 +214,154 @@ def volume_regime(total_volume: float | None) -> str:
     return "high"
 
 
+def volume_quintile(total_volume: float | None, *, edges: Sequence[float]) -> str:
+    if total_volume is None:
+        return "unknown"
+    volume = max(0.0, float(total_volume))
+    for idx in range(len(edges) - 1):
+        if volume <= edges[idx + 1]:
+            return f"Q{idx + 1}"
+    return f"Q{len(edges) - 1}"
+
+
+def volume_quintile_edges(steps: Sequence[IntervalStep], *, positive_only: bool = True) -> list[float]:
+    """Compute quintile breakpoints from observed total volumes."""
+
+    volumes = [max(0.0, float(step.total_volume)) for step in steps]
+    if positive_only:
+        volumes = [v for v in volumes if v > 0.0]
+    if not volumes:
+        return [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    ordered = sorted(volumes)
+    edges = [0.0]
+    for q in (0.2, 0.4, 0.6, 0.8, 1.0):
+        edges.append(percentile(ordered, q) or 0.0)
+    return edges
+
+
+def dataset_profile(steps: Sequence[IntervalStep]) -> dict[str, Any]:
+    """Human-readable summary stats for experiment notebooks."""
+
+    if not steps:
+        return {"n_steps": 0}
+    volumes = [max(0.0, float(step.total_volume)) for step in steps]
+    mids = [float(step.mid) for step in steps]
+    spreads = [float(step.spread) for step in steps]
+    zero_frac = sum(1 for v in volumes if v <= 0.0) / len(volumes)
+    positive = [v for v in volumes if v > 0.0]
+    deltas = [float(steps[i].mid - steps[i - 1].mid) for i in range(1, len(steps))]
+    return {
+        "n_steps": len(steps),
+        "since": steps[0].ts.isoformat(),
+        "until": steps[-1].ts.isoformat(),
+        "zero_volume_fraction": zero_frac,
+        "volume_p50": percentile(sorted(positive), 0.5) if positive else 0.0,
+        "volume_p90": percentile(sorted(positive), 0.9) if positive else 0.0,
+        "volume_p99": percentile(sorted(positive), 0.99) if positive else 0.0,
+        "mid_min": min(mids),
+        "mid_max": max(mids),
+        "mid_std": sample_std(mids) if len(mids) > 1 else 0.0,
+        "spread_median": sorted(spreads)[len(spreads) // 2],
+        "delta_mid_std": sample_std(deltas) if len(deltas) > 1 else 0.0,
+        "avg_total_volume": mean(volumes),
+    }
+
+
+def period_split_nll(result: WalkForwardResult, *, fraction: float = 0.5) -> dict[str, Any]:
+    """Compare mean NLL in the first vs second half of scored steps."""
+
+    scored = [float(score.nll) for score in result.scores if score.nll is not None and math.isfinite(float(score.nll))]
+    if not scored:
+        return {"n": 0}
+    cut = max(1, int(len(scored) * fraction))
+    first, second = scored[:cut], scored[cut:]
+    return {
+        "n": len(scored),
+        "first_half_mean_nll": mean(first) if first else None,
+        "second_half_mean_nll": mean(second) if second else None,
+        "warmup_improvement": (mean(first) - mean(second)) if first and second else None,
+    }
+
+
+def paired_significance(
+    results: Mapping[str, WalkForwardResult],
+    *,
+    baseline_label: str,
+    candidate_label: str,
+    n_bootstrap: int = 500,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Bootstrap CI for paired mean NLL delta (candidate - baseline)."""
+
+    import random
+
+    baseline = results[baseline_label]
+    candidate = results[candidate_label]
+    baseline_by_step = {
+        score.step_index: float(score.nll)
+        for score in baseline.scores
+        if score.nll is not None and math.isfinite(float(score.nll))
+    }
+    deltas: list[float] = []
+    for score in candidate.scores:
+        if score.nll is None or score.step_index not in baseline_by_step:
+            continue
+        value = float(score.nll)
+        if math.isfinite(value):
+            deltas.append(value - baseline_by_step[score.step_index])
+    if len(deltas) < 2:
+        return {"n": len(deltas), "mean_delta_nll": None}
+    rng = random.Random(seed)
+    boot: list[float] = []
+    for _ in range(max(1, int(n_bootstrap))):
+        sample = [deltas[rng.randrange(len(deltas))] for _ in range(len(deltas))]
+        boot.append(mean(sample))
+    boot.sort()
+    lo = boot[int(0.025 * (len(boot) - 1))]
+    hi = boot[int(0.975 * (len(boot) - 1))]
+    observed = mean(deltas)
+    return {
+        "baseline": baseline_label,
+        "candidate": candidate_label,
+        "n": len(deltas),
+        "mean_delta_nll": observed,
+        "ci95_low": lo,
+        "ci95_high": hi,
+        "significant_at_5pct": (hi < 0.0) or (lo > 0.0),
+        "candidate_wins": observed < 0.0,
+    }
+
+
+def stratified_nll_quintiles(
+    results: Mapping[str, WalkForwardResult],
+    steps: Sequence[IntervalStep],
+) -> list[dict[str, Any]]:
+    """NLL by data-driven volume quintile."""
+
+    edges = volume_quintile_edges(steps)
+    groups: dict[tuple[str, str], list[float]] = {}
+    for label, result in results.items():
+        for row in score_rows(result, steps, model_label=label):
+            nll = row.get("nll")
+            if nll is None or not math.isfinite(float(nll)):
+                continue
+            regime = volume_quintile(row.get("total_volume"), edges=edges)
+            groups.setdefault((label, regime), []).append(float(nll))
+    out: list[dict[str, Any]] = []
+    for (label, regime), values in groups.items():
+        ordered = sorted(values)
+        out.append(
+            {
+                "label": label,
+                "volume_quintile": regime,
+                "n": len(values),
+                "mean_nll": mean(values),
+                "median_nll": ordered[len(ordered) // 2],
+            }
+        )
+    return sorted(out, key=lambda row: (row["label"], row["volume_quintile"]))
+
+
 def percentile(sorted_values: Sequence[float], q: float) -> float | None:
     if not sorted_values:
         return None

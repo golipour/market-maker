@@ -78,20 +78,41 @@ def test_experimental_flow_models_score() -> None:
 
 def test_experimental_price_models_score() -> None:
     steps = _synthetic_steps(40)
-    for spec in ("price:student_t_mid_delta", "price:flow_conditioned_mid_delta"):
+    for spec in (
+        "price:student_t_mid_delta",
+        "price:flow_conditioned_mid_delta",
+        "price:ar1_mid_delta",
+        "price:garch_mid_delta",
+        "price:spread_norm_mid_delta",
+        "price:microprice_delta",
+        "price:hmm2_mid_delta",
+    ):
         result = run_walk_forward(build_model(spec), steps)
         assert result.summary is not None
         assert result.summary.n_scored > 0
         assert result.summary.mean_nll is not None
 
 
-def test_analysis_helpers() -> None:
+def test_state_conditioned_flow_scores() -> None:
+    result = run_walk_forward(build_model("flow:state_conditioned_hurdle"), _synthetic_steps(40))
+    assert result.summary is not None
+    assert result.summary.n_scored > 0
+
+
+def test_analysis_helpers_extended() -> None:
     steps = _synthetic_steps(40)
     results = {
         "zero": run_walk_forward(ConstantZeroFlowModel(), steps),
         "hln": run_walk_forward(build_model("flow:hurdle_lognormal"), steps),
     }
-    assert leaderboard(results)
-    assert stratified_nll(results, steps)
-    assert paired_nll_deltas(results, baseline_label="zero")
-    assert stationarity_report(steps)
+    from research.model_lab.core.analysis import (
+        dataset_profile,
+        paired_significance,
+        period_split_nll,
+        stratified_nll_quintiles,
+    )
+
+    assert dataset_profile(steps)["n_steps"] == 40
+    assert period_split_nll(results["hln"])["n"] > 0
+    assert stratified_nll_quintiles(results, steps)
+    assert paired_significance(results, baseline_label="zero", candidate_label="hln")["n"] > 0

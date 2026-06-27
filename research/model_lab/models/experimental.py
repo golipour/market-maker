@@ -369,3 +369,396 @@ class FlowConditionedMidDeltaModel:
         signed = 0.0 if total <= 0.0 else (float(step.buy_volume) - float(step.sell_volume)) / total
         spread_bps = 0.0 if step.mid <= 0.0 else 10_000.0 * float(step.spread) / float(step.mid)
         return np.array([1.0, math.log1p(total), signed, spread_bps], dtype=np.float64)
+
+
+def _book_imbalance(step: IntervalStep) -> float:
+    bids = getattr(step.orderbook, "bids", ()) or ()
+    asks = getattr(step.orderbook, "asks", ()) or ()
+    bid_depth = sum(float(getattr(level, "qty", 0.0)) for level in bids[:5])
+    ask_depth = sum(float(getattr(level, "qty", 0.0)) for level in asks[:5])
+    total = bid_depth + ask_depth
+    if total <= 0.0:
+        return 0.0
+    return (bid_depth - ask_depth) / total
+
+
+def _gaussian_log_pdf(x: float, mu: float, sigma: float) -> float:
+    sigma = max(1e-12, float(sigma))
+    z = (float(x) - float(mu)) / sigma
+    return -0.5 * math.log(2.0 * math.pi) - math.log(sigma) - 0.5 * z * z
+
+
+@dataclass
+class StateConditionedHurdleFlowModel:
+    """Hurdle lognormal with logistic gate on spread and book imbalance."""
+
+    decay: float = 0.95
+    init_p0: float = 0.3
+    init_mu: float = 0.0
+    init_sigma: float = 1.0
+    gate_decay: float = 0.99
+    name: str = "flow_state_conditioned_hurdle"
+    kind: str = "state_conditioned_hurdle"
+    family: str = "flow"
+    _base: Any = field(init=False, repr=False)
+    _gate_weights: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        from mm.mpc.market_order_flow_torch import TorchHurdleLogNormalModel
+
+        self._base = TorchHurdleLogNormalModel(
+            decay=self.decay,
+            init_p0=self.init_p0,
+            init_mu=self.init_mu,
+            init_sigma=self.init_sigma,
+        )
+        self._gate_weights = np.zeros(3, dtype=np.float64)
+
+    def get_params(self) -> dict[str, Any]:
+        params = dict(self._base.get_params())
+        params["gate_weights"] = self._gate_weights.tolist()
+        return params
+
+    def _gate_features(self, step: IntervalStep) -> np.ndarray:
+        spread_bps = 0.0 if step.mid <= 0.0 else 10_000.0 * float(step.spread) / float(step.mid)
+        return np.array([1.0, spread_bps, _book_imbalance(step)], dtype=np.float64)
+
+    def _adjusted_p0(self, base_p0: float, features: np.ndarray) -> float:
+        logit = float(features @ self._gate_weights)
+        scale = 1.0 / (1.0 + math.exp(-logit))
+        return max(1e-6, min(1.0 - 1e-6, float(base_p0) * (0.5 + scale)))
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        params = self._base.get_params()
+        features = self._gate_features(previous) if previous is not None else np.array([1.0, 0.0, 0.0])
+        buy = max(0, int(round(float(current.buy_volume))))
+        sell = max(0, int(round(float(current.sell_volume))))
+        p0_buy = self._adjusted_p0(float(params.get("p0_buy", self.init_p0)), features)
+        p0_sell = self._adjusted_p0(float(params.get("p0_sell", self.init_p0)), features)
+        prob_buy = max(_MIN_PROB, _hurdle_lognormal_pmf(buy, p0_buy, float(params.get("mu_buy", self.init_mu)), float(params.get("sigma_buy", self.init_sigma))))
+        prob_sell = max(_MIN_PROB, _hurdle_lognormal_pmf(sell, p0_sell, float(params.get("mu_sell", self.init_mu)), float(params.get("sigma_sell", self.init_sigma))))
+        ll = math.log(max(_MIN_PROB, prob_buy * prob_sell))
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            observation={"buy_volume": buy, "sell_volume": sell, "p0_buy": p0_buy, "p0_sell": p0_sell},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        self._base.update(mpc_step_from_interval(previous), mpc_step_from_interval(current))
+        features = self._gate_features(previous)
+        buy_zero = 1.0 if float(current.buy_volume) <= 0.0 else 0.0
+        sell_zero = 1.0 if float(current.sell_volume) <= 0.0 else 0.0
+        target = 0.5 * (buy_zero + sell_zero)
+        gamma = max(1e-6, min(1.0, float(self.gate_decay)))
+        pred = 1.0 / (1.0 + math.exp(-float(features @ self._gate_weights)))
+        grad = (pred - target) * features
+        self._gate_weights = gamma * self._gate_weights - (1.0 - gamma) * grad
+        return True
+
+
+@dataclass
+class AR1MidDeltaModel:
+    """AR(1) mean on mid deltas with EWMA innovation variance."""
+
+    decay: float = 0.99
+    phi_decay: float = 0.99
+    initial_sigma: float = 50.0
+    name: str = "price_ar1_mid_delta"
+    kind: str = "ar1_mid_delta"
+    family: str = "price"
+    _phi: float = field(default=0.0, init=False, repr=False)
+    _prev_delta: float = field(default=0.0, init=False, repr=False)
+    _sigma2: float = field(default=2500.0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._phi = 0.0
+        self._prev_delta = 0.0
+        sigma = max(1e-6, float(self.initial_sigma))
+        self._sigma2 = sigma * sigma
+
+    def get_params(self) -> dict[str, Any]:
+        return {"phi": self._phi, "sigma_mid": math.sqrt(max(1e-12, self._sigma2))}
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        if previous is None:
+            return StepScore(step_index=-1, ts=current.ts, model_name=self.name, model_kind=self.kind, family=self.family, skip_reason="missing_previous_frame")
+        delta = float(current.mid - previous.mid)
+        mu = self._phi * self._prev_delta
+        sigma = math.sqrt(max(1e-12, self._sigma2))
+        ll = _gaussian_log_pdf(delta, mu, sigma)
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            standardized_residual=(delta - mu) / sigma,
+            observation={"delta_mid": delta, "mu_mid_before": mu},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        delta = float(current.mid - previous.mid)
+        mu = self._phi * self._prev_delta
+        residual = delta - mu
+        gamma = max(1e-6, min(1.0, float(self.decay)))
+        self._sigma2 = gamma * self._sigma2 + (1.0 - gamma) * residual * residual
+        phi_gamma = max(1e-6, min(1.0, float(self.phi_decay)))
+        denom = max(1e-12, self._prev_delta * self._prev_delta)
+        phi_obs = (self._prev_delta * delta) / denom if abs(self._prev_delta) > 1e-9 else 0.0
+        self._phi = phi_gamma * self._phi + (1.0 - phi_gamma) * phi_obs
+        self._phi = max(-0.99, min(0.99, self._phi))
+        self._prev_delta = delta
+        return True
+
+
+@dataclass
+class GARCHMidDeltaModel:
+    """Online GARCH(1,1) volatility on mid deltas."""
+
+    omega: float = 1.0
+    alpha: float = 0.05
+    beta: float = 0.90
+    initial_sigma: float = 50.0
+    name: str = "price_garch_mid_delta"
+    kind: str = "garch_mid_delta"
+    family: str = "price"
+    _sigma2: float = field(default=2500.0, init=False, repr=False)
+    _prev_eps: float = field(default=0.0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        sigma = max(1e-6, float(self.initial_sigma))
+        self._sigma2 = sigma * sigma
+        self._prev_eps = 0.0
+
+    def get_params(self) -> dict[str, Any]:
+        return {"sigma_mid": math.sqrt(max(1e-12, self._sigma2))}
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        if previous is None:
+            return StepScore(step_index=-1, ts=current.ts, model_name=self.name, model_kind=self.kind, family=self.family, skip_reason="missing_previous_frame")
+        delta = float(current.mid - previous.mid)
+        sigma = math.sqrt(max(1e-12, self._sigma2))
+        ll = _gaussian_log_pdf(delta, 0.0, sigma)
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            standardized_residual=delta / sigma,
+            observation={"delta_mid": delta, "sigma_mid_before": sigma},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        delta = float(current.mid - previous.mid)
+        eps = delta
+        self._sigma2 = max(1e-12, float(self.omega) + float(self.alpha) * self._prev_eps * self._prev_eps + float(self.beta) * self._sigma2)
+        self._prev_eps = eps
+        return True
+
+
+@dataclass
+class SpreadNormMidDeltaModel:
+    """EWMA Gaussian on spread-normalized mid moves."""
+
+    decay: float = 0.99
+    initial_sigma: float = 1.0
+    name: str = "price_spread_norm_mid_delta"
+    kind: str = "spread_norm_mid_delta"
+    family: str = "price"
+    _mu: float = field(default=0.0, init=False, repr=False)
+    _sigma2: float = field(default=1.0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._mu = 0.0
+        sigma = max(1e-6, float(self.initial_sigma))
+        self._sigma2 = sigma * sigma
+
+    def get_params(self) -> dict[str, Any]:
+        return {"mu_norm": self._mu, "sigma_norm": math.sqrt(max(1e-12, self._sigma2))}
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        if previous is None:
+            return StepScore(step_index=-1, ts=current.ts, model_name=self.name, model_kind=self.kind, family=self.family, skip_reason="missing_previous_frame")
+        spread = max(1e-12, float(previous.spread))
+        target = float(current.mid - previous.mid) / spread
+        sigma = math.sqrt(max(1e-12, self._sigma2))
+        ll = _gaussian_log_pdf(target, self._mu, sigma)
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            standardized_residual=(target - self._mu) / sigma,
+            observation={"spread_norm_delta": target},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        spread = max(1e-12, float(previous.spread))
+        target = float(current.mid - previous.mid) / spread
+        gamma = max(1e-6, min(1.0, float(self.decay)))
+        mu_new = gamma * self._mu + (1.0 - gamma) * target
+        self._sigma2 = gamma * self._sigma2 + (1.0 - gamma) * (target - mu_new) ** 2
+        self._mu = float(mu_new)
+        return True
+
+
+@dataclass
+class MicropriceDeltaModel:
+    """EWMA Gaussian on microprice deltas."""
+
+    decay: float = 0.99
+    initial_sigma: float = 50.0
+    name: str = "price_microprice_delta"
+    kind: str = "microprice_delta"
+    family: str = "price"
+    _mu: float = field(default=0.0, init=False, repr=False)
+    _sigma2: float = field(default=2500.0, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._mu = 0.0
+        sigma = max(1e-6, float(self.initial_sigma))
+        self._sigma2 = sigma * sigma
+
+    def get_params(self) -> dict[str, Any]:
+        return {"mu_micro": self._mu, "sigma_micro": math.sqrt(max(1e-12, self._sigma2))}
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        if previous is None:
+            return StepScore(step_index=-1, ts=current.ts, model_name=self.name, model_kind=self.kind, family=self.family, skip_reason="missing_previous_frame")
+        delta = float(current.microprice - previous.microprice)
+        sigma = math.sqrt(max(1e-12, self._sigma2))
+        ll = _gaussian_log_pdf(delta, self._mu, sigma)
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            standardized_residual=(delta - self._mu) / sigma,
+            observation={"delta_microprice": delta},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        delta = float(current.microprice - previous.microprice)
+        gamma = max(1e-6, min(1.0, float(self.decay)))
+        mu_new = gamma * self._mu + (1.0 - gamma) * delta
+        self._sigma2 = gamma * self._sigma2 + (1.0 - gamma) * (delta - mu_new) ** 2
+        self._mu = float(mu_new)
+        return True
+
+
+@dataclass
+class TwoStateMidDeltaHMM:
+    """Two-state Gaussian HMM on mid deltas (quiet vs active)."""
+
+    decay: float = 0.99
+    initial_sigma_quiet: float = 30.0
+    initial_sigma_active: float = 80.0
+    name: str = "price_hmm2_mid_delta"
+    kind: str = "hmm2_mid_delta"
+    family: str = "price"
+    _trans: np.ndarray = field(init=False, repr=False)
+    _state_prob: np.ndarray = field(init=False, repr=False)
+    _sigma2: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._trans = np.array([[0.95, 0.05], [0.10, 0.90]], dtype=np.float64)
+        self._state_prob = np.array([0.8, 0.2], dtype=np.float64)
+        self._sigma2 = np.array(
+            [float(self.initial_sigma_quiet) ** 2, float(self.initial_sigma_active) ** 2],
+            dtype=np.float64,
+        )
+
+    def get_params(self) -> dict[str, Any]:
+        return {
+            "state_prob": self._state_prob.tolist(),
+            "sigma_quiet": math.sqrt(self._sigma2[0]),
+            "sigma_active": math.sqrt(self._sigma2[1]),
+        }
+
+    def score(self, previous: IntervalStep | None, current: IntervalStep) -> StepScore:
+        if previous is None:
+            return StepScore(step_index=-1, ts=current.ts, model_name=self.name, model_kind=self.kind, family=self.family, skip_reason="missing_previous_frame")
+        delta = float(current.mid - previous.mid)
+        ll = self._predictive_log_pdf(delta)
+        sigma = math.sqrt(max(1e-12, float(self._state_prob @ self._sigma2)))
+        return StepScore(
+            step_index=-1,
+            ts=current.ts,
+            model_name=self.name,
+            model_kind=self.kind,
+            family=self.family,
+            log_likelihood=ll,
+            nll=-ll,
+            standardized_residual=delta / max(1e-12, sigma),
+            observation={"delta_mid": delta},
+            params_before=self.get_params(),
+        )
+
+    def update(self, previous: IntervalStep, current: IntervalStep) -> bool:
+        delta = float(current.mid - previous.mid)
+        gamma = max(1e-6, min(1.0, float(self.decay)))
+        pred_prob = self._trans.T @ self._state_prob
+        state_ll = np.array([_gaussian_log_pdf(delta, 0.0, math.sqrt(self._sigma2[i])) for i in range(2)])
+        weights = pred_prob * np.exp(state_ll - max(state_ll))
+        weights = weights / max(1e-300, weights.sum())
+        for i in range(2):
+            resid = delta
+            self._sigma2[i] = gamma * self._sigma2[i] + (1.0 - gamma) * resid * resid
+        self._state_prob = weights
+        active = 1 if weights[1] > weights[0] else 0
+        trans_obs = np.zeros((2, 2), dtype=np.float64)
+        for i in range(2):
+            for j in range(2):
+                trans_obs[i, j] = 1.0 if (i == (1 if active else 0) and j == active) else 0.0
+        self._trans = gamma * self._trans + (1.0 - gamma) * trans_obs
+        self._trans = self._trans / np.maximum(1e-12, self._trans.sum(axis=1, keepdims=True))
+        return True
+
+    def _predictive_log_pdf(self, delta: float) -> float:
+        pred_prob = self._trans.T @ self._state_prob
+        components = []
+        for i in range(2):
+            sigma = math.sqrt(max(1e-12, self._sigma2[i]))
+            components.append(pred_prob[i] + _gaussian_log_pdf(delta, 0.0, sigma))
+        m = max(components)
+        return m + math.log(sum(math.exp(c - m) for c in components))
