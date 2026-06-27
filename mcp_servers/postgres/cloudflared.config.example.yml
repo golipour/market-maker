@@ -1,0 +1,21 @@
+# Example named Cloudflare Tunnel config for exposing the Postgres MCP server.
+#
+# 1. Create a tunnel:
+#      cloudflared tunnel create market-maker-mcp
+# 2. Copy credentials JSON to a safe path and set credentials-file below.
+# 3. Add a public DNS route:
+#      cloudflared tunnel route dns market-maker-mcp mcp.example.com
+# 4. Run the MCP server locally on port 8787 (see README).
+# 5. Start the tunnel:
+#      cloudflared tunnel --config mcp_servers/postgres/cloudflared.config.example.yml run
+#
+# For a quick ephemeral URL (no DNS), use:
+#   cloudflared tunnel --url http://127.0.0.1:8787
+
+tunnel: <TUNNEL_ID>
+credentials-file: /path/to/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: mcp.example.com
+    service: http://127.0.0.1:8787
+  - service: http_status:404

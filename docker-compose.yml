@@ -154,6 +154,29 @@ services:
       - tempo
       - redis
 
+  # Read-only Postgres MCP server (streamable HTTP at http://localhost:8787/mcp).
+  # Set MCP_API_KEY in .env when exposing via Cloudflare Tunnel.
+  mcp-postgres:
+    build:
+      context: .
+      dockerfile: mcp_servers/postgres/Dockerfile
+    container_name: mcp-postgres
+    restart: "no"
+    environment:
+      MM_DATABASE_URL: postgresql://meysam:Welcome123@db:5432/postgres
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8787
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}
+      MCP_OAUTH_CLIENT_ID: ${MCP_OAUTH_CLIENT_ID:-}
+      MCP_OAUTH_CLIENT_SECRET: ${MCP_OAUTH_CLIENT_SECRET:-}
+      MCP_OAUTH_USERNAME: ${MCP_OAUTH_USERNAME:-}
+      MCP_OAUTH_PASSWORD: ${MCP_OAUTH_PASSWORD:-}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+    ports:
+      - "8787:8787"
+    depends_on:
+      - db
+
 volumes:
   redis-data:
   postgres_data:
