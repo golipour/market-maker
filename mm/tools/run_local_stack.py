@@ -89,6 +89,12 @@ def _terminate_process(proc: subprocess.Popen[str], *, sig: signal.Signals) -> N
         os.killpg(proc.pid, sig)
     except ProcessLookupError:
         return
+    except PermissionError:
+        # macOS / sandbox: may not signal the whole group; fall back to the child.
+        try:
+            proc.send_signal(sig)
+        except ProcessLookupError:
+            return
 
 
 def _terminate_all(procs: list[subprocess.Popen[str]]) -> None:
