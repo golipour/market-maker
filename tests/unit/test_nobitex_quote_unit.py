@@ -63,6 +63,14 @@ def test_nobitex_token_header_does_not_double_prefix():
     assert private_rest._token_authorization_header("Bearer abc") == "Bearer abc"
 
 
+def test_raw_private_key_bytes_accepts_urlsafe_base64():
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    raw = ed25519.Ed25519PrivateKey.generate().private_bytes_raw()
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    assert private_rest._raw_private_key_bytes(encoded) == raw
+
+
 def test_nobitex_api_key_signs_open_order_query(monkeypatch):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519

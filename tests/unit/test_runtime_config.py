@@ -78,6 +78,22 @@ def test_private_runtime_config_resolves_nobitex_api_key_auth(monkeypatch) -> No
     assert credentials.private_key == "private-key"
 
 
+def test_private_runtime_config_uses_token_as_nobitex_public_key_when_api_key_missing(monkeypatch) -> None:
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "public-key-from-token")
+    monkeypatch.delenv("NOBITEX_API_KEY", raising=False)
+    monkeypatch.setenv("NOBITEX_API_PRIVATE_KEY", "private-key")
+    config = PrivateRuntimeConfig(
+        api_token_env="NOBITEX_API_TOKEN",
+        api_private_key_env="NOBITEX_API_PRIVATE_KEY",
+    )
+
+    credentials = config.resolved_api_credentials("nobitex")
+
+    assert isinstance(credentials, NobitexApiKeyAuth)
+    assert credentials.public_key == "public-key-from-token"
+    assert credentials.private_key == "private-key"
+
+
 def test_private_runtime_config_prefers_nobitex_api_key_auth_over_token(monkeypatch) -> None:
     monkeypatch.setenv("NOBITEX_API_TOKEN", "legacy-token")
     monkeypatch.setenv("NOBITEX_API_KEY", "public-key")
@@ -151,7 +167,7 @@ def test_runtime_config_parses_exchange_configs_for_bot_roles() -> None:
     assert contract["venues"]["local"]["private"]["mode"] == "rest"
     assert contract["venues"]["local"]["fees"]["maker_fee"] == 0.0015
     assert contract["venues"]["global"]["fees"]["maker_fee"] == 0.0025
-    assert contract["venues"]["global"]["private"]["auth_type"] == "token"
+    assert contract["venues"]["global"]["private"]["auth_mode"] == "api_key"
 
 
 def test_runtime_config_rejects_private_enable_execution() -> None:

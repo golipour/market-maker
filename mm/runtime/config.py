@@ -135,10 +135,13 @@ class PrivateRuntimeConfig:
     """Private state and execution observation config for one exchange."""
 
     mode: str = "rest"
+    auth_mode: str | None = None
     api_token: str | None = None
     api_token_env: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
+    api_secret: str | None = None
+    api_secret_env: str | None = None
     api_private_key: str | None = None
     api_private_key_env: str | None = None
     api_passphrase: str | None = None
@@ -154,13 +157,17 @@ class PrivateRuntimeConfig:
 
     @property
     def enabled(self) -> bool:
-        return bool(
-            self.resolved_api_token()
-            or (
-                self.resolved_api_key()
-                and self.resolved_api_private_key()
-            )
-        )
+        return bool(self.resolved_api_key() or self.resolved_api_token())
+
+    def resolved_auth_mode(self, exchange: str | None = None) -> str:
+        if self.auth_mode:
+            return str(self.auth_mode).strip()
+        exchange_key = str(exchange or "").lower().strip()
+        if self.resolved_api_secret(exchange_key or None):
+            if exchange_key == "kucoin":
+                return "signed_key_passphrase"
+            return "signed_key"
+        return "api_key"
 
     def resolved_api_token(self, exchange: str | None = None) -> str | None:
         if self.api_token:
@@ -180,14 +187,23 @@ class PrivateRuntimeConfig:
             return os.environ.get(f"{exchange.upper()}_API_KEY")
         return None
 
-    def resolved_api_private_key(self, exchange: str | None = None) -> str | None:
+    def resolved_api_secret(self, exchange: str | None = None) -> str | None:
+        if self.api_secret:
+            return self.api_secret
         if self.api_private_key:
             return self.api_private_key
+        if self.api_secret_env:
+            return os.environ.get(self.api_secret_env)
         if self.api_private_key_env:
             return os.environ.get(self.api_private_key_env)
         if exchange:
-            return os.environ.get(f"{exchange.upper()}_API_PRIVATE_KEY")
+            return os.environ.get(f"{exchange.upper()}_API_SECRET") or os.environ.get(
+                f"{exchange.upper()}_API_PRIVATE_KEY"
+            )
         return None
+
+    def resolved_api_private_key(self, exchange: str | None = None) -> str | None:
+        return self.resolved_api_secret(exchange)
 
     def resolved_api_passphrase(self, exchange: str | None = None) -> str | None:
         if self.api_passphrase:
@@ -200,32 +216,29 @@ class PrivateRuntimeConfig:
 
     def resolved_api_credentials(self, exchange: str | None = None) -> Any:
         exchange_key = str(exchange or "").lower().strip()
-        api_key = self.resolved_api_key(exchange_key or None)
-        api_private_key = self.resolved_api_private_key(exchange_key or None)
-        if exchange_key == "nobitex" and api_key and api_private_key:
-            from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
+        api_key = self.resolved_api_key(exchange_key or None) or self.resolved_api_token(
+            exchange_key or None
+        )
+        if not api_key and not self.resolved_api_secret(exchange_key or None):
+            return None
+        if not exchange_key:
+            return api_key
+        from mm.exchanges.auth import exchange_auth_spec, resolve_exchange_auth
 
-            return NobitexApiKeyAuth(api_key, api_private_key)
-        if exchange_key == "tabdeal":
-            from mm.exchanges.tabdeal.private_rest import TabdealApiKeyAuth
-
-            tabdeal_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            if tabdeal_api_key and api_private_key:
-                return TabdealApiKeyAuth(tabdeal_api_key, api_private_key)
-        if exchange_key == "bitpin":
-            from mm.exchanges.bitpin.private_rest import BitpinApiKeyAuth
-
-            bitpin_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            if bitpin_api_key and api_private_key:
-                return BitpinApiKeyAuth(bitpin_api_key, api_private_key)
-        if exchange_key == "kucoin":
-            from mm.exchanges.kucoin.private_rest import KucoinApiKeyAuth
-
-            kucoin_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            api_passphrase = self.resolved_api_passphrase(exchange_key or None)
-            if kucoin_api_key and api_private_key and api_passphrase:
-                return KucoinApiKeyAuth(kucoin_api_key, api_private_key, api_passphrase)
-        return self.resolved_api_token(exchange_key or None)
+        spec = exchange_auth_spec(exchange_key) if exchange_key else None
+        auth_mode = self.resolved_auth_mode(exchange_key or None)
+        if spec is not None and auth_mode not in spec.supported_modes:
+            auth_mode = spec.default_mode
+        try:
+            return resolve_exchange_auth(
+                exchange_key,
+                auth_mode=auth_mode,
+                api_key=api_key,
+                api_secret=self.resolved_api_secret(exchange_key or None),
+                api_passphrase=self.resolved_api_passphrase(exchange_key or None),
+            )
+        except ValueError:
+            return api_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -850,12 +863,17 @@ class MarketMakerRuntimeConfig:
 def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | None:
     if private is None:
         return None
+    has_secret = bool(private.resolved_api_secret())
+    auth_mode = private.auth_mode
+    if not auth_mode:
+        auth_mode = "signed_key" if has_secret else "api_key"
     return {
         "mode": private.mode,
         "poll_interval_ms": private.poll_interval_ms,
         "fill_event_source": private.fill_event_source,
         "enabled": private.enabled,
-        "auth_type": "api_key" if private.resolved_api_key() and private.resolved_api_private_key() else "token",
+        "auth_mode": auth_mode,
+        "auth_type": auth_mode,
     }
 
 
@@ -1298,10 +1316,13 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         )
     return PrivateRuntimeConfig(
         mode=str(payload.get("mode", "rest")),
+        auth_mode=payload.get("auth_mode"),
         api_token=payload.get("api_token"),
         api_token_env=payload.get("api_token_env"),
         api_key=payload.get("api_key"),
         api_key_env=payload.get("api_key_env"),
+        api_secret=payload.get("api_secret"),
+        api_secret_env=payload.get("api_secret_env"),
         api_private_key=payload.get("api_private_key"),
         api_private_key_env=payload.get("api_private_key_env"),
         api_passphrase=payload.get("api_passphrase"),

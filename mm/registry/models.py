@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from mm.registry.credentials import account_credentials_for_api, is_legacy_env_ref
+
 ExchangeStatus = Literal["active", "disabled"]
 AccountStatus = Literal["active", "disabled"]
 PresetStatus = Literal["active", "disabled"]
@@ -26,7 +28,7 @@ class ExchangeRecord:
     updated_at: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "exchange": self.exchange,
             "status": self.status,
             "capabilities": dict(self.capabilities),
@@ -34,6 +36,13 @@ class ExchangeRecord:
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
+        try:
+            from mm.exchanges.auth import exchange_auth_spec
+
+            payload["auth_spec"] = exchange_auth_spec(self.exchange).as_dict()
+        except ValueError:
+            payload["auth_spec"] = None
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,12 +56,15 @@ class AccountRecord:
     updated_at: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
+        credentials = account_credentials_for_api(self.credential_ref)
         return {
             "account_id": self.account_id,
             "exchange": self.exchange,
             "role": self.role,
             "status": self.status,
-            "credential_ref": self.credential_ref,
+            "credential_ref": self.credential_ref if is_legacy_env_ref(self.credential_ref) else "",
+            "credentials": credentials,
+            "credential_storage": "legacy_env" if is_legacy_env_ref(self.credential_ref) else "stored",
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }

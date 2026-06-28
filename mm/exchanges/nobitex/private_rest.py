@@ -185,12 +185,20 @@ def _raw_private_key_bytes(value: str) -> bytes | None:
             return decoded
     except ValueError:
         pass
-    try:
-        decoded = base64.b64decode(compact, validate=True)
-        if len(decoded) == 32:
-            return decoded
-    except (binascii.Error, ValueError):
-        pass
+    for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+        try:
+            decoded = decoder(compact, validate=True)
+            if len(decoded) == 32:
+                return decoded
+        except (binascii.Error, ValueError):
+            pass
+        try:
+            padded = compact + "=" * (-len(compact) % 4)
+            decoded = decoder(padded, validate=True)
+            if len(decoded) == 32:
+                return decoded
+        except (binascii.Error, ValueError):
+            pass
     return None
 
 
