@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from mm.exchanges.auth import validate_credentials_for_exchange
+from mm.exchanges.auth import exchange_auth_spec, validate_credentials_for_exchange
 
 _LEGACY_ENV_KEYS = frozenset(
     {
@@ -143,7 +143,25 @@ def merge_credentials_update(
     return credentials
 
 
-def private_credentials_from_ref(credential_ref: str) -> dict[str, str]:
+def _legacy_env_defaults(exchange: str, token_env: str) -> dict[str, str]:
+    """Expand a single legacy token env name into signed-auth env keys when needed."""
+
+    exchange_key = exchange.lower().strip()
+    out: dict[str, str] = {"api_token_env": token_env}
+    try:
+        spec = exchange_auth_spec(exchange_key)
+    except ValueError:
+        return out
+    prefix = exchange_key.upper()
+    if "signed_key" in spec.supported_modes or "signed_key_passphrase" in spec.supported_modes:
+        out["api_secret_env"] = f"{prefix}_API_SECRET"
+        out["api_private_key_env"] = f"{prefix}_API_PRIVATE_KEY"
+    if "signed_key_passphrase" in spec.supported_modes:
+        out["api_passphrase_env"] = f"{prefix}_API_PASSPHRASE"
+    return out
+
+
+def private_credentials_from_ref(credential_ref: str, *, exchange: str = "") -> dict[str, str]:
     """Map a legacy env reference to ``*_env`` private config keys."""
 
     ref = str(credential_ref or "").strip()
@@ -179,7 +197,9 @@ def private_credentials_from_ref(credential_ref: str) -> dict[str, str]:
         env_name = ref[4:].strip()
         if not env_name:
             raise ValueError("credential_ref env: prefix requires a variable name")
-        return {"api_token_env": env_name}
+        return _legacy_env_defaults(exchange, env_name) if exchange else {"api_token_env": env_name}
+    if exchange:
+        return _legacy_env_defaults(exchange, ref)
     return {"api_token_env": ref}
 
 
@@ -192,7 +212,7 @@ def merge_private_config(
     """Merge exchange private defaults with account credentials."""
 
     base = dict(exchange_private or {})
-    credentials = private_credentials_from_ref(credential_ref)
+    credentials = private_credentials_from_ref(credential_ref, exchange=exchange)
     merged = {**base, **credentials}
     for legacy_key in (
         "api_token",

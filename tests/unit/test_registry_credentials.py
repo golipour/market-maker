@@ -84,6 +84,24 @@ def test_merge_private_config_inline_stored_credentials() -> None:
     assert "api_token_env" not in merged
 
 
+def test_legacy_nobitex_env_ref_expands_secret_env() -> None:
+    assert private_credentials_from_ref("NOBITEX_API_TOKEN", exchange="nobitex") == {
+        "api_token_env": "NOBITEX_API_TOKEN",
+        "api_secret_env": "NOBITEX_API_SECRET",
+        "api_private_key_env": "NOBITEX_API_PRIVATE_KEY",
+    }
+
+
+def test_merge_private_config_legacy_nobitex_includes_secret_env() -> None:
+    merged = merge_private_config(
+        {"mode": "rest"},
+        exchange="nobitex",
+        credential_ref="NOBITEX_API_TOKEN",
+    )
+    assert merged["api_token_env"] == "NOBITEX_API_TOKEN"
+    assert merged["api_private_key_env"] == "NOBITEX_API_PRIVATE_KEY"
+
+
 def test_merge_private_config_strips_inline_secrets_from_base() -> None:
     merged = merge_private_config(
         {

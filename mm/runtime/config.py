@@ -160,13 +160,15 @@ class PrivateRuntimeConfig:
         return bool(self.resolved_api_key() or self.resolved_api_token())
 
     def resolved_auth_mode(self, exchange: str | None = None) -> str:
+        exchange_key = str(exchange or "").lower().strip()
+        has_secret = bool(self.resolved_api_secret(exchange_key or None))
+        has_passphrase = bool(self.resolved_api_passphrase(exchange_key or None))
+        if exchange_key == "kucoin" and has_secret and has_passphrase:
+            return "signed_key_passphrase"
+        if has_secret and exchange_key in ("nobitex", "tabdeal", "bitpin", "kucoin"):
+            return "signed_key"
         if self.auth_mode:
             return str(self.auth_mode).strip()
-        exchange_key = str(exchange or "").lower().strip()
-        if self.resolved_api_secret(exchange_key or None):
-            if exchange_key == "kucoin":
-                return "signed_key_passphrase"
-            return "signed_key"
         return "api_key"
 
     def resolved_api_token(self, exchange: str | None = None) -> str | None:

@@ -106,6 +106,21 @@ def test_private_runtime_config_prefers_nobitex_api_key_auth_over_token(monkeypa
     assert credentials.public_key == "public-key"
 
 
+def test_private_runtime_config_prefers_signed_key_when_secret_present(monkeypatch) -> None:
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "public-key")
+    monkeypatch.setenv("NOBITEX_API_PRIVATE_KEY", "private-key")
+    config = PrivateRuntimeConfig(
+        auth_mode="api_key",
+        api_token_env="NOBITEX_API_TOKEN",
+        api_private_key_env="NOBITEX_API_PRIVATE_KEY",
+    )
+    from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
+
+    assert config.resolved_auth_mode("nobitex") == "signed_key"
+    credentials = config.resolved_api_credentials("nobitex")
+    assert isinstance(credentials, NobitexApiKeyAuth)
+
+
 def test_private_runtime_config_parses_fill_event_source() -> None:
     payload = venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"})
     payload["exchanges"]["nobitex"]["private"] = {
