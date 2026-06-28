@@ -534,21 +534,55 @@ def test_action_pipeline_side_counts_dashboard_splits_bid_and_ask() -> None:
 def test_exchange_account_dashboard_uses_physical_snapshot_sources() -> None:
     dashboard = exchange_account()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
 
     assert dashboard["uid"] == "mm-obs-v2-exchange-account"
+    assert dashboard["time"]["from"] == "now-24h"
+    assert templating["diagnostics_topic"]["hide"] == 2
+    assert templating["interval_ms"]["hide"] == 2
+
     balances_sql = panels_by_title["Latest account balances"]["targets"][0]["rawSql"]
     assert "PrivateStateSnapshot" in balances_sql
     assert "private:state:%:snapshot" in balances_sql
+    assert "$__timeFilter(e.ts)" not in balances_sql
+
+    age_sql = panels_by_title["Private snapshot age"]["targets"][0]["rawSql"]
+    assert "$__timeFilter(e.ts)" not in age_sql
+
+    errors_sql = panels_by_title["Recent private poll errors"]["targets"][0]["rawSql"]
+    assert "private:state:%:errors" in errors_sql
+    assert "401" not in errors_sql
+
+    step_sql = panels_by_title["Private poll errors / step"]["targets"][0]["rawSql"]
+    assert "private:state:%:errors" in step_sql
+    assert "$__timeFilter(e.ts)" in step_sql
 
     venue_sql = panels_by_title["Latest venue ledger"]["targets"][0]["rawSql"]
     assert "VenueLedgerSnapshot" in venue_sql
-    assert "ledger:snapshot:%" in venue_sql
+    assert "JointLedgerSnapshot" in venue_sql
+    assert "ledger:snapshot" in venue_sql
     assert "available_base" in venue_sql
     assert "open_orders" in venue_sql
+    assert "$__timeFilter(e.ts)" not in venue_sql
 
     inventory_sql = panels_by_title["Trading inventory (base)"]["targets"][0]["rawSql"]
     assert "available_base" in inventory_sql
     assert "locked_base" in inventory_sql
+    assert "$__timeFilter(e.ts)" in inventory_sql
+
+
+def test_diagnostics_and_target_book_filters_use_topic_patterns() -> None:
+    combined_sql = "\n".join(
+        target["rawSql"]
+        for dashboard in dashboards()
+        for panel in dashboard["panels"]
+        for target in panel.get("targets", ())
+        if target.get("datasource", {}).get("type") == "postgres"
+    )
+    assert "e.topic = '${diagnostics_topic}'" not in combined_sql
+    assert "topic = '${target_books_topic}'" not in combined_sql
+    assert "e.topic LIKE 'strategy:diagnostics:%'" in combined_sql
+    assert "e.topic LIKE 'strategy:target_books:%'" in combined_sql
 
 
 def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:

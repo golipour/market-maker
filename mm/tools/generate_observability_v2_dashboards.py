@@ -14,6 +14,7 @@ from typing import Any
 from mm.tools.grafana_dashboard_variables import (
     MM_SCOPE_EVENT_TYPES,
     actor_id_var_query,
+    diagnostics_scope_filter_sql,
     diagnostics_topic_var_query,
     exchange_var_query,
     interval_ms_events_filter_sql,
@@ -21,6 +22,7 @@ from mm.tools.grafana_dashboard_variables import (
     interval_ms_var_query,
     run_id_var_query,
     symbol_var_query,
+    target_books_scope_filter_sql,
     target_books_topic_var_query,
 )
 
@@ -617,7 +619,13 @@ def _dashboard(
     *,
     tags: list[str],
     extra_templating: list[dict[str, Any]] | None = None,
+    hide_variables: frozenset[str] | None = None,
+    time_from: str = DEFAULT_DASHBOARD_TIME_FROM,
+    time_to: str = DEFAULT_DASHBOARD_TIME_TO,
 ) -> dict[str, Any]:
+    templating = _templating(hide=hide_variables)
+    if extra_templating:
+        templating = [*templating, *extra_templating]
     return {
         "annotations": {"list": []},
         "editable": True,
@@ -631,8 +639,8 @@ def _dashboard(
         "schemaVersion": 39,
         "style": "dark",
         "tags": ["market-maker", "observability-v2", *tags],
-        "templating": {"list": [*_templating(), *(extra_templating or [])]},
-        "time": {"from": DEFAULT_DASHBOARD_TIME_FROM, "to": DEFAULT_DASHBOARD_TIME_TO},
+        "templating": {"list": templating},
+        "time": {"from": time_from, "to": time_to},
         "timepicker": {},
         "timezone": "browser",
         "title": title,
@@ -642,8 +650,9 @@ def _dashboard(
     }
 
 
-def _templating() -> list[dict[str, Any]]:
-    return [
+def _templating(*, hide: frozenset[str] | None = None) -> list[dict[str, Any]]:
+    hidden = hide or frozenset()
+    variables = [
         _query_var(
             "exchange",
             "Exchange",
@@ -673,6 +682,9 @@ def _templating() -> list[dict[str, Any]]:
             interval_ms_var_query(),
         ),
     ]
+    if not hidden:
+        return variables
+    return [{**var, "hide": 2} if var["name"] in hidden else var for var in variables]
 
 
 def _query_var(
@@ -708,7 +720,7 @@ def _query_var(
 
 
 def _target_stems_frame_query() -> str:
-    return """SELECT
+    return f"""SELECT
   e.event_id AS __value,
   (
     'step ' || COALESCE(e.payload->>'frame_step', '?')
@@ -716,12 +728,7 @@ def _target_stems_frame_query() -> str:
     || ' / created ' || COALESCE(e.payload->>'created_at_ms', '?')
   ) AS __text
 FROM mm_events e
-WHERE e.topic = '${diagnostics_topic}'
-  AND e.event_type = 'ControllerDiagnostics'
-  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
-  AND $__timeFilter(e.ts)
+WHERE {diagnostics_scope_filter_sql()}
 ORDER BY e.ts DESC
 LIMIT 100"""
 
@@ -2048,7 +2055,7 @@ FROM (
            + jsonb_array_length(COALESCE(e.payload->'global'->'orders', '[]'::jsonb))
          )::double precision AS value
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -2141,7 +2148,7 @@ def _target_ladder_level_sql(measure: str) -> str:
     VALUES ('local', e.payload->'local'), ('global', e.payload->'global')
   ) AS book(role, value)
   CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book.value->'orders', '[]'::jsonb)) WITH ORDINALITY AS o(value, order_no)
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -2356,7 +2363,7 @@ def _latest_target_ladder_qty_price_sql() -> str:
          e.actor_id,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -2643,7 +2650,7 @@ def _stem_axis_ctes() -> str:
          e.actor_id,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -2805,7 +2812,7 @@ def _latest_action_pipeline_stage_orders_sql(
   SELECT e.exchange,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{diagnostics_topic}}'
+  WHERE {diagnostics_scope_filter_sql()}
     AND e.event_type = 'ControllerDiagnostics'
     AND (
       '${{target_frame_mode}}' = 'latest'
@@ -2933,7 +2940,7 @@ def _latest_action_pipeline_stage_spread_bucket_sql(
   SELECT e.exchange,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{diagnostics_topic}}'
+  WHERE {diagnostics_scope_filter_sql()}
     AND e.event_type = 'ControllerDiagnostics'
     AND (
       '${{target_frame_mode}}' = 'latest'
@@ -3052,7 +3059,7 @@ def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str | None = "l
   SELECT e.exchange,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{diagnostics_topic}}'
+  WHERE {diagnostics_scope_filter_sql()}
     AND e.event_type = 'ControllerDiagnostics'
     AND (
       '${{target_frame_mode}}' = 'latest'
@@ -3121,7 +3128,7 @@ def _stem_raw_to_target_sql() -> str:
          e.actor_id,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -3203,7 +3210,7 @@ def _stem_target_to_place_sql() -> str:
          e.actor_id,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -4339,28 +4346,99 @@ def _exchange_account_private_exchange_expr() -> str:
     )
 
 
-def _exchange_account_venue_exchange_expr() -> str:
+def _exchange_account_private_errors_exchange_expr() -> str:
     return (
         "COALESCE(e.exchange, e.payload->>'exchange', "
-        "substring(e.topic from '^ledger:snapshot:([^:]+)$'), 'unknown')"
+        "substring(e.topic from '^private:state:([^:]+):errors$'), 'unknown')"
     )
 
 
-def _exchange_account_private_filter() -> str:
+def _exchange_account_venue_exchange_expr() -> str:
+    return (
+        "COALESCE("
+        "e.exchange, "
+        "e.payload->>'exchange', "
+        "e.payload #>> '{local,exchange}', "
+        "substring(e.topic from '^ledger:snapshot:([^:]+)$'), "
+        "'unknown'"
+        ")"
+    )
+
+
+def _exchange_account_venue_symbol_expr() -> str:
+    return (
+        "COALESCE("
+        "e.symbol, "
+        "e.payload->>'symbol', "
+        "e.payload #>> '{local,symbol}', "
+        "'unknown'"
+        ")"
+    )
+
+
+def _exchange_account_private_scope_filter() -> str:
     exchange = _exchange_account_private_exchange_expr()
     return f"""e.event_type = 'PrivateStateSnapshot'
   AND e.topic LIKE 'private:state:%:snapshot'
-  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])"""
+
+
+def _exchange_account_private_time_filter() -> str:
+    return f"""{_exchange_account_private_scope_filter()}
   AND $__timeFilter(e.ts)"""
 
 
-def _exchange_account_venue_filter() -> str:
+def _exchange_account_private_errors_scope_filter() -> str:
+    exchange = _exchange_account_private_errors_exchange_expr()
+    return f"""e.topic LIKE 'private:state:%:errors'
+  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])"""
+
+
+def _exchange_account_private_errors_time_filter() -> str:
+    return f"""{_exchange_account_private_errors_scope_filter()}
+  AND $__timeFilter(e.ts)"""
+
+
+def _exchange_account_venue_scope_filter() -> str:
     exchange = _exchange_account_venue_exchange_expr()
-    return f"""e.event_type = 'VenueLedgerSnapshot'
-  AND e.topic LIKE 'ledger:snapshot:%'
+    symbol = _exchange_account_venue_symbol_expr()
+    return f"""(
+    (e.event_type = 'VenueLedgerSnapshot' AND e.topic LIKE 'ledger:snapshot:%')
+    OR (e.event_type = 'JointLedgerSnapshot' AND e.topic = 'ledger:snapshot')
+  )
   AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-  AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  AND {symbol} = ANY(ARRAY[${{symbol:sqlstring}}]::text[])"""
+
+
+def _exchange_account_venue_time_filter() -> str:
+    return f"""{_exchange_account_venue_scope_filter()}
   AND $__timeFilter(e.ts)"""
+
+
+def _exchange_account_payload_field_from(alias: str, field: str) -> str:
+    return (
+        f"COALESCE("
+        f"NULLIF({alias}->>'{field}', '')::double precision, "
+        f"NULLIF({alias} #>> ARRAY['local','{field}'], '')::double precision"
+        f")"
+    )
+
+
+def _exchange_account_open_orders_from(alias: str) -> str:
+    return (
+        f"COALESCE("
+        f"jsonb_object_length(COALESCE({alias}->'open_orders', '{{}}'::jsonb)), "
+        f"jsonb_object_length(COALESCE({alias} #> ARRAY['local','open_orders'], '{{}}'::jsonb))"
+        f")"
+    )
+
+
+def _exchange_account_venue_payload_field(field: str) -> str:
+    return _exchange_account_payload_field_from("e.payload", field)
+
+
+def _exchange_account_venue_open_orders_expr() -> str:
+    return _exchange_account_open_orders_from("e.payload")
 
 
 def _exchange_account_latest_balances_sql() -> str:
@@ -4371,7 +4449,7 @@ def _exchange_account_latest_balances_sql() -> str:
     e.ts,
     e.payload
   FROM mm_events e
-  WHERE {_exchange_account_private_filter()}
+  WHERE {_exchange_account_private_scope_filter()}
   ORDER BY {exchange}, e.ts DESC
 )
 SELECT
@@ -4394,63 +4472,94 @@ def _exchange_account_balance_timeseries_sql(field: str) -> str:
   (balance->>'{field}')::double precision AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each(COALESCE(e.payload->'balances', '{{}}'::jsonb)) AS b(asset, balance)
-WHERE {_exchange_account_private_filter()}
+WHERE {_exchange_account_private_time_filter()}
 ORDER BY 1"""
 
 
 def _exchange_account_private_snapshot_age_sql() -> str:
-    exchange = _exchange_account_private_exchange_expr()
     return f"""SELECT EXTRACT(EPOCH FROM (now() - max(e.ts)))::double precision AS value
 FROM mm_events e
-WHERE {_exchange_account_private_filter()}"""
+WHERE {_exchange_account_private_scope_filter()}"""
+
+
+def _exchange_account_private_errors_step_sql() -> str:
+    exchange = _exchange_account_private_errors_exchange_expr()
+    step_seconds = _step_interval_seconds_sql()
+    return f"""SELECT
+  (floor(EXTRACT(EPOCH FROM e.ts) / {step_seconds}) * {step_seconds})::bigint AS "time",
+  {exchange} || ' ' || COALESCE(e.payload->>'source', 'unknown') AS metric,
+  COUNT(*)::double precision AS value
+FROM mm_events e
+WHERE {_exchange_account_private_errors_time_filter()}
+GROUP BY 1, 2
+ORDER BY 1"""
+
+
+def _exchange_account_private_errors_recent_sql(*, limit: int = 50) -> str:
+    exchange = _exchange_account_private_errors_exchange_expr()
+    return f"""SELECT
+  e.ts,
+  {exchange} AS exchange,
+  COALESCE(e.payload->>'source', '') AS source,
+  COALESCE(e.payload->>'error', '') AS error,
+  COALESCE(e.payload->>'message', '') AS message
+FROM mm_events e
+WHERE {_exchange_account_private_errors_time_filter()}
+ORDER BY e.ts DESC
+LIMIT {limit}"""
 
 
 def _exchange_account_venue_field_timeseries_sql(*fields: str) -> str:
     exchange = _exchange_account_venue_exchange_expr()
+    symbol = _exchange_account_venue_symbol_expr()
     unions = []
     for field in fields:
+        value = _exchange_account_venue_payload_field(field)
         unions.append(
             f"""SELECT
   e.ts AS time,
-  {exchange} || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') || ' {field}' AS metric,
-  (e.payload->>'{field}')::double precision AS value
+  {exchange} || ' ' || {symbol} || ' {field}' AS metric,
+  {value} AS value
 FROM mm_events e
-WHERE {_exchange_account_venue_filter()}"""
+WHERE {_exchange_account_venue_time_filter()}"""
         )
     return "\nUNION ALL\n".join(unions) + "\nORDER BY 1"
 
 
 def _exchange_account_open_orders_timeseries_sql() -> str:
     exchange = _exchange_account_venue_exchange_expr()
+    symbol = _exchange_account_venue_symbol_expr()
+    open_orders = _exchange_account_venue_open_orders_expr()
     return f"""SELECT
   e.ts AS time,
-  {exchange} || ' ' || COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS metric,
-  jsonb_object_length(COALESCE(e.payload->'open_orders', '{{}}'::jsonb))::double precision AS value
+  {exchange} || ' ' || {symbol} AS metric,
+  {open_orders}::double precision AS value
 FROM mm_events e
-WHERE {_exchange_account_venue_filter()}
+WHERE {_exchange_account_venue_time_filter()}
 ORDER BY 1"""
 
 
 def _exchange_account_latest_venue_ledger_sql() -> str:
     exchange = _exchange_account_venue_exchange_expr()
+    symbol = _exchange_account_venue_symbol_expr()
     return f"""WITH latest AS (
-  SELECT DISTINCT ON ({exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))
+  SELECT DISTINCT ON ({exchange}, {symbol})
     {exchange} AS exchange,
-    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,
+    {symbol} AS symbol,
     e.ts,
     e.payload
   FROM mm_events e
-  WHERE {_exchange_account_venue_filter()}
-  ORDER BY {exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC
+  WHERE {_exchange_account_venue_scope_filter()}
+  ORDER BY {exchange}, {symbol}, e.ts DESC
 )
 SELECT
   exchange,
   symbol,
-  (payload->>'available_base')::double precision AS available_base,
-  (payload->>'locked_base')::double precision AS locked_base,
-  (payload->>'available_quote')::double precision AS available_quote,
-  (payload->>'locked_quote')::double precision AS locked_quote,
-  jsonb_object_length(COALESCE(payload->'open_orders', '{{}}'::jsonb)) AS open_orders,
+  {_exchange_account_payload_field_from("payload", "available_base")} AS available_base,
+  {_exchange_account_payload_field_from("payload", "locked_base")} AS locked_base,
+  {_exchange_account_payload_field_from("payload", "available_quote")} AS available_quote,
+  {_exchange_account_payload_field_from("payload", "locked_quote")} AS locked_quote,
+  {_exchange_account_open_orders_from("payload")} AS open_orders,
   ts AS snapshot_time
 FROM latest
 ORDER BY exchange, symbol"""
@@ -4458,18 +4567,51 @@ ORDER BY exchange, symbol"""
 
 def _exchange_account_latest_open_orders_sql() -> str:
     exchange = _exchange_account_venue_exchange_expr()
+    symbol = _exchange_account_venue_symbol_expr()
     return f"""WITH latest AS (
-  SELECT DISTINCT ON ({exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'))
+  SELECT DISTINCT ON ({exchange}, {symbol})
     {exchange} AS exchange,
-    COALESCE(e.symbol, e.payload->>'symbol', 'unknown') AS symbol,
+    {symbol} AS symbol,
     e.ts,
     e.payload
   FROM mm_events e
-  WHERE {_exchange_account_venue_filter()}
-  ORDER BY {exchange}, COALESCE(e.symbol, e.payload->>'symbol', 'unknown'), e.ts DESC
+  WHERE {_exchange_account_venue_scope_filter()}
+  ORDER BY {exchange}, {symbol}, e.ts DESC
 )
-SELECT sum(jsonb_object_length(COALESCE(payload->'open_orders', '{{}}'::jsonb)))::double precision AS value
+SELECT sum({_exchange_account_open_orders_from("payload")})::double precision AS value
 FROM latest"""
+
+
+def _exchange_account_snapshot_age_stat_panel(id_: int, *, x: int, y: int) -> dict[str, Any]:
+    return {
+        "datasource": PG_DS,
+        "description": (
+            "Seconds since the latest PrivateStateSnapshot for the selected exchange(s), "
+            "regardless of dashboard time range. Values above a few minutes usually mean "
+            "wallet polling is failing."
+        ),
+        "fieldConfig": {
+            "defaults": {
+                "decimals": 0,
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {"color": "yellow", "value": 120},
+                        {"color": "red", "value": 900},
+                    ],
+                },
+                "unit": "s",
+            },
+            "overrides": [],
+        },
+        "gridPos": {"h": 4, "w": 6, "x": x, "y": y},
+        "id": id_,
+        "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto"},
+        "targets": [_target(PG_DS, _exchange_account_private_snapshot_age_sql(), fmt="table")],
+        "title": "Private snapshot age",
+        "type": "stat",
+    }
 
 
 def exchange_account() -> dict[str, Any]:
@@ -4479,28 +4621,17 @@ def exchange_account() -> dict[str, Any]:
             "Scope",
             (
                 "Physical exchange account data from persisted snapshots. "
-                "Account balances come from PrivateStateSnapshot (REST wallet poll on private:state:{exchange}:snapshot). "
-                "Per-symbol trading inventory, locked funds, and open orders come from VenueLedgerSnapshot "
-                "(ledger:snapshot:{exchange}). This is separate from the virtual strategy wallet shown in Portfolio And PnL."
+                "Account balances come from PrivateStateSnapshot (REST wallet poll on "
+                "`private:state:{exchange}:snapshot`). Poll failures are published on "
+                "`private:state:{exchange}:errors`. Per-symbol trading inventory, locked "
+                "funds, and open orders come from VenueLedgerSnapshot (`ledger:snapshot:*`) "
+                "and joint ledger snapshots (`ledger:snapshot`). This is separate from the "
+                "virtual strategy wallet shown in Portfolio And PnL."
             ),
             y=0,
             h=4,
         ),
-        _panel(
-            2,
-            "Private snapshot age",
-            "stat",
-            PG_DS,
-            _exchange_account_private_snapshot_age_sql(),
-            x=0,
-            y=4,
-            w=6,
-            h=4,
-            fmt="table",
-            unit="s",
-            decimals=0,
-            description="Seconds since the latest PrivateStateSnapshot in the selected time range.",
-        ),
+        _exchange_account_snapshot_age_stat_panel(2, x=0, y=4),
         _panel(
             3,
             "Latest open orders",
@@ -4513,7 +4644,20 @@ def exchange_account() -> dict[str, Any]:
             h=4,
             fmt="table",
             decimals=0,
-            description="Open order count from the latest VenueLedgerSnapshot per exchange/symbol.",
+            description="Open order count from the latest venue ledger snapshot per exchange/symbol.",
+        ),
+        _panel(
+            11,
+            "Private poll errors / step",
+            "timeseries",
+            PG_DS,
+            _exchange_account_private_errors_step_sql(),
+            x=12,
+            y=4,
+            w=12,
+            h=4,
+            decimals=0,
+            description="Count of private REST poll failures (`private:state:{exchange}:errors`) per step.",
         ),
         _panel(
             4,
@@ -4526,7 +4670,20 @@ def exchange_account() -> dict[str, Any]:
             w=24,
             h=10,
             fmt="table",
-            description="Most recent wallet balances per asset from PrivateStateSnapshot.",
+            description="Most recent wallet balances per asset from PrivateStateSnapshot (not limited to dashboard time range).",
+        ),
+        _panel(
+            12,
+            "Recent private poll errors",
+            "table",
+            PG_DS,
+            _exchange_account_private_errors_recent_sql(),
+            x=0,
+            y=18,
+            w=24,
+            h=10,
+            fmt="table",
+            description="Latest Nobitex/Wallex private REST failures (401, timeouts, etc.) for the selected exchange(s).",
         ),
         _panel(
             5,
@@ -4535,8 +4692,8 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_balance_timeseries_sql("total"),
             x=0,
-            y=18,
-            description="Total balance per asset from exchange wallet polls.",
+            y=28,
+            description="Total balance per asset from exchange wallet polls within the dashboard time range.",
         ),
         _panel(
             6,
@@ -4545,7 +4702,7 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_balance_timeseries_sql("locked"),
             x=12,
-            y=18,
+            y=28,
             description="Locked balance per asset (orders, holds) from exchange wallet polls.",
         ),
         _panel(
@@ -4555,8 +4712,8 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_venue_field_timeseries_sql("available_base", "locked_base"),
             x=0,
-            y=26,
-            description="Per-symbol base asset available and locked from VenueLedgerSnapshot.",
+            y=36,
+            description="Per-symbol base asset available and locked from venue ledger snapshots.",
         ),
         _panel(
             8,
@@ -4565,8 +4722,8 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_venue_field_timeseries_sql("available_quote", "locked_quote"),
             x=12,
-            y=26,
-            description="Per-symbol quote asset available and locked from VenueLedgerSnapshot.",
+            y=36,
+            description="Per-symbol quote asset available and locked from venue ledger snapshots.",
         ),
         _panel(
             9,
@@ -4575,7 +4732,7 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_open_orders_timeseries_sql(),
             x=0,
-            y=34,
+            y=44,
             w=24,
             h=8,
             decimals=0,
@@ -4588,11 +4745,11 @@ def exchange_account() -> dict[str, Any]:
             PG_DS,
             _exchange_account_latest_venue_ledger_sql(),
             x=0,
-            y=42,
+            y=52,
             w=24,
             h=10,
             fmt="table",
-            description="Most recent per-symbol trading ledger snapshot.",
+            description="Most recent per-symbol trading ledger snapshot (not limited to dashboard time range).",
         ),
     ]
     return _dashboard(
@@ -4600,6 +4757,16 @@ def exchange_account() -> dict[str, Any]:
         "MM Observability v2 / 07A Exchange Accounts",
         panels,
         tags=["portfolio", "exchange-account"],
+        hide_variables=frozenset(
+            {
+                "diagnostics_topic",
+                "target_books_topic",
+                "actor_id",
+                "interval_ms",
+                "run_id",
+            }
+        ),
+        time_from="now-24h",
     )
 
 
@@ -4760,12 +4927,11 @@ def incident_drilldown() -> dict[str, Any]:
 
 
 def _diagnostics_filter() -> str:
-    return """e.topic = '${diagnostics_topic}'
-  AND e.event_type = 'ControllerDiagnostics'
-  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
-  AND ($__timeFilter(e.ts))"""
+    return diagnostics_scope_filter_sql()
+
+
+def _target_books_filter() -> str:
+    return target_books_scope_filter_sql()
 
 
 def _latest_warnings_sql(limit: int = 25) -> str:
@@ -5055,27 +5221,20 @@ ORDER BY 1"""
 
 
 def _role_exchange_cte() -> str:
-    return """role_exchange AS (
+    diag = diagnostics_scope_filter_sql()
+    return f"""role_exchange AS (
   SELECT DISTINCT role, exchange, symbol
   FROM (
     SELECT 'local'::text AS role, e.exchange AS exchange, e.symbol AS symbol
     FROM mm_events e
-    WHERE e.topic = '${diagnostics_topic}'
-      AND e.event_type = 'ControllerDiagnostics'
-      AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-      AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
-      AND $__timeFilter(e.ts)
+    WHERE {diag}
     UNION ALL
     SELECT gates.value->>'role' AS role, gates.key AS exchange, e.symbol AS symbol
     FROM mm_events e
     CROSS JOIN LATERAL jsonb_each(
-      COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)
+      COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{{}}'::jsonb)
     ) AS gates(key, value)
-    WHERE e.topic = '${diagnostics_topic}'
-      AND e.event_type = 'ControllerDiagnostics'
-      AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-      AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
-      AND $__timeFilter(e.ts)
+    WHERE {diag}
       AND gates.value->>'role' IN ('local', 'global')
     UNION ALL
     SELECT 'local'::text,
@@ -5140,7 +5299,7 @@ SELECT e.ts AS "time", (r.exchange || ' buy_vwap') AS metric,
        {buy_vwap} AS value
 FROM mm_events e
 JOIN role_exchange r ON {vwap_join}
-WHERE e.topic = '${{diagnostics_topic}}'
+WHERE {diagnostics_scope_filter_sql()}
   AND e.event_type = 'ControllerDiagnostics'
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
@@ -5152,7 +5311,7 @@ SELECT e.ts AS "time", (r.exchange || ' sell_vwap') AS metric,
        {sell_vwap} AS value
 FROM mm_events e
 JOIN role_exchange r ON {vwap_join}
-WHERE e.topic = '${{diagnostics_topic}}'
+WHERE {diagnostics_scope_filter_sql()}
   AND e.event_type = 'ControllerDiagnostics'
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
@@ -5430,7 +5589,7 @@ def _role_execution_contract_sql(role: str) -> str:
          'target orders'::text AS metric,
          SUM(jsonb_array_length(COALESCE(e.payload->'{target_path}'->'orders', '[]'::jsonb)))::double precision AS value
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -5588,7 +5747,7 @@ def _latest_target_orders_sql(limit: int = 200) -> str:
          e.symbol AS frame_symbol,
          e.payload
   FROM mm_events e
-  WHERE e.topic = '${{target_books_topic}}'
+  WHERE {_target_books_filter()}
     AND e.event_type = 'JointTargetBook'
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -6159,7 +6318,7 @@ FROM mm_events e
 CROSS JOIN LATERAL (
   {values_sql}
 ) AS v(venue, book)
-WHERE e.topic = '${{target_books_topic}}'
+WHERE {_target_books_filter()}
   AND e.event_type = 'JointTargetBook'
   AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -6190,7 +6349,7 @@ CROSS JOIN LATERAL (
   {values_sql}
 ) AS v(venue, book)
 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(book->'orders', '[]'::jsonb)) AS o
-WHERE e.topic = '${{target_books_topic}}'
+WHERE {_target_books_filter()}
   AND e.event_type = 'JointTargetBook'
   AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -6220,12 +6379,7 @@ def _latest_payload_sql(kind: str) -> str:
   AND actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
   AND $__timeFilter(ts)"""
     else:
-        where = """topic = '${target_books_topic}'
-  AND event_type = 'JointTargetBook'
-  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
-  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])
-  AND actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])
-  AND $__timeFilter(ts)"""
+        where = target_books_scope_filter_sql(include_time=True).replace("e.", "")
     alias = "e" if kind == "diagnostics" else ""
     if alias:
         return f"SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE {where} ORDER BY e.ts DESC LIMIT 1"

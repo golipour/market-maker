@@ -127,6 +127,9 @@ def exchange_var_query(*, include_market_facts: bool = True) -> str:
     ts
   FROM mm_events
   WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')""",
+        """SELECT substring(topic from '^private:state:([^:]+):errors$') AS exchange, ts
+  FROM mm_events
+  WHERE topic LIKE 'private:state:%:errors'""",
     ]
     if include_market_facts:
         sources.append(
@@ -199,6 +202,42 @@ FROM (
   GROUP BY topic
 ) ranked
 ORDER BY latest_ts DESC"""
+
+
+def diagnostics_scope_filter_sql(*, table_ref: str = "e", include_time: bool = True) -> str:
+    """Scope ControllerDiagnostics rows by exchange/symbol/actor (not a single topic)."""
+
+    prefix = f"{table_ref}." if table_ref else ""
+    clauses = [
+        f"{prefix}topic LIKE 'strategy:diagnostics:%'",
+        f"{prefix}event_type = 'ControllerDiagnostics'",
+        f"{prefix}exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])",
+        f"{prefix}symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])",
+        f"{prefix}actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])",
+    ]
+    if include_time:
+        clauses.append(f"$__timeFilter({prefix}ts)")
+    return "\n  AND ".join(clauses)
+
+
+def target_books_scope_filter_sql(*, table_ref: str = "e", include_time: bool = True) -> str:
+    """Scope JointTargetBook rows by exchange/symbol/actor (not a single topic)."""
+
+    prefix = f"{table_ref}." if table_ref else ""
+    clauses = [
+        f"{prefix}topic LIKE 'strategy:target_books:%'",
+        f"{prefix}event_type = 'JointTargetBook'",
+        f"{prefix}exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])",
+        f"{prefix}symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])",
+        (
+            f"COALESCE(NULLIF({prefix}actor_id, ''), "
+            f"substring({prefix}topic from '^strategy:target_books:(.+)$')) "
+            f"= ANY(ARRAY[${{actor_id:sqlstring}}]::text[])"
+        ),
+    ]
+    if include_time:
+        clauses.append(f"$__timeFilter({prefix}ts)")
+    return "\n  AND ".join(clauses)
 
 
 def run_id_var_query() -> str:
