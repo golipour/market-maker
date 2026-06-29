@@ -211,10 +211,21 @@ Local and global books evolve in parallel; consolidated wealth drives CE. VWAP t
 
 ## 7. Scalar objective `J`
 
+**Local-only optimizer:**
+
 ```text
-J = CE + w_book · B − w_inv · Z̄
-    (+ global book / inventory terms in joint mode)
+J = CE_eff + w_book · B − w_inv · Z̄
 ```
+
+**Joint / liquidity-sourcing optimizer** (consolidated CE plus per-venue soft terms):
+
+```text
+J = CE_eff
+    + w_book_local · B_local − w_inv_local · Z̄_local
+    + w_book_global · B_global − w_inv_global · Z̄_global
+```
+
+Component keys: `book_quality`, `inventory_zone_penalty`, `global_book_quality`, `global_inventory_zone_penalty`. Local and global inventory zones may use different `comfort_*` and `w_inv` blocks.
 
 Evaluation timing:
 
@@ -224,19 +235,40 @@ Evaluation timing:
 
 ### 7.1 Risk-adjusted return (CE)
 
-Per-path horizon returns `R_i` (wealth-normalized):
+#### Per-path horizon return
+
+For Monte Carlo path `i`, horizon steps `h = 0 … H−1`:
+
+```text
+ΔW_i,h = wealth after step h − wealth before step h   (inventory-aware marking)
+R_i    = (Σ_h ΔW_i,h) / W_0
+W_0    = max(1e-8, cash_0 + inventory_0 · mark_0)
+```
+
+`mark_0` uses bid VWAP when short inventory, sell VWAP when long, else quote anchor (see §3.2).
+
+#### Entropic certainty equivalent
+
+Per-path horizon returns `R_i` (wealth-normalized), batch size `N`:
 
 ```text
 CE = min_i(R_i) − (1/β) · ln( (1/N) Σ_i exp(−β · (R_i − min_i(R_i))) )
 ```
 
-`β = return_risk_aversion_beta` (venue-scoped).
+Equivalent stable form (implemented via `logsumexp`):
+
+```text
+CE = min_i(R_i) − (1/β) · logsumexp_i(−β · (R_i − min_i(R_i))) + (1/β) · ln(N)
+```
+
+`β = return_risk_aversion_beta` (venue-scoped). `σ` in inventory zone (§7.4) is unrelated; here `β` is risk aversion only.
 
 Properties:
 
 - Soft minimum / entropic certainty equivalent over paths.
 - Sensitive to tail paths, not only mean return.
 - Units: dimensionless return after dividing by `W_0`.
+- When all paths have zero tradeable capacity or zero `ΔW`, `R_i = 0` for all `i` → **CE = 0**.
 
 CE is computed from **simulated** fills and model-sampled flows, not realized live PnL.
 
@@ -244,11 +276,23 @@ CE is computed from **simulated** fills and model-sampled flows, not realized li
 
 When `objective_normalize.enabled`:
 
-1. `risk_adjusted_return_raw` = raw CE.
-2. `risk_adjusted_return` = `CE_raw / s`, with `s` = EWMA of `|CE_raw|` from **prior decisions** (fixed during the Adam loop).
-3. `J ← J − CE_raw + CE_norm`.
+```text
+CE_raw  = CE from §7.1 (before scaling)
+s       = EWMA scale from prior decisions (fixed for entire Adam loop on this frame)
+CE_norm = CE_raw / s                    # stored as risk_adjusted_return
+J       ← J − CE_raw + CE_norm          # replace raw CE term in objective
+```
 
-After the frame: `s_new = decay · s + (1 − decay) · |CE_raw|`.
+If `s ≤ 0` on first use, `s ← max(|CE_raw|, 1e-12)` for that frame.
+
+EWMA update after the decision completes (`ce_ewma_decay = decay`):
+
+```text
+s_new = decay · s + (1 − decay) · |CE_raw|     if s > 0 and |CE_raw| > 0
+s_new = max(|CE_raw|, 1e-12)                    if s ≤ 0 (bootstrap)
+```
+
+Diagnostics keys: `risk_adjusted_return_raw`, `risk_adjusted_return` (= `CE_norm`), `objective_ce_ewma_scale` (= `s` used).
 
 **Asymmetry:** Only CE is scaled. `w_book` and `w_inv` are fixed scalars on their raw scores. No coupled normalization for inventory or book terms exists in code.
 
@@ -256,20 +300,32 @@ When `CE_raw = 0`, CE contributes nothing to `J`; inventory and book terms remai
 
 ### 7.3 Book quality (`B`, weight `w_book`)
 
-`B ∈ [0, 1]` at h=0 from weighted sub-scores:
+`B ∈ [0, 1]` at **horizon step 0 only** from weighted sub-scores. Let `d_bid_touch`, `d_ask_touch` be effective quoted depth at touch spread `touch = spread_max · touch_spread_fraction`, and `q_bid`, `q_ask` cumulative depth at `spread_max`:
 
-| Sub-score | Construction (summary) |
-| --- | --- |
-| Presence | Touch depth vs `depth_target` |
-| Tightness | `exp(−spread_sum / spread_target)` on first centers |
-| Balance | Bid/ask notional symmetry at `spread_max` |
-| Uniformity | Evenness of marginal depth across grid |
+```text
+presence   = min(d_bid_touch, d_ask_touch) / (depth_target + min(d_bid_touch, d_ask_touch))
 
-`measure = "quoted"` | `"combined"` (adds market depth at each level).
+tightness  = exp(−(x0_bid + x0_ask) / spread_target)     # first center spreads
+
+q_bid_$    = q_bid · mid
+q_ask_$    = q_ask · mid
+balance    = 1 − |q_bid_$ − q_ask_$| / (q_bid_$ + q_ask_$ + ε)
+
+uniformity = ½ · (U(marginals_bid) + U(marginals_ask))
+U(m)       = 1 − Var(m) / (Mean(m)² + Var(m) + ε)
+
+B = (v_presence·presence + v_tightness·tightness + v_balance·balance + v_uniformity·uniformity)
+    / (v_presence + v_tightness + v_balance + v_uniformity)
+B = clamp(B, 0, 1)
+```
+
+`measure = "quoted"` uses own decoded depth only. `measure = "combined"` adds market cumulative depth at each grid level (requires market book tensors).
 
 ```text
 book_quality_component = w_book · B
 ```
+
+Diagnostics also store unweighted sub-scores: `book_presence`, `book_tightness`, `book_balance`, `book_uniformity`, and `book_quality_score` (= `B`).
 
 If `w_book = 0`, no soft reward for two-sided shape; only hard capacity applies.
 
@@ -283,8 +339,32 @@ imb = (Q·mid − cash) / (|Q·mid| + |cash| + ε)
 
 **Zone penalty:**
 
+Sigmoid: `σ(x) = 1 / (1 + exp(−x))`.
+
+Low-side ramp (penalizes cash-heavy / low base value, `imb < comfort_low`):
+
 ```text
-Z(imb) = (a_lo · σ((comfort_low − imb) / d_lo) + a_hi · σ((imb − comfort_high) / d_hi)) / (a_lo + a_hi)
+P_lo(imb) = a_lo · σ((comfort_low − imb) / d_lo)
+```
+
+High-side ramp (penalizes base-heavy / low quote value, `imb > comfort_high`):
+
+```text
+P_hi(imb) = a_hi · σ((imb − comfort_high) / d_hi)
+```
+
+Combined normalized penalty:
+
+```text
+Z(imb) = (P_lo(imb) + P_hi(imb)) / (a_lo + a_hi)
+```
+
+Diagnostics store side means along the simulated path:
+
+```text
+inventory_zone_low_penalty  = mean_h,P P_lo(imb_h,P) / (a_lo + a_hi)
+inventory_zone_high_penalty = mean_h,P P_hi(imb_h,P) / (a_lo + a_hi)
+inventory_zone_penalty_raw  = Z̄ = mean_h,P Z(imb_h,P)
 ```
 
 Default parameters (configurable per venue):
@@ -298,7 +378,20 @@ Default parameters (configurable per venue):
 | `low_penalty_cap` | 1.0 | Low-side cap |
 | `high_penalty_cap` | 0.6 | High-side cap |
 
-`Z(imb)` is bounded in `[0, 1]` but **not zero at imb = 0** (sigmoid tails → floor ≈ 0.018 with default caps). Saturates ≈ 0.625 at extreme imbalance with default caps.
+`Z(imb)` is bounded in `[0, 1]` but **not zero at imb = 0** (both sigmoid tails are active at the center → floor ≈ 0.018 with default caps). Saturates ≈ 0.625 at extreme imbalance with default caps.
+
+**Reference values (default zone, `a_lo=1.0`, `a_hi=0.6`, band ±0.2, ramps 0.05):**
+
+| `imb` | Interpretation | `Z(imb)` (approx.) |
+| --- | --- | --- |
+| 0 | Balanced value **or** degenerate `Q=cash=0` | 0.018 |
+| +0.05 | Slightly base-heavy, inside comfort band | 0.021 |
+| −0.2 | At lower comfort edge | 0.125 |
+| −0.80 | ~90% quote / 10% base by value (e.g. 6 USDT + 9.3M IRT at mid 170k) | 0.625 |
+| −0.99 | Nearly all quote (e.g. 0.005 USDT + 18.7M IRT) | 0.625 |
+| +0.99 | Nearly all base | 0.375 |
+
+At `imb ≤ −0.2`, `P_lo` saturates near `a_lo`; at `imb ≥ +0.2`, `P_hi` saturates near `a_hi`. The penalty is **path-based**: MPC penalizes simulated imbalance over the horizon, not only the current wallet snapshot.
 
 **Path aggregate:**
 
@@ -343,18 +436,85 @@ Stored weighted components (representative keys):
 
 ### 7.6 Contribution fractions
 
+Computed in `compute_contribution_fractions()` from **weighted** components only:
+
 ```text
 fraction_k = |component_k| / Σ_j |component_j|
 ```
 
-Keys included: `risk_adjusted_return`, `book_quality`, `inventory_zone_penalty`, plus `global_*` variants in joint mode.
+Keys included (`OBJECTIVE_CONTRIBUTION_KEYS`): `risk_adjusted_return`, `book_quality`, `inventory_zone_penalty`, plus `global_book_quality` and `global_inventory_zone_penalty` in joint mode. Sub-components (`inventory_zone_penalty_raw`, `book_presence`, etc.) are **excluded** from fractions.
+
+Grafana panels:
+
+| Panel | Source field | What it shows |
+| --- | --- | --- |
+| Objective contribution fractions | `optimizer.objective.contribution_fractions` | Relative shares (sum to 1 over included keys) |
+| Objective components (weighted J terms) | `optimizer.objective.final.components` | Absolute weighted values in `J` |
+| Inventory zone breakdown | `final.components` keys `inventory_zone_*` | Raw `Z̄`, path `imb`, side penalties |
+
+**Worked example — degenerate state (`CE = 0`):**
+
+```text
+risk_adjusted_return      =  0.0
+inventory_zone_penalty    = −0.000018     # −w_inv · Z̄,  w_inv=0.001, Z̄≈0.018
+J                         = −0.000018
+
+fraction_risk_adjusted_return   = 0 / (0 + 0.000018) = 0%
+fraction_inventory_zone_penalty = 0.000018 / 0.000018 = 100%
+```
+
+The weighted J panel shows a **tiny** inventory term; the fraction panel shows **100%** inventory. Both are correct: inventory is the only non-zero term in `J`, not the economically dominant force.
+
+**Worked example — funded, skewed wallet (`CE ≈ −1`, `Z̄ ≈ 0.625`, `w_inv = 0.01`):**
+
+```text
+risk_adjusted_return      = −1.0
+inventory_zone_penalty    = −0.00625        # −0.01 × 0.625
+J                         ≈ −1.006
+
+fraction_inventory ≈ 0.00625 / (1.0 + 0.00625) ≈ 0.6%
+fraction_CE        ≈ 99.4%
+```
 
 Interpretation constraints:
 
 - Fractions are **shares of absolute weighted terms in `J`**, not shares of economic PnL or notional risk.
 - Any term with value exactly 0 drops out of the denominator; remaining terms sum to 100%.
-- Small absolute penalty can show 100% share if CE and other terms are 0.
+- Small absolute penalty can show 100% share if CE and other terms are 0 (common when optimizer state has `cash = inventory = 0`).
 - Large CE can dominate fractions even when inventory imbalance is extreme in the live wallet.
+- `inventory_zone_imbalance` in components is the **mean simulated path** imbalance; `state.local_inventory` / `local_cash` are the **wallet fed into rollout** — these can disagree.
+
+### 7.7 Worked wallet imbalance examples
+
+Imbalance uses **economic value**, not unit counts:
+
+```text
+imb = (Q·mid − cash) / (|Q·mid| + |cash| + ε)
+```
+
+| Wallet (USDT, IRT) | `mid` | Base value (IRT) | `imb` | `Z(imb)` (default zone) |
+| --- | --- | --- | --- | --- |
+| 6, 9_300_000 | 170_000 | 1_020_000 | −0.80 | ~0.625 |
+| 0.005, 18_700_000 | 167_000 | 835 | −0.99 | ~0.625 |
+| 59, 9_420_000 | 159_500 | 9_410_500 | +0.05 | ~0.021 |
+| 0, 0 | any | 0 | 0 (degenerate) | ~0.018 |
+
+**Target 50/50 by value** at total wealth `W = Q·mid + cash`:
+
+```text
+Q·mid = cash = W/2
+imb   = 0
+```
+
+Example: total wealth ≈ 10.3M IRT at `mid = 170_000` → each leg ≈ 5.15M IRT → **~30.3 USDT + ~5.15M IRT**, not 6 USDT + 9.3M IRT (which is still ~90% quote by value).
+
+**Combining terms into `J` (local-only path):**
+
+```text
+J = CE_eff + w_book · B − w_inv · Z̄
+```
+
+`combine_soft_objective_terms()` writes weighted keys into `components` and updates `J` additively. Inventory is subtracted because rebalancing is a penalty on the objective being maximized.
 
 ---
 
@@ -443,16 +603,35 @@ There is **no single `w_inv`** that yields a constant economic trade-off against
 
 ### 11.3 Illustrative arithmetic (not a tuning guide)
 
-For reference only, with `Z̄ ≈ 0.625` (saturated zone) and `Z̄ ≈ 0.018` (near floor):
+For reference only, with `Z̄ ≈ 0.625` (saturated zone) and `Z̄ ≈ 0.018` (near floor at `imb = 0`):
 
-| `w_inv` | `|−w_inv · Z̄|` at saturation | `|−w_inv · Z̄|` at floor |
-| --- | --- | --- |
-| 0.001 | 0.0006 | 0.000018 |
-| 0.01 | 0.006 | 0.00018 |
-| 0.05 | 0.031 | 0.0009 |
-| 0.10 | 0.063 | 0.0018 |
+| `w_inv` | `\|−w_inv · Z̄\|` at `Z̄=0.625` | `\|−w_inv · Z̄\|` at `Z̄=0.018` | Share of `J` if `\|CE_eff\|=1` | Share if `CE_eff=0` |
+| --- | --- | --- | --- | --- |
+| 0.001 | 0.0006 | 0.000018 | ~0.06% | 100% |
+| 0.01 | 0.006 | 0.00018 | ~0.6% | 100% |
+| 0.03 | 0.019 | 0.00054 | ~1.9% | 100% |
+| 0.05 | 0.031 | 0.0009 | ~3.1% | 100% |
+| 0.10 | 0.063 | 0.0018 | ~5.9% | 100% |
 
 Relative share in `J` depends on contemporaneous `|CE_eff|` and whether `w_book` is active. Example: if `|CE_eff| = 1`, `w_inv = 0.05`, saturated `Z̄`, inventory share ≈ 3%. If `|CE_eff| = 0.01`, same settings give ≈ 75% share. If `CE_eff = 0`, inventory share is 100% regardless of absolute penalty size.
+
+**Contribution fraction from weighted terms** (when only CE and inventory are active):
+
+```text
+share_inv = |w_inv · Z̄| / (|CE_eff| + |w_inv · Z̄|)
+```
+
+**Sizing heuristic (not implemented in code; for manual tuning only):**
+
+To target inventory at approximately fraction `α` of `|J|` when `Z̄ ≈ Z_max` (saturated, ~0.625 default) and `|CE_eff| ≈ c`:
+
+```text
+w_inv ≈ α · c / Z_max
+```
+
+Example: `c = 1.0`, `Z_max = 0.625`, `α = 0.05` (5% share) → `w_inv ≈ 0.08`. At `α = 0.03` → `w_inv ≈ 0.05`. At `imb → 0`, the same `w_inv` applies to `Z̄ ≈ 0.018`, so the absolute penalty drops ~35× automatically.
+
+Increasing `w_inv` strengthens rebalance pressure when skewed but raises churn risk with short `horizon`, low `quote_size_min_per_side`, and maker fees; there is no turnover penalty in `J`.
 
 ### 11.4 Design space not implemented
 
@@ -608,13 +787,21 @@ Shortage/threshold inventory penalties in that branch are **no longer wired** in
 | --- | --- |
 | `Q`, `cash` | Base inventory and quote cash in optimizer state |
 | `mid` | Quote per base |
+| `imb` | `wallet_imbalance` ∈ [−1, +1] by economic value |
 | `W` | Mark-to-market wealth |
-| `R_i` | Per-path horizon return `ΣΔW / W_0` |
-| `CE` | Entropic risk-adjusted return over paths |
-| `CE_eff` | CE after optional EWMA normalization |
+| `W_0` | Initial wealth `max(1e-8, cash_0 + Q_0·mark_0)` |
+| `ΔW_i,h` | Per-step wealth change on path `i` |
+| `R_i` | Per-path horizon return `Σ_h ΔW_i,h / W_0` |
+| `CE`, `CE_raw` | Entropic risk-adjusted return over paths (raw before normalization) |
+| `CE_eff` | CE after optional EWMA normalization (`risk_adjusted_return` in diagnostics) |
 | `β` | `return_risk_aversion_beta` |
-| `B` | Book quality score ∈ [0, 1] |
-| `Z(imb)` | Sigmoid zone penalty ∈ [0, 1] |
-| `Z̄` | Mean zone penalty over simulated path |
+| `σ(x)` | Logistic sigmoid `1/(1+e^{−x})` (inventory zone only) |
+| `B` | Book quality score ∈ [0, 1] at h=0 |
+| `P_lo`, `P_hi` | Low / high side zone ramp before normalization |
+| `Z(imb)` | `(P_lo + P_hi)/(a_lo + a_hi)` ∈ [0, 1] |
+| `Z̄` | Mean `Z(imb)` over simulated path (`inventory_zone_penalty_raw`) |
+| `a_lo`, `a_hi` | `low_penalty_cap`, `high_penalty_cap` |
+| `d_lo`, `d_hi` | `low_ramp_width`, `high_ramp_width` |
 | `w_book`, `w_inv` | Fixed config weights on soft terms |
 | `s` | CE EWMA scale when normalization enabled |
+| `fraction_k` | `\|component_k\| / Σ_j \|component_j\|` over weighted objective keys |
