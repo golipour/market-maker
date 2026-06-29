@@ -142,12 +142,27 @@ def _migrate_inventory_zone_to_viability(payload: dict[str, Any]) -> bool:
     return changed
 
 
+def _migrate_w_book_to_validity(payload: dict[str, Any]) -> bool:
+    changed = False
+    if "w_book" in payload:
+        payload.pop("w_book")
+        changed = True
+    if "validity" not in payload:
+        payload["validity"] = {
+            "min_score": 0.3,
+            "penalty_scale": 100.0,
+        }
+        changed = True
+    return changed
+
+
 def _migrate_venue_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(payload, dict):
         return {}, False
     out = dict(payload)
     changed = _rename_keys(out, _LEGACY_VENUE_KEY_MAP)
     changed = _migrate_inventory_zone_to_viability(out) or changed
+    changed = _migrate_w_book_to_validity(out) or changed
     if RESERVATION_SKEW in out:
         migrated, skew_changed = _migrate_reservation_skew(out[RESERVATION_SKEW])
         if migrated is not None:

@@ -9,14 +9,16 @@ from mm.mpc.objective_terms import (
     BookQualityParams,
     BookQualitySoftScoring,
     ObjectiveNormalizeParams,
+    ValidityParams,
     ViabilityParams,
     apply_ce_objective_normalization,
     book_quality_score,
-    combine_soft_objective_terms,
+    combine_validity_term,
     combine_viability_term,
     soft_availability_margin,
     update_ce_ewma_scale,
     update_viability_lambda,
+    validity_book_shortfall,
     viability_path_shortfall,
 )
 
@@ -129,20 +131,35 @@ def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
     assert float(components["viability_lambda"]) == pytest.approx(2.0)
 
 
-def test_combine_soft_objective_terms_keeps_ce_component_pure() -> None:
+def test_validity_from_mapping_rejects_w_book() -> None:
+    with pytest.raises(ValueError, match="w_book"):
+        ValidityParams.from_mapping({"w_book": 0.1, "min_score": 0.3})
+
+
+def test_validity_book_shortfall_is_zero_when_score_meets_minimum() -> None:
+    score = torch.tensor(0.5, dtype=torch.float64)
+    params = ValidityParams(min_score=0.3, penalty_scale=100.0)
+    shortfall, parts = validity_book_shortfall(score, params=params)
+    assert float(shortfall) == pytest.approx(0.0)
+    assert float(parts["validity_book_score"]) == pytest.approx(0.5)
+
+
+def test_combine_validity_term_applies_fixed_penalty_below_minimum() -> None:
     base = torch.tensor(0.5, dtype=torch.float64)
-    book = torch.tensor(0.8, dtype=torch.float64)
-    objective, components = combine_soft_objective_terms(
+    book = torch.tensor(0.1, dtype=torch.float64)
+    params = ValidityParams(min_score=0.3, penalty_scale=100.0)
+    objective, components = combine_validity_term(
         base,
         {"risk_adjusted_return": base},
-        w_book=0.1,
+        params=params,
         book_score=book,
-        book_components={"book_quality": book},
+        book_components={"book_quality": book, "book_presence": book},
     )
-    assert float(objective) == pytest.approx(0.5 + 0.1 * 0.8)
+    assert float(objective) == pytest.approx(0.5 - 100.0 * 0.2)
+    assert float(components["validity_penalty"]) == pytest.approx(-20.0)
+    assert float(components["validity_penalty_raw"]) == pytest.approx(0.2)
+    assert float(components["validity_book_score"]) == pytest.approx(0.1)
     assert float(components["risk_adjusted_return"]) == pytest.approx(0.5)
-    assert float(components["book_quality"]) == pytest.approx(0.08)
-    assert float(components["book_quality_score"]) == pytest.approx(0.8)
 
 
 def test_book_quality_quoted_mode_gradients_flow() -> None:

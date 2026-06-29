@@ -248,7 +248,10 @@
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,
             "cumulative_qty_floor_at_spread_max": 1.0,
-            "w_book": 0.0,
+            "validity": {
+              "min_score": 0.3,
+              "penalty_scale": 100.0
+            },
             "viability": {
               "min_quote_qty": 1.0,
               "margin_sharpness": 0.1,
@@ -276,7 +279,10 @@
             "objective_weight": 1.0,
             "return_risk_aversion_beta": 0.1,
             "cumulative_qty_floor_at_spread_max": 1.0,
-            "w_book": 0.002,
+            "validity": {
+              "min_score": 0.3,
+              "penalty_scale": 100.0
+            },
             "viability": {
               "min_quote_qty": 1.0,
               "margin_sharpness": 0.1,

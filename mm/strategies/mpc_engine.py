@@ -56,7 +56,7 @@ _VENUE_OPTIMIZER_KEYS = {
     CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
     CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
     RESERVATION_SKEW,
-    "w_book",
+    "validity",
     "viability",
     "book_quality",
     "soft_fill_temp",

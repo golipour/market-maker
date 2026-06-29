@@ -52,22 +52,22 @@ def test_contribution_fractions_sum_to_one() -> None:
         "risk_adjusted_return": 10.0,
         "local_risk_adjusted_return": 6.0,
         "global_risk_adjusted_return": 4.0,
-        "book_quality": 2.0,
+        "validity_penalty": -2.0,
         "book_presence": 0.8,
     }
     fracs = compute_contribution_fractions(components)
-    assert set(fracs) == {"risk_adjusted_return", "book_quality"}
+    assert set(fracs) == {"risk_adjusted_return", "validity_penalty"}
     assert fracs["risk_adjusted_return"] == pytest.approx(10.0 / 12.0, rel=1e-9)
-    assert fracs["book_quality"] == pytest.approx(2.0 / 12.0, rel=1e-9)
+    assert fracs["validity_penalty"] == pytest.approx(2.0 / 12.0, rel=1e-9)
     assert sum(fracs.values()) == pytest.approx(1.0, rel=1e-9)
 
 
 def test_contribution_fractions_include_soft_objective_terms() -> None:
     components = {
         "risk_adjusted_return": 8.0,
-        "book_quality": 1.0,
+        "validity_penalty": -1.0,
         "viability_penalty": -0.5,
-        "global_book_quality": 0.25,
+        "global_validity_penalty": -0.25,
         "global_viability_penalty": -0.25,
         "book_presence": 0.9,
         "book_tightness": 0.7,
@@ -75,9 +75,9 @@ def test_contribution_fractions_include_soft_objective_terms() -> None:
     fracs = compute_contribution_fractions(components)
     assert set(fracs) == {
         "risk_adjusted_return",
-        "book_quality",
+        "validity_penalty",
         "viability_penalty",
-        "global_book_quality",
+        "global_validity_penalty",
         "global_viability_penalty",
     }
     total_abs = 8.0 + 1.0 + 0.5 + 0.25 + 0.25

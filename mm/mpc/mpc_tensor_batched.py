@@ -32,10 +32,11 @@ from mm.mpc.optimizer_config_keys import (
 from mm.mpc.objective_terms import (
     BookQualityParams,
     ObjectiveNormalizeParams,
+    ValidityParams,
     ViabilityParams,
     apply_ce_objective_normalization,
     book_quality_score,
-    combine_soft_objective_terms,
+    combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
     update_viability_lambda,
@@ -91,7 +92,7 @@ class VenueOptimizerParams:
     cumulative_qty_floor_at_spread_max: float = 0.0
     cumulative_qty_cap_at_spread_max: float | None = None
     reservation_skew: ReservationSkewParams | None = None
-    w_book: float = 0.0
+    validity: ValidityParams | None = None
     viability: ViabilityParams | None = None
     book_quality: BookQualityParams | None = None
     soft_fill_temp: float = 0.1
@@ -119,6 +120,11 @@ class VenueOptimizerParams:
                 "use viability {min_quote_qty, margin_sharpness, availability_target, "
                 "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             )
+        if "w_book" in data:
+            raise ValueError(
+                "optimizer venue key w_book was removed; use validity "
+                "{min_score, penalty_scale} with book_quality.soft_scoring"
+            )
         return cls(
             n_components=(
                 max(1, int(data.get("n_components")))
@@ -143,7 +149,11 @@ class VenueOptimizerParams:
                 if data.get(RESERVATION_SKEW) is not None
                 else base.reservation_skew
             ),
-            w_book=max(0.0, float(data.get("w_book", base.w_book))),
+            validity=(
+                ValidityParams.from_mapping(data.get("validity"))
+                if data.get("validity") is not None
+                else base.validity
+            ),
             viability=(
                 ViabilityParams.from_mapping(data.get("viability"))
                 if data.get("viability") is not None
@@ -217,13 +227,14 @@ class VenueOptimizerParams:
             "objective_weight": self.objective_weight,
             CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: self.cumulative_qty_floor_at_spread_max,
             CUMULATIVE_QTY_CAP_AT_SPREAD_MAX: self.cumulative_qty_cap_at_spread_max,
-            "w_book": self.w_book,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
         if self.reservation_skew is not None:
             out[RESERVATION_SKEW] = self.reservation_skew.as_mapping()
+        if self.validity is not None:
+            out["validity"] = self.validity.as_mapping()
         if self.viability is not None:
             out["viability"] = self.viability.as_mapping()
         if self.book_quality is not None:
@@ -1427,7 +1438,7 @@ class MonteCarloMPCTensorBatched:
                 )
                 J, components = self.normalize_terminal_objective(J, components)
                 venue_opt = self.local_optimizer
-                if float(venue_opt.w_book) > 0.0:
+                if venue_opt.validity is not None:
                     book_params = venue_opt.book_quality or BookQualityParams()
                     use_combined = book_params.measure == "combined"
                     book_score, book_components = book_quality_score(
@@ -1444,10 +1455,10 @@ class MonteCarloMPCTensorBatched:
                         market_cum_bid=book_cum_bid if use_combined else None,
                         market_cum_ask=book_cum_ask if use_combined else None,
                     )
-                    J, components = combine_soft_objective_terms(
+                    J, components = combine_validity_term(
                         J,
                         components,
-                        w_book=venue_opt.w_book,
+                        params=venue_opt.validity,
                         book_score=book_score,
                         book_components=book_components,
                     )

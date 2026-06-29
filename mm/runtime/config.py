@@ -1431,7 +1431,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
             CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
             RESERVATION_SKEW,
-            "w_book",
+            "validity",
             "viability",
             "book_quality",
             "soft_fill_temp",
@@ -1525,6 +1525,11 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                     f"removed controller.optimizer.{venue} keys {', '.join(removed_inventory_zone)}; "
                     "use viability {min_quote_qty, margin_sharpness, availability_target, "
                     "shortfall_tolerance, lambda_init, lambda_learning_rate}"
+                )
+            if "w_book" in venue_payload:
+                raise ValueError(
+                    f"removed controller.optimizer.{venue} key w_book; "
+                    "use validity {min_score, penalty_scale} with book_quality.soft_scoring"
                 )
             unknown_keys = sorted(
                 key for key in venue_payload if key not in venue_optimizer_keys
@@ -1711,8 +1716,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer.local/global cumulative_qty_floor_at_spread_max is the venue lot-size "
             "floor for spread-structured decoding at spread_max; "
             "cumulative_qty_cap_at_spread_max is an optional safety cap. "
-            "Cash/inventory capacity structurally caps each side; two-sided presence "
-            "is encouraged via w_book * book_quality when configured."
+            "Cash/inventory capacity structurally caps each side; book-shape validity "
+            "is enforced via validity {min_score, penalty_scale} when configured."
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -1744,7 +1749,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "cumulative_qty_cap_at_spread_max": (
                 "optional decoder cumulative base qty safety cap per side at spread_max"
             ),
-            "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
+            "validity": (
+                "book-shape validity gate with fixed penalty scale; "
+                "keys {min_score, penalty_scale}; uses book_quality.soft_scoring for B"
+            ),
             "viability": (
                 "availability shortfall term with adaptive Lagrange multiplier; "
                 "keys {min_quote_qty, margin_sharpness, availability_target, "
@@ -1753,7 +1761,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "book_quality": (
                 "book shape preferences: hard_structure caps first-touch decode "
                 "(action_max_spread, action_min_depth, action_k_epsilon); "
-                "soft_scoring sets presence/tightness references for w_book scoring "
+                "soft_scoring sets presence/tightness references for validity scoring "
                 "(measure='quoted' or 'combined')"
             ),
             "reservation_skew": (

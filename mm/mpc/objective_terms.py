@@ -1,4 +1,4 @@
-"""Normalized soft objective terms for MPC (book quality and viability availability)."""
+"""Normalized soft objective terms for MPC (book validity, viability availability)."""
 
 from __future__ import annotations
 
@@ -95,6 +95,42 @@ class ViabilityParams:
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValidityParams:
+    """Book-shape validity gate with fixed penalty scale (docs/validity_term.md)."""
+
+    min_score: float = 0.3
+    penalty_scale: float = 100.0
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> ValidityParams | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("validity must be an object")
+        if "w_book" in payload:
+            raise ValueError(
+                "validity must not include w_book; use "
+                "{min_score, penalty_scale} and book_quality.soft_scoring"
+            )
+        min_score = float(payload.get("min_score", 0.3))
+        if not (0.0 <= min_score < 1.0):
+            raise ValueError("validity.min_score must be in [0, 1)")
+        penalty_scale = float(payload.get("penalty_scale", 100.0))
+        if penalty_scale < 0.0:
+            raise ValueError("validity.penalty_scale must be >= 0")
+        return cls(
+            min_score=min_score,
+            penalty_scale=penalty_scale,
+        )
+
+    def as_mapping(self) -> dict[str, float]:
+        return {
+            "min_score": self.min_score,
+            "penalty_scale": self.penalty_scale,
         }
 
 
@@ -572,9 +608,9 @@ def book_quality_score(
 OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
     {
         "risk_adjusted_return",
-        "book_quality",
+        "validity_penalty",
         "viability_penalty",
-        "global_book_quality",
+        "global_validity_penalty",
         "global_viability_penalty",
     }
 )
@@ -667,30 +703,61 @@ def update_viability_lambda(
     return max(0.0, lam + eta * (shortfall - eps))
 
 
-def combine_soft_objective_terms(
+def validity_book_shortfall(
+    book_score: Any,
+    *,
+    params: ValidityParams | None,
+) -> tuple[Any, dict[str, Any]]:
+    """Shortfall below minimum acceptable h=0 book-quality score: max(0, B_min - B)."""
+
+    torch = _torch()
+    if params is None or float(params.penalty_scale) <= 0.0:
+        if torch.is_tensor(book_score):
+            zero = torch.zeros((), dtype=book_score.dtype, device=book_score.device)
+        else:
+            zero = 0.0
+        return zero, {}
+    if torch.is_tensor(book_score):
+        shortfall = torch.clamp(float(params.min_score) - book_score, min=0.0)
+    else:
+        shortfall = max(0.0, float(params.min_score) - float(book_score))
+    return shortfall, {
+        "validity_shortfall": shortfall,
+        "validity_book_score": book_score,
+    }
+
+
+def combine_validity_term(
     base_objective: Any,
     components: dict[str, Any],
     *,
-    w_book: float,
+    params: ValidityParams | None,
     book_score: Any | None = None,
     book_components: dict[str, Any] | None = None,
-    book_term: str = "book_quality",
+    validity_term: str = "validity_penalty",
     component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
-    """Combine CE return with optional book-quality reward."""
+    """Subtract fixed-scale validity penalty: -mu * max(0, B_min - B)."""
 
     out = dict(components)
     objective = base_objective
-    if book_score is not None and float(w_book) > 0.0:
-        weighted_book = float(w_book) * book_score
-        objective = objective + weighted_book
-        out[book_term] = weighted_book
-        for key, value in (book_components or {}).items():
-            if key == "book_quality":
-                out[f"{book_term}_score"] = value
-            else:
-                diag_key = key if key.startswith("book_") else f"book_{key}"
-                out[f"{component_prefix}{diag_key}"] = value
+    if book_score is None or params is None or float(params.penalty_scale) <= 0.0:
+        return objective, out
+    shortfall, validity_components = validity_book_shortfall(book_score, params=params)
+    weighted = -float(params.penalty_scale) * shortfall
+    objective = objective + weighted
+    out[validity_term] = weighted
+    for key, value in validity_components.items():
+        if key == "validity_shortfall":
+            out[f"{validity_term}_raw"] = value
+        else:
+            out[f"{component_prefix}{key}"] = value
+    for key, value in (book_components or {}).items():
+        if key == "book_quality":
+            out[f"{component_prefix}validity_book_score"] = value
+        else:
+            diag_key = key if key.startswith("book_") else f"book_{key}"
+            out[f"{component_prefix}{diag_key}"] = value
     return objective, out
 
 

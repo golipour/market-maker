@@ -40,8 +40,27 @@ def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
     assert changed is True
     optimizer = migrated["controller"]["optimizer"]
     assert optimizer["local"]["viability"]["lambda_init"] == 1.0
+    assert optimizer["local"]["validity"]["min_score"] == 0.3
     assert optimizer["global"]["viability"]["availability_target"] == 0.9
     assert optimizer["adam_epochs"] == 40
+
+
+def test_migrate_w_book_to_validity() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "local": {
+                    "w_book": 0.002,
+                }
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    local = migrated["controller"]["optimizer"]["local"]
+    assert "w_book" not in local
+    assert local["validity"]["min_score"] == 0.3
+    assert local["validity"]["penalty_scale"] == 100.0
 
 
 def test_migrate_sparse_optimizer_preserves_existing_overrides() -> None:

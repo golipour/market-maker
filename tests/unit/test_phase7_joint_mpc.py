@@ -395,7 +395,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
                     "cumulative_qty_floor_at_spread_max": 0.2,
-                    "w_book": 0.001,
+                    "validity": {
+                        "min_score": 0.3,
+                        "penalty_scale": 100.0,
+                    },
                     "viability": {
                         "min_quote_qty": 0.2,
                         "margin_sharpness": 0.1,
@@ -414,7 +417,10 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "return_risk_aversion_beta": 0.8,
                     "cumulative_qty_floor_at_spread_max": 1.0,
                     "cumulative_qty_cap_at_spread_max": 5.0,
-                    "w_book": 0.002,
+                    "validity": {
+                        "min_score": 0.3,
+                        "penalty_scale": 100.0,
+                    },
                     "viability": {
                         "min_quote_qty": 1.0,
                         "margin_sharpness": 0.1,
@@ -453,7 +459,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
     assert controller.local_optimizer.cumulative_qty_cap_at_spread_max is None
-    assert controller.local_optimizer.w_book == pytest.approx(0.001)
+    assert controller.local_optimizer.validity is not None
+    assert controller.local_optimizer.validity.min_score == pytest.approx(0.3)
     assert controller.global_optimizer.viability is not None
     assert controller.global_optimizer.viability.lambda_init == pytest.approx(1.0)
     assert controller.local_optimizer.soft_fill_queue_model == "pro_rata"

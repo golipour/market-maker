@@ -4148,6 +4148,28 @@ def optimizer_diagnostics() -> dict[str, Any]:
             w=12,
             decimals=4,
         ),
+        _panel(
+            9,
+            "Validity breakdown",
+            "timeseries",
+            PG_DS,
+            _optimizer_validity_breakdown_sql(),
+            x=0,
+            y=34,
+            w=12,
+            decimals=4,
+        ),
+        _panel(
+            10,
+            "Validity config",
+            "timeseries",
+            PG_DS,
+            _optimizer_validity_config_sql(),
+            x=12,
+            y=34,
+            w=12,
+            decimals=4,
+        ),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
@@ -5416,9 +5438,9 @@ _OBJECTIVE_CONTRIBUTION_KEYS_SQL = ", ".join(
     f"'{key}'"
     for key in (
         "risk_adjusted_return",
-        "book_quality",
+        "validity_penalty",
         "viability_penalty",
-        "global_book_quality",
+        "global_validity_penalty",
         "global_viability_penalty",
     )
 )
@@ -5474,10 +5496,10 @@ WHERE {_diagnostics_filter()}
     OR kv.key LIKE 'global_book_%'
   )
   AND kv.key NOT IN (
-    'book_quality',
-    'global_book_quality',
-    'book_quality_score',
-    'global_book_quality_score'
+    'validity_penalty',
+    'global_validity_penalty',
+    'validity_book_score',
+    'global_validity_book_score'
   )
 ORDER BY 1"""
 
@@ -5532,6 +5554,46 @@ CROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(
     e.payload #> ARRAY['optimizer','config', scope, 'viability'],
+    '{{}}'::jsonb
+  )
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND kv.key IN ({keys_sql})
+ORDER BY 1"""
+
+
+def _optimizer_validity_breakdown_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND (
+    kv.key IN (
+      'validity_penalty_raw',
+      'validity_shortfall',
+      'validity_book_score',
+      'global_validity_penalty_raw',
+      'global_validity_shortfall',
+      'global_validity_book_score'
+    )
+  )
+ORDER BY 1"""
+
+
+def _optimizer_validity_config_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    keys_sql = ", ".join(f"'{key}'" for key in ("min_score", "penalty_scale"))
+    return f"""SELECT e.ts AS "time",
+       (scope || '.' || kv.key) AS metric,
+       {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(
+    e.payload #> ARRAY['optimizer','config', scope, 'validity'],
     '{{}}'::jsonb
   )
 ) AS kv

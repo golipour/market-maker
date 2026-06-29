@@ -105,7 +105,7 @@ def test_example_runtime_config_loads() -> None:
     assert "execution:errors" in config.effective_persistence_topics
     assert "private:state:bitpin:errors" in config.effective_persistence_topics
     local_optimizer = (config.controller.optimizer or {}).get("local", {})
-    assert local_optimizer.get("w_book") == pytest.approx(0.0)
+    assert local_optimizer.get("validity", {}).get("min_score") == pytest.approx(0.3)
     assert local_optimizer.get("viability", {}).get("lambda_init") == pytest.approx(1.0)
     assert "spread_structure" not in local_optimizer
     global_optimizer = (config.controller.optimizer or {}).get("global", {})

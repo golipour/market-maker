@@ -32,7 +32,7 @@ def compute_contribution_fractions(
     Share of each weighted objective term in the scalar ``J`` optimized at closure end.
 
     Uses ``|component| / sum(|component|)`` over objective-level keys only, where each
-    ``component`` is the fully weighted term stored in ``J`` (CE, ``w_book·B``, ``-λ·S``).
+    ``component`` is the fully weighted term stored in ``J`` (CE, ``-μ·validity``, ``-λ·S``).
     """
     abs_components = {
         str(k): abs(float(v))

@@ -21,7 +21,7 @@ from mm.mpc.l_param import action_param_len, sigmoid_action_from_flat_raw
 from mm.mpc.objective_terms import (
     BookQualityParams,
     book_quality_score,
-    combine_soft_objective_terms,
+    combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
     update_viability_lambda,
@@ -764,7 +764,7 @@ def optimize_joint_with_diagnostics(
                 joint_h0,
                 [local_venue_len, global_venue_len],
             )
-            if float(local_opt.w_book) > 0.0:
+            if local_opt.validity is not None:
                 book_params = local_opt.book_quality or BookQualityParams()
                 use_combined = book_params.measure == "combined"
                 book_score, book_components = book_quality_score(
@@ -781,14 +781,14 @@ def optimize_joint_with_diagnostics(
                     market_cum_bid=book_cum_bid if use_combined else None,
                     market_cum_ask=book_cum_ask if use_combined else None,
                 )
-                J, components = combine_soft_objective_terms(
+                J, components = combine_validity_term(
                     J,
                     components,
-                    w_book=local_opt.w_book,
+                    params=local_opt.validity,
                     book_score=book_score,
                     book_components=book_components,
                 )
-            if global_mask > 0.0 and float(global_opt.w_book) > 0.0:
+            if global_mask > 0.0 and global_opt.validity is not None:
                 book_params = global_opt.book_quality or BookQualityParams()
                 use_combined = book_params.measure == "combined"
                 book_score, book_components = book_quality_score(
@@ -805,13 +805,13 @@ def optimize_joint_with_diagnostics(
                     market_cum_bid=global_book_cum_bid if use_combined else None,
                     market_cum_ask=global_book_cum_ask if use_combined else None,
                 )
-                J, components = combine_soft_objective_terms(
+                J, components = combine_validity_term(
                     J,
                     components,
-                    w_book=global_opt.w_book,
+                    params=global_opt.validity,
                     book_score=book_score,
                     book_components=book_components,
-                    book_term="global_book_quality",
+                    validity_term="global_validity_penalty",
                     component_prefix="global_",
                 )
             if local_opt.viability is not None:
