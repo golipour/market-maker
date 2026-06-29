@@ -43,12 +43,12 @@ def test_optimizer_stores_objective_params() -> None:
         flow,
         exe,
         return_risk_aversion_beta=2.0,
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     assert mpc.return_risk_aversion_beta == 2.0
-    assert mpc.quote_size_min_per_side == 1.0
-    assert mpc.quote_size_max_per_side == 10.0
+    assert mpc.cumulative_qty_floor_at_spread_max == 1.0
+    assert mpc.cumulative_qty_cap_at_spread_max == 10.0
     assert mpc.soft_fill_queue_model == "back_of_queue"
 
 
@@ -73,7 +73,7 @@ def test_optimizer_passes_risk_aversion_beta_to_objective(monkeypatch) -> None:
         adam_epochs=1,
         fixed_mc_samples=True,
         return_risk_aversion_beta=7.5,
-        quote_size_min_per_side=1.0,
+        cumulative_qty_floor_at_spread_max=1.0,
     )
 
     mpc.optimize(
@@ -363,8 +363,8 @@ def test_soft_fill_dynamic_decoder_max_limits_simulated_fill_qty() -> None:
 
 def test_quote_capacity_bounds_use_wallet_caps_without_side_mins() -> None:
     optimizer = VenueOptimizerParams(
-        quote_size_min_per_side=0.3,
-        quote_size_max_per_side=None,
+        cumulative_qty_floor_at_spread_max=0.3,
+        cumulative_qty_cap_at_spread_max=None,
     )
     cash = torch.tensor([[20.0], [100.0], [20.0]], dtype=torch.float64)
     inventory = torch.tensor([[0.2], [0.5], [2.0]], dtype=torch.float64)
@@ -415,8 +415,8 @@ def test_quote_capacity_bounds_use_wallet_totals_not_free_only() -> None:
     assert cash == pytest.approx(100.0)
 
     optimizer = VenueOptimizerParams(
-        quote_size_min_per_side=0.0,
-        quote_size_max_per_side=None,
+        cumulative_qty_floor_at_spread_max=0.0,
+        cumulative_qty_cap_at_spread_max=None,
     )
     bid_min, bid_max, ask_min, ask_max = _quote_capacity_bounds_batched(
         cash=torch.tensor([[cash]], dtype=torch.float64),
@@ -467,8 +467,8 @@ def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
         exe,
         soft_fill_activation="hardsigmoid",
         soft_fill_queue_model="pro_rata",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     assert mpc.soft_fill_activation == "hardsigmoid"
     assert mpc.soft_fill_queue_model == "pro_rata"
@@ -476,10 +476,10 @@ def test_mpc_optimizer_accepts_soft_fill_activation_config() -> None:
     with pytest.raises(ValueError, match="unsupported soft_fill_activation"):
         MonteCarloMPCTensorBatched(
             price, flow, exe, soft_fill_activation="relu",
-            quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+            cumulative_qty_floor_at_spread_max=1.0, cumulative_qty_cap_at_spread_max=10.0,
         )
     with pytest.raises(ValueError, match="unsupported soft_fill_queue_model"):
         MonteCarloMPCTensorBatched(
             price, flow, exe, soft_fill_queue_model="middle_of_queue",
-            quote_size_min_per_side=1.0, quote_size_max_per_side=10.0,
+            cumulative_qty_floor_at_spread_max=1.0, cumulative_qty_cap_at_spread_max=10.0,
         )

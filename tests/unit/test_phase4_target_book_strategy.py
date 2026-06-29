@@ -385,8 +385,8 @@ async def test_mpc_engine_emits_joint_target_book(monkeypatch: pytest.MonkeyPatc
             actor_id="mpc-controller",
             orderbook_grid=OrderbookGridConfig(spread_max=200.0, spread_step=20.0),
             optimizer={
-                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
-                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 10.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 10.0},
             },
         ),
     )
@@ -434,8 +434,8 @@ def test_mpc_engine_uses_injected_optimizer_backend(monkeypatch: pytest.MonkeyPa
             actor_id="mpc-controller",
             orderbook_grid=OrderbookGridConfig(spread_max=200.0, spread_step=20.0),
             optimizer={
-                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
-                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 10.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 10.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 10.0},
             },
         ),
     )
@@ -486,8 +486,8 @@ async def test_strategy_runner_publishes_target_book_event(monkeypatch: pytest.M
             dry_run=True,
             risk=RiskRuntimeConfig(enabled=True),
             optimizer={
-                "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
-                "global": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 1.0, "cumulative_qty_cap_at_spread_max": 10.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 1.0, "cumulative_qty_cap_at_spread_max": 10.0},
             },
         ),
         binding=runtime.binding,

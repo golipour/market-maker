@@ -75,8 +75,8 @@ def _build_optimizer(
         adam_epochs=2,
         spread_max=20.0,
         spread_step=5.0,
-        quote_size_min_per_side=0.5,
-        quote_size_max_per_side=2.0,
+        cumulative_qty_floor_at_spread_max=0.5,
+        cumulative_qty_cap_at_spread_max=2.0,
         local_optimizer=local_optimizer,
         global_optimizer=global_optimizer,
         device="cpu",
@@ -284,8 +284,8 @@ def test_build_controller_uses_global_price_model_not_local_residual() -> None:
             global_price_model={"kind": "ewma_gaussian", "decay": 0.95},
             local_price_model={"kind": "residual", "residual_decay": 0.95},
             optimizer={
-                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
-                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
             },
         ),
         liquidity_sourcing=sourcing,
@@ -317,8 +317,8 @@ def test_build_controller_uses_first_class_global_market_flow_model() -> None:
             local_market_flow_model={"kind": "hurdle_lognormal", "init_p0": 0.1},
             global_market_flow_model={"kind": "hurdle_lognormal", "init_p0": 0.9},
             optimizer={
-                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
-                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
             },
         ),
         liquidity_sourcing=sourcing,
@@ -353,8 +353,8 @@ def test_build_controller_keeps_global_models_for_global_reference_without_sourc
             reference_price_source="global",
             global_price_model={"kind": "ewma_gaussian", "decay": 0.95},
             optimizer={
-                "local": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
-                "global": {"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
             },
         ),
         liquidity_sourcing=sourcing,
@@ -394,7 +394,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "n_components": 3,
                     "objective_weight": 0.7,
                     "return_risk_aversion_beta": 0.2,
-                    "quote_size_min_per_side": 0.2,
+                    "cumulative_qty_floor_at_spread_max": 0.2,
                     "w_book": 0.001,
                     "w_inv": 0.005,
                     "soft_fill_temp": 0.11,
@@ -405,8 +405,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "n_components": 2,
                     "objective_weight": 0.4,
                     "return_risk_aversion_beta": 0.8,
-                    "quote_size_min_per_side": 1.0,
-                    "quote_size_max_per_side": 5.0,
+                    "cumulative_qty_floor_at_spread_max": 1.0,
+                    "cumulative_qty_cap_at_spread_max": 5.0,
                     "w_book": 0.002,
                     "w_inv": 0.01,
                     "soft_fill_temp": 0.33,
@@ -438,7 +438,7 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.return_risk_aversion_beta == pytest.approx(0.8)
     assert controller.local_optimizer.soft_fill_temp == pytest.approx(0.11)
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
-    assert controller.local_optimizer.quote_size_max_per_side is None
+    assert controller.local_optimizer.cumulative_qty_cap_at_spread_max is None
     assert controller.local_optimizer.w_book == pytest.approx(0.001)
     assert controller.global_optimizer.w_inv == pytest.approx(0.01)
     assert controller.local_optimizer.soft_fill_queue_model == "pro_rata"
@@ -456,7 +456,7 @@ def test_build_controller_rejects_flat_venue_optimizer_params() -> None:
         local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="USDT_IRT"),
         controller=ControllerRuntimeConfig(
             enabled=True,
-            optimizer={"quote_size_min_per_side": 0.1, "quote_size_max_per_side": 1.0},
+            optimizer={"cumulative_qty_floor_at_spread_max": 0.1, "cumulative_qty_cap_at_spread_max": 1.0},
         ),
     )
 

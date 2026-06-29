@@ -33,7 +33,7 @@ Implemented mechanisms that relate to this intent:
 | `w_book · B` | Soft (optional) | Rewards presence, tightness, balance, uniformity at h=0 |
 | `−w_inv · Z̄` | Soft (optional) | Penalizes imbalanced inventory **paths** in simulation |
 
-Current capacity decoder sets `bid_min = ask_min = 0`. There is **no hard minimum quote per side** at the capacity layer. `quote_size_min_per_side` affects spread-structure decode at `spread_max`, but mins are clamped to feasible capacity and can be zero when a side has no free balance.
+Current capacity decoder sets `bid_min = ask_min = 0`. There is **no hard minimum quote per side** at the capacity layer. `cumulative_qty_floor_at_spread_max` affects spread-structure decode at `spread_max`, but mins are clamped to feasible capacity and can be zero when a side has no free balance.
 
 ### 1.2 Profitability
 
@@ -156,7 +156,7 @@ Zero `cash` → zero bid capacity in simulation. Zero `inventory` → zero ask c
 
 ### 5.2 Decode geometry
 
-`book_quality.hard_structure` can cap first-touch spread sum and minimum depth at the first center. `quote_size_min_per_side` is a lot-size floor in structural sizing at `spread_max`, not an independent per-side minimum at the capacity layer.
+`book_quality.hard_structure` can cap first-touch spread sum and minimum depth at the first center. `cumulative_qty_floor_at_spread_max` is a lot-size floor in structural sizing at `spread_max`, not an independent per-side minimum at the capacity layer.
 
 ---
 
@@ -561,12 +561,30 @@ Illustrative values from MPC diagnostics snapshots (not authoritative; live regi
 | `local_optimizer.w_inv` | varies (e.g. 0.001, 0.01) |
 | `local_optimizer.w_book` | often 0 |
 | `return_risk_aversion_beta` | e.g. 0.1 |
-| `quote_size_min_per_side` | venue lot floor |
+| `cumulative_qty_floor_at_spread_max` | decoder cumulative qty floor at `spread_max` |
+| `cumulative_qty_cap_at_spread_max` | optional decoder cumulative qty cap |
+| `book_quality.soft_scoring.presence_reference_qty` | book-score presence reference (needs `w_book > 0`) |
+| `book_quality.soft_scoring.tightness_spread_scale` | book-score tightness decay scale |
+| `reservation_skew.max_abs_skew` | learnable reservation skew bound |
 | `inventory_zone` | sigmoid band (see §7.4) |
 | `execution_model` maker fee | e.g. 0.0015 |
 | `soft_fill_queue_model` | `back_of_queue` |
 
 Separate `local_optimizer` and `global_optimizer` blocks exist in joint mode.
+
+### 10.1 Optimizer parameter names
+
+| Key | Role |
+| --- | --- |
+| `cumulative_qty_floor_at_spread_max` | Decoder total base qty floor at outer spread |
+| `cumulative_qty_cap_at_spread_max` | Optional decoder total base qty cap |
+| `book_quality.soft_scoring` | Container for `w_book` scoring references |
+| `presence_reference_qty` | Presence sub-score reference qty |
+| `tightness_spread_scale` | Tightness sub-score spread scale |
+| `reservation_skew` | Learnable bid/ask curve skew block |
+| `max_abs_skew` | Bound on reservation skew parameter |
+
+Legacy aliases (`quote_size_min_per_side`, `reservation_offset`, `soft_target`, etc.) are rejected at parse time. Registry Postgres configs were migrated to canonical keys via `mm/tools/migrate_optimizer_config_keys.py`. Serialized diagnostics and `VenueOptimizerParams.as_config()` emit canonical keys only.
 
 ---
 
@@ -631,7 +649,7 @@ w_inv ≈ α · c / Z_max
 
 Example: `c = 1.0`, `Z_max = 0.625`, `α = 0.05` (5% share) → `w_inv ≈ 0.08`. At `α = 0.03` → `w_inv ≈ 0.05`. At `imb → 0`, the same `w_inv` applies to `Z̄ ≈ 0.018`, so the absolute penalty drops ~35× automatically.
 
-Increasing `w_inv` strengthens rebalance pressure when skewed but raises churn risk with short `horizon`, low `quote_size_min_per_side`, and maker fees; there is no turnover penalty in `J`.
+Increasing `w_inv` strengthens rebalance pressure when skewed but raises churn risk with short `horizon`, low `cumulative_qty_floor_at_spread_max`, and maker fees; there is no turnover penalty in `J`.
 
 ### 11.4 Design space not implemented
 

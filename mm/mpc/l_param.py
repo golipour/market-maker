@@ -8,6 +8,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    MAX_ABS_SKEW,
+    RESERVATION_SKEW,
+    reject_removed_reservation_skew_keys,
+)
+
 if TYPE_CHECKING:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
 
@@ -84,24 +92,25 @@ def reservation_logit_index(n_components: int) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class ReservationOffsetParams:
-    """Relative reservation-price shift: ``mid_eff = mid * (1 + r_offset)``."""
+class ReservationSkewParams:
+    """Bounded learnable reservation skew on the spread grid."""
 
-    r_max: float
+    max_abs_skew: float
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> ReservationOffsetParams | None:
+    def from_mapping(cls, payload: Any) -> ReservationSkewParams | None:
         if payload is None:
             return None
         if not isinstance(payload, dict):
-            raise ValueError("reservation_offset must be an object")
-        r_max = max(0.0, float(payload.get("r_max", 0.0)))
-        if r_max <= 0.0:
+            raise ValueError(f"{RESERVATION_SKEW} must be an object")
+        reject_removed_reservation_skew_keys(payload)
+        max_abs_skew = max(0.0, float(payload.get(MAX_ABS_SKEW, 0.0)))
+        if max_abs_skew <= 0.0:
             return None
-        return cls(r_max=r_max)
+        return cls(max_abs_skew=max_abs_skew)
 
     def as_mapping(self) -> dict[str, float]:
-        return {"r_max": self.r_max}
+        return {MAX_ABS_SKEW: self.max_abs_skew}
 
 
 def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
@@ -227,12 +236,12 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
     lo = float(l_param.quote_size_min)
     hi = float(l_param.quote_size_max) if l_param.quote_size_max is not None else None
     if lo < 0.0:
-        raise ValueError("quote_size_min_per_side must be >= 0")
+        raise ValueError(f"{CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX} must be >= 0")
     if hi is not None and hi <= 0.0:
-        raise ValueError("quote_size_max_per_side must be positive when configured")
+        raise ValueError(f"{CUMULATIVE_QTY_CAP_AT_SPREAD_MAX} must be positive when configured")
     if hi is not None and lo > hi:
         raise ValueError(
-            f"quote_size_min_per_side ({lo}) must be <= quote_size_max_per_side ({hi})"
+            f"{CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX} ({lo}) must be <= {CUMULATIVE_QTY_CAP_AT_SPREAD_MAX} ({hi})"
         )
     if l_param.spread_structured:
         s_max = float(l_param.quote_spread_max or 0.0)
@@ -243,7 +252,7 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
             )
         if hi is not None and q_spread > hi:
             raise ValueError(
-                f"book_quality.hard_structure.action_min_depth ({q_spread}) must be <= quote_size_max_per_side ({hi})"
+                f"book_quality.hard_structure.action_min_depth ({q_spread}) must be <= {CUMULATIVE_QTY_CAP_AT_SPREAD_MAX} ({hi})"
             )
         if int(l_param.n_components) < 2:
             raise ValueError(
@@ -251,7 +260,7 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
                 "(spread leg + tail leg)"
             )
     if float(l_param.reservation_r_max) > 0.0 and float(l_param.reservation_r_max) >= 1.0:
-        raise ValueError("reservation_offset.r_max must be < 1.0 for relative mid shift")
+        raise ValueError(f"{RESERVATION_SKEW}.{MAX_ABS_SKEW} must be < 1.0 for relative mid shift")
 
 
 def reservation_r_offset_from_flat_np(

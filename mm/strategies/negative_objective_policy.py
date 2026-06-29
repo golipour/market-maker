@@ -81,7 +81,7 @@ def _venue_optimizer_params(
         spec = binding.global_ or binding.local
         min_qty = float(spec.min_qty or 1.0)
     venue_defaults = VenueOptimizerParams.from_mapping(
-        {"quote_size_min_per_side": min_qty},
+        {CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: min_qty},
         defaults=defaults,
     )
     venue_cfg = dict(optimizer.get(venue, {}) or {})

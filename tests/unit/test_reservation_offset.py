@@ -21,9 +21,9 @@ def test_action_param_len_includes_reservation_logit() -> None:
 
 
 def test_reservation_offset_parses_from_config() -> None:
-    params = VenueOptimizerParams.from_mapping({"reservation_offset": {"r_max": 0.0015}})
-    assert params.reservation_offset is not None
-    assert params.reservation_offset.r_max == pytest.approx(0.0015)
+    params = VenueOptimizerParams.from_mapping({"reservation_skew": {"max_abs_skew": 0.0015}})
+    assert params.reservation_skew is not None
+    assert params.reservation_skew.max_abs_skew == pytest.approx(0.0015)
     l_param = params.l_param_config(spread_max=200.0, n_components=2)
     assert l_param.reservation_r_max == pytest.approx(0.0015)
 

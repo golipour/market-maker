@@ -6,6 +6,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from mm.mpc.l_param import LParamConfig, materialize_side_torch, reservation_r_offset_from_params
+from mm.mpc.optimizer_config_keys import (
+    MAX_ABS_SKEW,
+    PRESENCE_REFERENCE_QTY,
+    REMOVED_BOOK_QUALITY_ALIASES,
+    RESERVATION_SKEW,
+    SOFT_SCORING,
+    TIGHTNESS_SPREAD_SCALE,
+    reject_removed_book_quality_keys,
+    reject_removed_keys,
+    reject_removed_reservation_skew_keys,
+)
 from mm.mpc.state_tensor import (
     depth_bid_derivative_tensor,
     depth_ask_derivative_tensor,
@@ -117,10 +128,10 @@ class ObjectiveNormalizeParams:
         }
 
 
-_LEGACY_BOOK_QUALITY_SOFT_KEYS = frozenset(
+_BOOK_QUALITY_SOFT_KEYS = frozenset(
     {
-        "spread_target",
-        "depth_target",
+        TIGHTNESS_SPREAD_SCALE,
+        PRESENCE_REFERENCE_QTY,
         "touch_spread_fraction",
         "measure",
         "v_presence",
@@ -174,11 +185,11 @@ class BookQualityHardStructure:
 
 
 @dataclass(frozen=True, slots=True)
-class BookQualitySoftTarget:
-    """Soft book-quality objective targets and sub-weights."""
+class BookQualitySoftScoring:
+    """Soft book-quality objective scoring references and sub-weights."""
 
-    spread_target: float = 50.0
-    depth_target: float = 1.0
+    tightness_spread_scale: float = 50.0
+    presence_reference_qty: float = 1.0
     touch_spread_fraction: float = 0.01
     measure: str = "quoted"
     v_presence: float = 0.25
@@ -187,21 +198,19 @@ class BookQualitySoftTarget:
     v_uniformity: float = 0.25
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> BookQualitySoftTarget:
+    def from_mapping(cls, payload: Any) -> BookQualitySoftScoring:
         if payload is None:
             return cls()
         if not isinstance(payload, dict):
-            raise ValueError("book_quality.soft_target must be an object")
+            raise ValueError(f"book_quality.{SOFT_SCORING} must be an object")
+        reject_removed_keys(payload, removed=REMOVED_BOOK_QUALITY_ALIASES, scope=f"book_quality.{SOFT_SCORING}")
         measure = str(payload.get("measure", "quoted")).strip().lower()
         if measure not in ("quoted", "combined"):
-            raise ValueError("book_quality.soft_target.measure must be 'quoted' or 'combined'")
+            raise ValueError(f"book_quality.{SOFT_SCORING}.measure must be 'quoted' or 'combined'")
         return cls(
-            spread_target=max(1e-9, float(payload.get("spread_target", 50.0))),
-            depth_target=max(1e-9, float(payload.get("depth_target", 1.0))),
-            touch_spread_fraction=max(
-                1e-9,
-                float(payload.get("touch_spread_fraction", 0.01)),
-            ),
+            tightness_spread_scale=max(1e-9, float(payload.get(TIGHTNESS_SPREAD_SCALE, 50.0))),
+            presence_reference_qty=max(1e-9, float(payload.get(PRESENCE_REFERENCE_QTY, 1.0))),
+            touch_spread_fraction=max(1e-9, float(payload.get("touch_spread_fraction", 0.01))),
             measure=measure,
             v_presence=float(payload.get("v_presence", 0.25)),
             v_tightness=float(payload.get("v_tightness", 0.25)),
@@ -211,8 +220,8 @@ class BookQualitySoftTarget:
 
     def as_mapping(self) -> dict[str, float | str]:
         out: dict[str, float | str] = {
-            "spread_target": self.spread_target,
-            "depth_target": self.depth_target,
+            TIGHTNESS_SPREAD_SCALE: self.tightness_spread_scale,
+            PRESENCE_REFERENCE_QTY: self.presence_reference_qty,
             "measure": self.measure,
         }
         if self.touch_spread_fraction != 0.01:
@@ -230,42 +239,42 @@ class BookQualitySoftTarget:
 
 @dataclass(frozen=True, slots=True)
 class BookQualityParams:
-    """Venue book geometry: optional hard decoder structure plus soft targets."""
+    """Venue book geometry: optional hard decoder structure plus soft scoring."""
 
     hard_structure: BookQualityHardStructure | None = None
-    soft_target: BookQualitySoftTarget = BookQualitySoftTarget()
-
-    @property
-    def spread_target(self) -> float:
-        return self.soft_target.spread_target
-
-    @property
-    def depth_target(self) -> float:
-        return self.soft_target.depth_target
+    soft_scoring: BookQualitySoftScoring = BookQualitySoftScoring()
 
     @property
     def touch_spread_fraction(self) -> float:
-        return self.soft_target.touch_spread_fraction
+        return self.soft_scoring.touch_spread_fraction
 
     @property
     def measure(self) -> str:
-        return self.soft_target.measure
+        return self.soft_scoring.measure
 
     @property
     def v_presence(self) -> float:
-        return self.soft_target.v_presence
+        return self.soft_scoring.v_presence
 
     @property
     def v_tightness(self) -> float:
-        return self.soft_target.v_tightness
+        return self.soft_scoring.v_tightness
 
     @property
     def v_balance(self) -> float:
-        return self.soft_target.v_balance
+        return self.soft_scoring.v_balance
 
     @property
     def v_uniformity(self) -> float:
-        return self.soft_target.v_uniformity
+        return self.soft_scoring.v_uniformity
+
+    @property
+    def tightness_spread_scale(self) -> float:
+        return self.soft_scoring.tightness_spread_scale
+
+    @property
+    def presence_reference_qty(self) -> float:
+        return self.soft_scoring.presence_reference_qty
 
     @classmethod
     def from_mapping(cls, payload: Any) -> BookQualityParams | None:
@@ -278,18 +287,19 @@ class BookQualityParams:
                 "spread_structure belongs under book_quality.hard_structure "
                 "(action_max_spread, action_min_depth, action_k_epsilon)"
             )
-        flat_soft = sorted(k for k in _LEGACY_BOOK_QUALITY_SOFT_KEYS if k in payload)
+        reject_removed_book_quality_keys(payload)
+        flat_soft = sorted(k for k in _BOOK_QUALITY_SOFT_KEYS if k in payload)
         if flat_soft:
             raise ValueError(
-                "book_quality soft keys belong under book_quality.soft_target: "
+                f"book_quality soft keys belong under book_quality.{SOFT_SCORING}: "
                 + ", ".join(flat_soft)
             )
         hard = BookQualityHardStructure.from_mapping(payload.get("hard_structure"))
-        soft = BookQualitySoftTarget.from_mapping(payload.get("soft_target"))
-        return cls(hard_structure=hard, soft_target=soft)
+        soft = BookQualitySoftScoring.from_mapping(payload.get(SOFT_SCORING))
+        return cls(hard_structure=hard, soft_scoring=soft)
 
     def as_mapping(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"soft_target": self.soft_target.as_mapping()}
+        out: dict[str, Any] = {SOFT_SCORING: self.soft_scoring.as_mapping()}
         if self.hard_structure is not None:
             out["hard_structure"] = self.hard_structure.as_mapping()
         return out
@@ -538,11 +548,11 @@ def book_quality_score(
         )
 
     smooth_min = torch.minimum(d_bid_touch, d_ask_touch)
-    q_ref = max(1e-9, float(params.depth_target))
+    q_ref = max(1e-9, float(params.presence_reference_qty))
     presence = smooth_min / (q_ref + smooth_min)
 
     spread_sum = bid_x0[0] + ask_x0[0]
-    tightness = torch.exp(-spread_sum / max(1e-9, float(params.spread_target)))
+    tightness = torch.exp(-spread_sum / max(1e-9, float(params.tightness_spread_scale)))
 
     q_bid_notional = q_bid * max(0.0, float(mid_price))
     q_ask_notional = q_ask * max(0.0, float(mid_price))

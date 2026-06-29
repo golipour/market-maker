@@ -132,8 +132,8 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
         fixed_mc_samples=True,
         warm_start=False,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     action, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     payload = diagnostics.to_payload()
@@ -168,8 +168,8 @@ def test_optimizer_ignores_nonfinite_warm_start_action() -> None:
         fixed_mc_samples=True,
         warm_start=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     mpc._last_raw_flat = torch.full((6,), float("nan"), dtype=torch.float64).numpy()
 
@@ -195,8 +195,8 @@ def test_payload_contribution_fractions_match_final_only() -> None:
         adam_epochs=2,
         fixed_mc_samples=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     payload = diagnostics.to_payload()
@@ -220,8 +220,8 @@ def test_objective_snapshot_payload_improvement_fields() -> None:
         adam_epochs=3,
         fixed_mc_samples=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     improvement = diagnostics.to_payload()["objective"]["improvement"]

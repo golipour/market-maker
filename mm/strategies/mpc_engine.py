@@ -41,15 +41,21 @@ from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     local_constraints_from_spec,
 )
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    REMOVED_VENUE_OPTIMIZER_ALIASES,
+    RESERVATION_SKEW,
+)
 
 
 _VENUE_OPTIMIZER_KEYS = {
     "n_components",
     "return_risk_aversion_beta",
     "objective_weight",
-    "quote_size_min_per_side",
-    "quote_size_max_per_side",
-    "reservation_offset",
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    RESERVATION_SKEW,
     "w_book",
     "w_inv",
     "inventory_zone",
@@ -77,6 +83,7 @@ _REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
     }
 )
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
+    **{k: v for k, v in REMOVED_VENUE_OPTIMIZER_ALIASES.items()},
     "soft_fill_queue_penalty": "soft_fill_queue_model",
     "spread_structure": "book_quality.hard_structure",
 }
@@ -638,10 +645,10 @@ def _build_controller(
     local_min_qty = float(order_constraints.min_qty or 1.0)
     global_min_qty = float(global_constraints.min_qty or local_min_qty)
     local_optimizer_defaults = {
-        "quote_size_min_per_side": local_min_qty,
+        CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: local_min_qty,
     }
     global_optimizer_defaults = {
-        "quote_size_min_per_side": global_min_qty,
+        CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: global_min_qty,
     }
     local_optimizer_defaults.update(local_optimizer_cfg)
     global_optimizer_defaults.update(global_optimizer_cfg)

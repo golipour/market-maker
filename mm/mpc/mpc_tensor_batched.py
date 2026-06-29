@@ -16,12 +16,18 @@ import torch.nn.functional as F
 
 from mm.mpc.l_param import (
     LParamConfig,
-    ReservationOffsetParams,
+    ReservationSkewParams,
     SpreadStructureParams,
     action_param_len,
     reservation_r_offset_from_params,
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
+)
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    RESERVATION_SKEW,
+    reject_removed_venue_optimizer_keys,
 )
 from mm.mpc.objective_terms import (
     BookQualityParams,
@@ -80,9 +86,9 @@ class VenueOptimizerParams:
     n_components: int | None = None
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
-    quote_size_min_per_side: float = 0.0
-    quote_size_max_per_side: float | None = None
-    reservation_offset: ReservationOffsetParams | None = None
+    cumulative_qty_floor_at_spread_max: float = 0.0
+    cumulative_qty_cap_at_spread_max: float | None = None
+    reservation_skew: ReservationSkewParams | None = None
     w_book: float = 0.0
     w_inv: float = 0.0
     inventory_zone: InventoryZoneParams | None = None
@@ -100,6 +106,7 @@ class VenueOptimizerParams:
     ) -> "VenueOptimizerParams":
         base = defaults or cls()
         data = dict(payload or {})
+        reject_removed_venue_optimizer_keys(data, venue="optimizer")
         if data.get("spread_structure") is not None:
             raise ValueError(
                 "optimizer spread_structure was removed; use "
@@ -116,18 +123,18 @@ class VenueOptimizerParams:
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
-            quote_size_min_per_side=float(
-                data.get("quote_size_min_per_side", base.quote_size_min_per_side)
+            cumulative_qty_floor_at_spread_max=float(
+                data.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, base.cumulative_qty_floor_at_spread_max)
             ),
-            quote_size_max_per_side=(
-                float(data.get("quote_size_max_per_side"))
-                if data.get("quote_size_max_per_side") is not None
-                else base.quote_size_max_per_side
+            cumulative_qty_cap_at_spread_max=(
+                float(data[CUMULATIVE_QTY_CAP_AT_SPREAD_MAX])
+                if CUMULATIVE_QTY_CAP_AT_SPREAD_MAX in data
+                else base.cumulative_qty_cap_at_spread_max
             ),
-            reservation_offset=(
-                ReservationOffsetParams.from_mapping(data.get("reservation_offset"))
-                if data.get("reservation_offset") is not None
-                else base.reservation_offset
+            reservation_skew=(
+                ReservationSkewParams.from_mapping(data.get(RESERVATION_SKEW))
+                if data.get(RESERVATION_SKEW) is not None
+                else base.reservation_skew
             ),
             w_book=max(0.0, float(data.get("w_book", base.w_book))),
             w_inv=max(0.0, float(data.get("w_inv", base.w_inv))),
@@ -151,9 +158,9 @@ class VenueOptimizerParams:
         )
 
     def validate(self, *, spread_max: float, n_components: int | None, venue: str) -> None:
-        if float(self.quote_size_min_per_side) < 0.0:
+        if float(self.cumulative_qty_floor_at_spread_max) < 0.0:
             raise ValueError(
-                f"optimizer.{venue}.quote_size_min_per_side must be >= 0"
+                f"optimizer.{venue}.{CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX} must be >= 0"
             )
         l_param = self.l_param_config(
             spread_max=spread_max,
@@ -180,17 +187,17 @@ class VenueOptimizerParams:
             }
         )
         return LParamConfig(
-            quote_size_min=float(self.quote_size_min_per_side),
+            quote_size_min=float(self.cumulative_qty_floor_at_spread_max),
             quote_size_max=(
-                float(self.quote_size_max_per_side)
-                if self.quote_size_max_per_side is not None
+                float(self.cumulative_qty_cap_at_spread_max)
+                if self.cumulative_qty_cap_at_spread_max is not None
                 else None
             ),
             spread_max=spread_max,
             n_components=n_components,
             reservation_r_max=(
-                float(self.reservation_offset.r_max)
-                if self.reservation_offset is not None
+                float(self.reservation_skew.max_abs_skew)
+                if self.reservation_skew is not None
                 else 0.0
             ),
             **spread_fields,
@@ -202,16 +209,16 @@ class VenueOptimizerParams:
             "n_components": int(self.n_components or n_components),
             "return_risk_aversion_beta": self.return_risk_aversion_beta,
             "objective_weight": self.objective_weight,
-            "quote_size_min_per_side": self.quote_size_min_per_side,
-            "quote_size_max_per_side": self.quote_size_max_per_side,
+            CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: self.cumulative_qty_floor_at_spread_max,
+            CUMULATIVE_QTY_CAP_AT_SPREAD_MAX: self.cumulative_qty_cap_at_spread_max,
             "w_book": self.w_book,
             "w_inv": self.w_inv,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
-        if self.reservation_offset is not None:
-            out["reservation_offset"] = self.reservation_offset.as_mapping()
+        if self.reservation_skew is not None:
+            out[RESERVATION_SKEW] = self.reservation_skew.as_mapping()
         if self.inventory_zone is not None:
             out["inventory_zone"] = self.inventory_zone.as_mapping()
         if self.book_quality is not None:
@@ -735,8 +742,8 @@ def _quote_capacity_bounds_batched(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Hard side caps from wallet totals; side mins stay at zero (presence is soft)."""
     hard_cap_value = (
-        float(optimizer.quote_size_max_per_side)
-        if optimizer.quote_size_max_per_side is not None
+        float(optimizer.cumulative_qty_cap_at_spread_max)
+        if optimizer.cumulative_qty_cap_at_spread_max is not None
         else float("inf")
     )
     hard_cap = torch.full_like(cash, max(0.0, hard_cap_value))
@@ -757,8 +764,8 @@ def _quote_capacity_bounds_scalar(
     optimizer: VenueOptimizerParams,
 ) -> tuple[float, float, float, float]:
     hard_cap = (
-        max(0.0, float(optimizer.quote_size_max_per_side))
-        if optimizer.quote_size_max_per_side is not None
+        max(0.0, float(optimizer.cumulative_qty_cap_at_spread_max))
+        if optimizer.cumulative_qty_cap_at_spread_max is not None
         else float("inf")
     )
     mid_safe = max(1e-12, float(mid_price))
@@ -801,8 +808,8 @@ class MonteCarloMPCTensorBatched:
         local_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         global_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         reference_price_source: str = "global",
-        quote_size_min_per_side: float | int | None = None,
-        quote_size_max_per_side: float | int | None = None,
+        cumulative_qty_floor_at_spread_max: float | int | None = None,
+        cumulative_qty_cap_at_spread_max: float | int | None = None,
         objective_normalize: dict[str, Any] | ObjectiveNormalizeParams | None = None,
     ):
         self.local_price_model = local_price_model
@@ -831,11 +838,15 @@ class MonteCarloMPCTensorBatched:
             n_components=self.n_components,
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
-            quote_size_min_per_side=(
-                float(quote_size_min_per_side) if quote_size_min_per_side is not None else 0.0
+            cumulative_qty_floor_at_spread_max=(
+                float(cumulative_qty_floor_at_spread_max)
+                if cumulative_qty_floor_at_spread_max is not None
+                else 0.0
             ),
-            quote_size_max_per_side=(
-                float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
+            cumulative_qty_cap_at_spread_max=(
+                float(cumulative_qty_cap_at_spread_max)
+                if cumulative_qty_cap_at_spread_max is not None
+                else None
             ),
             soft_fill_temp=float(soft_fill_temp),
             soft_fill_activation=_normalize_soft_fill_activation(soft_fill_activation),
@@ -864,8 +875,10 @@ class MonteCarloMPCTensorBatched:
             venue="global",
         )
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
-        self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
-        self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
+        self.cumulative_qty_floor_at_spread_max = (
+            self.local_optimizer.cumulative_qty_floor_at_spread_max
+        )
+        self.cumulative_qty_cap_at_spread_max = self.local_optimizer.cumulative_qty_cap_at_spread_max
         self.soft_fill_temp = self.local_optimizer.soft_fill_temp
         self.soft_fill_activation = self.local_optimizer.soft_fill_activation
         self.soft_fill_queue_model = self.local_optimizer.soft_fill_queue_model

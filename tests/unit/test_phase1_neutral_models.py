@@ -185,8 +185,8 @@ def test_flat_venue_optimizer_config_names_are_rejected() -> None:
                     "enabled": True,
                     "optimizer": {
                         "kind": "monte_carlo_mpc_tensor_batched",
-                        "quote_size_min_per_side": 1.0,
-                        "quote_size_max_per_side": 10.0,
+                        "cumulative_qty_floor_at_spread_max": 1.0,
+                        "cumulative_qty_cap_at_spread_max": 10.0,
                     },
                 },
             )
@@ -204,8 +204,8 @@ def test_removed_nested_venue_optimizer_aliases_are_rejected() -> None:
                         "kind": "monte_carlo_mpc_tensor_batched",
                         "local": {
                             "inv_coef": 0.1,
-                            "quote_size_min_per_side": 1.0,
-                            "quote_size_max_per_side": 10.0,
+                            "cumulative_qty_floor_at_spread_max": 1.0,
+                            "cumulative_qty_cap_at_spread_max": 10.0,
                         },
                     },
                 },

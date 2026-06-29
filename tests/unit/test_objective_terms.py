@@ -7,7 +7,7 @@ from mm.mpc.l_param import LParamConfig, action_param_len
 from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange, _spread_grid_tensor
 from mm.mpc.objective_terms import (
     BookQualityParams,
-    BookQualitySoftTarget,
+    BookQualitySoftScoring,
     InventoryZoneParams,
     ObjectiveNormalizeParams,
     apply_ce_objective_normalization,
@@ -194,7 +194,7 @@ def test_book_quality_quoted_mode_gradients_flow() -> None:
         ask_quote_size_min=0.0,
         ask_quote_size_max=10.0,
         mid_price=100.0,
-        params=BookQualityParams(soft_target=BookQualitySoftTarget(measure="quoted")),
+        params=BookQualityParams(soft_scoring=BookQualitySoftScoring(measure="quoted")),
     )
     score.backward()
     assert flat.grad is not None
@@ -236,7 +236,7 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         ask_quote_size_max=10.0,
         mid_price=100.0,
         params=BookQualityParams(
-            soft_target=BookQualitySoftTarget(measure="quoted", depth_target=1.0)
+            soft_scoring=BookQualitySoftScoring(measure="quoted", presence_reference_qty=1.0)
         ),
     )
     combined_score, combined_components = book_quality_score(
@@ -250,7 +250,7 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         ask_quote_size_max=10.0,
         mid_price=100.0,
         params=BookQualityParams(
-            soft_target=BookQualitySoftTarget(measure="combined", depth_target=1.0)
+            soft_scoring=BookQualitySoftScoring(measure="combined", presence_reference_qty=1.0)
         ),
         market_cum_bid=market_cum_bid,
         market_cum_ask=market_cum_ask,

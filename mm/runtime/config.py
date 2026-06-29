@@ -15,6 +15,12 @@ from mm.core.models.instrument import (
 )
 from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.persistence.retention import RetentionPolicy, retention_policy_from_mapping
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    REMOVED_VENUE_OPTIMIZER_ALIASES,
+    RESERVATION_SKEW,
+)
 
 SourceRole = Literal["local", "global"]
 NegativeObjectiveActionMode = Literal["optimizer_action", "floor_action", "zero_action"]
@@ -1415,13 +1421,16 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         )
     optimizer_payload = payload.get("optimizer")
     if isinstance(optimizer_payload, dict):
+        payload = dict(payload)
+        optimizer_payload = dict(optimizer_payload)
+        payload["optimizer"] = optimizer_payload
         venue_optimizer_keys = {
             "n_components",
             "return_risk_aversion_beta",
             "objective_weight",
-            "quote_size_min_per_side",
-            "quote_size_max_per_side",
-            "reservation_offset",
+            CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+            CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+            RESERVATION_SKEW,
             "w_book",
             "w_inv",
             "inventory_zone",
@@ -1449,6 +1458,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             }
         )
         removed_venue_optimizer_aliases = {
+            **REMOVED_VENUE_OPTIMIZER_ALIASES,
             "soft_fill_queue_penalty": "soft_fill_queue_model",
             "spread_structure": "book_quality.hard_structure",
         }
@@ -1467,8 +1477,8 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "n_components",
                 "objective_weight",
                 *sorted(removed_threshold_objective_keys),
-                "quote_size_min_per_side",
-                "quote_size_max_per_side",
+                CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+                CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
                 "spread_structure",
                 "soft_fill_temp",
                 "soft_fill_activation",
@@ -1690,9 +1700,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.local/global quote_size_min_per_side is the venue lot-size floor "
-            "for spread-structured decoding; quote_size_max_per_side is an optional safety "
-            "cap. Cash/inventory capacity structurally caps each side; two-sided presence "
+            "optimizer.local/global cumulative_qty_floor_at_spread_max is the venue lot-size "
+            "floor for spread-structured decoding at spread_max; "
+            "cumulative_qty_cap_at_spread_max is an optional safety cap. "
+            "Cash/inventory capacity structurally caps each side; two-sided presence "
             "is encouraged via w_book * book_quality when configured."
         ),
         "risk": {
@@ -1718,11 +1729,13 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "quote_size_min_per_side": (
-                "venue lot-size floor for spread-structured decoding at spread_max; "
+            "cumulative_qty_floor_at_spread_max": (
+                "venue lot-size floor for decoder total cumulative base qty at spread_max; "
                 "capacity bounds keep side mins at zero"
             ),
-            "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
+            "cumulative_qty_cap_at_spread_max": (
+                "optional decoder cumulative base qty safety cap per side at spread_max"
+            ),
             "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
             "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
             "inventory_zone": (
@@ -1733,13 +1746,12 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "book_quality": (
                 "book shape preferences: hard_structure caps first-touch decode "
                 "(action_max_spread, action_min_depth, action_k_epsilon); "
-                "soft_target sets spread/depth targets for w_book scoring "
+                "soft_scoring sets presence/tightness references for w_book scoring "
                 "(measure='quoted' or 'combined')"
             ),
-            "reservation_offset": (
-                "optional relative reservation-price shift: r_max bounds dimensionless "
-                "r_offset with mid_eff = mid * (1 + r_offset); curve evaluation uses "
-                "D(x ± mid * r_offset) on the market spread grid"
+            "reservation_skew": (
+                "optional learnable reservation skew: max_abs_skew bounds dimensionless "
+                "r_skew; curve evaluation uses D(x ± mid * r_skew) on the market spread grid"
             ),
             "soft_fill_temp": "venue soft-fill temperature",
             "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",

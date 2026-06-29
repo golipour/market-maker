@@ -50,8 +50,8 @@ def _config() -> ControllerRuntimeConfig:
         optimizer={
             "n_components": 1,
             "local": {
-                "quote_size_min_per_side": 0.3,
-                "quote_size_max_per_side": 2.0,
+                "cumulative_qty_floor_at_spread_max": 0.3,
+                "cumulative_qty_cap_at_spread_max": 2.0,
             },
         },
     )
