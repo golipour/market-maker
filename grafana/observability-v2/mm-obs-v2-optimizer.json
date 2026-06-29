@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), and timing.",
+        "content": "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), final weighted components plus objective total, and timing.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -191,7 +191,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nUNION ALL\nSELECT e.ts AS \"time\", 'objective_total' AS metric, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective','final','value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective','final','value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective','final','value'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],

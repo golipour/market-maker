@@ -4084,7 +4084,8 @@ def optimizer_diagnostics() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), and timing.",
+            "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), "
+            "final weighted components plus objective total, and timing.",
             y=0,
         ),
         _panel(2, "Objective value", "timeseries", PG_DS, _optimizer_objective_sql(), x=0, y=3, w=24, unit="sci", decimals=4),
@@ -5440,14 +5441,23 @@ ORDER BY 1"""
 
 
 def _optimizer_weighted_components_sql() -> str:
-    value = _numeric_sql("kv.value", default="NULL")
-    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+    component_value = _numeric_sql("kv.value", default="NULL")
+    objective_value = _numeric_sql(
+        "e.payload #>> ARRAY['optimizer','objective','final','value']",
+        default="NULL",
+    )
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {component_value} AS value
 FROM mm_events e
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
 ) AS kv
 WHERE {_diagnostics_filter()}
   AND kv.key IN ({_OBJECTIVE_CONTRIBUTION_KEYS_SQL})
+UNION ALL
+SELECT e.ts AS "time", 'objective_total' AS metric, {objective_value} AS value
+FROM mm_events e
+WHERE {_diagnostics_filter()}
+  AND e.payload #>> ARRAY['optimizer','objective','final','value'] IS NOT NULL
 ORDER BY 1"""
 
 

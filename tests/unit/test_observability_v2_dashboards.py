@@ -1,4 +1,5 @@
 from mm.tools.generate_observability_v2_dashboards import (
+    _optimizer_weighted_components_sql,
     _runtime_fill_rate_sql,
     action_pipeline,
     action_pipeline_side_counts,
@@ -11,6 +12,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     market_data_quality,
     model_parameters,
     model_quality,
+    optimizer_diagnostics,
     orderbook_depth,
     pipeline_time_profile,
     portfolio_pnl,
@@ -18,6 +20,18 @@ from mm.tools.generate_observability_v2_dashboards import (
     runtime_overview,
     target_order_stems,
 )
+
+
+def test_optimizer_weighted_components_sql_includes_final_objective_total() -> None:
+    sql = _optimizer_weighted_components_sql()
+    dashboard = optimizer_diagnostics()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert "UNION ALL" in sql
+    assert "'objective_total' AS metric" in sql
+    assert "ARRAY['optimizer','objective','final','value']" in sql
+    assert "ARRAY['optimizer','objective','final','components']" in sql
+    assert panels_by_title["Objective components (weighted J terms)"]["targets"][0]["rawSql"] == sql
 
 
 def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
