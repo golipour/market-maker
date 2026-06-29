@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+from pathlib import Path
 from typing import Any
 
 from mm.mpc.optimizer_config_keys import (
@@ -29,6 +31,52 @@ _LEGACY_SOFT_KEY_MAP = {
 _LEGACY_SKEW_KEY_MAP = {
     "r_max": MAX_ABS_SKEW,
 }
+
+_CANONICAL_PRESET_ID = "thin_local_liquidity_weighted_mpc"
+_RUNTIME_EXAMPLE_PATH = (
+    Path(__file__).resolve().parents[1] / "configs" / "market_maker.runtime.example.json"
+)
+
+
+def _canonical_optimizer() -> dict[str, Any]:
+    payload = json.loads(_RUNTIME_EXAMPLE_PATH.read_text())
+    presets = payload.get("strategy_presets")
+    if not isinstance(presets, dict):
+        raise ValueError("runtime example missing strategy_presets")
+    preset = presets.get(_CANONICAL_PRESET_ID)
+    if not isinstance(preset, dict):
+        raise ValueError(f"runtime example missing strategy_presets.{_CANONICAL_PRESET_ID}")
+    controller = preset.get("controller")
+    if not isinstance(controller, dict):
+        raise ValueError(f"strategy_presets.{_CANONICAL_PRESET_ID}.controller is required")
+    optimizer = controller.get("optimizer")
+    if not isinstance(optimizer, dict):
+        raise ValueError(
+            f"strategy_presets.{_CANONICAL_PRESET_ID}.controller.optimizer is required"
+        )
+    return copy.deepcopy(optimizer)
+
+
+def _deep_merge_defaults(base: Any, defaults: Any) -> tuple[Any, bool]:
+    if not isinstance(defaults, dict):
+        return base, False
+    if not isinstance(base, dict):
+        return copy.deepcopy(defaults), True
+    out = dict(base)
+    changed = False
+    for key, default_val in defaults.items():
+        if str(key).startswith("_"):
+            continue
+        if key not in out:
+            out[key] = copy.deepcopy(default_val)
+            changed = True
+            continue
+        if isinstance(out[key], dict) and isinstance(default_val, dict):
+            merged, child_changed = _deep_merge_defaults(out[key], default_val)
+            if child_changed:
+                out[key] = merged
+                changed = True
+    return out, changed
 
 
 def _rename_keys(payload: dict[str, Any], key_map: dict[str, str]) -> bool:
@@ -123,6 +171,9 @@ def _migrate_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
             migrated, venue_changed = _migrate_venue_optimizer(out[venue])
             out[venue] = migrated
             changed = changed or venue_changed
+    merged, merge_changed = _deep_merge_defaults(out, _canonical_optimizer())
+    out = merged
+    changed = changed or merge_changed
     return out, changed
 
 

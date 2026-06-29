@@ -25,3 +25,47 @@ def test_migrate_inventory_zone_to_viability() -> None:
     assert "inventory_zone" not in local
     assert local["viability"]["min_quote_qty"] == 2.0
     assert local["viability"]["lambda_init"] == 1.0
+
+
+def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "kind": "monte_carlo_mpc_tensor_batched",
+                "horizon": 2,
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    optimizer = migrated["controller"]["optimizer"]
+    assert optimizer["local"]["viability"]["lambda_init"] == 1.0
+    assert optimizer["global"]["viability"]["availability_target"] == 0.9
+    assert optimizer["adam_epochs"] == 40
+
+
+def test_migrate_sparse_optimizer_preserves_existing_overrides() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "kind": "monte_carlo_mpc_tensor_batched",
+                "horizon": 4,
+                "local": {
+                    "n_components": 2,
+                    "viability": {
+                        "min_quote_qty": 1.0,
+                        "margin_sharpness": 0.1,
+                        "availability_target": 0.9,
+                        "shortfall_tolerance": 0.05,
+                        "lambda_init": 1.0,
+                        "lambda_learning_rate": 0.5,
+                    },
+                },
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    optimizer = migrated["controller"]["optimizer"]
+    assert optimizer["horizon"] == 4
+    assert optimizer["local"]["n_components"] == 2
