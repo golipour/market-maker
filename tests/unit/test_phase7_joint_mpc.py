@@ -396,7 +396,14 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "return_risk_aversion_beta": 0.2,
                     "cumulative_qty_floor_at_spread_max": 0.2,
                     "w_book": 0.001,
-                    "w_inv": 0.005,
+                    "viability": {
+                        "min_quote_qty": 0.2,
+                        "margin_sharpness": 0.1,
+                        "availability_target": 0.9,
+                        "shortfall_tolerance": 0.05,
+                        "lambda_init": 0.5,
+                        "lambda_learning_rate": 0.5,
+                    },
                     "soft_fill_temp": 0.11,
                     "soft_fill_activation": "hardsigmoid",
                     "soft_fill_queue_model": "pro_rata",
@@ -408,7 +415,14 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
                     "cumulative_qty_floor_at_spread_max": 1.0,
                     "cumulative_qty_cap_at_spread_max": 5.0,
                     "w_book": 0.002,
-                    "w_inv": 0.01,
+                    "viability": {
+                        "min_quote_qty": 1.0,
+                        "margin_sharpness": 0.1,
+                        "availability_target": 0.9,
+                        "shortfall_tolerance": 0.05,
+                        "lambda_init": 1.0,
+                        "lambda_learning_rate": 0.5,
+                    },
                     "soft_fill_temp": 0.33,
                     "soft_fill_activation": "sigmoid",
                     "soft_fill_queue_model": "back_of_queue",
@@ -440,7 +454,8 @@ def test_build_controller_uses_separate_local_global_optimizer_params() -> None:
     assert controller.global_optimizer.soft_fill_temp == pytest.approx(0.33)
     assert controller.local_optimizer.cumulative_qty_cap_at_spread_max is None
     assert controller.local_optimizer.w_book == pytest.approx(0.001)
-    assert controller.global_optimizer.w_inv == pytest.approx(0.01)
+    assert controller.global_optimizer.viability is not None
+    assert controller.global_optimizer.viability.lambda_init == pytest.approx(1.0)
     assert controller.local_optimizer.soft_fill_queue_model == "pro_rata"
     assert controller.global_optimizer.soft_fill_queue_model == "back_of_queue"
     assert controller.reference_price_source == "local"

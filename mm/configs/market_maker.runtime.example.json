@@ -249,21 +249,20 @@
             "return_risk_aversion_beta": 0.1,
             "cumulative_qty_floor_at_spread_max": 1.0,
             "w_book": 0.0,
-            "w_inv": 0.0,
+            "viability": {
+              "min_quote_qty": 1.0,
+              "margin_sharpness": 0.1,
+              "availability_target": 0.9,
+              "shortfall_tolerance": 0.05,
+              "lambda_init": 1.0,
+              "lambda_learning_rate": 0.5
+            },
             "book_quality": {
               "soft_scoring": {
                 "tightness_spread_scale": 200.0,
                 "presence_reference_qty": 1.0,
                 "measure": "quoted"
               }
-            },
-            "inventory_zone": {
-              "comfort_low": -0.2,
-              "comfort_high": 0.2,
-              "low_ramp_width": 0.05,
-              "high_ramp_width": 0.05,
-              "low_penalty_cap": 1.0,
-              "high_penalty_cap": 0.6
             },
             "reservation_skew": {
               "max_abs_skew": 0.002
@@ -278,7 +277,14 @@
             "return_risk_aversion_beta": 0.1,
             "cumulative_qty_floor_at_spread_max": 1.0,
             "w_book": 0.002,
-            "w_inv": 0.01,
+            "viability": {
+              "min_quote_qty": 1.0,
+              "margin_sharpness": 0.1,
+              "availability_target": 0.9,
+              "shortfall_tolerance": 0.05,
+              "lambda_init": 1.0,
+              "lambda_learning_rate": 0.5
+            },
             "book_quality": {
               "hard_structure": {
                 "action_max_spread": 100.0,
@@ -290,14 +296,6 @@
                 "presence_reference_qty": 1.0,
                 "measure": "quoted"
               }
-            },
-            "inventory_zone": {
-              "comfort_low": -0.2,
-              "comfort_high": 0.2,
-              "low_ramp_width": 0.05,
-              "high_ramp_width": 0.05,
-              "low_penalty_cap": 0.7,
-              "high_penalty_cap": 1.0
             },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",

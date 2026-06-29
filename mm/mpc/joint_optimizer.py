@@ -22,8 +22,10 @@ from mm.mpc.objective_terms import (
     BookQualityParams,
     book_quality_score,
     combine_soft_objective_terms,
-    inventory_zone_path_mean,
+    combine_viability_term,
     update_ce_ewma_scale,
+    update_viability_lambda,
+    viability_path_shortfall,
 )
 from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
 from mm.mpc.mpc_tensor_batched import (
@@ -783,7 +785,6 @@ def optimize_joint_with_diagnostics(
                     J,
                     components,
                     w_book=local_opt.w_book,
-                    w_inv=0.0,
                     book_score=book_score,
                     book_components=book_components,
                 )
@@ -808,46 +809,39 @@ def optimize_joint_with_diagnostics(
                     J,
                     components,
                     w_book=global_opt.w_book,
-                    w_inv=0.0,
                     book_score=book_score,
                     book_components=book_components,
                     book_term="global_book_quality",
                     component_prefix="global_",
                 )
-            if float(local_opt.w_inv) > 0.0 and local_opt.inventory_zone is not None:
-                zone_mean, zone_components = inventory_zone_path_mean(
+            if local_opt.viability is not None:
+                shortfall, viability_components = viability_path_shortfall(
                     torch_mod.stack(local_inv_path, dim=1),
                     cash_path=torch_mod.stack(local_cash_path, dim=1),
                     mid_path=torch_mod.stack(local_mid_path, dim=1),
-                    zone=local_opt.inventory_zone,
+                    params=local_opt.viability,
                 )
-                J, components = combine_soft_objective_terms(
+                J, components = combine_viability_term(
                     J,
                     components,
-                    w_book=0.0,
-                    w_inv=local_opt.w_inv,
-                    inventory_zone_mean=zone_mean,
-                    zone_components=zone_components,
+                    viability_lambda=mpc._viability_lambda_local,
+                    viability_shortfall=shortfall,
+                    viability_components=viability_components,
                 )
-            if (
-                global_mask > 0.0
-                and float(global_opt.w_inv) > 0.0
-                and global_opt.inventory_zone is not None
-            ):
-                zone_mean, zone_components = inventory_zone_path_mean(
+            if global_mask > 0.0 and global_opt.viability is not None:
+                shortfall, viability_components = viability_path_shortfall(
                     torch_mod.stack(global_inv_path, dim=1),
                     cash_path=torch_mod.stack(global_cash_path, dim=1),
                     mid_path=torch_mod.stack(global_mid_path, dim=1),
-                    zone=global_opt.inventory_zone,
+                    params=global_opt.viability,
                 )
-                J, components = combine_soft_objective_terms(
+                J, components = combine_viability_term(
                     J,
                     components,
-                    w_book=0.0,
-                    w_inv=global_opt.w_inv,
-                    inventory_zone_mean=zone_mean,
-                    zone_components=zone_components,
-                    zone_term="global_inventory_zone_penalty",
+                    viability_lambda=mpc._viability_lambda_global,
+                    viability_shortfall=shortfall,
+                    viability_components=viability_components,
+                    viability_term="global_viability_penalty",
                     component_prefix="global_",
                 )
             J_mean_raw = torch_mod.nan_to_num(
@@ -984,6 +978,20 @@ def optimize_joint_with_diagnostics(
             mpc._ce_ewma_scale,
             best_metrics.components,
             normalize=mpc.objective_normalize,
+        )
+        mpc._viability_lambda_local = update_viability_lambda(
+            mpc._viability_lambda_local,
+            best_metrics.components,
+            params=local_opt.viability,
+        )
+        mpc._viability_lambda_global = update_viability_lambda(
+            mpc._viability_lambda_global,
+            {
+                "viability_shortfall": best_metrics.components.get(
+                    "global_viability_shortfall"
+                ),
+            },
+            params=global_opt.viability,
         )
 
     diagnostics = OptimizerRunDiagnostics(

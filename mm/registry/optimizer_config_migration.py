@@ -75,11 +75,31 @@ def _migrate_book_quality(payload: Any) -> tuple[dict[str, Any] | None, bool]:
     return out, changed
 
 
+def _migrate_inventory_zone_to_viability(payload: dict[str, Any]) -> bool:
+    changed = False
+    if "inventory_zone" in payload or "w_inv" in payload:
+        w_inv = float(payload.pop("w_inv", 0.0) or 0.0)
+        payload.pop("inventory_zone", None)
+        if "viability" not in payload:
+            floor = float(payload.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, 1.0) or 1.0)
+            payload["viability"] = {
+                "min_quote_qty": max(1e-12, floor),
+                "margin_sharpness": 0.1,
+                "availability_target": 0.9,
+                "shortfall_tolerance": 0.05,
+                "lambda_init": max(0.1, w_inv * 100.0) if w_inv > 0.0 else 1.0,
+                "lambda_learning_rate": 0.5,
+            }
+        changed = True
+    return changed
+
+
 def _migrate_venue_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(payload, dict):
         return {}, False
     out = dict(payload)
     changed = _rename_keys(out, _LEGACY_VENUE_KEY_MAP)
+    changed = _migrate_inventory_zone_to_viability(out) or changed
     if RESERVATION_SKEW in out:
         migrated, skew_changed = _migrate_reservation_skew(out[RESERVATION_SKEW])
         if migrated is not None:

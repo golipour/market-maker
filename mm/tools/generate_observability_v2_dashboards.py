@@ -4128,10 +4128,10 @@ def optimizer_diagnostics() -> dict[str, Any]:
         ),
         _panel(
             7,
-            "Inventory zone breakdown",
+            "Viability breakdown",
             "timeseries",
             PG_DS,
-            _optimizer_inventory_zone_breakdown_sql(),
+            _optimizer_viability_breakdown_sql(),
             x=0,
             y=27,
             w=12,
@@ -4139,10 +4139,10 @@ def optimizer_diagnostics() -> dict[str, Any]:
         ),
         _panel(
             8,
-            "Inventory zone config",
+            "Viability config",
             "timeseries",
             PG_DS,
-            _optimizer_inventory_zone_config_sql(),
+            _optimizer_viability_config_sql(),
             x=12,
             y=27,
             w=12,
@@ -5417,9 +5417,9 @@ _OBJECTIVE_CONTRIBUTION_KEYS_SQL = ", ".join(
     for key in (
         "risk_adjusted_return",
         "book_quality",
-        "inventory_zone_penalty",
+        "viability_penalty",
         "global_book_quality",
-        "global_inventory_zone_penalty",
+        "global_viability_penalty",
     )
 )
 
@@ -5482,7 +5482,7 @@ WHERE {_diagnostics_filter()}
 ORDER BY 1"""
 
 
-def _optimizer_inventory_zone_breakdown_sql() -> str:
+def _optimizer_viability_breakdown_sql() -> str:
     value = _numeric_sql("kv.value", default="NULL")
     return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
 FROM mm_events e
@@ -5492,30 +5492,38 @@ CROSS JOIN LATERAL jsonb_each_text(
 WHERE {_diagnostics_filter()}
   AND (
     kv.key IN (
-      'inventory_zone_penalty_raw',
-      'inventory_zone_imbalance',
-      'inventory_zone_low_penalty',
-      'inventory_zone_high_penalty',
-      'global_inventory_zone_penalty_raw',
-      'global_inventory_zone_imbalance',
-      'global_inventory_zone_low_penalty',
-      'global_inventory_zone_high_penalty'
+      'viability_penalty_raw',
+      'viability_shortfall',
+      'viability_min_availability',
+      'viability_step_availability',
+      'viability_bid_margin',
+      'viability_ask_margin',
+      'viability_lambda',
+      'global_viability_penalty_raw',
+      'global_viability_shortfall',
+      'global_viability_min_availability',
+      'global_viability_step_availability',
+      'global_viability_bid_margin',
+      'global_viability_ask_margin',
+      'global_viability_lambda'
     )
   )
 ORDER BY 1"""
 
 
-def _optimizer_inventory_zone_config_sql() -> str:
+def _optimizer_viability_config_sql() -> str:
     value = _numeric_sql("kv.value", default="NULL")
-    zone_keys = (
-        "comfort_low",
-        "comfort_high",
-        "low_ramp_width",
-        "high_ramp_width",
-        "low_penalty_cap",
-        "high_penalty_cap",
+    keys_sql = ", ".join(
+        f"'{key}'"
+        for key in (
+            "min_quote_qty",
+            "margin_sharpness",
+            "availability_target",
+            "shortfall_tolerance",
+            "lambda_init",
+            "lambda_learning_rate",
+        )
     )
-    keys_sql = ", ".join(f"'{key}'" for key in zone_keys)
     return f"""SELECT e.ts AS "time",
        (scope || '.' || kv.key) AS metric,
        {value} AS value
@@ -5523,7 +5531,7 @@ FROM mm_events e
 CROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope
 CROSS JOIN LATERAL jsonb_each_text(
   COALESCE(
-    e.payload #> ARRAY['optimizer','config', scope, 'inventory_zone'],
+    e.payload #> ARRAY['optimizer','config', scope, 'viability'],
     '{{}}'::jsonb
   )
 ) AS kv

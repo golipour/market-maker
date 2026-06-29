@@ -1432,8 +1432,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
             RESERVATION_SKEW,
             "w_book",
-            "w_inv",
-            "inventory_zone",
+            "viability",
             "book_quality",
             "soft_fill_temp",
             "soft_fill_activation",
@@ -1517,6 +1516,15 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 raise ValueError(
                     f"removed venue optimizer aliases under controller.optimizer.{venue}: "
                     f"{replacements}"
+                )
+            removed_inventory_zone = sorted(
+                key for key in ("w_inv", "inventory_zone") if key in venue_payload
+            )
+            if removed_inventory_zone:
+                raise ValueError(
+                    f"removed controller.optimizer.{venue} keys {', '.join(removed_inventory_zone)}; "
+                    "use viability {min_quote_qty, margin_sharpness, availability_target, "
+                    "shortfall_tolerance, lambda_init, lambda_learning_rate}"
                 )
             unknown_keys = sorted(
                 key for key in venue_payload if key not in venue_optimizer_keys
@@ -1737,11 +1745,10 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "optional decoder cumulative base qty safety cap per side at spread_max"
             ),
             "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
-            "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
-            "inventory_zone": (
-                "sigmoid comfort band on wallet imbalance (Q·mid−cash)/(|Q·mid|+|cash|); "
-                "keys {comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap}"
+            "viability": (
+                "availability shortfall term with adaptive Lagrange multiplier; "
+                "keys {min_quote_qty, margin_sharpness, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             ),
             "book_quality": (
                 "book shape preferences: hard_structure caps first-touch decode "

@@ -1,7 +1,8 @@
-"""Normalized soft objective terms for MPC (book quality and inventory zone)."""
+"""Normalized soft objective terms for MPC (book quality and viability availability)."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,66 +32,69 @@ def _torch():
     return torch
 
 
-_LEGACY_INVENTORY_ZONE_POWER_KEYS = frozenset({"q_min", "q_max", "p"})
-_LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES = frozenset(
-    {"q_lo", "q_hi", "d_lo", "d_hi", "a_lo", "a_hi"}
-)
-
-
 @dataclass(frozen=True, slots=True)
-class InventoryZoneParams:
-    """Sigmoid operational zone on wallet imbalance (proposal §4.3 option B)."""
+class ViabilityParams:
+    """Availability shortfall term with adaptive Lagrange multiplier (docs/viability_term.md)."""
 
-    comfort_low: float = -0.2
-    comfort_high: float = 0.2
-    low_ramp_width: float = 0.05
-    high_ramp_width: float = 0.05
-    low_penalty_cap: float = 1.0
-    high_penalty_cap: float = 0.6
+    min_quote_qty: float = 1.0
+    margin_sharpness: float = 0.1
+    availability_target: float = 0.9
+    shortfall_tolerance: float = 0.05
+    lambda_init: float = 1.0
+    lambda_learning_rate: float = 0.5
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> InventoryZoneParams | None:
+    def from_mapping(cls, payload: Any) -> ViabilityParams | None:
         if payload is None:
             return None
         if not isinstance(payload, dict):
-            raise ValueError("inventory_zone must be an object")
-        removed_power = sorted(k for k in _LEGACY_INVENTORY_ZONE_POWER_KEYS if k in payload)
-        if removed_power:
+            raise ValueError("viability must be an object")
+        removed = sorted(
+            key
+            for key in payload
+            if key
+            in {
+                "comfort_low",
+                "comfort_high",
+                "low_ramp_width",
+                "high_ramp_width",
+                "low_penalty_cap",
+                "high_penalty_cap",
+            }
+        )
+        if removed:
             raise ValueError(
-                "inventory_zone power-zone keys were removed; use sigmoid zone "
-                "{comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap}: "
-                + ", ".join(removed_power)
+                "inventory_zone keys were removed; use viability "
+                "{min_quote_qty, margin_sharpness, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
+                + ", ".join(removed)
             )
-        removed_aliases = sorted(k for k in _LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES if k in payload)
-        if removed_aliases:
-            raise ValueError(
-                "inventory_zone keys renamed to descriptive sigmoid names "
-                "(comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap); remove: "
-                + ", ".join(removed_aliases)
-            )
-        comfort_low = float(payload.get("comfort_low", -0.2))
-        comfort_high = float(payload.get("comfort_high", 0.2))
-        if comfort_low >= comfort_high:
-            raise ValueError("inventory_zone.comfort_low must be < comfort_high")
+        availability_target = float(payload.get("availability_target", 0.9))
+        if not (0.0 < availability_target <= 1.0):
+            raise ValueError("viability.availability_target must be in (0, 1]")
+        shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
+        if shortfall_tolerance < 0.0:
+            raise ValueError("viability.shortfall_tolerance must be >= 0")
+        lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.5))
+        if lambda_learning_rate <= 0.0:
+            raise ValueError("viability.lambda_learning_rate must be > 0")
         return cls(
-            comfort_low=comfort_low,
-            comfort_high=comfort_high,
-            low_ramp_width=max(1e-9, float(payload.get("low_ramp_width", 0.05))),
-            high_ramp_width=max(1e-9, float(payload.get("high_ramp_width", 0.05))),
-            low_penalty_cap=max(0.0, float(payload.get("low_penalty_cap", 1.0))),
-            high_penalty_cap=max(0.0, float(payload.get("high_penalty_cap", 0.6))),
+            min_quote_qty=max(1e-12, float(payload.get("min_quote_qty", 1.0))),
+            margin_sharpness=max(1e-9, float(payload.get("margin_sharpness", 0.1))),
+            availability_target=availability_target,
+            shortfall_tolerance=shortfall_tolerance,
+            lambda_init=max(0.0, float(payload.get("lambda_init", 1.0))),
+            lambda_learning_rate=lambda_learning_rate,
         )
 
     def as_mapping(self) -> dict[str, float]:
         return {
-            "comfort_low": self.comfort_low,
-            "comfort_high": self.comfort_high,
-            "low_ramp_width": self.low_ramp_width,
-            "high_ramp_width": self.high_ramp_width,
-            "low_penalty_cap": self.low_penalty_cap,
-            "high_penalty_cap": self.high_penalty_cap,
+            "min_quote_qty": self.min_quote_qty,
+            "margin_sharpness": self.margin_sharpness,
+            "availability_target": self.availability_target,
+            "shortfall_tolerance": self.shortfall_tolerance,
+            "lambda_init": self.lambda_init,
+            "lambda_learning_rate": self.lambda_learning_rate,
         }
 
 
@@ -305,92 +309,75 @@ class BookQualityParams:
         return out
 
 
-def wallet_imbalance(
+def soft_availability_margin(
     inventory: Any,
     *,
-    mid_price: Any,
     cash: Any,
-    eps: float = 1e-12,
-) -> Any:
+    mid_price: Any,
+    params: ViabilityParams,
+) -> tuple[Any, dict[str, Any]]:
     """
-    Normalized cash/base mix in [-1, 1].
+    Smooth two-sided quoting availability in [0, 1] from exchange capacity margins.
 
-    (Q·mid − cash) / (|Q·mid| + |cash| + eps)
-    Negative ⇒ cash-heavy (low base, ask-side capacity risk).
-    Positive ⇒ base-heavy (low cash, bid-side capacity risk).
-    """
-
-    inv_value = inventory * mid_price
-    denom = inv_value.abs() + cash.abs() + float(eps)
-    return (inv_value - cash) / denom
-
-
-def inventory_zone_penalty(
-    imbalance: Any,
-    zone: InventoryZoneParams,
-    *,
-    return_components: bool = False,
-) -> Any | tuple[Any, dict[str, Any]]:
-    """
-    Normalized sigmoid zone-of-indifference penalty in [0, 1].
-
-    Z(imb) = (a_lo * sigmoid((comfort_low - imb) / d_lo)
-              + a_hi * sigmoid((imb - comfort_high) / d_hi))
-             / (a_lo + a_hi)
+    C_bid = cash / mid, C_ask = inventory; m_side = C_side / Q_min;
+    phi(x) = sigmoid((x - 1) / delta); A = phi(m_bid) * phi(m_ask).
     """
 
     torch = _torch()
-    cap_sum = float(zone.low_penalty_cap) + float(zone.high_penalty_cap)
-    if cap_sum <= 0.0:
-        zero = torch.zeros_like(imbalance)
-        if return_components:
-            return zero, {
-                "inventory_zone_low_penalty": zero,
-                "inventory_zone_high_penalty": zero,
-            }
-        return zero
-    d_lo = max(1e-9, float(zone.low_ramp_width))
-    d_hi = max(1e-9, float(zone.high_ramp_width))
-    low_penalty = float(zone.low_penalty_cap) * torch.sigmoid(
-        (float(zone.comfort_low) - imbalance) / d_lo
-    )
-    high_penalty = float(zone.high_penalty_cap) * torch.sigmoid(
-        (imbalance - float(zone.comfort_high)) / d_hi
-    )
-    total = (low_penalty + high_penalty) / cap_sum
-    if return_components:
-        return total, {
-            "inventory_zone_low_penalty": low_penalty / cap_sum,
-            "inventory_zone_high_penalty": high_penalty / cap_sum,
-        }
-    return total
+    q_min = max(1e-12, float(params.min_quote_qty))
+    delta = max(1e-9, float(params.margin_sharpness))
+    mid_safe = torch.clamp(mid_price, min=1e-12)
+    c_bid = torch.clamp(cash, min=0.0) / mid_safe
+    c_ask = torch.clamp(inventory, min=0.0)
+    m_bid = c_bid / q_min
+    m_ask = c_ask / q_min
+    phi_bid = torch.sigmoid((m_bid - 1.0) / delta)
+    phi_ask = torch.sigmoid((m_ask - 1.0) / delta)
+    availability = phi_bid * phi_ask
+    return availability, {
+        "viability_bid_margin": m_bid,
+        "viability_ask_margin": m_ask,
+        "viability_step_availability": availability,
+    }
 
 
-def inventory_zone_path_mean(
+def viability_path_shortfall(
     inventory_path: Any,
     *,
     cash_path: Any,
     mid_path: Any,
-    zone: InventoryZoneParams | None,
+    params: ViabilityParams | None,
 ) -> tuple[Any, dict[str, Any]]:
+    """
+    Expected availability shortfall over Monte Carlo paths.
+
+    Per path: A_min = min_h A_h; S = max(0, A* - A_min); return mean(S).
+    """
+
     torch = _torch()
-    if zone is None:
+    if params is None:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    imbalance = wallet_imbalance(inventory_path, mid_price=mid_path, cash=cash_path)
-    step_penalty, step_components = inventory_zone_penalty(
-        imbalance,
-        zone,
-        return_components=True,
+    step_avail, step_parts = soft_availability_margin(
+        inventory_path,
+        cash=cash_path,
+        mid_price=mid_path,
+        params=params,
     )
-    path_mean = step_penalty.mean()
+    path_min_avail = step_avail.min(dim=1).values
+    shortfall_per_path = torch.clamp(
+        float(params.availability_target) - path_min_avail,
+        min=0.0,
+    )
+    shortfall_mean = shortfall_per_path.mean()
     components = {
-        "inventory_zone_penalty": path_mean,
-        "inventory_zone_imbalance": imbalance.mean(),
-        "inventory_zone_low_penalty": step_components["inventory_zone_low_penalty"].mean(),
-        "inventory_zone_high_penalty": step_components["inventory_zone_high_penalty"].mean(),
+        "viability_shortfall": shortfall_mean,
+        "viability_min_availability": path_min_avail.mean(),
+        "viability_step_availability": step_parts["viability_step_availability"].mean(),
+        "viability_bid_margin": step_parts["viability_bid_margin"].mean(),
+        "viability_ask_margin": step_parts["viability_ask_margin"].mean(),
     }
-    return path_mean, components
+    return shortfall_mean, components
 
 
 def _market_level_from_cumulative(cum: Any) -> Any:
@@ -586,9 +573,9 @@ OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
     {
         "risk_adjusted_return",
         "book_quality",
-        "inventory_zone_penalty",
+        "viability_penalty",
         "global_book_quality",
-        "global_inventory_zone_penalty",
+        "global_viability_penalty",
     }
 )
 
@@ -653,21 +640,44 @@ def update_ce_ewma_scale(
     return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
+def update_viability_lambda(
+    viability_lambda: float,
+    components: dict[str, Any],
+    *,
+    params: ViabilityParams | None,
+) -> float:
+    """Dual ascent on availability shortfall: lambda <- max(0, lambda + eta * (S - epsilon))."""
+
+    if params is None:
+        return float(viability_lambda)
+    raw = components.get("viability_shortfall")
+    if raw is None:
+        return float(viability_lambda)
+    try:
+        shortfall = float(raw.detach().item() if hasattr(raw, "detach") else raw)
+    except Exception:
+        return float(viability_lambda)
+    if not math.isfinite(shortfall):
+        return float(viability_lambda)
+    lam = float(viability_lambda)
+    if lam <= 0.0:
+        lam = float(params.lambda_init)
+    eta = float(params.lambda_learning_rate)
+    eps = float(params.shortfall_tolerance)
+    return max(0.0, lam + eta * (shortfall - eps))
+
+
 def combine_soft_objective_terms(
     base_objective: Any,
     components: dict[str, Any],
     *,
     w_book: float,
-    w_inv: float,
     book_score: Any | None = None,
-    inventory_zone_mean: Any | None = None,
     book_components: dict[str, Any] | None = None,
-    zone_components: dict[str, Any] | None = None,
     book_term: str = "book_quality",
-    zone_term: str = "inventory_zone_penalty",
     component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
-    """Combine CE return with optional book-quality reward and inventory-zone penalty."""
+    """Combine CE return with optional book-quality reward."""
 
     out = dict(components)
     objective = base_objective
@@ -681,13 +691,33 @@ def combine_soft_objective_terms(
             else:
                 diag_key = key if key.startswith("book_") else f"book_{key}"
                 out[f"{component_prefix}{diag_key}"] = value
-    if inventory_zone_mean is not None and float(w_inv) > 0.0:
-        weighted_zone = -float(w_inv) * inventory_zone_mean
-        objective = objective + weighted_zone
-        out[zone_term] = weighted_zone
-        for key, value in (zone_components or {}).items():
-            if key == "inventory_zone_penalty":
-                out[f"{zone_term}_raw"] = value
-            else:
-                out[f"{component_prefix}{key}"] = value
+    return objective, out
+
+
+def combine_viability_term(
+    base_objective: Any,
+    components: dict[str, Any],
+    *,
+    viability_lambda: float,
+    viability_shortfall: Any | None = None,
+    viability_components: dict[str, Any] | None = None,
+    viability_term: str = "viability_penalty",
+    component_prefix: str = "",
+) -> tuple[Any, dict[str, Any]]:
+    """Subtract adaptive Lagrange penalty: -lambda * expected availability shortfall."""
+
+    out = dict(components)
+    objective = base_objective
+    if viability_shortfall is None:
+        return objective, out
+    lam = max(0.0, float(viability_lambda))
+    weighted = -lam * viability_shortfall
+    objective = objective + weighted
+    out[viability_term] = weighted
+    out[f"{component_prefix}viability_lambda"] = lam
+    for key, value in (viability_components or {}).items():
+        if key == "viability_shortfall":
+            out[f"{viability_term}_raw"] = value
+        else:
+            out[f"{component_prefix}{key}"] = value
     return objective, out

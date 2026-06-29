@@ -66,9 +66,9 @@ def test_contribution_fractions_include_soft_objective_terms() -> None:
     components = {
         "risk_adjusted_return": 8.0,
         "book_quality": 1.0,
-        "inventory_zone_penalty": -0.5,
+        "viability_penalty": -0.5,
         "global_book_quality": 0.25,
-        "global_inventory_zone_penalty": -0.25,
+        "global_viability_penalty": -0.25,
         "book_presence": 0.9,
         "book_tightness": 0.7,
     }
@@ -76,9 +76,9 @@ def test_contribution_fractions_include_soft_objective_terms() -> None:
     assert set(fracs) == {
         "risk_adjusted_return",
         "book_quality",
-        "inventory_zone_penalty",
+        "viability_penalty",
         "global_book_quality",
-        "global_inventory_zone_penalty",
+        "global_viability_penalty",
     }
     total_abs = 8.0 + 1.0 + 0.5 + 0.25 + 0.25
     assert fracs["risk_adjusted_return"] == pytest.approx(8.0 / total_abs, rel=1e-9)

@@ -31,13 +31,15 @@ from mm.mpc.optimizer_config_keys import (
 )
 from mm.mpc.objective_terms import (
     BookQualityParams,
-    InventoryZoneParams,
     ObjectiveNormalizeParams,
+    ViabilityParams,
     apply_ce_objective_normalization,
     book_quality_score,
     combine_soft_objective_terms,
-    inventory_zone_path_mean,
+    combine_viability_term,
     update_ce_ewma_scale,
+    update_viability_lambda,
+    viability_path_shortfall,
 )
 from mm.mpc.mpc_state import State
 from mm.core.wallet import portfolio_wealth
@@ -90,8 +92,7 @@ class VenueOptimizerParams:
     cumulative_qty_cap_at_spread_max: float | None = None
     reservation_skew: ReservationSkewParams | None = None
     w_book: float = 0.0
-    w_inv: float = 0.0
-    inventory_zone: InventoryZoneParams | None = None
+    viability: ViabilityParams | None = None
     book_quality: BookQualityParams | None = None
     soft_fill_temp: float = 0.1
     soft_fill_activation: str = "sigmoid"
@@ -111,6 +112,12 @@ class VenueOptimizerParams:
             raise ValueError(
                 "optimizer spread_structure was removed; use "
                 "book_quality.hard_structure.{action_max_spread, action_min_depth, action_k_epsilon}"
+            )
+        if "w_inv" in data or "inventory_zone" in data:
+            raise ValueError(
+                "optimizer venue keys w_inv and inventory_zone were removed; "
+                "use viability {min_quote_qty, margin_sharpness, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             )
         return cls(
             n_components=(
@@ -137,11 +144,10 @@ class VenueOptimizerParams:
                 else base.reservation_skew
             ),
             w_book=max(0.0, float(data.get("w_book", base.w_book))),
-            w_inv=max(0.0, float(data.get("w_inv", base.w_inv))),
-            inventory_zone=(
-                InventoryZoneParams.from_mapping(data.get("inventory_zone"))
-                if data.get("inventory_zone") is not None
-                else base.inventory_zone
+            viability=(
+                ViabilityParams.from_mapping(data.get("viability"))
+                if data.get("viability") is not None
+                else base.viability
             ),
             book_quality=(
                 BookQualityParams.from_mapping(data.get("book_quality"))
@@ -212,15 +218,14 @@ class VenueOptimizerParams:
             CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: self.cumulative_qty_floor_at_spread_max,
             CUMULATIVE_QTY_CAP_AT_SPREAD_MAX: self.cumulative_qty_cap_at_spread_max,
             "w_book": self.w_book,
-            "w_inv": self.w_inv,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
         if self.reservation_skew is not None:
             out[RESERVATION_SKEW] = self.reservation_skew.as_mapping()
-        if self.inventory_zone is not None:
-            out["inventory_zone"] = self.inventory_zone.as_mapping()
+        if self.viability is not None:
+            out["viability"] = self.viability.as_mapping()
         if self.book_quality is not None:
             out["book_quality"] = self.book_quality.as_mapping()
         return out
@@ -903,6 +908,14 @@ class MonteCarloMPCTensorBatched:
         else:
             self.objective_normalize = ObjectiveNormalizeParams.from_mapping(objective_normalize)
         self._ce_ewma_scale = 0.0
+        local_viability = self.local_optimizer.viability
+        global_viability = self.global_optimizer.viability
+        self._viability_lambda_local = (
+            float(local_viability.lambda_init) if local_viability is not None else 0.0
+        )
+        self._viability_lambda_global = (
+            float(global_viability.lambda_init) if global_viability is not None else 0.0
+        )
 
         if bounds is None:
             logit_bound = (-30.0, 30.0)
@@ -1435,27 +1448,25 @@ class MonteCarloMPCTensorBatched:
                         J,
                         components,
                         w_book=venue_opt.w_book,
-                        w_inv=0.0,
                         book_score=book_score,
                         book_components=book_components,
                     )
-                if float(venue_opt.w_inv) > 0.0 and venue_opt.inventory_zone is not None:
+                if venue_opt.viability is not None:
                     inv_path_t = torch_mod.stack(inv_path, dim=1)
                     cash_path_t = torch_mod.stack(cash_path, dim=1)
                     mid_path_t = torch_mod.stack(mid_path, dim=1)
-                    zone_mean, zone_components = inventory_zone_path_mean(
+                    shortfall, viability_components = viability_path_shortfall(
                         inv_path_t,
                         cash_path=cash_path_t,
                         mid_path=mid_path_t,
-                        zone=venue_opt.inventory_zone,
+                        params=venue_opt.viability,
                     )
-                    J, components = combine_soft_objective_terms(
+                    J, components = combine_viability_term(
                         J,
                         components,
-                        w_book=0.0,
-                        w_inv=venue_opt.w_inv,
-                        inventory_zone_mean=zone_mean,
-                        zone_components=zone_components,
+                        viability_lambda=self._viability_lambda_local,
+                        viability_shortfall=shortfall,
+                        viability_components=viability_components,
                     )
 
                 def _finite_item(t) -> float:
@@ -1570,6 +1581,11 @@ class MonteCarloMPCTensorBatched:
                 self._ce_ewma_scale,
                 best_metrics.components,
                 normalize=self.objective_normalize,
+            )
+            self._viability_lambda_local = update_viability_lambda(
+                self._viability_lambda_local,
+                best_metrics.components,
+                params=self.local_optimizer.viability,
             )
         diagnostics = OptimizerRunDiagnostics(
             config={

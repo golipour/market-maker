@@ -8,107 +8,75 @@ from mm.mpc.mpc_tensor_batched import _initial_action_uniform_marginal_qrange, _
 from mm.mpc.objective_terms import (
     BookQualityParams,
     BookQualitySoftScoring,
-    InventoryZoneParams,
     ObjectiveNormalizeParams,
+    ViabilityParams,
     apply_ce_objective_normalization,
     book_quality_score,
     combine_soft_objective_terms,
-    inventory_zone_penalty,
-    inventory_zone_path_mean,
+    combine_viability_term,
+    soft_availability_margin,
     update_ce_ewma_scale,
-    wallet_imbalance,
+    update_viability_lambda,
+    viability_path_shortfall,
 )
 
 
-def _sigmoid_zone(**overrides: float) -> InventoryZoneParams:
+def _viability_params(**overrides: float) -> ViabilityParams:
     defaults = {
-        "comfort_low": -0.1,
-        "comfort_high": 0.1,
-        "low_ramp_width": 0.02,
-        "high_ramp_width": 0.02,
-        "low_penalty_cap": 1.0,
-        "high_penalty_cap": 0.6,
+        "min_quote_qty": 1.0,
+        "margin_sharpness": 0.1,
+        "availability_target": 0.9,
+        "shortfall_tolerance": 0.05,
+        "lambda_init": 1.0,
+        "lambda_learning_rate": 0.5,
     }
     defaults.update(overrides)
-    return InventoryZoneParams(**defaults)
+    return ViabilityParams(**defaults)
 
 
-def test_wallet_imbalance_is_negative_when_cash_heavy() -> None:
-    imbalance = wallet_imbalance(
-        torch.tensor([0.0, 1.0]),
+def test_viability_from_mapping_rejects_inventory_zone_keys() -> None:
+    with pytest.raises(ValueError, match="inventory_zone keys were removed"):
+        ViabilityParams.from_mapping({"comfort_low": -0.2, "comfort_high": 0.2})
+
+
+def test_soft_availability_is_high_when_both_sides_have_capacity() -> None:
+    params = _viability_params()
+    availability, parts = soft_availability_margin(
+        torch.tensor([10.0, 2.0]),
+        cash=torch.tensor([2000.0, 500.0]),
         mid_price=torch.tensor([100.0, 100.0]),
-        cash=torch.tensor([1000.0, 500.0]),
+        params=params,
     )
-    assert float(imbalance[0]) == pytest.approx(-1.0)
-    assert float(imbalance[1]) < 0.0
+    assert float(availability[0]) > 0.9
+    assert float(availability[1]) > float(availability[0]) * 0.5
+    assert float(parts["viability_bid_margin"][0]) == pytest.approx(20.0)
 
 
-def test_wallet_imbalance_is_positive_when_base_heavy() -> None:
-    imbalance = wallet_imbalance(
-        torch.tensor([10.0, 20.0]),
-        mid_price=torch.tensor([100.0, 100.0]),
-        cash=torch.tensor([100.0, 100.0]),
+def test_soft_availability_goes_to_zero_when_one_side_lacks_capacity() -> None:
+    params = _viability_params()
+    availability, _ = soft_availability_margin(
+        torch.tensor([0.0]),
+        cash=torch.tensor([1000.0]),
+        mid_price=torch.tensor([100.0]),
+        params=params,
     )
-    assert float(imbalance[0]) > 0.0
-    assert float(imbalance[1]) > float(imbalance[0])
+    assert float(availability[0]) < 0.01
 
 
-def test_inventory_zone_from_mapping_rejects_power_zone_keys() -> None:
-    with pytest.raises(ValueError, match="power-zone keys were removed"):
-        InventoryZoneParams.from_mapping(
-            {"q_lo": -0.1, "q_hi": 0.1, "q_min": -0.5, "q_max": 0.5, "p": 2.0}
-        )
-
-
-def test_inventory_zone_penalty_is_near_zero_inside_comfort_band() -> None:
-    zone = _sigmoid_zone()
-    center = torch.tensor([0.0], dtype=torch.float64)
-    extremes = torch.tensor([-0.9, 0.9], dtype=torch.float64)
-    center_penalty = float(inventory_zone_penalty(center, zone))
-    extreme_penalty = inventory_zone_penalty(extremes, zone)
-    assert center_penalty < 0.02
-    assert center_penalty < float(extreme_penalty.min()) * 0.1
-
-
-def test_inventory_zone_penalty_saturates_at_extremes() -> None:
-    zone = _sigmoid_zone()
-    cap_sum = zone.low_penalty_cap + zone.high_penalty_cap
-    imbalance = torch.tensor([-0.95, 0.95], dtype=torch.float64)
-    penalty = inventory_zone_penalty(imbalance, zone)
-    assert float(penalty[0]) == pytest.approx(zone.low_penalty_cap / cap_sum, rel=1e-3)
-    assert float(penalty[1]) == pytest.approx(zone.high_penalty_cap / cap_sum, rel=1e-3)
-    assert float(penalty.max()) <= 1.0 + 1e-9
-
-
-def test_inventory_zone_low_side_penalizes_cash_heavy_imbalance() -> None:
-    zone = _sigmoid_zone(comfort_low=-0.1)
-    penalty, parts = inventory_zone_penalty(
-        torch.tensor([-0.8], dtype=torch.float64),
-        zone,
-        return_components=True,
-    )
-    assert float(penalty[0]) > 0.5
-    assert float(parts["inventory_zone_low_penalty"][0]) > float(
-        parts["inventory_zone_high_penalty"][0]
-    )
-
-
-def test_inventory_zone_path_mean_reports_imbalance_and_side_components() -> None:
-    zone = _sigmoid_zone()
-    inventory_path = torch.tensor([[0.0, 5.0], [20.0, 0.0]], dtype=torch.float64)
-    cash_path = torch.tensor([[1000.0, 500.0], [100.0, 800.0]], dtype=torch.float64)
+def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
+    params = _viability_params(availability_target=0.9)
+    inventory_path = torch.tensor([[0.0, 0.0], [10.0, 10.0]], dtype=torch.float64)
+    cash_path = torch.tensor([[1000.0, 1000.0], [1000.0, 1000.0]], dtype=torch.float64)
     mid_path = torch.full_like(inventory_path, 100.0)
-    path_mean, components = inventory_zone_path_mean(
+    shortfall, components = viability_path_shortfall(
         inventory_path,
         cash_path=cash_path,
         mid_path=mid_path,
-        zone=zone,
+        params=params,
     )
-    assert 0.0 <= float(path_mean) <= 1.0
-    assert float(components["inventory_zone_penalty"]) == pytest.approx(float(path_mean))
-    assert float(components["inventory_zone_imbalance"]) != 0.0
-    assert float(components["inventory_zone_low_penalty"]) > 0.0
-    assert float(components["inventory_zone_high_penalty"]) > 0.0
+    assert float(shortfall) > 0.0
+    assert float(components["viability_shortfall"]) == pytest.approx(float(shortfall))
+    assert float(components["viability_min_availability"]) < 0.9
 
 
 def test_apply_ce_objective_normalization_scales_by_previous_ewma() -> None:
@@ -135,26 +103,46 @@ def test_update_ce_ewma_scale_tracks_magnitude() -> None:
     assert scale == pytest.approx(0.9 * 0.001 + 0.1 * 0.002)
 
 
+def test_update_viability_lambda_increases_on_shortfall() -> None:
+    params = _viability_params(shortfall_tolerance=0.05, lambda_learning_rate=0.5)
+    lam = update_viability_lambda(
+        1.0,
+        {"viability_shortfall": 0.2},
+        params=params,
+    )
+    assert lam == pytest.approx(1.0 + 0.5 * (0.2 - 0.05))
+
+
+def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
+    base = torch.tensor(0.5, dtype=torch.float64)
+    shortfall = torch.tensor(0.2, dtype=torch.float64)
+    objective, components = combine_viability_term(
+        base,
+        {"risk_adjusted_return": base},
+        viability_lambda=2.0,
+        viability_shortfall=shortfall,
+        viability_components={"viability_shortfall": shortfall},
+    )
+    assert float(objective) == pytest.approx(0.5 - 2.0 * 0.2)
+    assert float(components["viability_penalty"]) == pytest.approx(-0.4)
+    assert float(components["viability_penalty_raw"]) == pytest.approx(0.2)
+    assert float(components["viability_lambda"]) == pytest.approx(2.0)
+
+
 def test_combine_soft_objective_terms_keeps_ce_component_pure() -> None:
     base = torch.tensor(0.5, dtype=torch.float64)
     book = torch.tensor(0.8, dtype=torch.float64)
-    zone = torch.tensor(0.2, dtype=torch.float64)
     objective, components = combine_soft_objective_terms(
         base,
         {"risk_adjusted_return": base},
         w_book=0.1,
-        w_inv=0.05,
         book_score=book,
-        inventory_zone_mean=zone,
         book_components={"book_quality": book},
-        zone_components={"inventory_zone_penalty": zone},
     )
-    assert float(objective) == pytest.approx(0.5 + 0.1 * 0.8 - 0.05 * 0.2)
+    assert float(objective) == pytest.approx(0.5 + 0.1 * 0.8)
     assert float(components["risk_adjusted_return"]) == pytest.approx(0.5)
     assert float(components["book_quality"]) == pytest.approx(0.08)
-    assert float(components["inventory_zone_penalty"]) == pytest.approx(-0.01)
     assert float(components["book_quality_score"]) == pytest.approx(0.8)
-    assert float(components["inventory_zone_penalty_raw"]) == pytest.approx(0.2)
 
 
 def test_book_quality_quoted_mode_gradients_flow() -> None:
@@ -218,41 +206,42 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         quote_size_min=0.0,
         quote_size_max=10.0,
         spread_max=spread_max,
-        n_components=1,
+        n_components=2,
     )
-    flat = torch.zeros(action_param_len(1), dtype=torch.float64)
-    flat[6] = -30.0
-    flat[7] = -30.0
-    market_cum_bid = torch.tensor([5.0, 5.0, 5.0, 5.0, 5.0], dtype=torch.float64)
-    market_cum_ask = torch.tensor([4.0, 4.0, 4.0, 4.0, 4.0], dtype=torch.float64)
-    quoted_score, quoted_components = book_quality_score(
+    flat = torch.tensor(
+        _initial_action_uniform_marginal_qrange(
+            n_components=2,
+            spread_max=spread_max,
+            l_param=l_param,
+        ),
+        dtype=torch.float64,
+    )
+    market_cum_bid = torch.tensor([0.0, 5.0, 10.0], dtype=torch.float64)
+    market_cum_ask = torch.tensor([0.0, 5.0, 10.0], dtype=torch.float64)
+    quoted_score, _ = book_quality_score(
         flat,
         l_param=l_param,
-        n_components=1,
+        n_components=2,
         spread_grid=spread_grid,
         bid_quote_size_min=0.0,
         bid_quote_size_max=10.0,
         ask_quote_size_min=0.0,
         ask_quote_size_max=10.0,
         mid_price=100.0,
-        params=BookQualityParams(
-            soft_scoring=BookQualitySoftScoring(measure="quoted", presence_reference_qty=1.0)
-        ),
+        params=BookQualityParams(soft_scoring=BookQualitySoftScoring(measure="quoted")),
     )
-    combined_score, combined_components = book_quality_score(
+    combined_score, _ = book_quality_score(
         flat,
         l_param=l_param,
-        n_components=1,
+        n_components=2,
         spread_grid=spread_grid,
         bid_quote_size_min=0.0,
         bid_quote_size_max=10.0,
         ask_quote_size_min=0.0,
         ask_quote_size_max=10.0,
         mid_price=100.0,
-        params=BookQualityParams(
-            soft_scoring=BookQualitySoftScoring(measure="combined", presence_reference_qty=1.0)
-        ),
+        params=BookQualityParams(soft_scoring=BookQualitySoftScoring(measure="combined")),
         market_cum_bid=market_cum_bid,
         market_cum_ask=market_cum_ask,
     )
-    assert float(combined_components["book_presence"]) > float(quoted_components["book_presence"])
+    assert float(combined_score) >= float(quoted_score)
