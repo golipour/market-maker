@@ -24,7 +24,7 @@ def test_migrate_inventory_zone_to_viability() -> None:
     assert "w_inv" not in local
     assert "inventory_zone" not in local
     assert local["viability"]["min_viable_quote"] == 50_000.0
-    assert local["viability"]["lambda_init"] == 1.0
+    assert local["viability"]["lambda_init"] == 0.0
 
 
 def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
@@ -39,7 +39,7 @@ def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
     migrated, changed = migrate_runtime_config_mapping(payload)
     assert changed is True
     optimizer = migrated["controller"]["optimizer"]
-    assert optimizer["local"]["viability"]["lambda_init"] == 1.0
+    assert optimizer["local"]["viability"]["lambda_init"] == 0.0
     assert optimizer["local"]["validity"]["min_score"] == 0.3
     assert optimizer["global"]["viability"]["availability_target"] == 0.99
     assert optimizer["adam_epochs"] == 40

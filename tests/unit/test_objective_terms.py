@@ -29,8 +29,9 @@ def _viability_params(**overrides: float) -> ViabilityParams:
         "margin_buffer": 10.0,
         "availability_target": 0.99,
         "shortfall_tolerance": 0.05,
-        "lambda_init": 1.0,
-        "lambda_learning_rate": 0.5,
+        "lambda_init": 0.0,
+        "lambda_learning_rate": 0.02,
+        "lambda_leakage": 0.0,
     }
     defaults.update(overrides)
     return ViabilityParams(**defaults)
@@ -159,6 +160,49 @@ def test_update_viability_lambda_increases_on_shortfall() -> None:
         params=params,
     )
     assert lam == pytest.approx(1.0 + 0.5 * (0.2 - 0.05))
+
+
+def test_update_viability_lambda_applies_leakage() -> None:
+    params = _viability_params(
+        shortfall_tolerance=0.1,
+        lambda_learning_rate=0.02,
+        lambda_leakage=0.01,
+    )
+    lam = update_viability_lambda(
+        1.0,
+        {"viability_shortfall": 0.1},
+        params=params,
+    )
+    assert lam == pytest.approx(0.99 * 1.0 + 0.02 * (0.1 - 0.1))
+
+
+def test_update_viability_lambda_leakage_decays_when_on_target() -> None:
+    params = _viability_params(
+        shortfall_tolerance=0.1,
+        lambda_learning_rate=0.02,
+        lambda_leakage=0.01,
+    )
+    lam = update_viability_lambda(
+        2.0,
+        {"viability_shortfall": 0.1},
+        params=params,
+    )
+    assert lam == pytest.approx(0.99 * 2.0)
+
+
+def test_combine_viability_term_with_lambda_init_zero_applies_no_penalty() -> None:
+    params = _viability_params(lambda_init=0.0)
+    shortfall = torch.tensor(0.2, dtype=torch.float64)
+    objective, components = combine_viability_term(
+        torch.tensor(0.5, dtype=torch.float64),
+        {},
+        viability_lambda=0.0,
+        viability_params=params,
+        viability_shortfall=shortfall,
+        viability_components={"viability_shortfall": shortfall},
+    )
+    assert float(objective) == pytest.approx(0.5)
+    assert float(components["viability_lambda"]) == pytest.approx(0.0)
 
 
 def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:

@@ -40,8 +40,9 @@ class ViabilityParams:
     margin_buffer: float = 5_000.0
     availability_target: float = 0.99
     shortfall_tolerance: float = 0.05
-    lambda_init: float = 1.0
-    lambda_learning_rate: float = 0.5
+    lambda_init: float = 0.0
+    lambda_learning_rate: float = 0.02
+    lambda_leakage: float = 0.01
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -69,7 +70,7 @@ class ViabilityParams:
             raise ValueError(
                 "removed viability keys; use "
                 "{min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate, lambda_leakage}: "
                 + ", ".join(removed)
             )
         availability_target = float(payload.get("availability_target", 0.99))
@@ -78,16 +79,20 @@ class ViabilityParams:
         shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
         if shortfall_tolerance < 0.0:
             raise ValueError("viability.shortfall_tolerance must be >= 0")
-        lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.5))
+        lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.02))
         if lambda_learning_rate <= 0.0:
             raise ValueError("viability.lambda_learning_rate must be > 0")
+        lambda_leakage = float(payload.get("lambda_leakage", 0.01))
+        if not (0.0 <= lambda_leakage < 1.0):
+            raise ValueError("viability.lambda_leakage must be in [0, 1)")
         return cls(
             min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
             margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
             availability_target=availability_target,
             shortfall_tolerance=shortfall_tolerance,
-            lambda_init=max(0.0, float(payload.get("lambda_init", 1.0))),
+            lambda_init=max(0.0, float(payload.get("lambda_init", 0.0))),
             lambda_learning_rate=lambda_learning_rate,
+            lambda_leakage=lambda_leakage,
         )
 
     def as_mapping(self) -> dict[str, float]:
@@ -98,6 +103,7 @@ class ViabilityParams:
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
+            "lambda_leakage": self.lambda_leakage,
         }
 
 
@@ -721,7 +727,7 @@ def update_viability_lambda(
     shortfall_key: str = "viability_shortfall",
     shortfall_raw_key: str = "viability_penalty_raw",
 ) -> float:
-    """Dual ascent on availability shortfall: lambda <- max(0, lambda + eta * (S - epsilon))."""
+    """Dual ascent with optional leakage: lambda <- max(0, (1-rho)*lambda + eta*(S-eps))."""
 
     if params is None:
         return float(viability_lambda)
@@ -741,7 +747,8 @@ def update_viability_lambda(
     lam = effective_viability_lambda(viability_lambda, params)
     eta = float(params.lambda_learning_rate)
     eps = float(params.shortfall_tolerance)
-    return max(0.0, lam + eta * (shortfall - eps))
+    rho = float(params.lambda_leakage)
+    return max(0.0, (1.0 - rho) * lam + eta * (shortfall - eps))
 
 
 def validity_book_shortfall(

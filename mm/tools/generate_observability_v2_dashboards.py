@@ -5544,6 +5544,7 @@ def _optimizer_viability_config_sql() -> str:
             "shortfall_tolerance",
             "lambda_init",
             "lambda_learning_rate",
+            "lambda_leakage",
         )
     )
     return f"""SELECT e.ts AS "time",
