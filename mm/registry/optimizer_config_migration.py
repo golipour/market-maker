@@ -123,6 +123,20 @@ def _migrate_book_quality(payload: Any) -> tuple[dict[str, Any] | None, bool]:
     return out, changed
 
 
+def _migrate_viability_min_quote_qty(payload: dict[str, Any]) -> bool:
+    """Re-sync ``min_quote_qty`` when a legacy migration copied an oversized floor."""
+
+    viability = payload.get("viability")
+    if not isinstance(viability, dict):
+        return False
+    floor = float(payload.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, 1.0) or 1.0)
+    cur = float(viability.get("min_quote_qty", floor) or floor)
+    if cur <= max(floor * 100.0, floor + 1.0) or cur <= 100.0:
+        return False
+    viability["min_quote_qty"] = max(1e-12, floor)
+    return True
+
+
 def _migrate_inventory_zone_to_viability(payload: dict[str, Any]) -> bool:
     changed = False
     if "inventory_zone" in payload or "w_inv" in payload:
@@ -162,6 +176,7 @@ def _migrate_venue_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     out = dict(payload)
     changed = _rename_keys(out, _LEGACY_VENUE_KEY_MAP)
     changed = _migrate_inventory_zone_to_viability(out) or changed
+    changed = _migrate_viability_min_quote_qty(out) or changed
     changed = _migrate_w_book_to_validity(out) or changed
     if RESERVATION_SKEW in out:
         migrated, skew_changed = _migrate_reservation_skew(out[RESERVATION_SKEW])

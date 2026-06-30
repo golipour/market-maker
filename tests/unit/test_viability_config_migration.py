@@ -88,3 +88,29 @@ def test_migrate_sparse_optimizer_preserves_existing_overrides() -> None:
     optimizer = migrated["controller"]["optimizer"]
     assert optimizer["horizon"] == 4
     assert optimizer["local"]["n_components"] == 2
+
+
+def test_migrate_oversized_viability_min_quote_qty_resyncs_to_floor() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "local": {
+                    "cumulative_qty_floor_at_spread_max": 1.0,
+                    "viability": {
+                        "min_quote_qty": 5_000_000.0,
+                        "margin_sharpness": 0.1,
+                        "availability_target": 0.9,
+                        "shortfall_tolerance": 0.05,
+                        "lambda_init": 1.0,
+                        "lambda_learning_rate": 1.0,
+                    },
+                }
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    assert (
+        migrated["controller"]["optimizer"]["local"]["viability"]["min_quote_qty"]
+        == 1.0
+    )

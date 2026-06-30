@@ -682,17 +682,47 @@ def update_ce_ewma_scale(
     return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
+def effective_viability_lambda(
+    viability_lambda: float,
+    params: ViabilityParams | None,
+) -> float:
+    """Use ``lambda_init`` when the dual state has not been initialized yet."""
+
+    lam = max(0.0, float(viability_lambda))
+    if lam > 0.0 or params is None:
+        return lam
+    return max(0.0, float(params.lambda_init))
+
+
+def _viability_shortfall_from_components(
+    components: dict[str, Any],
+    *,
+    shortfall_key: str = "viability_shortfall",
+    shortfall_raw_key: str = "viability_penalty_raw",
+) -> Any | None:
+    raw = components.get(shortfall_key)
+    if raw is None:
+        raw = components.get(shortfall_raw_key)
+    return raw
+
+
 def update_viability_lambda(
     viability_lambda: float,
     components: dict[str, Any],
     *,
     params: ViabilityParams | None,
+    shortfall_key: str = "viability_shortfall",
+    shortfall_raw_key: str = "viability_penalty_raw",
 ) -> float:
     """Dual ascent on availability shortfall: lambda <- max(0, lambda + eta * (S - epsilon))."""
 
     if params is None:
         return float(viability_lambda)
-    raw = components.get("viability_shortfall")
+    raw = _viability_shortfall_from_components(
+        components,
+        shortfall_key=shortfall_key,
+        shortfall_raw_key=shortfall_raw_key,
+    )
     if raw is None:
         return float(viability_lambda)
     try:
@@ -701,9 +731,7 @@ def update_viability_lambda(
         return float(viability_lambda)
     if not math.isfinite(shortfall):
         return float(viability_lambda)
-    lam = float(viability_lambda)
-    if lam <= 0.0:
-        lam = float(params.lambda_init)
+    lam = effective_viability_lambda(viability_lambda, params)
     eta = float(params.lambda_learning_rate)
     eps = float(params.shortfall_tolerance)
     return max(0.0, lam + eta * (shortfall - eps))
@@ -772,6 +800,7 @@ def combine_viability_term(
     components: dict[str, Any],
     *,
     viability_lambda: float,
+    viability_params: ViabilityParams | None = None,
     viability_shortfall: Any | None = None,
     viability_components: dict[str, Any] | None = None,
     viability_term: str = "viability_penalty",
@@ -783,7 +812,7 @@ def combine_viability_term(
     objective = base_objective
     if viability_shortfall is None:
         return objective, out
-    lam = max(0.0, float(viability_lambda))
+    lam = effective_viability_lambda(viability_lambda, viability_params)
     weighted = -lam * viability_shortfall
     objective = objective + weighted
     out[viability_term] = weighted

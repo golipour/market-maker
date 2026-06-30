@@ -846,6 +846,7 @@ def optimize_joint_with_diagnostics(
                     J,
                     components,
                     viability_lambda=mpc._viability_lambda_local,
+                    viability_params=local_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
                 )
@@ -860,6 +861,7 @@ def optimize_joint_with_diagnostics(
                     J,
                     components,
                     viability_lambda=mpc._viability_lambda_global,
+                    viability_params=global_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
                     viability_term="global_viability_penalty",
@@ -1007,12 +1009,10 @@ def optimize_joint_with_diagnostics(
         )
         mpc._viability_lambda_global = update_viability_lambda(
             mpc._viability_lambda_global,
-            {
-                "viability_shortfall": best_metrics.components.get(
-                    "global_viability_shortfall"
-                ),
-            },
+            best_metrics.components,
             params=global_opt.viability,
+            shortfall_key="global_viability_shortfall",
+            shortfall_raw_key="global_viability_penalty_raw",
         )
 
     diagnostics = OptimizerRunDiagnostics(

@@ -1485,6 +1485,7 @@ class MonteCarloMPCTensorBatched:
                         J,
                         components,
                         viability_lambda=self._viability_lambda_local,
+                        viability_params=venue_opt.viability,
                         viability_shortfall=shortfall,
                         viability_components=viability_components,
                     )

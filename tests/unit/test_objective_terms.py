@@ -158,6 +158,31 @@ def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
     assert float(components["viability_lambda"]) == pytest.approx(2.0)
 
 
+def test_combine_viability_term_uses_lambda_init_when_dual_state_is_zero() -> None:
+    params = _viability_params(lambda_init=1.5)
+    shortfall = torch.tensor(0.2, dtype=torch.float64)
+    objective, components = combine_viability_term(
+        torch.tensor(0.0, dtype=torch.float64),
+        {},
+        viability_lambda=0.0,
+        viability_params=params,
+        viability_shortfall=shortfall,
+        viability_components={"viability_shortfall": shortfall},
+    )
+    assert float(objective) == pytest.approx(-1.5 * 0.2)
+    assert float(components["viability_lambda"]) == pytest.approx(1.5)
+
+
+def test_update_viability_lambda_reads_penalty_raw() -> None:
+    params = _viability_params(shortfall_tolerance=0.05, lambda_learning_rate=0.5)
+    lam = update_viability_lambda(
+        1.0,
+        {"viability_penalty_raw": 0.2},
+        params=params,
+    )
+    assert lam == pytest.approx(1.0 + 0.5 * (0.2 - 0.05))
+
+
 def test_validity_from_mapping_rejects_w_book() -> None:
     with pytest.raises(ValueError, match="w_book"):
         ValidityParams.from_mapping({"w_book": 0.1, "min_score": 0.3})
