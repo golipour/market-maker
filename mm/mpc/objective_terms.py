@@ -34,11 +34,11 @@ def _torch():
 
 @dataclass(frozen=True, slots=True)
 class ViabilityParams:
-    """Availability shortfall term with adaptive Lagrange multiplier (docs/viability_term.md)."""
+    """Availability shortfall on total wallet balances (docs/viability_term.md)."""
 
-    min_quote_qty: float = 1.0
-    margin_sharpness: float = 0.1
-    availability_target: float = 0.9
+    min_viable_quote: float = 50_000.0
+    margin_buffer: float = 5_000.0
+    availability_target: float = 0.99
     shortfall_tolerance: float = 0.05
     lambda_init: float = 1.0
     lambda_learning_rate: float = 0.5
@@ -60,16 +60,19 @@ class ViabilityParams:
                 "high_ramp_width",
                 "low_penalty_cap",
                 "high_penalty_cap",
+                "min_quote_qty",
+                "min_free_quote",
+                "margin_sharpness",
             }
         )
         if removed:
             raise ValueError(
-                "inventory_zone keys were removed; use viability "
-                "{min_quote_qty, margin_sharpness, availability_target, "
+                "removed viability keys; use "
+                "{min_viable_quote, margin_buffer, availability_target, "
                 "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
                 + ", ".join(removed)
             )
-        availability_target = float(payload.get("availability_target", 0.9))
+        availability_target = float(payload.get("availability_target", 0.99))
         if not (0.0 < availability_target <= 1.0):
             raise ValueError("viability.availability_target must be in (0, 1]")
         shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
@@ -79,8 +82,8 @@ class ViabilityParams:
         if lambda_learning_rate <= 0.0:
             raise ValueError("viability.lambda_learning_rate must be > 0")
         return cls(
-            min_quote_qty=max(1e-12, float(payload.get("min_quote_qty", 1.0))),
-            margin_sharpness=max(1e-9, float(payload.get("margin_sharpness", 0.1))),
+            min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
+            margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
             availability_target=availability_target,
             shortfall_tolerance=shortfall_tolerance,
             lambda_init=max(0.0, float(payload.get("lambda_init", 1.0))),
@@ -89,8 +92,8 @@ class ViabilityParams:
 
     def as_mapping(self) -> dict[str, float]:
         return {
-            "min_quote_qty": self.min_quote_qty,
-            "margin_sharpness": self.margin_sharpness,
+            "min_viable_quote": self.min_viable_quote,
+            "margin_buffer": self.margin_buffer,
             "availability_target": self.availability_target,
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
@@ -353,26 +356,33 @@ def soft_availability_margin(
     params: ViabilityParams,
 ) -> tuple[Any, dict[str, Any]]:
     """
-    Smooth two-sided quoting availability in [0, 1] from exchange capacity margins.
+    Smooth two-sided quoting availability in [0, 1] from total wallet margins.
 
-    C_bid = cash / mid, C_ask = inventory; m_side = C_side / Q_min;
-    phi(x) = sigmoid((x - 1) / delta); A = phi(m_bid) * phi(m_ask).
+    ``cash`` is total quote balance q_t (free + locked); ``inventory`` is total
+    base balance b_t. ``min_viable_quote`` is q_min: the minimum quote-side
+    wallet volume required to remain viable on bids; b_min(p) = q_min / p.
+
+    m_bid = q_t - q_min; m_ask = b_t - b_min(p);
+    a_side = sigmoid(m_side / delta_side); A = a_bid * a_ask.
     """
 
     torch = _torch()
-    q_min = max(1e-12, float(params.min_quote_qty))
-    delta = max(1e-9, float(params.margin_sharpness))
+    q_min = max(1e-12, float(params.min_viable_quote))
+    delta_quote = max(1e-9, float(params.margin_buffer))
     mid_safe = torch.clamp(mid_price, min=1e-12)
-    c_bid = torch.clamp(cash, min=0.0) / mid_safe
-    c_ask = torch.clamp(inventory, min=0.0)
-    m_bid = c_bid / q_min
-    m_ask = c_ask / q_min
-    phi_bid = torch.sigmoid((m_bid - 1.0) / delta)
-    phi_ask = torch.sigmoid((m_ask - 1.0) / delta)
-    availability = phi_bid * phi_ask
+    quote_total = torch.clamp(cash, min=0.0)
+    base_total = torch.clamp(inventory, min=0.0)
+    b_min = q_min / mid_safe
+    delta_base = delta_quote / mid_safe
+    m_bid = quote_total - q_min
+    m_ask = base_total - b_min
+    a_bid = torch.sigmoid(m_bid / delta_quote)
+    a_ask = torch.sigmoid(m_ask / delta_base)
+    availability = a_bid * a_ask
     return availability, {
         "viability_bid_margin": m_bid,
         "viability_ask_margin": m_ask,
+        "viability_min_viable_base": b_min,
         "viability_step_availability": availability,
     }
 
@@ -388,10 +398,7 @@ def viability_path_shortfall(
     Expected availability shortfall over Monte Carlo paths.
 
     ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
-    of simulated wallet capacity along each rollout path. Rollout should record
-    the initial wallet (before horizon step 0) and, after each horizon step,
-    the post-fill wallet and mid from the evolved orderbook so sampled
-    orderflow/fills deplete bid/ask capacity in ``A_min``.
+    of simulated **total** wallet balances (free + locked) along each rollout path.
 
     Per path: A_min = min_h A_h; S = max(0, A* - A_min); return mean(S).
     """

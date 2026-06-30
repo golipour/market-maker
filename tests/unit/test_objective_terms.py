@@ -25,9 +25,9 @@ from mm.mpc.objective_terms import (
 
 def _viability_params(**overrides: float) -> ViabilityParams:
     defaults = {
-        "min_quote_qty": 1.0,
-        "margin_sharpness": 0.1,
-        "availability_target": 0.9,
+        "min_viable_quote": 100.0,
+        "margin_buffer": 10.0,
+        "availability_target": 0.99,
         "shortfall_tolerance": 0.05,
         "lambda_init": 1.0,
         "lambda_learning_rate": 0.5,
@@ -37,11 +37,18 @@ def _viability_params(**overrides: float) -> ViabilityParams:
 
 
 def test_viability_from_mapping_rejects_inventory_zone_keys() -> None:
-    with pytest.raises(ValueError, match="inventory_zone keys were removed"):
+    with pytest.raises(ValueError, match="removed viability keys"):
         ViabilityParams.from_mapping({"comfort_low": -0.2, "comfort_high": 0.2})
 
 
-def test_soft_availability_is_high_when_both_sides_have_capacity() -> None:
+def test_viability_from_mapping_rejects_legacy_keys() -> None:
+    with pytest.raises(ValueError, match="removed viability keys"):
+        ViabilityParams.from_mapping({"min_quote_qty": 1.0, "margin_sharpness": 0.1})
+    with pytest.raises(ValueError, match="removed viability keys"):
+        ViabilityParams.from_mapping({"min_free_quote": 1.0, "margin_buffer": 0.1})
+
+
+def test_soft_availability_is_high_when_total_balances_exceed_viable_floor() -> None:
     params = _viability_params()
     availability, parts = soft_availability_margin(
         torch.tensor([10.0, 2.0]),
@@ -51,10 +58,11 @@ def test_soft_availability_is_high_when_both_sides_have_capacity() -> None:
     )
     assert float(availability[0]) > 0.9
     assert float(availability[1]) > float(availability[0]) * 0.5
-    assert float(parts["viability_bid_margin"][0]) == pytest.approx(20.0)
+    assert float(parts["viability_bid_margin"][0]) == pytest.approx(1900.0)
+    assert float(parts["viability_ask_margin"][0]) == pytest.approx(9.0)
 
 
-def test_soft_availability_goes_to_zero_when_one_side_lacks_capacity() -> None:
+def test_soft_availability_goes_to_zero_when_one_side_lacks_total_base() -> None:
     params = _viability_params()
     availability, _ = soft_availability_margin(
         torch.tensor([0.0]),
@@ -65,8 +73,19 @@ def test_soft_availability_goes_to_zero_when_one_side_lacks_capacity() -> None:
     assert float(availability[0]) < 0.01
 
 
+def test_soft_availability_penalizes_insufficient_total_quote() -> None:
+    params = _viability_params()
+    availability, _ = soft_availability_margin(
+        torch.tensor([10.0]),
+        cash=torch.tensor([50.0]),
+        mid_price=torch.tensor([100.0]),
+        params=params,
+    )
+    assert float(availability[0]) < 0.01
+
+
 def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
-    params = _viability_params(availability_target=0.9)
+    params = _viability_params(availability_target=0.99)
     inventory_path = torch.tensor([[0.0, 0.0], [10.0, 10.0]], dtype=torch.float64)
     cash_path = torch.tensor([[1000.0, 1000.0], [1000.0, 1000.0]], dtype=torch.float64)
     mid_path = torch.full_like(inventory_path, 100.0)
@@ -78,12 +97,12 @@ def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
     )
     assert float(shortfall) > 0.0
     assert float(components["viability_shortfall"]) == pytest.approx(float(shortfall))
-    assert float(components["viability_min_availability"]) < 0.9
+    assert float(components["viability_min_availability"]) < 0.99
 
 
 def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
     """Rollout paths must include post-orderflow wallet snapshots, not only pre-fill."""
-    params = _viability_params(availability_target=0.9)
+    params = _viability_params(availability_target=0.99)
     mid = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
     post_fill_path = {
         "inventory_path": torch.tensor([[10.0, 0.0]], dtype=torch.float64),

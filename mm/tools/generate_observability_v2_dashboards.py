@@ -5538,8 +5538,8 @@ def _optimizer_viability_config_sql() -> str:
     keys_sql = ", ".join(
         f"'{key}'"
         for key in (
-            "min_quote_qty",
-            "margin_sharpness",
+            "min_viable_quote",
+            "margin_buffer",
             "availability_target",
             "shortfall_tolerance",
             "lambda_init",

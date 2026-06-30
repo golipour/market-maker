@@ -117,7 +117,7 @@ class VenueOptimizerParams:
         if "w_inv" in data or "inventory_zone" in data:
             raise ValueError(
                 "optimizer venue keys w_inv and inventory_zone were removed; "
-                "use viability {min_quote_qty, margin_sharpness, availability_target, "
+                "use viability {min_viable_quote, margin_buffer, availability_target, "
                 "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             )
         if "w_book" in data:

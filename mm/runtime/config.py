@@ -1523,7 +1523,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             if removed_inventory_zone:
                 raise ValueError(
                     f"removed controller.optimizer.{venue} keys {', '.join(removed_inventory_zone)}; "
-                    "use viability {min_quote_qty, margin_sharpness, availability_target, "
+                    "use viability {min_viable_quote, margin_buffer, availability_target, "
                     "shortfall_tolerance, lambda_init, lambda_learning_rate}"
                 )
             if "w_book" in venue_payload:
@@ -1755,7 +1755,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
             "viability": (
                 "availability shortfall term with adaptive Lagrange multiplier; "
-                "keys {min_quote_qty, margin_sharpness, availability_target, "
+                "keys {min_viable_quote, margin_buffer, availability_target, "
                 "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             ),
             "book_quality": (

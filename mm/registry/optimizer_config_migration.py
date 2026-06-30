@@ -123,18 +123,58 @@ def _migrate_book_quality(payload: Any) -> tuple[dict[str, Any] | None, bool]:
     return out, changed
 
 
-def _migrate_viability_min_quote_qty(payload: dict[str, Any]) -> bool:
-    """Re-sync ``min_quote_qty`` when a legacy migration copied an oversized floor."""
+_LEGACY_VIABILITY_KEY_MAP = {
+    "min_quote_qty": "min_viable_quote",
+    "min_free_quote": "min_viable_quote",
+    "margin_sharpness": "margin_buffer",
+}
+
+
+def _canonical_viability_defaults() -> dict[str, float]:
+    viability = _canonical_optimizer().get("local", {}).get("viability")
+    if not isinstance(viability, dict):
+        raise ValueError("runtime example missing optimizer.local.viability")
+    return {
+        "min_viable_quote": float(viability.get("min_viable_quote", 50_000.0)),
+        "margin_buffer": float(viability.get("margin_buffer", 5_000.0)),
+        "availability_target": float(viability.get("availability_target", 0.99)),
+        "shortfall_tolerance": float(viability.get("shortfall_tolerance", 0.05)),
+        "lambda_init": float(viability.get("lambda_init", 1.0)),
+        "lambda_learning_rate": float(viability.get("lambda_learning_rate", 0.5)),
+    }
+
+
+def _migrate_viability_keys(payload: dict[str, Any]) -> bool:
+    viability = payload.get("viability")
+    if not isinstance(viability, dict):
+        return False
+    return _rename_keys(viability, _LEGACY_VIABILITY_KEY_MAP)
+
+
+def _migrate_viability_min_viable_quote_semantics(payload: dict[str, Any]) -> bool:
+    """Re-sync legacy base-unit thresholds to quote-currency viable-volume floors."""
 
     viability = payload.get("viability")
     if not isinstance(viability, dict):
         return False
-    floor = float(payload.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, 1.0) or 1.0)
-    cur = float(viability.get("min_quote_qty", floor) or floor)
-    if cur <= max(floor * 100.0, floor + 1.0) or cur <= 100.0:
-        return False
-    viability["min_quote_qty"] = max(1e-12, floor)
-    return True
+    defaults = _canonical_viability_defaults()
+    changed = False
+    if "min_viable_quote" not in viability:
+        viability["min_viable_quote"] = defaults["min_viable_quote"]
+        changed = True
+    cur = float(viability.get("min_viable_quote", defaults["min_viable_quote"]) or 0.0)
+    canonical = defaults["min_viable_quote"]
+    if cur <= 1_000.0 or cur >= canonical * 100.0:
+        if cur != canonical:
+            viability["min_viable_quote"] = canonical
+            changed = True
+    if "margin_buffer" not in viability:
+        viability["margin_buffer"] = defaults["margin_buffer"]
+        changed = True
+    if float(viability.get("availability_target", defaults["availability_target"])) < 0.95:
+        viability["availability_target"] = defaults["availability_target"]
+        changed = True
+    return changed
 
 
 def _migrate_inventory_zone_to_viability(payload: dict[str, Any]) -> bool:
@@ -143,14 +183,10 @@ def _migrate_inventory_zone_to_viability(payload: dict[str, Any]) -> bool:
         w_inv = float(payload.pop("w_inv", 0.0) or 0.0)
         payload.pop("inventory_zone", None)
         if "viability" not in payload:
-            floor = float(payload.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, 1.0) or 1.0)
+            defaults = _canonical_viability_defaults()
             payload["viability"] = {
-                "min_quote_qty": max(1e-12, floor),
-                "margin_sharpness": 0.1,
-                "availability_target": 0.9,
-                "shortfall_tolerance": 0.05,
-                "lambda_init": max(0.1, w_inv * 100.0) if w_inv > 0.0 else 1.0,
-                "lambda_learning_rate": 0.5,
+                **defaults,
+                "lambda_init": max(0.1, w_inv * 100.0) if w_inv > 0.0 else defaults["lambda_init"],
             }
         changed = True
     return changed
@@ -176,7 +212,8 @@ def _migrate_venue_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     out = dict(payload)
     changed = _rename_keys(out, _LEGACY_VENUE_KEY_MAP)
     changed = _migrate_inventory_zone_to_viability(out) or changed
-    changed = _migrate_viability_min_quote_qty(out) or changed
+    changed = _migrate_viability_keys(out) or changed
+    changed = _migrate_viability_min_viable_quote_semantics(out) or changed
     changed = _migrate_w_book_to_validity(out) or changed
     if RESERVATION_SKEW in out:
         migrated, skew_changed = _migrate_reservation_skew(out[RESERVATION_SKEW])

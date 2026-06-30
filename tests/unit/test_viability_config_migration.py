@@ -23,7 +23,7 @@ def test_migrate_inventory_zone_to_viability() -> None:
     local = migrated["controller"]["optimizer"]["local"]
     assert "w_inv" not in local
     assert "inventory_zone" not in local
-    assert local["viability"]["min_quote_qty"] == 2.0
+    assert local["viability"]["min_viable_quote"] == 50_000.0
     assert local["viability"]["lambda_init"] == 1.0
 
 
@@ -41,7 +41,7 @@ def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
     optimizer = migrated["controller"]["optimizer"]
     assert optimizer["local"]["viability"]["lambda_init"] == 1.0
     assert optimizer["local"]["validity"]["min_score"] == 0.3
-    assert optimizer["global"]["viability"]["availability_target"] == 0.9
+    assert optimizer["global"]["viability"]["availability_target"] == 0.99
     assert optimizer["adam_epochs"] == 40
 
 
@@ -72,9 +72,9 @@ def test_migrate_sparse_optimizer_preserves_existing_overrides() -> None:
                 "local": {
                     "n_components": 2,
                     "viability": {
-                        "min_quote_qty": 1.0,
-                        "margin_sharpness": 0.1,
-                        "availability_target": 0.9,
+                        "min_viable_quote": 75_000.0,
+                        "margin_buffer": 5_000.0,
+                        "availability_target": 0.99,
                         "shortfall_tolerance": 0.05,
                         "lambda_init": 1.0,
                         "lambda_learning_rate": 0.5,
@@ -88,16 +88,17 @@ def test_migrate_sparse_optimizer_preserves_existing_overrides() -> None:
     optimizer = migrated["controller"]["optimizer"]
     assert optimizer["horizon"] == 4
     assert optimizer["local"]["n_components"] == 2
+    assert optimizer["local"]["viability"]["min_viable_quote"] == 75_000.0
 
 
-def test_migrate_oversized_viability_min_quote_qty_resyncs_to_floor() -> None:
+def test_migrate_legacy_viability_keys_to_viable_quote_formulation() -> None:
     payload = {
         "controller": {
             "optimizer": {
                 "local": {
                     "cumulative_qty_floor_at_spread_max": 1.0,
                     "viability": {
-                        "min_quote_qty": 5_000_000.0,
+                        "min_free_quote": 1.0,
                         "margin_sharpness": 0.1,
                         "availability_target": 0.9,
                         "shortfall_tolerance": 0.05,
@@ -110,7 +111,35 @@ def test_migrate_oversized_viability_min_quote_qty_resyncs_to_floor() -> None:
     }
     migrated, changed = migrate_runtime_config_mapping(payload)
     assert changed is True
+    viability = migrated["controller"]["optimizer"]["local"]["viability"]
+    assert "min_free_quote" not in viability
+    assert "margin_sharpness" not in viability
+    assert viability["min_viable_quote"] == 50_000.0
+    assert viability["margin_buffer"] == 5_000.0
+    assert viability["availability_target"] == 0.99
+
+
+def test_migrate_oversized_viability_min_viable_quote_resyncs_to_canonical() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "local": {
+                    "cumulative_qty_floor_at_spread_max": 1.0,
+                    "viability": {
+                        "min_viable_quote": 5_000_000.0,
+                        "margin_buffer": 5_000.0,
+                        "availability_target": 0.99,
+                        "shortfall_tolerance": 0.05,
+                        "lambda_init": 1.0,
+                        "lambda_learning_rate": 1.0,
+                    },
+                }
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
     assert (
-        migrated["controller"]["optimizer"]["local"]["viability"]["min_quote_qty"]
-        == 1.0
+        migrated["controller"]["optimizer"]["local"]["viability"]["min_viable_quote"]
+        == 50_000.0
     )
