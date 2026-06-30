@@ -132,6 +132,34 @@ def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
     assert float(shortfall_post) > float(shortfall_pre)
 
 
+def test_viability_path_shortfall_ignores_pre_action_step_zero() -> None:
+    """h=0 is the live wallet before the MPC action; only post-fill steps matter."""
+    params = _viability_params(availability_target=0.99)
+    mid = torch.tensor([[100.0, 100.0, 100.0]], dtype=torch.float64)
+    dead_then_recovered = {
+        "inventory_path": torch.tensor([[0.0, 10.0, 10.0]], dtype=torch.float64),
+        "cash_path": torch.tensor([[50.0, 1000.0, 1000.0]], dtype=torch.float64),
+    }
+    dead_throughout = {
+        "inventory_path": torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float64),
+        "cash_path": torch.tensor([[50.0, 50.0, 50.0]], dtype=torch.float64),
+    }
+    shortfall_recovered, components_recovered = viability_path_shortfall(
+        dead_then_recovered["inventory_path"],
+        cash_path=dead_then_recovered["cash_path"],
+        mid_path=mid,
+        params=params,
+    )
+    shortfall_dead, _ = viability_path_shortfall(
+        dead_throughout["inventory_path"],
+        cash_path=dead_throughout["cash_path"],
+        mid_path=mid,
+        params=params,
+    )
+    assert float(shortfall_recovered) < float(shortfall_dead)
+    assert float(components_recovered["viability_min_availability"]) > 0.5
+
+
 def test_apply_ce_objective_normalization_scales_by_previous_ewma() -> None:
     normalize = ObjectiveNormalizeParams(enabled=True, ce_ewma_decay=0.95)
     ce = torch.tensor(0.002, dtype=torch.float64)

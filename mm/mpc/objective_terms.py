@@ -402,7 +402,8 @@ def viability_path_shortfall(
     ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
     of simulated **total** wallet balances (free + locked) along each rollout path.
 
-    Per path: A_min = min_h A_h; S = max(0, A* - A_min); return mean(S).
+    Per path: A_min = min_{h>=1} A_h (exclude pre-action snapshot at h=0);
+    S = max(0, A* - A_min); return mean(S).
     """
 
     torch = _torch()
@@ -415,7 +416,10 @@ def viability_path_shortfall(
         mid_price=mid_path,
         params=params,
     )
-    path_min_avail = step_avail.min(dim=1).values
+    if step_avail.shape[1] <= 1:
+        zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
+        return zero, {}
+    path_min_avail = step_avail[:, 1:].min(dim=1).values
     shortfall_per_path = torch.clamp(
         float(params.availability_target) - path_min_avail,
         min=0.0,
