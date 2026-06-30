@@ -1229,6 +1229,15 @@ class MonteCarloMPCTensorBatched:
                 inv_path: list[Any] = []
                 cash_path: list[Any] = []
                 mid_path: list[Any] = []
+                mid_init = _mid_from_book_best_levels_batched(
+                    ob_bids,
+                    ob_asks,
+                    mid_fallback_t,
+                    spread_grid,
+                )
+                inv_path.append(inv_t.squeeze(1))
+                cash_path.append(cash_t.squeeze(1))
+                mid_path.append(mid_init.squeeze(1))
                 conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
                 conditional_buy_vwap_t = None
                 conditional_sell_vwap_t = None
@@ -1408,9 +1417,9 @@ class MonteCarloMPCTensorBatched:
                     step_reward = step_reward_main
                     if h == 0:
                         step_reward_0 = step_reward
-                    inv_path.append(inv_t.squeeze(1))
-                    cash_path.append(cash_t.squeeze(1))
-                    mid_path.append(mid_t.squeeze(1))
+                    inv_path.append(inv_next.squeeze(1))
+                    cash_path.append(cash_next.squeeze(1))
+                    mid_path.append(mid_next.squeeze(1))
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
 

@@ -417,6 +417,24 @@ def optimize_joint_with_diagnostics(
             global_inv_path: list[Any] = []
             global_cash_path: list[Any] = []
             global_mid_path: list[Any] = []
+            local_mid_init = _mid_from_book_best_levels_batched(
+                ob_bids,
+                ob_asks,
+                mid_fallback_t,
+                spread_grid,
+            )
+            global_mid_init = _mid_from_book_best_levels_batched(
+                global_ob_bids,
+                global_ob_asks,
+                global_mid_fallback_t,
+                spread_grid,
+            )
+            local_inv_path.append(inv_t.squeeze(1))
+            local_cash_path.append(cash_t.squeeze(1))
+            local_mid_path.append(local_mid_init.squeeze(1))
+            global_inv_path.append(global_inv_t.squeeze(1))
+            global_cash_path.append(global_cash_t.squeeze(1))
+            global_mid_path.append(global_mid_init.squeeze(1))
             local_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             local_fill_ask_sum = torch_mod.zeros((), dtype=dtype, device=_device)
             global_fill_bid_sum = torch_mod.zeros((), dtype=dtype, device=_device)
@@ -583,11 +601,20 @@ def optimize_joint_with_diagnostics(
                 cash_next = cash_t + local_cash_delta.unsqueeze(1)
                 global_inv_next = global_inv_t + global_inv_delta.unsqueeze(1)
                 global_cash_next = global_cash_t + global_cash_delta.unsqueeze(1)
+                local_mid_next = _mid_from_book_best_levels_batched(
+                    ob_bids_next,
+                    ob_asks_next,
+                    mid_t,
+                    spread_grid,
+                )
+                global_mid_next = _mid_from_book_best_levels_batched(
+                    global_ob_bids_next,
+                    global_ob_asks_next,
+                    global_mid_t,
+                    spread_grid,
+                )
 
                 if local_conditional_price:
-                    local_mid_next = _mid_from_book_best_levels_batched(
-                        ob_bids_next, ob_asks_next, mid_t, spread_grid
-                    )
                     ref_depth = float(getattr(mpc.local_price_model, "reference_vwap_vol", 100.0))
                     prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
                         ob_bids,
@@ -639,12 +666,6 @@ def optimize_joint_with_diagnostics(
                     sell_vwap_t = conditional_sell_vwap_t
 
                 if global_conditional_price:
-                    global_mid_next = _mid_from_book_best_levels_batched(
-                        global_ob_bids_next,
-                        global_ob_asks_next,
-                        global_mid_t,
-                        spread_grid,
-                    )
                     ref_depth = float(getattr(global_price_model, "reference_vwap_vol", 100.0))
                     prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
                         global_ob_bids,
@@ -720,12 +741,12 @@ def optimize_joint_with_diagnostics(
                     - (global_cash_t + global_inv_t * ref_t)
                 ).squeeze(1)
                 step_reward = local_step_reward + global_step_reward
-                local_inv_path.append(inv_t.squeeze(1))
-                local_cash_path.append(cash_t.squeeze(1))
-                local_mid_path.append(mid_t.squeeze(1))
-                global_inv_path.append(global_inv_t.squeeze(1))
-                global_cash_path.append(global_cash_t.squeeze(1))
-                global_mid_path.append(global_mid_t.squeeze(1))
+                local_inv_path.append(inv_next.squeeze(1))
+                local_cash_path.append(cash_next.squeeze(1))
+                local_mid_path.append(local_mid_next.squeeze(1))
+                global_inv_path.append(global_inv_next.squeeze(1))
+                global_cash_path.append(global_cash_next.squeeze(1))
+                global_mid_path.append(global_mid_next.squeeze(1))
                 if h == 0:
                     step_reward_0 = step_reward
                     local_fill_bid_sum = local_fill_bid_sum + local_inv_delta.mean()

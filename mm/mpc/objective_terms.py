@@ -387,6 +387,12 @@ def viability_path_shortfall(
     """
     Expected availability shortfall over Monte Carlo paths.
 
+    ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
+    of simulated wallet capacity along each rollout path. Rollout should record
+    the initial wallet (before horizon step 0) and, after each horizon step,
+    the post-fill wallet and mid from the evolved orderbook so sampled
+    orderflow/fills deplete bid/ask capacity in ``A_min``.
+
     Per path: A_min = min_h A_h; S = max(0, A* - A_min); return mean(S).
     """
 

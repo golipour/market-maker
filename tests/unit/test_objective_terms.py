@@ -81,6 +81,33 @@ def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
     assert float(components["viability_min_availability"]) < 0.9
 
 
+def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
+    """Rollout paths must include post-orderflow wallet snapshots, not only pre-fill."""
+    params = _viability_params(availability_target=0.9)
+    mid = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
+    post_fill_path = {
+        "inventory_path": torch.tensor([[10.0, 0.0]], dtype=torch.float64),
+        "cash_path": torch.tensor([[1000.0, 50.0]], dtype=torch.float64),
+    }
+    pre_fill_only_path = {
+        "inventory_path": torch.tensor([[10.0, 10.0]], dtype=torch.float64),
+        "cash_path": torch.tensor([[1000.0, 1000.0]], dtype=torch.float64),
+    }
+    shortfall_post, _ = viability_path_shortfall(
+        post_fill_path["inventory_path"],
+        cash_path=post_fill_path["cash_path"],
+        mid_path=mid,
+        params=params,
+    )
+    shortfall_pre, _ = viability_path_shortfall(
+        pre_fill_only_path["inventory_path"],
+        cash_path=pre_fill_only_path["cash_path"],
+        mid_path=mid,
+        params=params,
+    )
+    assert float(shortfall_post) > float(shortfall_pre)
+
+
 def test_apply_ce_objective_normalization_scales_by_previous_ewma() -> None:
     normalize = ObjectiveNormalizeParams(enabled=True, ce_ewma_decay=0.95)
     ce = torch.tensor(0.002, dtype=torch.float64)
