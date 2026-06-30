@@ -132,8 +132,24 @@ def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
     assert float(shortfall_post) > float(shortfall_pre)
 
 
+def test_viability_path_shortfall_uses_terminal_step_not_path_min() -> None:
+    """Terminal A_H must not be pinned by an early depleted post-action step."""
+    params = _viability_params(availability_target=0.99)
+    mid = torch.tensor([[100.0, 100.0, 100.0]], dtype=torch.float64)
+    inv = torch.tensor([[0.0, 0.0, 10.0]], dtype=torch.float64)
+    cash = torch.tensor([[50.0, 50.0, 1000.0]], dtype=torch.float64)
+    shortfall, components = viability_path_shortfall(
+        inv,
+        cash_path=cash,
+        mid_path=mid,
+        params=params,
+    )
+    assert float(shortfall) < 0.5
+    assert float(components["viability_min_availability"]) > 0.5
+
+
 def test_viability_path_shortfall_ignores_pre_action_step_zero() -> None:
-    """h=0 is the live wallet before the MPC action; only post-fill steps matter."""
+    """h=0 is the live wallet before the MPC action; terminal post-fill step matters."""
     params = _viability_params(availability_target=0.99)
     mid = torch.tensor([[100.0, 100.0, 100.0]], dtype=torch.float64)
     dead_then_recovered = {
