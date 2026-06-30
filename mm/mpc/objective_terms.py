@@ -42,9 +42,6 @@ class ViabilityParams:
     shortfall_tolerance: float = 0.05
     lambda_init: float = 0.0
     lambda_learning_rate: float = 0.02
-    lambda_leakage: float = 0.01
-    lambda_reset_on_target: bool = True
-    lambda_log_update: bool = False
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -66,14 +63,16 @@ class ViabilityParams:
                 "min_quote_qty",
                 "min_free_quote",
                 "margin_sharpness",
+                "lambda_leakage",
+                "lambda_reset_on_target",
+                "lambda_log_update",
             }
         )
         if removed:
             raise ValueError(
                 "removed viability keys; use "
                 "{min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, lambda_leakage, "
-                "lambda_reset_on_target, lambda_log_update}: "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
                 + ", ".join(removed)
             )
         availability_target = float(payload.get("availability_target", 0.99))
@@ -85,11 +84,6 @@ class ViabilityParams:
         lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.02))
         if lambda_learning_rate <= 0.0:
             raise ValueError("viability.lambda_learning_rate must be > 0")
-        lambda_leakage = float(payload.get("lambda_leakage", 0.01))
-        if not (0.0 <= lambda_leakage < 1.0):
-            raise ValueError("viability.lambda_leakage must be in [0, 1)")
-        lambda_reset_on_target = bool(payload.get("lambda_reset_on_target", True))
-        lambda_log_update = bool(payload.get("lambda_log_update", False))
         return cls(
             min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
             margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
@@ -97,9 +91,6 @@ class ViabilityParams:
             shortfall_tolerance=shortfall_tolerance,
             lambda_init=max(0.0, float(payload.get("lambda_init", 0.0))),
             lambda_learning_rate=lambda_learning_rate,
-            lambda_leakage=lambda_leakage,
-            lambda_reset_on_target=lambda_reset_on_target,
-            lambda_log_update=lambda_log_update,
         )
 
     def as_mapping(self) -> dict[str, float]:
@@ -110,9 +101,6 @@ class ViabilityParams:
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
-            "lambda_leakage": self.lambda_leakage,
-            "lambda_reset_on_target": self.lambda_reset_on_target,
-            "lambda_log_update": self.lambda_log_update,
         }
 
 
@@ -703,16 +691,25 @@ def update_ce_ewma_scale(
     return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
-def effective_viability_lambda(
-    viability_lambda: float,
-    params: ViabilityParams | None,
-) -> float:
-    """Use ``lambda_init`` when the dual state has not been initialized yet."""
+_LAMBDA_INIT_FLOOR = 1e-300
 
-    lam = max(0.0, float(viability_lambda))
-    if lam > 0.0 or params is None:
-        return lam
-    return max(0.0, float(params.lambda_init))
+
+def viability_theta_from_lambda_init(lambda_init: float) -> float:
+    """Map configured ``lambda_init`` to log-space dual state ``θ`` with ``λ = exp(θ)``."""
+
+    return math.log(max(0.0, float(lambda_init), _LAMBDA_INIT_FLOOR))
+
+
+def viability_lambda_from_theta(viability_theta: float) -> float:
+    """Positive Lagrange multiplier from log-space dual state."""
+
+    theta = float(viability_theta)
+    if not math.isfinite(theta):
+        return 0.0
+    if theta <= math.log(_LAMBDA_INIT_FLOOR):
+        return 0.0
+    lam = math.exp(theta)
+    return lam if math.isfinite(lam) and lam > 0.0 else 0.0
 
 
 def _viability_shortfall_from_components(
@@ -751,52 +748,31 @@ def _signed_availability_gap(
     return float(params.availability_target) - a_min
 
 
-def update_viability_lambda(
-    viability_lambda: float,
+def update_viability_theta(
+    viability_theta: float,
     components: dict[str, Any],
     *,
     params: ViabilityParams | None,
-    shortfall_key: str = "viability_shortfall",
-    shortfall_raw_key: str = "viability_penalty_raw",
     min_availability_key: str = "viability_min_availability",
 ) -> float:
     """
-    Dual ascent on signed availability gap: gap = A* - E[A_min].
+    Log-space dual ascent: θ <- θ + η (A* - E[A_min]); λ = exp(θ).
 
-    When ``lambda_reset_on_target`` is true and gap <= shortfall_tolerance, reset
-    to ``lambda_init`` instead of winding up λ across satisfied decisions.
-
-    ``lambda_log_update`` applies multiplicative steps ``λ <- λ * exp(η * gap)`` for
-    scale-stable learning when λ is large.
+    Uses the signed availability gap (not one-sided shortfall) so λ can decrease
+    when availability is above target. No reset, leakage, or ε in the dual update.
     """
 
     if params is None:
-        return float(viability_lambda)
+        return float(viability_theta)
     gap = _signed_availability_gap(
         components,
         params=params,
         min_availability_key=min_availability_key,
     )
     if gap is None:
-        raw = _viability_shortfall_from_components(
-            components,
-            shortfall_key=shortfall_key,
-            shortfall_raw_key=shortfall_raw_key,
-        )
-        shortfall = _float_component(raw)
-        if shortfall is None:
-            return float(viability_lambda)
-        gap = shortfall
-    eps = float(params.shortfall_tolerance)
-    if params.lambda_reset_on_target and gap <= eps:
-        return max(0.0, float(params.lambda_init))
-    lam = effective_viability_lambda(viability_lambda, params)
+        return float(viability_theta)
     eta = float(params.lambda_learning_rate)
-    rho = float(params.lambda_leakage)
-    if params.lambda_log_update:
-        lam_safe = max(lam, 1e-12)
-        return max(0.0, lam_safe * math.exp(eta * gap))
-    return max(0.0, (1.0 - rho) * lam + eta * gap)
+    return float(viability_theta) + eta * gap
 
 
 def validity_book_shortfall(
@@ -861,24 +837,25 @@ def combine_viability_term(
     base_objective: Any,
     components: dict[str, Any],
     *,
-    viability_lambda: float,
+    viability_theta: float,
     viability_params: ViabilityParams | None = None,
     viability_shortfall: Any | None = None,
     viability_components: dict[str, Any] | None = None,
     viability_term: str = "viability_penalty",
     component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
-    """Subtract adaptive Lagrange penalty: -lambda * expected availability shortfall."""
+    """Subtract adaptive Lagrange penalty: -exp(theta) * expected availability shortfall."""
 
     out = dict(components)
     objective = base_objective
     if viability_shortfall is None:
         return objective, out
-    lam = effective_viability_lambda(viability_lambda, viability_params)
+    lam = viability_lambda_from_theta(viability_theta)
     weighted = -lam * viability_shortfall
     objective = objective + weighted
     out[viability_term] = weighted
     out[f"{component_prefix}viability_lambda"] = lam
+    out[f"{component_prefix}viability_lambda_theta"] = float(viability_theta)
     for key, value in (viability_components or {}).items():
         if key == "viability_shortfall":
             out[f"{viability_term}_raw"] = value

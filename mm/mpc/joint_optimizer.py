@@ -24,7 +24,8 @@ from mm.mpc.objective_terms import (
     combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
-    update_viability_lambda,
+    update_viability_theta,
+    viability_theta_from_lambda_init,
     viability_path_shortfall,
 )
 from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
@@ -845,7 +846,7 @@ def optimize_joint_with_diagnostics(
                 J, components = combine_viability_term(
                     J,
                     components,
-                    viability_lambda=mpc._viability_lambda_local,
+                    viability_theta=mpc._viability_theta_local,
                     viability_params=local_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
@@ -860,7 +861,7 @@ def optimize_joint_with_diagnostics(
                 J, components = combine_viability_term(
                     J,
                     components,
-                    viability_lambda=mpc._viability_lambda_global,
+                    viability_theta=mpc._viability_theta_global,
                     viability_params=global_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
@@ -1002,17 +1003,15 @@ def optimize_joint_with_diagnostics(
             best_metrics.components,
             normalize=mpc.objective_normalize,
         )
-        mpc._viability_lambda_local = update_viability_lambda(
-            mpc._viability_lambda_local,
+        mpc._viability_theta_local = update_viability_theta(
+            mpc._viability_theta_local,
             best_metrics.components,
             params=local_opt.viability,
         )
-        mpc._viability_lambda_global = update_viability_lambda(
-            mpc._viability_lambda_global,
+        mpc._viability_theta_global = update_viability_theta(
+            mpc._viability_theta_global,
             best_metrics.components,
             params=global_opt.viability,
-            shortfall_key="global_viability_shortfall",
-            shortfall_raw_key="global_viability_penalty_raw",
             min_availability_key="global_viability_min_availability",
         )
 

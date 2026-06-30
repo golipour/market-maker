@@ -39,8 +39,9 @@ from mm.mpc.objective_terms import (
     combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
-    update_viability_lambda,
+    update_viability_theta,
     viability_path_shortfall,
+    viability_theta_from_lambda_init,
 )
 from mm.mpc.mpc_state import State
 from mm.core.wallet import portfolio_wealth
@@ -118,8 +119,7 @@ class VenueOptimizerParams:
             raise ValueError(
                 "optimizer venue keys w_inv and inventory_zone were removed; "
                 "use viability {min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, lambda_leakage, "
-                "lambda_reset_on_target, lambda_log_update}"
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             )
         if "w_book" in data:
             raise ValueError(
@@ -922,11 +922,15 @@ class MonteCarloMPCTensorBatched:
         self._ce_ewma_scale = 0.0
         local_viability = self.local_optimizer.viability
         global_viability = self.global_optimizer.viability
-        self._viability_lambda_local = (
-            float(local_viability.lambda_init) if local_viability is not None else 0.0
+        self._viability_theta_local = (
+            viability_theta_from_lambda_init(local_viability.lambda_init)
+            if local_viability is not None
+            else viability_theta_from_lambda_init(0.0)
         )
-        self._viability_lambda_global = (
-            float(global_viability.lambda_init) if global_viability is not None else 0.0
+        self._viability_theta_global = (
+            viability_theta_from_lambda_init(global_viability.lambda_init)
+            if global_viability is not None
+            else viability_theta_from_lambda_init(0.0)
         )
 
         if bounds is None:
@@ -1485,7 +1489,7 @@ class MonteCarloMPCTensorBatched:
                     J, components = combine_viability_term(
                         J,
                         components,
-                        viability_lambda=self._viability_lambda_local,
+                        viability_theta=self._viability_theta_local,
                         viability_params=venue_opt.viability,
                         viability_shortfall=shortfall,
                         viability_components=viability_components,
@@ -1604,8 +1608,8 @@ class MonteCarloMPCTensorBatched:
                 best_metrics.components,
                 normalize=self.objective_normalize,
             )
-            self._viability_lambda_local = update_viability_lambda(
-                self._viability_lambda_local,
+            self._viability_theta_local = update_viability_theta(
+                self._viability_theta_local,
                 best_metrics.components,
                 params=self.local_optimizer.viability,
             )

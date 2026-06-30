@@ -5522,6 +5522,7 @@ WHERE {_diagnostics_filter()}
       'viability_ask_margin',
       'viability_base_notional',
       'viability_lambda',
+      'viability_lambda_theta',
       'global_viability_penalty_raw',
       'global_viability_shortfall',
       'global_viability_min_availability',
@@ -5546,9 +5547,6 @@ def _optimizer_viability_config_sql() -> str:
             "shortfall_tolerance",
             "lambda_init",
             "lambda_learning_rate",
-            "lambda_leakage",
-            "lambda_reset_on_target",
-            "lambda_log_update",
         )
     )
     return f"""SELECT e.ts AS "time",

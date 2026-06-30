@@ -258,10 +258,7 @@
               "availability_target": 0.99,
               "shortfall_tolerance": 0.05,
               "lambda_init": 0.0,
-              "lambda_learning_rate": 0.02,
-              "lambda_leakage": 0.01,
-              "lambda_reset_on_target": true,
-              "lambda_log_update": false
+              "lambda_learning_rate": 0.02
             },
             "book_quality": {
               "soft_scoring": {
@@ -292,10 +289,7 @@
               "availability_target": 0.99,
               "shortfall_tolerance": 0.05,
               "lambda_init": 0.0,
-              "lambda_learning_rate": 0.02,
-              "lambda_leakage": 0.01,
-              "lambda_reset_on_target": true,
-              "lambda_log_update": false
+              "lambda_learning_rate": 0.02
             },
             "book_quality": {
               "hard_structure": {
