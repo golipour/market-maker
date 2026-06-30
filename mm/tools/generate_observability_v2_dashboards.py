@@ -4139,34 +4139,46 @@ def optimizer_diagnostics() -> dict[str, Any]:
         ),
         _panel(
             8,
-            "Viability config",
+            "Viability λ (learned dual)",
             "timeseries",
             PG_DS,
-            _optimizer_viability_config_sql(),
+            _optimizer_viability_lambda_sql(),
             x=12,
             y=27,
             w=12,
+            unit="sci",
             decimals=4,
         ),
         _panel(
             9,
-            "Validity breakdown",
+            "Viability config",
             "timeseries",
             PG_DS,
-            _optimizer_validity_breakdown_sql(),
+            _optimizer_viability_config_sql(),
             x=0,
-            y=34,
+            y=35,
             w=12,
             decimals=4,
         ),
         _panel(
             10,
+            "Validity breakdown",
+            "timeseries",
+            PG_DS,
+            _optimizer_validity_breakdown_sql(),
+            x=12,
+            y=35,
+            w=12,
+            decimals=4,
+        ),
+        _panel(
+            11,
             "Validity config",
             "timeseries",
             PG_DS,
             _optimizer_validity_config_sql(),
-            x=12,
-            y=34,
+            x=0,
+            y=42,
             w=12,
             decimals=4,
         ),
@@ -5521,17 +5533,35 @@ WHERE {_diagnostics_filter()}
       'viability_bid_margin',
       'viability_ask_margin',
       'viability_base_notional',
-      'viability_lambda',
-      'viability_lambda_theta',
       'global_viability_penalty_raw',
       'global_viability_shortfall',
       'global_viability_min_availability',
       'global_viability_step_availability',
       'global_viability_bid_margin',
       'global_viability_ask_margin',
-      'global_viability_base_notional',
-      'global_viability_lambda'
+      'global_viability_base_notional'
     )
+  )
+ORDER BY 1"""
+
+
+def _optimizer_viability_lambda_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND kv.key IN (
+    'viability_lambda',
+    'viability_lambda_learned',
+    'viability_lambda_theta',
+    'viability_lambda_theta_learned',
+    'global_viability_lambda',
+    'global_viability_lambda_learned',
+    'global_viability_lambda_theta',
+    'global_viability_lambda_theta_learned'
   )
 ORDER BY 1"""
 

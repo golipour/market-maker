@@ -25,6 +25,7 @@ from mm.mpc.objective_terms import (
     combine_viability_term,
     update_ce_ewma_scale,
     update_viability_theta,
+    stamp_learned_viability_dual,
     viability_theta_from_lambda_init,
     viability_path_shortfall,
 )
@@ -1014,6 +1015,13 @@ def optimize_joint_with_diagnostics(
             params=global_opt.viability,
             min_availability_key="global_viability_min_availability",
         )
+        for metrics in (initial_metrics, final_metrics, best_metrics):
+            if metrics is not None:
+                stamp_learned_viability_dual(
+                    metrics.components,
+                    local_theta=mpc._viability_theta_local,
+                    global_theta=mpc._viability_theta_global,
+                )
 
     diagnostics = OptimizerRunDiagnostics(
         config={

@@ -40,6 +40,7 @@ from mm.mpc.objective_terms import (
     combine_viability_term,
     update_ce_ewma_scale,
     update_viability_theta,
+    stamp_learned_viability_dual,
     viability_path_shortfall,
     viability_theta_from_lambda_init,
 )
@@ -1613,6 +1614,12 @@ class MonteCarloMPCTensorBatched:
                 best_metrics.components,
                 params=self.local_optimizer.viability,
             )
+            for metrics in (initial_metrics, final_metrics, best_metrics):
+                if metrics is not None:
+                    stamp_learned_viability_dual(
+                        metrics.components,
+                        local_theta=self._viability_theta_local,
+                    )
         diagnostics = OptimizerRunDiagnostics(
             config={
                 "kind": "monte_carlo_mpc_tensor_batched",

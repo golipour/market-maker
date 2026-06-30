@@ -712,6 +712,21 @@ def viability_lambda_from_theta(viability_theta: float) -> float:
     return lam if math.isfinite(lam) and lam > 0.0 else 0.0
 
 
+def stamp_learned_viability_dual(
+    components: dict[str, Any],
+    *,
+    local_theta: float,
+    global_theta: float | None = None,
+) -> None:
+    """Record post-update dual state (λ for the next MPC decision) in diagnostics."""
+
+    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta)
+    components["viability_lambda_theta_learned"] = float(local_theta)
+    if global_theta is not None:
+        components["global_viability_lambda_learned"] = viability_lambda_from_theta(global_theta)
+        components["global_viability_lambda_theta_learned"] = float(global_theta)
+
+
 def _viability_shortfall_from_components(
     components: dict[str, Any],
     *,

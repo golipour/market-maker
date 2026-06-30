@@ -24,6 +24,7 @@ from mm.mpc.objective_terms import (
     viability_lambda_from_theta,
     viability_path_shortfall,
     viability_theta_from_lambda_init,
+    stamp_learned_viability_dual,
 )
 
 
@@ -216,6 +217,17 @@ def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
     assert float(components["viability_penalty_raw"]) == pytest.approx(0.2)
     assert float(components["viability_lambda"]) == pytest.approx(2.0)
     assert float(components["viability_lambda_theta"]) == pytest.approx(theta)
+
+
+def test_stamp_learned_viability_dual_records_post_update_state() -> None:
+    components: dict[str, float] = {}
+    stamp_learned_viability_dual(
+        components,
+        local_theta=math.log(3.0),
+        global_theta=math.log(2.0),
+    )
+    assert components["viability_lambda_learned"] == pytest.approx(3.0)
+    assert components["global_viability_lambda_learned"] == pytest.approx(2.0)
 
 
 def test_viability_from_mapping_rejects_removed_dual_keys() -> None:
