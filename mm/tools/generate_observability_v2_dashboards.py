@@ -5520,6 +5520,7 @@ WHERE {_diagnostics_filter()}
       'viability_step_availability',
       'viability_bid_margin',
       'viability_ask_margin',
+      'viability_base_notional',
       'viability_lambda',
       'global_viability_penalty_raw',
       'global_viability_shortfall',
@@ -5527,6 +5528,7 @@ WHERE {_diagnostics_filter()}
       'global_viability_step_availability',
       'global_viability_bid_margin',
       'global_viability_ask_margin',
+      'global_viability_base_notional',
       'global_viability_lambda'
     )
   )

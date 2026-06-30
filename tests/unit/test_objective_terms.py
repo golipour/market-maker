@@ -60,7 +60,7 @@ def test_soft_availability_is_high_when_total_balances_exceed_viable_floor() -> 
     assert float(availability[0]) > 0.9
     assert float(availability[1]) > float(availability[0]) * 0.5
     assert float(parts["viability_bid_margin"][0]) == pytest.approx(1900.0)
-    assert float(parts["viability_ask_margin"][0]) == pytest.approx(9.0)
+    assert float(parts["viability_ask_margin"][0]) == pytest.approx(900.0)
 
 
 def test_soft_availability_goes_to_zero_when_one_side_lacks_total_base() -> None:

@@ -365,30 +365,29 @@ def soft_availability_margin(
     Smooth two-sided quoting availability in [0, 1] from total wallet margins.
 
     ``cash`` is total quote balance q_t (free + locked); ``inventory`` is total
-    base balance b_t. ``min_viable_quote`` is q_min: the minimum quote-side
-    wallet volume required to remain viable on bids; b_min(p) = q_min / p.
+    base balance b_t. ``min_viable_quote`` is q_min. Both margins are in quote
+    currency for a shared ``margin_buffer``:
 
-    m_bid = q_t - q_min; m_ask = b_t - b_min(p);
-    a_side = sigmoid(m_side / delta_side); A = a_bid * a_ask.
+    m_bid = q_t - q_min; m_ask = b_t * p_t - q_min;
+    a_side = sigmoid(m_side / margin_buffer); A = a_bid * a_ask.
     """
 
     torch = _torch()
     q_min = max(1e-12, float(params.min_viable_quote))
-    delta_quote = max(1e-9, float(params.margin_buffer))
+    delta = max(1e-9, float(params.margin_buffer))
     mid_safe = torch.clamp(mid_price, min=1e-12)
     quote_total = torch.clamp(cash, min=0.0)
     base_total = torch.clamp(inventory, min=0.0)
-    b_min = q_min / mid_safe
-    delta_base = delta_quote / mid_safe
+    base_notional = base_total * mid_safe
     m_bid = quote_total - q_min
-    m_ask = base_total - b_min
-    a_bid = torch.sigmoid(m_bid / delta_quote)
-    a_ask = torch.sigmoid(m_ask / delta_base)
+    m_ask = base_notional - q_min
+    a_bid = torch.sigmoid(m_bid / delta)
+    a_ask = torch.sigmoid(m_ask / delta)
     availability = a_bid * a_ask
     return availability, {
         "viability_bid_margin": m_bid,
         "viability_ask_margin": m_ask,
-        "viability_min_viable_base": b_min,
+        "viability_base_notional": base_notional,
         "viability_step_availability": availability,
     }
 
