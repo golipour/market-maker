@@ -5547,6 +5547,8 @@ def _optimizer_viability_config_sql() -> str:
             "lambda_init",
             "lambda_learning_rate",
             "lambda_leakage",
+            "lambda_reset_on_target",
+            "lambda_log_update",
         )
     )
     return f"""SELECT e.ts AS "time",

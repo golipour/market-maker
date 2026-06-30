@@ -142,6 +142,8 @@ def _canonical_viability_defaults() -> dict[str, float]:
         "lambda_init": float(viability.get("lambda_init", 0.0)),
         "lambda_learning_rate": float(viability.get("lambda_learning_rate", 0.02)),
         "lambda_leakage": float(viability.get("lambda_leakage", 0.01)),
+        "lambda_reset_on_target": bool(viability.get("lambda_reset_on_target", True)),
+        "lambda_log_update": bool(viability.get("lambda_log_update", False)),
     }
 
 
@@ -174,6 +176,12 @@ def _migrate_viability_min_viable_quote_semantics(payload: dict[str, Any]) -> bo
         changed = True
     if "lambda_leakage" not in viability:
         viability["lambda_leakage"] = defaults["lambda_leakage"]
+        changed = True
+    if "lambda_reset_on_target" not in viability:
+        viability["lambda_reset_on_target"] = defaults["lambda_reset_on_target"]
+        changed = True
+    if "lambda_log_update" not in viability:
+        viability["lambda_log_update"] = defaults["lambda_log_update"]
         changed = True
     if float(viability.get("availability_target", defaults["availability_target"])) < 0.95:
         viability["availability_target"] = defaults["availability_target"]

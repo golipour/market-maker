@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 
@@ -156,10 +158,55 @@ def test_update_viability_lambda_increases_on_shortfall() -> None:
     params = _viability_params(shortfall_tolerance=0.05, lambda_learning_rate=0.5)
     lam = update_viability_lambda(
         1.0,
-        {"viability_shortfall": 0.2},
+        {"viability_min_availability": 0.7, "viability_shortfall": 0.2},
         params=params,
     )
-    assert lam == pytest.approx(1.0 + 0.5 * (0.2 - 0.05))
+    assert lam == pytest.approx(1.0 + 0.5 * (0.9 - 0.7))
+
+
+def test_update_viability_lambda_decreases_when_above_target() -> None:
+    params = _viability_params(
+        shortfall_tolerance=0.05,
+        lambda_learning_rate=0.02,
+        lambda_reset_on_target=False,
+        lambda_leakage=0.0,
+    )
+    lam = update_viability_lambda(
+        1.0,
+        {"viability_min_availability": 0.95},
+        params=params,
+    )
+    assert lam == pytest.approx(1.0 + 0.02 * (0.99 - 0.95))
+
+
+def test_update_viability_lambda_resets_when_target_met() -> None:
+    params = _viability_params(
+        shortfall_tolerance=0.05,
+        lambda_learning_rate=1.0,
+        lambda_init=0.0,
+        lambda_reset_on_target=True,
+    )
+    lam = update_viability_lambda(
+        3.0,
+        {"viability_min_availability": 0.95},
+        params=params,
+    )
+    assert lam == pytest.approx(0.0)
+
+
+def test_update_viability_lambda_log_update_is_multiplicative() -> None:
+    params = _viability_params(
+        shortfall_tolerance=0.05,
+        lambda_learning_rate=0.5,
+        lambda_reset_on_target=False,
+        lambda_log_update=True,
+    )
+    lam = update_viability_lambda(
+        2.0,
+        {"viability_min_availability": 0.7},
+        params=params,
+    )
+    assert lam == pytest.approx(2.0 * math.exp(0.5 * (0.99 - 0.7)))
 
 
 def test_update_viability_lambda_applies_leakage() -> None:
@@ -167,13 +214,14 @@ def test_update_viability_lambda_applies_leakage() -> None:
         shortfall_tolerance=0.1,
         lambda_learning_rate=0.02,
         lambda_leakage=0.01,
+        lambda_reset_on_target=False,
     )
     lam = update_viability_lambda(
         1.0,
-        {"viability_shortfall": 0.1},
+        {"viability_min_availability": 0.89, "viability_shortfall": 0.01},
         params=params,
     )
-    assert lam == pytest.approx(0.99 * 1.0 + 0.02 * (0.1 - 0.1))
+    assert lam == pytest.approx(0.99 * 1.0 + 0.02 * (0.99 - 0.89))
 
 
 def test_update_viability_lambda_leakage_decays_when_on_target() -> None:
@@ -181,13 +229,14 @@ def test_update_viability_lambda_leakage_decays_when_on_target() -> None:
         shortfall_tolerance=0.1,
         lambda_learning_rate=0.02,
         lambda_leakage=0.01,
+        lambda_reset_on_target=False,
     )
     lam = update_viability_lambda(
         2.0,
-        {"viability_shortfall": 0.1},
+        {"viability_min_availability": 0.99},
         params=params,
     )
-    assert lam == pytest.approx(0.99 * 2.0)
+    assert lam == pytest.approx(0.99 * 2.0 + 0.02 * (0.99 - 0.99))
 
 
 def test_combine_viability_term_with_lambda_init_zero_applies_no_penalty() -> None:
@@ -236,14 +285,14 @@ def test_combine_viability_term_uses_lambda_init_when_dual_state_is_zero() -> No
     assert float(components["viability_lambda"]) == pytest.approx(1.5)
 
 
-def test_update_viability_lambda_reads_penalty_raw() -> None:
+def test_update_viability_lambda_reads_penalty_raw_fallback() -> None:
     params = _viability_params(shortfall_tolerance=0.05, lambda_learning_rate=0.5)
     lam = update_viability_lambda(
         1.0,
         {"viability_penalty_raw": 0.2},
         params=params,
     )
-    assert lam == pytest.approx(1.0 + 0.5 * (0.2 - 0.05))
+    assert lam == pytest.approx(1.0 + 0.5 * 0.2)
 
 
 def test_validity_from_mapping_rejects_w_book() -> None:

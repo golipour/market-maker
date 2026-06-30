@@ -1013,6 +1013,7 @@ def optimize_joint_with_diagnostics(
             params=global_opt.viability,
             shortfall_key="global_viability_shortfall",
             shortfall_raw_key="global_viability_penalty_raw",
+            min_availability_key="global_viability_min_availability",
         )
 
     diagnostics = OptimizerRunDiagnostics(

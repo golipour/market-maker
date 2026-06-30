@@ -43,6 +43,8 @@ class ViabilityParams:
     lambda_init: float = 0.0
     lambda_learning_rate: float = 0.02
     lambda_leakage: float = 0.01
+    lambda_reset_on_target: bool = True
+    lambda_log_update: bool = False
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -70,7 +72,8 @@ class ViabilityParams:
             raise ValueError(
                 "removed viability keys; use "
                 "{min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, lambda_leakage}: "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate, lambda_leakage, "
+                "lambda_reset_on_target, lambda_log_update}: "
                 + ", ".join(removed)
             )
         availability_target = float(payload.get("availability_target", 0.99))
@@ -85,6 +88,8 @@ class ViabilityParams:
         lambda_leakage = float(payload.get("lambda_leakage", 0.01))
         if not (0.0 <= lambda_leakage < 1.0):
             raise ValueError("viability.lambda_leakage must be in [0, 1)")
+        lambda_reset_on_target = bool(payload.get("lambda_reset_on_target", True))
+        lambda_log_update = bool(payload.get("lambda_log_update", False))
         return cls(
             min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
             margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
@@ -93,6 +98,8 @@ class ViabilityParams:
             lambda_init=max(0.0, float(payload.get("lambda_init", 0.0))),
             lambda_learning_rate=lambda_learning_rate,
             lambda_leakage=lambda_leakage,
+            lambda_reset_on_target=lambda_reset_on_target,
+            lambda_log_update=lambda_log_update,
         )
 
     def as_mapping(self) -> dict[str, float]:
@@ -104,6 +111,8 @@ class ViabilityParams:
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
             "lambda_leakage": self.lambda_leakage,
+            "lambda_reset_on_target": self.lambda_reset_on_target,
+            "lambda_log_update": self.lambda_log_update,
         }
 
 
@@ -718,6 +727,30 @@ def _viability_shortfall_from_components(
     return raw
 
 
+def _float_component(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw.detach().item() if hasattr(raw, "detach") else raw)
+    except Exception:
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _signed_availability_gap(
+    components: dict[str, Any],
+    *,
+    params: ViabilityParams,
+    min_availability_key: str,
+) -> float | None:
+    a_min = _float_component(components.get(min_availability_key))
+    if a_min is None:
+        return None
+    return float(params.availability_target) - a_min
+
+
 def update_viability_lambda(
     viability_lambda: float,
     components: dict[str, Any],
@@ -725,29 +758,45 @@ def update_viability_lambda(
     params: ViabilityParams | None,
     shortfall_key: str = "viability_shortfall",
     shortfall_raw_key: str = "viability_penalty_raw",
+    min_availability_key: str = "viability_min_availability",
 ) -> float:
-    """Dual ascent with optional leakage: lambda <- max(0, (1-rho)*lambda + eta*(S-eps))."""
+    """
+    Dual ascent on signed availability gap: gap = A* - E[A_min].
+
+    When ``lambda_reset_on_target`` is true and gap <= shortfall_tolerance, reset
+    to ``lambda_init`` instead of winding up λ across satisfied decisions.
+
+    ``lambda_log_update`` applies multiplicative steps ``λ <- λ * exp(η * gap)`` for
+    scale-stable learning when λ is large.
+    """
 
     if params is None:
         return float(viability_lambda)
-    raw = _viability_shortfall_from_components(
+    gap = _signed_availability_gap(
         components,
-        shortfall_key=shortfall_key,
-        shortfall_raw_key=shortfall_raw_key,
+        params=params,
+        min_availability_key=min_availability_key,
     )
-    if raw is None:
-        return float(viability_lambda)
-    try:
-        shortfall = float(raw.detach().item() if hasattr(raw, "detach") else raw)
-    except Exception:
-        return float(viability_lambda)
-    if not math.isfinite(shortfall):
-        return float(viability_lambda)
+    if gap is None:
+        raw = _viability_shortfall_from_components(
+            components,
+            shortfall_key=shortfall_key,
+            shortfall_raw_key=shortfall_raw_key,
+        )
+        shortfall = _float_component(raw)
+        if shortfall is None:
+            return float(viability_lambda)
+        gap = shortfall
+    eps = float(params.shortfall_tolerance)
+    if params.lambda_reset_on_target and gap <= eps:
+        return max(0.0, float(params.lambda_init))
     lam = effective_viability_lambda(viability_lambda, params)
     eta = float(params.lambda_learning_rate)
-    eps = float(params.shortfall_tolerance)
     rho = float(params.lambda_leakage)
-    return max(0.0, (1.0 - rho) * lam + eta * (shortfall - eps))
+    if params.lambda_log_update:
+        lam_safe = max(lam, 1e-12)
+        return max(0.0, lam_safe * math.exp(eta * gap))
+    return max(0.0, (1.0 - rho) * lam + eta * gap)
 
 
 def validity_book_shortfall(
