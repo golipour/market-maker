@@ -8,6 +8,7 @@ from mm.core.wallet import (
     normalize_snapshot_balances_for_open_orders,
     order_collateral_from_open_orders,
     portfolio_wealth,
+    reconcile_inflated_locked_wallet_balance,
     wallet_legs_from_available_and_locked,
     wallet_legs_from_total_and_locked,
     wallet_pair_from_snapshot,
@@ -135,3 +136,30 @@ def test_wallet_pair_from_snapshot_exposes_breakdown() -> None:
 
 def test_portfolio_wealth_enforces_floor() -> None:
     assert portfolio_wealth(0.0, 0.0, 100.0) == 1e-8
+
+
+def test_reconcile_inflated_locked_wallet_balance_nobitex_locked_added_without_free_drop() -> None:
+    previous = make_balance("nobitex", "IRT", 17_939_224.39, 0.0, 1, total=17_939_224.39)
+    incoming = make_balance(
+        "nobitex",
+        "IRT",
+        17_939_224.39,
+        7_160_381.44,
+        2,
+        total=25_099_605.83,
+    )
+
+    reconciled = reconcile_inflated_locked_wallet_balance(previous, incoming)
+
+    assert reconciled.total == 17_939_224.39
+    assert reconciled.locked == 7_160_381.44
+    assert reconciled.free == 10_778_842.95
+
+
+def test_reconcile_inflated_locked_wallet_balance_keeps_proper_available_update() -> None:
+    previous = make_balance("nobitex", "IRT", 9_960_016.47, 0.0, 1, total=9_960_016.47)
+    incoming = make_balance("nobitex", "IRT", 8_855_335.47, 1_104_681.0, 2, total=9_960_016.47)
+
+    reconciled = reconcile_inflated_locked_wallet_balance(previous, incoming)
+
+    assert reconciled is incoming

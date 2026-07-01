@@ -247,11 +247,32 @@ def _migrate_venue_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     return out, changed
 
 
+def _migrate_warm_start(payload: dict[str, Any]) -> bool:
+    ws = payload.get("warm_start")
+    if isinstance(ws, bool):
+        enabled = bool(ws)
+        payload["warm_start"] = {
+            "enabled": enabled,
+            "preserve_optimizer_state": enabled,
+            "alpha": 1.0 if enabled else 0.0,
+            "alpha_mode": "fixed",
+            "alpha_max": 0.95,
+            "grad_norm_eps": 1e-12,
+        }
+        return True
+    if ws is None:
+        canonical = _canonical_optimizer().get("warm_start")
+        if isinstance(canonical, dict):
+            payload["warm_start"] = copy.deepcopy(canonical)
+            return True
+    return False
+
+
 def _migrate_optimizer(payload: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(payload, dict):
         return {}, False
     out = dict(payload)
-    changed = False
+    changed = _migrate_warm_start(out)
     for venue in ("local", "global"):
         if venue in out and isinstance(out[venue], dict):
             migrated, venue_changed = _migrate_venue_optimizer(out[venue])

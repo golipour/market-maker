@@ -29,7 +29,10 @@ from mm.mpc.objective_terms import (
     viability_theta_from_lambda_init,
     viability_path_shortfall,
 )
-from mm.mpc.mpc_state import OrderbookRelative, SigmoidMixtureAction, State
+from mm.mpc.warm_start import (
+    prepare_warm_start_initial_flat,
+    warm_action_from_mpc_state,
+)
 from mm.mpc.mpc_tensor_batched import (
     _book_cumulative_from_arrays,
     _book_cumulative_from_ob_rel,
@@ -188,22 +191,39 @@ def optimize_joint_with_diagnostics(
         optimizer=mpc.global_optimizer,
     )
 
-    one_action = None
-    if mpc.warm_start and mpc._last_raw_flat is not None:
-        one_action = _finite_action_flat_or_none(mpc._last_raw_flat, joint_step_len)
-    if one_action is None:
-        local_action = _initial_action_uniform_marginal_qrange(
-            n_components=local_n,
-            spread_max=mpc.spread_max,
-            l_param=local_l_param,
+    local_action = _initial_action_uniform_marginal_qrange(
+        n_components=local_n,
+        spread_max=mpc.spread_max,
+        l_param=local_l_param,
+    )
+    global_action = _initial_action_uniform_marginal_qrange(
+        n_components=global_n,
+        spread_max=mpc.spread_max,
+        l_param=global_l_param,
+    )
+    u_default = np.concatenate([local_action, global_action])
+    u_warm = warm_action_from_mpc_state(
+        params=mpc.warm_start,
+        last_raw_flat=mpc._last_raw_flat,
+        last_action_flat=None,
+        expected_len=joint_step_len,
+        finite_flat_or_none=_finite_action_flat_or_none,
+    )
+    needs_adaptive_probe = (
+        mpc.warm_start.enabled
+        and u_warm is not None
+        and mpc.warm_start.alpha_mode == "adaptive"
+    )
+    if needs_adaptive_probe:
+        x0_arr = np.tile(u_default, mpc.horizon)
+        warm_meta: dict[str, float] = {}
+    else:
+        x0_arr, warm_meta = prepare_warm_start_initial_flat(
+            params=mpc.warm_start,
+            u_default=u_default,
+            u_warm=u_warm,
+            horizon=mpc.horizon,
         )
-        global_action = _initial_action_uniform_marginal_qrange(
-            n_components=global_n,
-            spread_max=mpc.spread_max,
-            l_param=global_l_param,
-        )
-        one_action = np.concatenate([local_action, global_action])
-    x0_arr = np.tile(one_action, mpc.horizon)
 
     local_bounds = _bounds_effective_to_raw(mpc.local_bounds)[:local_venue_len]
     global_bounds = _bounds_effective_to_raw(mpc.global_bounds)[:global_venue_len]
@@ -218,7 +238,7 @@ def optimize_joint_with_diagnostics(
     else:
         with torch_mod.no_grad():
             mpc._x_torch.data = torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
-        if not mpc.warm_start:
+        if not mpc.warm_start.enabled or not mpc.warm_start.preserve_optimizer_state:
             mpc._optimizer = torch_mod.optim.Adam([mpc._x_torch], lr=mpc.adam_lr)
     x_torch = mpc._x_torch
     optimizer = mpc._optimizer
@@ -338,6 +358,7 @@ def optimize_joint_with_diagnostics(
         "global_wealth_contrib_mean": 0.0,
     }
     t0 = time.perf_counter()
+    adaptive_warm_resolved = not needs_adaptive_probe
 
     for epoch in range(mpc.adam_epochs):
         if mpc.verbose:
@@ -348,7 +369,7 @@ def optimize_joint_with_diagnostics(
                 f"global {_format_action_verbose(global_flat, global_n)}"
             )
 
-        def closure():
+        def closure(probe_only: bool = False):
             nonlocal batch_time_sec, initial_metrics, final_metrics
             nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
             optimizer.zero_grad()
@@ -884,29 +905,30 @@ def optimize_joint_with_diagnostics(
             J_mean_next_raw = torch_mod.nan_to_num(
                 step_reward_0.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
             )
-            epoch_metrics = EpochObjectiveMetrics.from_tensors(
-                objective_value=_finite_item(J),
-                components={k: _finite_item(v) for k, v in components.items()},
-                expected_total_reward=_finite_item(J_mean_raw),
-                expected_total_return=_finite_item(J_return_raw),
-                expected_next_reward=_finite_item(J_mean_next_raw),
-                main_reward_mean=_finite_item(local_reward_raw),
-                global_reward_mean=_finite_item(global_reward_raw),
-            )
-            mpc._last_J_components = dict(epoch_metrics.components)
-            if initial_metrics is None:
-                initial_metrics = epoch_metrics
-            final_metrics = epoch_metrics
-            mpc._last_J_mean_raw = epoch_metrics.expected_total_reward
-            mpc._last_E_dW_next = epoch_metrics.expected_next_reward
-            mpc._last_main_reward_mean = _finite_item(local_reward_raw)
-            mpc._last_global_reward_mean = _finite_item(global_reward_raw)
-            joint_diag_accum["local_fill_bid_mean"] = float(local_fill_bid_sum.detach().item())
-            joint_diag_accum["local_fill_ask_mean"] = float(local_fill_ask_sum.detach().item())
-            joint_diag_accum["global_fill_bid_mean"] = float(global_fill_bid_sum.detach().item())
-            joint_diag_accum["global_fill_ask_mean"] = float(global_fill_ask_sum.detach().item())
-            joint_diag_accum["local_wealth_contrib_mean"] = _finite_item(local_reward_raw)
-            joint_diag_accum["global_wealth_contrib_mean"] = _finite_item(global_reward_raw)
+            if not probe_only:
+                epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                    objective_value=_finite_item(J),
+                    components={k: _finite_item(v) for k, v in components.items()},
+                    expected_total_reward=_finite_item(J_mean_raw),
+                    expected_total_return=_finite_item(J_return_raw),
+                    expected_next_reward=_finite_item(J_mean_next_raw),
+                    main_reward_mean=_finite_item(local_reward_raw),
+                    global_reward_mean=_finite_item(global_reward_raw),
+                )
+                mpc._last_J_components = dict(epoch_metrics.components)
+                if initial_metrics is None:
+                    initial_metrics = epoch_metrics
+                final_metrics = epoch_metrics
+                mpc._last_J_mean_raw = epoch_metrics.expected_total_reward
+                mpc._last_E_dW_next = epoch_metrics.expected_next_reward
+                mpc._last_main_reward_mean = _finite_item(local_reward_raw)
+                mpc._last_global_reward_mean = _finite_item(global_reward_raw)
+                joint_diag_accum["local_fill_bid_mean"] = float(local_fill_bid_sum.detach().item())
+                joint_diag_accum["local_fill_ask_mean"] = float(local_fill_ask_sum.detach().item())
+                joint_diag_accum["global_fill_bid_mean"] = float(global_fill_bid_sum.detach().item())
+                joint_diag_accum["global_fill_ask_mean"] = float(global_fill_ask_sum.detach().item())
+                joint_diag_accum["local_wealth_contrib_mean"] = _finite_item(local_reward_raw)
+                joint_diag_accum["global_wealth_contrib_mean"] = _finite_item(global_reward_raw)
             loss = -J
             if not torch_mod.isfinite(loss):
                 nonfinite_loss_count += 1
@@ -920,7 +942,40 @@ def optimize_joint_with_diagnostics(
                         torch_mod.nn.utils.clip_grad_norm_([x_torch], mpc.adam_grad_clip)
             return loss
 
-        loss = optimizer.step(closure)
+        if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
+
+            def _grad_norm_probe(one_flat: np.ndarray) -> float:
+                tiled = np.tile(one_flat, mpc.horizon)
+                with torch_mod.no_grad():
+                    x_torch.data.copy_(
+                        torch_mod.tensor(tiled, dtype=dtype, device=_device)
+                    )
+                optimizer.zero_grad()
+                closure(probe_only=True)
+                if x_torch.grad is None:
+                    return 0.0
+                grad_norm = float(x_torch.grad.detach().norm().item())
+                if not math.isfinite(grad_norm):
+                    return 0.0
+                return grad_norm
+
+            x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                params=mpc.warm_start,
+                u_default=u_default,
+                u_warm=u_warm,
+                horizon=mpc.horizon,
+                grad_norm_probe=_grad_norm_probe,
+            )
+            with torch_mod.no_grad():
+                x_torch.data.copy_(
+                    torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
+                )
+            if not (mpc.warm_start.enabled and mpc.warm_start.preserve_optimizer_state):
+                mpc._optimizer = torch_mod.optim.Adam([x_torch], lr=mpc.adam_lr)
+                optimizer = mpc._optimizer
+            adaptive_warm_resolved = True
+
+        loss = optimizer.step(lambda: closure(probe_only=False))
         if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
             best_loss = loss.item()
             best_x = last_eval_x.detach().clone()
@@ -979,7 +1034,7 @@ def optimize_joint_with_diagnostics(
     mpc._last_joint_action = joint_action
     mpc._last_global_sigmoid_action = best_global if global_active else None
     mpc._last_sigmoid_action = best_local
-    if mpc.warm_start:
+    if mpc.warm_start.enabled:
         mpc._last_action = best_local
         mpc._last_raw_flat = np.array(best_joint_flat, dtype=np.float64)
 
@@ -1043,6 +1098,8 @@ def optimize_joint_with_diagnostics(
             "reference_price_source": reference_price_source,
             "wealth_0": wealth_0,
             "objective_normalize": mpc.objective_normalize.as_mapping(),
+            "warm_start": mpc.warm_start.as_mapping(),
+            "warm_start_resolved": warm_meta,
             "local_optimizer": local_opt.as_config(
                 spread_max=mpc.spread_max,
                 n_components=local_n,

@@ -72,6 +72,52 @@ def reported_wallet_total(balance: Balance | None) -> float:
     return float(balance.free) + float(balance.locked)
 
 
+def _balance_reconcile_tolerance(*values: float) -> float:
+    scale = max((abs(value) for value in values), default=1.0)
+    return max(1.0, 1e-9 * scale)
+
+
+def reconcile_inflated_locked_wallet_balance(
+    previous: Balance | None,
+    incoming: Balance,
+) -> Balance:
+    """Correct wallet rows where locked collateral was added without reducing ``free``.
+
+    Nobitex intermittently reports ``balance``/``activeBalance`` as the full wallet
+    total while also exposing ``blocked``/``blockedBalance``. Parsers that treat the
+    available leg as spendable compute ``total = free + locked`` and inflate holdings
+    by the locked amount even though economic wealth is unchanged.
+    """
+
+    if previous is None:
+        return incoming
+
+    prev_total = reported_wallet_total(previous)
+    if prev_total <= _BALANCE_EPS:
+        return incoming
+
+    new_total = reported_wallet_total(incoming)
+    new_free = float(incoming.free)
+    new_locked = max(0.0, float(incoming.locked))
+    if new_locked <= _BALANCE_EPS:
+        return incoming
+
+    tol = _balance_reconcile_tolerance(prev_total, new_total, new_free, new_locked)
+    free_holds_prev_total = abs(new_free - prev_total) <= tol
+    total_grew_by_locked = abs(new_total - prev_total - new_locked) <= tol
+    if free_holds_prev_total and total_grew_by_locked:
+        legs = wallet_legs_from_total_and_locked(prev_total, new_locked)
+        return make_balance(
+            incoming.exchange,
+            incoming.asset,
+            legs["free"],
+            legs["locked"],
+            int(incoming.timestamp_ms),
+            total=legs["total"],
+        )
+    return incoming
+
+
 def order_collateral_from_open_orders(
     open_orders: Mapping[str, OpenOrder] | None,
     *,

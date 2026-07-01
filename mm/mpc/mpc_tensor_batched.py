@@ -44,7 +44,12 @@ from mm.mpc.objective_terms import (
     viability_path_shortfall,
     viability_theta_from_lambda_init,
 )
-from mm.mpc.mpc_state import State
+from mm.mpc.warm_start import (
+    WarmStartParams,
+    prepare_warm_start_initial_flat,
+    warm_action_from_mpc_state,
+)
+from mm.mpc.mpc_state import SigmoidMixtureAction, State
 from mm.core.wallet import portfolio_wealth
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
@@ -816,7 +821,7 @@ class MonteCarloMPCTensorBatched:
         adam_grad_clip: float = 10.0,
         device: str | None = None,
         bounds: list[tuple[float, float]] | None = None,
-        warm_start: bool = False,
+        warm_start: bool | dict[str, Any] | WarmStartParams | None = False,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
         return_risk_aversion_beta: float = 1.0,
@@ -843,7 +848,10 @@ class MonteCarloMPCTensorBatched:
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
         self.device = device
-        self.warm_start = warm_start
+        if isinstance(warm_start, WarmStartParams):
+            self.warm_start = warm_start
+        else:
+            self.warm_start = WarmStartParams.from_mapping(warm_start)
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
@@ -1077,18 +1085,35 @@ class MonteCarloMPCTensorBatched:
         single_len = action_param_len(n)
         param_len = self.horizon * single_len
 
-        one_action = None
-        if self.warm_start and self._last_raw_flat is not None:
-            one_action = _finite_action_flat_or_none(self._last_raw_flat, single_len)
-        if one_action is None and self.warm_start and self._last_action is not None:
-            one_action = _finite_action_flat_or_none(self._last_action.to_flat(), single_len)
-        if one_action is None:
-            one_action = _initial_action_uniform_marginal_qrange(
-                n_components=n,
-                spread_max=self.spread_max,
-                l_param=self._l_param_config(),
+        u_default = _initial_action_uniform_marginal_qrange(
+            n_components=n,
+            spread_max=self.spread_max,
+            l_param=self._l_param_config(),
+        )
+        u_warm = warm_action_from_mpc_state(
+            params=self.warm_start,
+            last_raw_flat=self._last_raw_flat,
+            last_action_flat=(
+                self._last_action.to_flat() if self._last_action is not None else None
+            ),
+            expected_len=single_len,
+            finite_flat_or_none=_finite_action_flat_or_none,
+        )
+        needs_adaptive_probe = (
+            self.warm_start.enabled
+            and u_warm is not None
+            and self.warm_start.alpha_mode == "adaptive"
+        )
+        if needs_adaptive_probe:
+            x0_arr = np.tile(u_default, self.horizon)
+            warm_meta: dict[str, float] = {}
+        else:
+            x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                params=self.warm_start,
+                u_default=u_default,
+                u_warm=u_warm,
+                horizon=self.horizon,
             )
-        x0_arr = np.tile(one_action, self.horizon)
 
         bounds_raw = _bounds_effective_to_raw(self.bounds)
         bounds_full = bounds_raw * self.horizon
@@ -1101,9 +1126,7 @@ class MonteCarloMPCTensorBatched:
         else:
             with torch_mod.no_grad():
                 self._x_torch.data = torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
-            # If warm start is disabled, do not carry Adam moments across optimize()
-            # calls; otherwise one-step updates can be dominated by stale momentum.
-            if not self.warm_start:
+            if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
                 self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
         x_torch = self._x_torch
         optimizer = self._optimizer
@@ -1192,13 +1215,14 @@ class MonteCarloMPCTensorBatched:
         nonfinite_grad_count = 0
         last_eval_x = best_x.detach().clone()
         t0 = time.perf_counter()
+        adaptive_warm_resolved = not needs_adaptive_probe
 
         for epoch in range(self.adam_epochs):
             if self.verbose:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
-            def closure():
+            def closure(probe_only: bool = False):
                 nonlocal batch_time_sec, captured_initial_components
                 nonlocal initial_metrics, final_metrics
                 nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
@@ -1504,27 +1528,28 @@ class MonteCarloMPCTensorBatched:
                         return 0.0
 
                 obj_value = _finite_item(J)
-                epoch_metrics = EpochObjectiveMetrics.from_tensors(
-                    objective_value=obj_value,
-                    components={k: _finite_item(v) for k, v in components.items()},
-                    expected_total_reward=_finite_item(J_mean_raw),
-                    expected_total_return=_finite_item(J_return_raw),
-                    expected_next_reward=_finite_item(J_mean_next_raw),
-                    main_reward_mean=_finite_item(main_reward_mean_raw),
-                    global_reward_mean=_finite_item(global_reward_mean_raw),
-                )
-                self._last_J_components = dict(epoch_metrics.components)
-                if not captured_initial_components:
-                    self._last_J_components_initial = dict(epoch_metrics.components)
-                    self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
-                    self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
-                    initial_metrics = epoch_metrics
-                    captured_initial_components = True
-                final_metrics = epoch_metrics
-                self._last_J_mean_raw = epoch_metrics.expected_total_reward
-                self._last_E_dW_next = epoch_metrics.expected_next_reward
-                self._last_main_reward_mean = epoch_metrics.main_reward_mean
-                self._last_global_reward_mean = epoch_metrics.global_reward_mean
+                if not probe_only:
+                    epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                        objective_value=obj_value,
+                        components={k: _finite_item(v) for k, v in components.items()},
+                        expected_total_reward=_finite_item(J_mean_raw),
+                        expected_total_return=_finite_item(J_return_raw),
+                        expected_next_reward=_finite_item(J_mean_next_raw),
+                        main_reward_mean=_finite_item(main_reward_mean_raw),
+                        global_reward_mean=_finite_item(global_reward_mean_raw),
+                    )
+                    self._last_J_components = dict(epoch_metrics.components)
+                    if not captured_initial_components:
+                        self._last_J_components_initial = dict(epoch_metrics.components)
+                        self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
+                        self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
+                        initial_metrics = epoch_metrics
+                        captured_initial_components = True
+                    final_metrics = epoch_metrics
+                    self._last_J_mean_raw = epoch_metrics.expected_total_reward
+                    self._last_E_dW_next = epoch_metrics.expected_next_reward
+                    self._last_main_reward_mean = epoch_metrics.main_reward_mean
+                    self._last_global_reward_mean = epoch_metrics.global_reward_mean
                 loss = -J
                 if not torch_mod.isfinite(loss):
                     nonfinite_loss_count += 1
@@ -1538,7 +1563,40 @@ class MonteCarloMPCTensorBatched:
                             torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
                 return loss
 
-            loss = optimizer.step(closure)
+            if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
+
+                def _grad_norm_probe(one_flat: np.ndarray) -> float:
+                    tiled = np.tile(one_flat, self.horizon)
+                    with torch_mod.no_grad():
+                        x_torch.data.copy_(
+                            torch_mod.tensor(tiled, dtype=dtype, device=_device)
+                        )
+                    optimizer.zero_grad()
+                    closure(probe_only=True)
+                    if x_torch.grad is None:
+                        return 0.0
+                    grad_norm = float(x_torch.grad.detach().norm().item())
+                    if not math.isfinite(grad_norm):
+                        return 0.0
+                    return grad_norm
+
+                x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                    params=self.warm_start,
+                    u_default=u_default,
+                    u_warm=u_warm,
+                    horizon=self.horizon,
+                    grad_norm_probe=_grad_norm_probe,
+                )
+                with torch_mod.no_grad():
+                    x_torch.data.copy_(
+                        torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
+                    )
+                if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
+                    self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+                    optimizer = self._optimizer
+                adaptive_warm_resolved = True
+
+            loss = optimizer.step(lambda: closure(probe_only=False))
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
                 best_x = last_eval_x.detach().clone()
@@ -1596,7 +1654,7 @@ class MonteCarloMPCTensorBatched:
         if best_main_reward_mean is not None and math.isfinite(float(best_main_reward_mean)):
             self._last_main_reward_mean = float(best_main_reward_mean)
         self._last_global_reward_mean = 0.0
-        if self.warm_start:
+        if self.warm_start.enabled:
             self._last_action = best_action
             self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
         if best_metrics is None and final_metrics is not None:
@@ -1634,6 +1692,8 @@ class MonteCarloMPCTensorBatched:
                 "vwap_depth": vwap_depth,
                 "reference_price_source": self.reference_price_source,
                 "objective_normalize": self.objective_normalize.as_mapping(),
+                "warm_start": self.warm_start.as_mapping(),
+                "warm_start_resolved": warm_meta,
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,
                     n_components=self.local_n_components,

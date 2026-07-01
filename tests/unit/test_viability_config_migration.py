@@ -143,3 +143,38 @@ def test_migrate_oversized_viability_min_viable_quote_resyncs_to_canonical() -> 
         migrated["controller"]["optimizer"]["local"]["viability"]["min_viable_quote"]
         == 50_000.0
     )
+
+
+def test_migrate_warm_start_bool_to_object() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "kind": "monte_carlo_mpc_tensor_batched",
+                "warm_start": True,
+                "local": {},
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    ws = migrated["controller"]["optimizer"]["warm_start"]
+    assert ws["enabled"] is True
+    assert ws["alpha"] == 1.0
+    assert ws["preserve_optimizer_state"] is True
+
+
+def test_migrate_missing_warm_start_merges_canonical_object() -> None:
+    payload = {
+        "controller": {
+            "optimizer": {
+                "kind": "monte_carlo_mpc_tensor_batched",
+                "local": {},
+            }
+        }
+    }
+    migrated, changed = migrate_runtime_config_mapping(payload)
+    assert changed is True
+    ws = migrated["controller"]["optimizer"]["warm_start"]
+    assert isinstance(ws, dict)
+    assert "enabled" in ws
+    assert "alpha" in ws

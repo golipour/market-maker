@@ -355,7 +355,7 @@ u* = argmin_u  (−J(u; ξ, θ_t))     via Adam,  E = adam_epochs,  lr = adam_lr
 | Adam steps | `optimizer.adam_epochs` | Inner iteration budget |
 | Learning rate | `optimizer.adam_lr` | Step size on \(u\) |
 | Gradient clip | `adam_grad_clip` (constructor) | Stability |
-| Warm start | `optimizer.warm_start` | Initialize from prior \(u\) |
+| Warm start | `optimizer.warm_start` | Prior \(u\), α-blend, optional Adam state carry-over (§9.1) |
 | Best epoch | lowest `loss = −J` | `best` action for target book |
 
 \(\theta_t\) is **fixed** for all inner epochs.
@@ -438,7 +438,7 @@ Paths are relative to `controller` in the runtime registry JSON unless noted.
 | Grid step \(\Delta\) | `orderbook_grid.spread_step` | quote units |
 | Adam epochs \(E\) | `optimizer.adam_epochs` | int |
 | Adam lr | `optimizer.adam_lr` | float |
-| Warm start | `optimizer.warm_start` | bool |
+| Warm start | `optimizer.warm_start` | bool or object (§9.1) |
 | CE EWMA normalize | `optimizer.objective_normalize.enabled` | bool |
 | CE EWMA decay | `optimizer.objective_normalize.ce_ewma_decay` | float |
 | Reference price | `optimizer.reference_price_source` | `local` / `global` |
@@ -1061,8 +1061,42 @@ This shows why **`q_min` calibration in quote currency** dominates viability beh
 
 - Adam on flattened horizon action vector.
 - `loss = −J`.
-- `adam_epochs`, `adam_grad_clip`, optional `warm_start`.
+- `adam_epochs`, `adam_grad_clip`, optional `warm_start` (§9.1).
 - Best epoch = lowest loss; target book from best clamped vector (`last_eval_x`, not post-update `x_torch`).
+
+### 9.1 Warm start (`optimizer.warm_start`)
+
+Accepts a **bool** (legacy) or object:
+
+| Key | Role |
+| --- | --- |
+| `enabled` | Use prior best action when available |
+| `preserve_optimizer_state` | Keep Adam moments across decisions (independent of init blend) |
+| `alpha` | Fixed blend weight when `alpha_mode=fixed` |
+| `alpha_mode` | `fixed` or `adaptive` |
+| `alpha_max` | Cap for adaptive α (default `0.95`) |
+| `grad_norm_eps` | ε in adaptive ratio |
+
+Per-step initializer (before tiling across horizon \(H\)):
+
+```text
+u_init = α · u_warm + (1 − α) · u_default
+```
+
+- `u_warm`: last decision’s best raw flat action (`_last_raw_flat`).
+- `u_default`: uniform marginal q-range initializer.
+- `α = 0` → cold start on default only; `α = 1` → legacy full warm start.
+- **`alpha_mode=adaptive`:** one gradient-norm probe per decision (same MC draws as inner solve):
+
+```text
+α = min(α_max, ‖∇J(u_warm)‖ / (‖∇J(u_warm)‖ + ‖∇J(u_default)‖ + ε))
+```
+
+When the warm point sits in a flat region, `‖∇J(u_warm)‖` is small → α shrinks → init moves toward `u_default` where gradient signal is stronger.
+
+Diagnostics: `optimizer.config.warm_start` (requested) and `warm_start_resolved` (resolved α, grad norms when adaptive).
+
+Legacy shorthand: `"warm_start": true` ≡ `{enabled: true, preserve_optimizer_state: true, alpha: 1.0}`; `false` ≡ disabled.
 
 Diagnostics count nonfinite loss/gradient events. No guarantee that Adam finds global optimum; nonconvexity from fills, sigmoids, and finite samples.
 

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from mm.core.wallet import make_balance, normalize_snapshot_balances_for_open_orders, reported_wallet_total
+from mm.core.wallet import (
+    make_balance,
+    normalize_snapshot_balances_for_open_orders,
+    reconcile_inflated_locked_wallet_balance,
+    reported_wallet_total,
+)
 from mm.core.asset_aliases import canonical_asset_code
 from mm.core.models.execution import Fill
 from mm.core.models.instrument import split_symbol
@@ -49,7 +54,12 @@ class PrivateStateStore:
 
     def apply_snapshot(self, snapshot: PrivateStateSnapshot) -> PrivateStateSnapshot:
         self._timestamp_ms = max(self._timestamp_ms, int(snapshot.timestamp_ms))
-        self._balances = dict(snapshot.balances)
+        reconciled: dict[str, Balance] = {}
+        for asset, balance in snapshot.balances.items():
+            key = canonical_asset_code(balance.asset)
+            previous = self._balances.get(key)
+            reconciled[key] = reconcile_inflated_locked_wallet_balance(previous, balance)
+        self._balances = reconciled
         self._ensure_economy_balances(self._balances, timestamp_ms=self._timestamp_ms)
         self._open_orders = dict(snapshot.open_orders)
         return self.snapshot()
@@ -71,13 +81,15 @@ class PrivateStateStore:
             else:
                 self._balances.pop(key, None)
         else:
+            previous = self._balances.get(key)
+            reconciled = reconcile_inflated_locked_wallet_balance(previous, balance)
             self._balances[key] = make_balance(
                 self.exchange,
                 key,
-                float(balance.free),
-                float(balance.locked),
-                int(balance.timestamp_ms),
-                total=float(balance.total),
+                float(reconciled.free),
+                float(reconciled.locked),
+                int(reconciled.timestamp_ms),
+                total=float(reconciled.total),
             )
         self._ensure_economy_balances(self._balances, timestamp_ms=self._timestamp_ms)
         return self.snapshot()
