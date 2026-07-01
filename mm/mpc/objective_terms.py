@@ -720,13 +720,88 @@ def viability_lambda_from_theta(viability_theta: float) -> float:
     return lam if math.isfinite(lam) and lam > 0.0 else 0.0
 
 
+def _viability_shortfall_raw_from_components(
+    components: dict[str, Any],
+    *,
+    component_prefix: str = "",
+) -> float | None:
+    for key in (
+        f"{component_prefix}viability_penalty_raw",
+        f"{component_prefix}viability_shortfall",
+    ):
+        value = _float_component(components.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def viability_lambda_applied_from_components(
+    components: dict[str, Any],
+    *,
+    theta_applied: float,
+    component_prefix: str = "",
+) -> float:
+    """
+    λ used in this decision's viability penalty.
+
+  Prefer ``|penalty| / shortfall`` when both are present so diagnostics match ``J``
+  even if closure-side keys were missing or stale.
+    """
+
+    shortfall = _viability_shortfall_raw_from_components(
+        components,
+        component_prefix=component_prefix,
+    )
+    penalty = _float_component(components.get(f"{component_prefix}viability_penalty"))
+    if shortfall is not None and penalty is not None and abs(shortfall) > 1e-15:
+        implied = abs(penalty) / abs(shortfall)
+        if math.isfinite(implied) and implied >= 0.0:
+            return implied
+    return viability_lambda_from_theta(theta_applied)
+
+
+def stamp_viability_dual_diagnostics(
+    components: dict[str, Any],
+    *,
+    local_theta_applied: float,
+    local_theta_learned: float,
+    global_theta_applied: float | None = None,
+    global_theta_learned: float | None = None,
+) -> None:
+    """
+    Stamp viability dual state on optimizer objective components.
+
+    - ``viability_lambda`` / ``viability_lambda_theta``: multiplier used in this decision.
+    - ``viability_lambda_learned`` / ``viability_lambda_theta_learned``: state for next decision.
+    """
+
+    components["viability_lambda"] = viability_lambda_applied_from_components(
+        components,
+        theta_applied=local_theta_applied,
+    )
+    components["viability_lambda_theta"] = float(local_theta_applied)
+    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta_learned)
+    components["viability_lambda_theta_learned"] = float(local_theta_learned)
+    if global_theta_applied is not None and global_theta_learned is not None:
+        components["global_viability_lambda"] = viability_lambda_applied_from_components(
+            components,
+            theta_applied=global_theta_applied,
+            component_prefix="global_",
+        )
+        components["global_viability_lambda_theta"] = float(global_theta_applied)
+        components["global_viability_lambda_learned"] = viability_lambda_from_theta(
+            global_theta_learned
+        )
+        components["global_viability_lambda_theta_learned"] = float(global_theta_learned)
+
+
 def stamp_learned_viability_dual(
     components: dict[str, Any],
     *,
     local_theta: float,
     global_theta: float | None = None,
 ) -> None:
-    """Record post-update dual state (λ for the next MPC decision) in diagnostics."""
+    """Deprecated: only stamps learned keys. Use ``stamp_viability_dual_diagnostics``."""
 
     components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta)
     components["viability_lambda_theta_learned"] = float(local_theta)

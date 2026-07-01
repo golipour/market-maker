@@ -4139,7 +4139,7 @@ def optimizer_diagnostics() -> dict[str, Any]:
         ),
         _panel(
             8,
-            "Viability λ (learned dual)",
+            "Viability λ (applied vs next)",
             "timeseries",
             PG_DS,
             _optimizer_viability_lambda_sql(),
@@ -5544,23 +5544,55 @@ ORDER BY 1"""
 
 
 def _optimizer_viability_lambda_sql() -> str:
-    value = _numeric_sql("kv.value", default="NULL")
-    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
-FROM mm_events e
-CROSS JOIN LATERAL jsonb_each_text(
-  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
-) AS kv
-WHERE {_diagnostics_filter()}
-  AND kv.key IN (
-    'viability_lambda',
-    'viability_lambda_learned',
-    'viability_lambda_theta',
-    'viability_lambda_theta_learned',
-    'global_viability_lambda',
-    'global_viability_lambda_learned',
-    'global_viability_lambda_theta',
-    'global_viability_lambda_theta_learned'
-  )
+    return f"""WITH comps AS (
+  SELECT e.ts,
+         COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb) AS c
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+)
+SELECT ts AS "time", metric, value
+FROM (
+  SELECT ts,
+         'λ applied (local)' AS metric,
+         COALESCE(
+           NULLIF(({_numeric_sql("c->>'viability_lambda'", default="NULL")}), 0),
+           CASE
+             WHEN abs({_numeric_sql("c->>'viability_penalty_raw'", default="0")}) > 1e-15
+             THEN abs({_numeric_sql("c->>'viability_penalty'", default="0")})
+                  / abs({_numeric_sql("c->>'viability_penalty_raw'", default="1")})
+             ELSE {_numeric_sql("c->>'viability_lambda'", default="NULL")}
+           END
+         ) AS value
+  FROM comps
+  WHERE c ? 'viability_penalty' OR c ? 'viability_lambda'
+  UNION ALL
+  SELECT ts,
+         'λ next (local)' AS metric,
+         {_numeric_sql("c->>'viability_lambda_learned'", default="NULL")} AS value
+  FROM comps
+  WHERE c ? 'viability_lambda_learned'
+  UNION ALL
+  SELECT ts,
+         'λ applied (global)' AS metric,
+         COALESCE(
+           NULLIF(({_numeric_sql("c->>'global_viability_lambda'", default="NULL")}), 0),
+           CASE
+             WHEN abs({_numeric_sql("c->>'global_viability_penalty_raw'", default="0")}) > 1e-15
+             THEN abs({_numeric_sql("c->>'global_viability_penalty'", default="0")})
+                  / abs({_numeric_sql("c->>'global_viability_penalty_raw'", default="1")})
+             ELSE {_numeric_sql("c->>'global_viability_lambda'", default="NULL")}
+           END
+         ) AS value
+  FROM comps
+  WHERE c ? 'global_viability_penalty' OR c ? 'global_viability_lambda'
+  UNION ALL
+  SELECT ts,
+         'λ next (global)' AS metric,
+         {_numeric_sql("c->>'global_viability_lambda_learned'", default="NULL")} AS value
+  FROM comps
+  WHERE c ? 'global_viability_lambda_learned'
+) s
+WHERE value IS NOT NULL
 ORDER BY 1"""
 
 

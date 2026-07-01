@@ -25,6 +25,8 @@ from mm.mpc.objective_terms import (
     viability_path_shortfall,
     viability_theta_from_lambda_init,
     stamp_learned_viability_dual,
+    stamp_viability_dual_diagnostics,
+    viability_lambda_applied_from_components,
 )
 
 
@@ -272,6 +274,40 @@ def test_stamp_learned_viability_dual_records_post_update_state() -> None:
     )
     assert components["viability_lambda_learned"] == pytest.approx(3.0)
     assert components["global_viability_lambda_learned"] == pytest.approx(2.0)
+
+
+def test_stamp_viability_dual_diagnostics_sets_applied_and_learned() -> None:
+    components = {
+        "viability_penalty": -0.4,
+        "viability_penalty_raw": 0.2,
+    }
+    theta_applied = math.log(2.0)
+    theta_learned = math.log(3.0)
+    stamp_viability_dual_diagnostics(
+        components,
+        local_theta_applied=theta_applied,
+        local_theta_learned=theta_learned,
+        global_theta_applied=math.log(1.5),
+        global_theta_learned=math.log(2.5),
+    )
+    assert components["viability_lambda"] == pytest.approx(2.0)
+    assert components["viability_lambda_theta"] == pytest.approx(theta_applied)
+    assert components["viability_lambda_learned"] == pytest.approx(3.0)
+    assert components["global_viability_lambda"] == pytest.approx(1.5)
+    assert components["global_viability_lambda_learned"] == pytest.approx(2.5)
+
+
+def test_viability_lambda_applied_from_penalty_ratio_when_lambda_key_zero() -> None:
+    components = {
+        "viability_lambda": 0.0,
+        "viability_penalty": -0.02,
+        "viability_penalty_raw": 0.1,
+    }
+    lam = viability_lambda_applied_from_components(
+        components,
+        theta_applied=viability_theta_from_lambda_init(0.0),
+    )
+    assert lam == pytest.approx(0.2)
 
 
 def test_viability_from_mapping_rejects_removed_dual_keys() -> None:

@@ -7,7 +7,9 @@ Related implementation references:
 - `mm.strategies.mpc_engine.MpcStrategyEngine`
 - `mm.mpc.mpc_tensor_batched.MonteCarloMPCTensorBatched`
 - `mm.mpc.joint_optimizer.optimize_joint_with_diagnostics` (liquidity-sourcing mode)
-- `mm.mpc.objective_terms` (book quality, inventory zone, normalization)
+- `mm.mpc.objective_terms` (book quality, validity, viability availability, dual λ, CE normalization)
+- `docs/viability_term.md` (conceptual motivation for availability vs CE)
+- `docs/validity_term.md` (validity gate design)
 - `mm.mpc.reward_tensor` (risk-adjusted return)
 - `docs/old/mpc-optimizer-implementation-details.md` (rollout timing, decoder, joint vs local-only differences)
 
@@ -22,16 +24,18 @@ The controller targets **persistent market making**: quoting over many intervals
 Operational intent includes:
 
 - Bid and ask liquidity when wallet capacity allows.
-- Wide spreads are not forbidden by the core return term; tightness is only rewarded if `w_book > 0`.
+- Wide spreads are not forbidden by the core return term; tightness enters only via **validity** when `validity.penalty_scale > 0`.
 - Depleting quote (IRT) or base (USDT) on one side removes hard capacity on that side and ends two-sided quoting in simulation.
 
 Implemented mechanisms that relate to this intent:
 
 | Mechanism | Type | Role |
 | --- | --- | --- |
-| `bid_max = cash/mid`, `ask_max = inventory` | Hard | Cannot simulate quotes beyond wallet totals |
-| `w_book · B` | Soft (optional) | Rewards presence, tightness, balance, uniformity at h=0 |
-| `−w_inv · Z̄` | Soft (optional) | Penalizes imbalanced inventory **paths** in simulation |
+| `bid_max = cash/mid`, `ask_max = inventory` | Hard | Cannot simulate quotes beyond wallet totals in rollout |
+| `−μ · max(0, B_min − B)` | Soft (optional) | **Validity** — penalizes poor h=0 book shape (`validity` block) |
+| `−λ · 𝒮` | Soft (optional) | **Viability** — penalizes low terminal two-sided **availability** along MC paths (`viability` block); `λ` adapts online |
+
+`w_book` and `w_inv` / `inventory_zone` were **removed**. Book scoring still exists via `book_quality.soft_scoring`, but enters `J` only through the validity gate (§7.3–7.4), not as a direct reward term.
 
 Current capacity decoder sets `bid_min = ask_min = 0`. There is **no hard minimum quote per side** at the capacity layer. `cumulative_qty_floor_at_spread_max` affects spread-structure decode at `spread_max`, but mins are clamped to feasible capacity and can be zero when a side has no free balance.
 
@@ -39,21 +43,15 @@ Current capacity decoder sets `bid_min = ask_min = 0`. There is **no hard minimu
 
 Profitability enters through **risk-adjusted horizon return** on simulated mark-to-market wealth, with maker fees and a differentiable soft-fill model. The optimizer maximizes CE (see §7.1). A separate **negative-objective policy** (§9) may alter the action when CE is negative; that policy is outside `J`.
 
-### 1.3 Inventory balance (50/50 economic value)
+### 1.3 Availability vs profitability (design split)
 
-The inventory zone uses wallet imbalance:
+The objective deliberately separates:
 
-```text
-wallet_imbalance = (Q·mid − cash) / (|Q·mid| + |cash| + ε)
-```
+- **CE (§7.1)** — risk-adjusted **return** on simulated wealth (price + fill uncertainty).
+- **Validity (§7.3)** — is the **h=0 quote shape** acceptable (spread/depth/balance/uniformity score)?
+- **Viability (§7.5–7.6)** — after simulating orderflow and fills over the horizon, is **two-sided quoting capacity** still above target?
 
-- `imbalance = 0` → equal **value** in base and quote (not equal units).
-- `imbalance < 0` → more quote value than base value (cash-heavy in this convention).
-- `imbalance > 0` → more base value than quote value.
-
-Comfort band defaults: `[comfort_low, comfort_high] = [−0.2, +0.2]` with sigmoid ramps outside.
-
-This 50/50 target is **in the MPC objective only**. Registry allocation caps, risk limits, and physical exchange balances are separate controls and may not match this target.
+Viability uses **total** wallet balances (`free + locked`, see §3.1). It does not model exchange min-notional, tick size, or free-vs-locked separately. Registry allocation caps, risk limits, and physical exchange balances remain outside `J`.
 
 ### 1.4 Outside the optimizer objective
 
@@ -211,27 +209,45 @@ Local and global books evolve in parallel; consolidated wealth drives CE. VWAP t
 
 ## 7. Scalar objective `J`
 
+The optimizer **maximizes** `J`. Adam minimizes `loss = −J`.
+
+### 7.0 Combined form
+
 **Local-only optimizer:**
 
 ```text
-J = CE_eff + w_book · B − w_inv · Z̄
+J = CE_eff − μ · max(0, B_min − B) − λ · 𝒮
 ```
 
-**Joint / liquidity-sourcing optimizer** (consolidated CE plus per-venue soft terms):
+**Joint / liquidity-sourcing optimizer** (consolidated CE; per-venue validity and viability):
 
 ```text
 J = CE_eff
-    + w_book_local · B_local − w_inv_local · Z̄_local
-    + w_book_global · B_global − w_inv_global · Z̄_global
+    − μ_local · max(0, B_min,local − B_local) − λ_local · 𝒮_local
+    − μ_global · max(0, B_min,global − B_global) − λ_global · 𝒮_global
 ```
 
-Component keys: `book_quality`, `inventory_zone_penalty`, `global_book_quality`, `global_inventory_zone_penalty`. Local and global inventory zones may use different `comfort_*` and `w_inv` blocks.
+| Symbol | Config / state | Code component key |
+| --- | --- | --- |
+| `CE_eff` | `objective_normalize` | `risk_adjusted_return` |
+| `B` | `book_quality` + `validity.min_score` | `validity_book_score` (unweighted); penalty in `validity_penalty` |
+| `μ` | `validity.penalty_scale` | fixed per venue |
+| `𝒮` | `viability` block + dual `λ` | `viability_penalty_raw` (unweighted); penalty in `viability_penalty` |
+| `λ` | `exp(θ)` from persisted `θ` | `viability_lambda` (closure); `viability_lambda_learned` (post-update) |
 
-Evaluation timing:
+**Removed:** `w_book`, `w_inv`, `inventory_zone`, and all `inventory_zone_*` diagnostics keys.
 
-- **CE, combined `J`:** from terminal closure using the candidate action vector at end of closure evaluation.
-- **Book quality `B`:** decoded action at **horizon step 0 only**.
-- **Inventory `Z̄`:** mean of `Z(imb)` over **simulated path** across horizon steps (and MC paths).
+**Evaluation timing:**
+
+| Term | When evaluated | Differentiable w.r.t. action? |
+| --- | --- | --- |
+| CE | Terminal closure over full horizon rollout | Yes (via fills, marks, fees) |
+| Validity `B` | **Horizon step 0** decoded action only | Yes (h=0 action slice) |
+| Viability `𝒮` | **Terminal** wallet after simulated horizon fills | Yes (via rollout path) |
+
+During one `optimize()` call, **`λ` (via `θ`) is fixed** for all Adam epochs. It updates **once** after the decision completes (§7.6).
+
+---
 
 ### 7.1 Risk-adjusted return (CE)
 
@@ -249,28 +265,22 @@ W_0    = max(1e-8, cash_0 + inventory_0 · mark_0)
 
 #### Entropic certainty equivalent
 
-Per-path horizon returns `R_i` (wealth-normalized), batch size `N`:
-
-```text
-CE = min_i(R_i) − (1/β) · ln( (1/N) Σ_i exp(−β · (R_i − min_i(R_i))) )
-```
-
-Equivalent stable form (implemented via `logsumexp`):
+Per-path horizon returns `R_i`, batch size `N`, `β = return_risk_aversion_beta`:
 
 ```text
 CE = min_i(R_i) − (1/β) · logsumexp_i(−β · (R_i − min_i(R_i))) + (1/β) · ln(N)
 ```
-
-`β = return_risk_aversion_beta` (venue-scoped). `σ` in inventory zone (§7.4) is unrelated; here `β` is risk aversion only.
 
 Properties:
 
 - Soft minimum / entropic certainty equivalent over paths.
 - Sensitive to tail paths, not only mean return.
 - Units: dimensionless return after dividing by `W_0`.
-- When all paths have zero tradeable capacity or zero `ΔW`, `R_i = 0` for all `i` → **CE = 0**.
+- When all paths have zero tradeable capacity or zero `ΔW`, `R_i = 0` ∀i → **CE = 0**.
 
 CE is computed from **simulated** fills and model-sampled flows, not realized live PnL.
+
+---
 
 ### 7.2 CE normalization (`objective_normalize`)
 
@@ -279,8 +289,8 @@ When `objective_normalize.enabled`:
 ```text
 CE_raw  = CE from §7.1 (before scaling)
 s       = EWMA scale from prior decisions (fixed for entire Adam loop on this frame)
-CE_norm = CE_raw / s                    # stored as risk_adjusted_return
-J       ← J − CE_raw + CE_norm          # replace raw CE term in objective
+CE_norm = CE_raw / s
+J       ← J − CE_raw + CE_norm
 ```
 
 If `s ≤ 0` on first use, `s ← max(|CE_raw|, 1e-12)` for that frame.
@@ -292,20 +302,35 @@ s_new = decay · s + (1 − decay) · |CE_raw|     if s > 0 and |CE_raw| > 0
 s_new = max(|CE_raw|, 1e-12)                    if s ≤ 0 (bootstrap)
 ```
 
-Diagnostics keys: `risk_adjusted_return_raw`, `risk_adjusted_return` (= `CE_norm`), `objective_ce_ewma_scale` (= `s` used).
+Diagnostics: `risk_adjusted_return_raw`, `risk_adjusted_return` (= `CE_norm`), `objective_ce_ewma_scale`.
 
-**Asymmetry:** Only CE is scaled. `w_book` and `w_inv` are fixed scalars on their raw scores. No coupled normalization for inventory or book terms exists in code.
+**Asymmetry:** Only CE is EWMA-normalized. Validity uses fixed `μ`; viability uses adaptive `λ`. No joint normalization across terms.
 
-When `CE_raw = 0`, CE contributes nothing to `J`; inventory and book terms remain.
+---
 
-### 7.3 Book quality (`B`, weight `w_book`)
+### 7.3 Validity term (book-shape gate)
 
-`B ∈ [0, 1]` at **horizon step 0 only** from weighted sub-scores. Let `d_bid_touch`, `d_ask_touch` be effective quoted depth at touch spread `touch = spread_max · touch_spread_fraction`, and `q_bid`, `q_ask` cumulative depth at `spread_max`:
+Validity penalizes a **low book-quality score** at the **current** (h=0) decoded action. It is **not** a reward for high `B`; only shortfall below `B_min` is penalized.
 
 ```text
-presence   = min(d_bid_touch, d_ask_touch) / (depth_target + min(d_bid_touch, d_ask_touch))
+validity_shortfall = max(0, B_min − B)        # B_min = validity.min_score
+validity_penalty   = −μ · validity_shortfall  # μ = validity.penalty_scale
+```
 
-tightness  = exp(−(x0_bid + x0_ask) / spread_target)     # first center spreads
+If `validity` is absent, `penalty_scale = 0`, or `book_score` is unavailable, the term is skipped.
+
+`B` is the **book quality score** from `book_quality_score()` (§7.4). Diagnostics store `validity_book_score` (= `B`) and `validity_penalty_raw` (= shortfall).
+
+---
+
+### 7.4 Book quality score `B` (feeds validity only)
+
+`B ∈ [0, 1]` at **horizon step 0**. Let `d_bid_touch`, `d_ask_touch` be effective quoted depth at touch spread `touch = spread_max · touch_spread_fraction`, and `q_bid`, `q_ask` cumulative depth at `spread_max`:
+
+```text
+presence   = min(d_bid_touch, d_ask_touch) / (q_ref + min(d_bid_touch, d_ask_touch))   # q_ref = presence_reference_qty
+
+tightness  = exp(−(x0_bid,0 + x0_ask,0) / tightness_spread_scale)   # first sigmoid centers
 
 q_bid_$    = q_bid · mid
 q_ask_$    = q_ask · mid
@@ -319,205 +344,266 @@ B = (v_presence·presence + v_tightness·tightness + v_balance·balance + v_unif
 B = clamp(B, 0, 1)
 ```
 
-`measure = "quoted"` uses own decoded depth only. `measure = "combined"` adds market cumulative depth at each grid level (requires market book tensors).
+`measure = "quoted"` uses own decoded depth only. `measure = "combined"` adds market cumulative depth at each grid level.
 
-```text
-book_quality_component = w_book · B
-```
+Sub-scores are stored in diagnostics (`book_presence`, `book_tightness`, `book_balance`, `book_uniformity`) but **do not** enter `J` unless `validity` maps `B` into a penalty.
 
-Diagnostics also store unweighted sub-scores: `book_presence`, `book_tightness`, `book_balance`, `book_uniformity`, and `book_quality_score` (= `B`).
+---
 
-If `w_book = 0`, no soft reward for two-sided shape; only hard capacity applies.
+### 7.5 Viability term (availability shortfall)
 
-### 7.4 Inventory zone penalty (`Z̄`, weight `w_inv`)
+Viability encodes **two-sided quoting capacity** after simulating orderflow and fills. It replaces the removed inventory-zone penalty (`w_inv · Z̄`).
 
-**Imbalance at each rollout step:**
+Conceptual target (see `docs/viability_term.md`): maximize CE subject to maintaining enough **bid and ask capacity** to place minimum viable size `q_min`. The implementation uses a **soft availability** functional and a **Lagrangian penalty** with adaptive `λ` (§7.6).
 
-```text
-imb = (Q·mid − cash) / (|Q·mid| + |cash| + ε)
-```
+#### 7.5.1 Wallet inputs
 
-**Zone penalty:**
+At each viability snapshot along a rollout path:
 
-Sigmoid: `σ(x) = 1 / (1 + exp(−x))`.
-
-Low-side ramp (penalizes cash-heavy / low base value, `imb < comfort_low`):
-
-```text
-P_lo(imb) = a_lo · σ((comfort_low − imb) / d_lo)
-```
-
-High-side ramp (penalizes base-heavy / low quote value, `imb > comfort_high`):
-
-```text
-P_hi(imb) = a_hi · σ((imb − comfort_high) / d_hi)
-```
-
-Combined normalized penalty:
-
-```text
-Z(imb) = (P_lo(imb) + P_hi(imb)) / (a_lo + a_hi)
-```
-
-Diagnostics store side means along the simulated path:
-
-```text
-inventory_zone_low_penalty  = mean_h,P P_lo(imb_h,P) / (a_lo + a_hi)
-inventory_zone_high_penalty = mean_h,P P_hi(imb_h,P) / (a_lo + a_hi)
-inventory_zone_penalty_raw  = Z̄ = mean_h,P Z(imb_h,P)
-```
-
-Default parameters (configurable per venue):
-
-| Parameter | Default | Role |
+| Variable | Code field | Meaning |
 | --- | --- | --- |
-| `comfort_low` | −0.2 | Lower comfort edge |
-| `comfort_high` | +0.2 | Upper comfort edge |
-| `low_ramp_width` | 0.05 | Ramp below band |
-| `high_ramp_width` | 0.05 | Ramp above band |
-| `low_penalty_cap` | 1.0 | Low-side cap |
-| `high_penalty_cap` | 0.6 | High-side cap |
+| `b_t` | `inventory` | Total base balance (USDT), `max(0, ·)` |
+| `q_t` | `cash` | Total quote balance (IRT), `max(0, ·)` |
+| `p_t` | `mid` | Quote per base, `max(1e-12, ·)` |
 
-`Z(imb)` is bounded in `[0, 1]` but **not zero at imb = 0** (both sigmoid tails are active at the center → floor ≈ 0.018 with default caps). Saturates ≈ 0.625 at extreme imbalance with default caps.
+Totals use **reported wallet total** (`free + locked`) from ledger/snapshot (§3.1). **Free-only balances are not used.**
 
-**Reference values (default zone, `a_lo=1.0`, `a_hi=0.6`, band ±0.2, ramps 0.05):**
+Config (`viability` block):
 
-| `imb` | Interpretation | `Z(imb)` (approx.) |
-| --- | --- | --- |
-| 0 | Balanced value **or** degenerate `Q=cash=0` | 0.018 |
-| +0.05 | Slightly base-heavy, inside comfort band | 0.021 |
-| −0.2 | At lower comfort edge | 0.125 |
-| −0.80 | ~90% quote / 10% base by value (e.g. 6 USDT + 9.3M IRT at mid 170k) | 0.625 |
-| −0.99 | Nearly all quote (e.g. 0.005 USDT + 18.7M IRT) | 0.625 |
-| +0.99 | Nearly all base | 0.375 |
+| Key | Symbol | Default | Role |
+| --- | --- | --- | --- |
+| `min_viable_quote` | `q_min` | `50000` | Minimum operational quote-notional required on **each** side |
+| `margin_buffer` | `δ` | `5000` | Sigmoid scale for soft margins (same units as margins: quote currency) |
+| `availability_target` | `A*` | `0.99` | Target terminal availability |
+| `lambda_init` | `λ_0` | `0` | Initial multiplier (maps to `θ_0`, §7.6) |
+| `lambda_learning_rate` | `η` | `0.02` | Dual learning rate |
+| `shortfall_tolerance` | `ε` | `0.05` | Parsed and stored; **not used** in the current dual update rule |
 
-At `imb ≤ −0.2`, `P_lo` saturates near `a_lo`; at `imb ≥ +0.2`, `P_hi` saturates near `a_hi`. The penalty is **path-based**: MPC penalizes simulated imbalance over the horizon, not only the current wallet snapshot.
+**Removed keys** (rejected at load): `min_quote_qty`, `margin_sharpness`, `inventory_zone`, `w_inv`, `lambda_leakage`, etc.
 
-**Path aggregate:**
+#### 7.5.2 Quote-notional margins (both sides in quote currency)
 
 ```text
-Z̄ = mean_h,Z Z(imb_h)   (over horizon and MC batch in practice)
+m_bid(t) = q_t − q_min
+m_ask(t) = b_t · p_t − q_min
 ```
 
-**Weighted term:**
+Interpretation:
+
+- `m_bid > 0` → total quote exceeds minimum required to fund bids.
+- `m_ask > 0` → base notional exceeds minimum required to fund asks.
+- Margins are in **quote currency** (IRT for USDT_IRT), not unitless ratios.
+
+#### 7.5.3 Soft side availability
+
+Logistic sigmoid `σ(x) = 1 / (1 + e^{−x})`:
 
 ```text
-inventory_zone_penalty = −w_inv · Z̄
+a_bid(t) = σ(m_bid(t) / δ)
+a_ask(t) = σ(m_ask(t) / δ)
+Ã(t)     = a_bid(t) · a_ask(t)     ∈ [0, 1]
 ```
 
-Diagnostics:
+`Ã` is **multiplicative**: one dead side drives availability to ~0 even if the other side is ample.
 
-| Key | Meaning |
+**Reference:** with `δ = 5000` IRT, `m = 0` gives `σ(0) = 0.5` per side, so `Ã = 0.25` at exactly `q_min` on both legs. Large positive margins saturate `σ` → 1.
+
+Diagnostics (batch means over path/time unless noted):
+
+| Key | Maps to |
 | --- | --- |
-| `inventory_zone_penalty_raw` | `Z̄` (unweighted) |
-| `inventory_zone_imbalance` | Mean `imb` along **simulated path** |
-| `inventory_zone_low_penalty` / `high_penalty` | Side breakdown |
+| `viability_bid_margin` | mean `m_bid` |
+| `viability_ask_margin` | mean `m_ask` |
+| `viability_base_notional` | mean `b · p` |
+| `viability_step_availability` | mean `Ã` |
+| `viability_min_availability` | mean terminal `Ã_H` (see below) |
 
-**Ambiguous case `imb = 0`:** Can mean economically balanced wallet, or `cash = inventory = 0` (formula gives 0), or near-zero wealth with numerical ε. `inventory_zone_imbalance` in diagnostics does not by itself distinguish these; read alongside `state.local_*` and wallet legs.
+#### 7.5.4 Rollout path snapshots
 
-### 7.5 Combined objective and components
+During each Adam closure, for each MC sample, the rollout records wallet/mid snapshots:
 
 ```text
-J = CE_eff + w_book · B − w_inv · Z̄
+index 0:  (b_0, q_0, p_0)     initial wallet before horizon step 0
+index 1:  after step 0 soft_fill + book evolution
+…
+index H:  after step H−1       terminal post-fill state
 ```
 
-`CE_eff` = normalized CE if enabled, else raw CE.
+Path tensors have shape `(N_paths, H+1)`. Snapshots after each step use **post-fill** `(inventory, cash, mid)` from `soft_fill_batched` and evolved orderbook mids.
 
-Stored weighted components (representative keys):
+Viability reads **terminal availability only**:
+
+```text
+Ã_H^(i) = Ã(b_H^(i), q_H^(i), p_H^(i))     last column of path i
+```
+
+**Design note:** Shortfall uses `Ã_H`, not `min_h Ã_h` along the path. Simulated fills over the horizon can **improve** terminal availability relative to an early depleted step; the path minimum is intentionally **not** used (see `viability_path_shortfall` docstring).
+
+#### 7.5.5 Per-path and batch shortfall
+
+```text
+S^(i) = max(0, A* − Ã_H^(i))
+𝒮     = (1/N) Σ_i S^(i)        # viability_penalty_raw / viability_shortfall
+```
+
+```text
+viability_penalty = −λ · 𝒮
+```
+
+Gradients flow: action → fills → terminal `(b_H, q_H, p_H)` → `Ã_H` → `𝒮` → `J`.
+
+---
+
+### 7.6 Dual optimization for `λ` (log-space)
+
+Viability uses a **primal–dual** pattern: `λ` is not hand-tuned each frame like `w_inv`; it is **state** on the `MonteCarloMPCTensorBatched` instance, persisted across controller decisions.
+
+#### 7.6.1 Multiplier parameterization
+
+```text
+λ = exp(θ)     θ ∈ ℝ
+θ_0 = ln(max(λ_init, ε_floor))     ε_floor = 1e-300
+```
+
+If `λ_init = 0`, then `θ_0 = ln(ε_floor)` and `λ = 0` (no viability penalty until `θ` increases).
+
+Implementation: `viability_theta_from_lambda_init`, `viability_lambda_from_theta` in `objective_terms.py`. State: `mpc._viability_theta_local`, `mpc._viability_theta_global` (joint mode).
+
+#### 7.6.2 Closure vs between-decision updates
+
+**Inside Adam closure** (each epoch, each `optimize()` call):
+
+```text
+λ_closure = exp(θ_t)              # θ_t fixed for all epochs
+J        ← J − λ_closure · 𝒮     # combine_viability_term
+```
+
+`θ` does **not** update during Adam; only the action vector changes.
+
+**After `optimize()` completes** (once per controller decision):
+
+```text
+Ā_H = mean_i(Ã_H^(i))            # from diagnostics: viability_min_availability
+gap = A* − Ā_H                   # signed availability gap
+θ_{t+1} = θ_t + η · gap
+λ_{t+1} = exp(θ_{t+1})
+```
+
+Implementation: `update_viability_theta`. Joint mode updates local and global `θ` separately from `viability_min_availability` and `global_viability_min_availability`.
+
+**Dual dynamics:**
+
+| Situation | `gap` | Effect on `θ`, `λ` |
+| --- | --- | --- |
+| Terminal availability below target (`Ā_H < A*`) | `> 0` | `θ` increases → `λ` increases → stronger viability penalty next decision |
+| Terminal availability above target (`Ā_H > A*`) | `< 0` | `θ` decreases → `λ` decreases → weaker penalty next decision |
+| At target (`Ā_H = A*`) | `0` | `θ` unchanged |
+
+There is **no** `ε` tolerance in the update rule (unlike classical `λ ← λ + η(S − ε)` on shortfall). `shortfall_tolerance` in config is currently **inert**.
+
+#### 7.6.3 Diagnostics: which `λ` to read
+
+| Key | When | Meaning |
+| --- | --- | --- |
+| `viability_lambda` | After optimize stamp | `λ` used in **this** decision's penalty (reconciled from `|penalty|/shortfall` when needed) |
+| `viability_lambda_theta` | After optimize stamp | `θ` at start of this decision (before dual update) |
+| `viability_lambda_learned` | After optimize stamp | `exp(θ_{t+1})` for **next** decision |
+| `viability_lambda_theta_learned` | After optimize stamp | `θ_{t+1}` |
+
+`stamp_viability_dual_diagnostics()` runs on initial/final/best snapshots after the dual update, overwriting closure-side `viability_lambda` keys so they match the multiplier that shaped `viability_penalty`.
+
+**Identity (per decision):**
+
+```text
+viability_penalty ≈ − viability_lambda · viability_penalty_raw
+```
+
+Use `viability_lambda_learned` when correlating the **next** tick's penalty strength with the prior update.
+
+#### 7.6.4 Constrained optimization interpretation
+
+The implemented penalty is the Lagrangian form of:
+
+```text
+maximize_π  CE_eff(π)
+subject to  E[Ã_H] ≥ A*     (softened via 𝒮)
+```
+
+`λ` rises when the constraint is violated (low terminal availability) and falls when the constraint is slack. Unlike fixed `w_inv`, the trade-off against CE **adapts**, but:
+
+- Only **terminal** availability enters `𝒮` (not path-min).
+- `λ` is fixed during the inner Adam solve (no inner dual loop).
+- CE may still dominate if `λ` is small or `𝒮` is small (e.g. saturated sigmoid with miscalibrated `q_min`).
+
+---
+
+### 7.7 Combined objective and component keys
+
+```text
+J = CE_eff − μ · max(0, B_min − B) − λ · 𝒮        # local-only
+```
+
+Representative diagnostics keys:
 
 | Key | Value stored |
 | --- | --- |
-| `risk_adjusted_return` | CE_eff |
-| `risk_adjusted_return_raw` | CE_raw (if normalization on) |
-| `objective_ce_ewma_scale` | Scale `s` used |
-| `book_quality` | `w_book · B` |
-| `inventory_zone_penalty` | `−w_inv · Z̄` |
-| `inventory_zone_penalty_raw` | `Z̄` |
+| `risk_adjusted_return` | `CE_eff` |
+| `risk_adjusted_return_raw` | `CE_raw` (if normalization on) |
+| `objective_ce_ewma_scale` | EWMA scale `s` |
+| `validity_penalty` | `−μ · max(0, B_min − B)` |
+| `validity_penalty_raw` | `max(0, B_min − B)` |
+| `validity_book_score` | `B` |
+| `viability_penalty` | `−λ · 𝒮` |
+| `viability_penalty_raw` | `𝒮` |
+| `viability_shortfall` | same as `𝒮` in tensor components |
+| `viability_min_availability` | `Ā_H` |
+| `viability_lambda` / `viability_lambda_learned` | see §7.6.3 |
 
-### 7.6 Contribution fractions
+Joint mode prefixes global venue keys with `global_`.
 
-Computed in `compute_contribution_fractions()` from **weighted** components only:
+---
+
+### 7.8 Contribution fractions
+
+From `compute_contribution_fractions()` on **weighted** terms only:
 
 ```text
 fraction_k = |component_k| / Σ_j |component_j|
 ```
 
-Keys included (`OBJECTIVE_CONTRIBUTION_KEYS`): `risk_adjusted_return`, `book_quality`, `inventory_zone_penalty`, plus `global_book_quality` and `global_inventory_zone_penalty` in joint mode. Sub-components (`inventory_zone_penalty_raw`, `book_presence`, etc.) are **excluded** from fractions.
+Keys in `OBJECTIVE_CONTRIBUTION_KEYS`:
 
-Grafana panels:
+- `risk_adjusted_return`
+- `validity_penalty`
+- `viability_penalty`
+- `global_validity_penalty`
+- `global_viability_penalty`
 
-| Panel | Source field | What it shows |
-| --- | --- | --- |
-| Objective contribution fractions | `optimizer.objective.contribution_fractions` | Relative shares (sum to 1 over included keys) |
-| Objective components (weighted J terms) | `optimizer.objective.final.components` | Absolute weighted values in `J` |
-| Inventory zone breakdown | `final.components` keys `inventory_zone_*` | Raw `Z̄`, path `imb`, side penalties |
+Raw sub-scores (`viability_penalty_raw`, `book_presence`, etc.) are **excluded**.
 
-**Worked example — degenerate state (`CE = 0`):**
+**Interpretation constraints:**
 
-```text
-risk_adjusted_return      =  0.0
-inventory_zone_penalty    = −0.000018     # −w_inv · Z̄,  w_inv=0.001, Z̄≈0.018
-J                         = −0.000018
-
-fraction_risk_adjusted_return   = 0 / (0 + 0.000018) = 0%
-fraction_inventory_zone_penalty = 0.000018 / 0.000018 = 100%
-```
-
-The weighted J panel shows a **tiny** inventory term; the fraction panel shows **100%** inventory. Both are correct: inventory is the only non-zero term in `J`, not the economically dominant force.
-
-**Worked example — funded, skewed wallet (`CE ≈ −1`, `Z̄ ≈ 0.625`, `w_inv = 0.01`):**
-
-```text
-risk_adjusted_return      = −1.0
-inventory_zone_penalty    = −0.00625        # −0.01 × 0.625
-J                         ≈ −1.006
-
-fraction_inventory ≈ 0.00625 / (1.0 + 0.00625) ≈ 0.6%
-fraction_CE        ≈ 99.4%
-```
-
-Interpretation constraints:
-
-- Fractions are **shares of absolute weighted terms in `J`**, not shares of economic PnL or notional risk.
-- Any term with value exactly 0 drops out of the denominator; remaining terms sum to 100%.
-- Small absolute penalty can show 100% share if CE and other terms are 0 (common when optimizer state has `cash = inventory = 0`).
-- Large CE can dominate fractions even when inventory imbalance is extreme in the live wallet.
-- `inventory_zone_imbalance` in components is the **mean simulated path** imbalance; `state.local_inventory` / `local_cash` are the **wallet fed into rollout** — these can disagree.
-
-### 7.7 Worked wallet imbalance examples
-
-Imbalance uses **economic value**, not unit counts:
-
-```text
-imb = (Q·mid − cash) / (|Q·mid| + |cash| + ε)
-```
-
-| Wallet (USDT, IRT) | `mid` | Base value (IRT) | `imb` | `Z(imb)` (default zone) |
-| --- | --- | --- | --- | --- |
-| 6, 9_300_000 | 170_000 | 1_020_000 | −0.80 | ~0.625 |
-| 0.005, 18_700_000 | 167_000 | 835 | −0.99 | ~0.625 |
-| 59, 9_420_000 | 159_500 | 9_410_500 | +0.05 | ~0.021 |
-| 0, 0 | any | 0 | 0 (degenerate) | ~0.018 |
-
-**Target 50/50 by value** at total wealth `W = Q·mid + cash`:
-
-```text
-Q·mid = cash = W/2
-imb   = 0
-```
-
-Example: total wealth ≈ 10.3M IRT at `mid = 170_000` → each leg ≈ 5.15M IRT → **~30.3 USDT + ~5.15M IRT**, not 6 USDT + 9.3M IRT (which is still ~90% quote by value).
-
-**Combining terms into `J` (local-only path):**
-
-```text
-J = CE_eff + w_book · B − w_inv · Z̄
-```
-
-`combine_soft_objective_terms()` writes weighted keys into `components` and updates `J` additively. Inventory is subtracted because rebalancing is a penalty on the objective being maximized.
+- Fractions are shares of **absolute weighted terms in `J`**, not economic PnL.
+- If `CE_eff ≈ 0`, viability/validity can show ~100% share while absolute penalty remains tiny.
+- `viability_lambda` in closure components should match `|viability_penalty| / |viability_penalty_raw|` when `𝒮 > 0`.
 
 ---
 
+### 7.9 Worked viability example (illustrative units)
+
+Take `q_min = 5×10⁶` IRT, `δ = 5×10⁵` IRT, `A* = 0.9`, terminal wallet after rollout:
+
+| `q_H` (IRT) | `b_H` (USDT) | `p_H` | `m_bid` | `m_ask` | `Ã_H` (approx.) | `S^(i)` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 18×10⁶ | 0.005 | 170k | 13×10⁶ | −8.5×10⁵ | ~0 | 0.9 |
+| 10×10⁶ | 45 | 170k | 5×10⁶ | 2.65×10⁶ | ~0.88 | 0.02 |
+| 10×10⁶ | 108 | 170k | 5×10⁶ | 13.4×10⁶ | ~0.99 | 0 |
+
+With `λ = 0.01`, `𝒮 = 0.9` → `viability_penalty = −0.009`. With `λ = 1`, same shortfall → `−0.9`.
+
+This shows why **`q_min` calibration in quote currency** dominates viability behavior: wrong `q_min` saturates `𝒮` or leaves it near zero regardless of action.
+
+---
 ## 8. Optimization procedure
 
 - Adam on flattened horizon action vector.
@@ -539,7 +625,7 @@ If `best_risk_adjusted_return < 0`, `negative_objective_action` may select:
 | `floor_action` | Minimum feasible quote from decoder + capacity |
 | `zero_action` | Zero depth |
 
-This gate uses optimizer diagnostics, not live PnL. Interaction with `w_inv` and CE normalization is configuration-dependent.
+This gate uses optimizer diagnostics, not live PnL. Interaction with validity, viability `λ`, and CE normalization is configuration-dependent.
 
 ---
 
@@ -558,15 +644,19 @@ Illustrative values from MPC diagnostics snapshots (not authoritative; live regi
 | `reference_price_source` | `local` or `global` |
 | `objective_normalize.enabled` | true |
 | `objective_normalize.ce_ewma_decay` | 0.9 |
-| `local_optimizer.w_inv` | varies (e.g. 0.001, 0.01) |
-| `local_optimizer.w_book` | often 0 |
+| `validity.penalty_scale` | e.g. 0 (disabled) or >0 |
+| `validity.min_score` | e.g. 0.5 — book score floor `B_min` |
+| `viability.min_viable_quote` | e.g. 5×10⁶ IRT — `q_min` |
+| `viability.margin_buffer` | e.g. 5×10⁵ IRT — sigmoid scale `δ` |
+| `viability.availability_target` | e.g. 0.9 — `A*` |
+| `viability.lambda_init` | e.g. 0.001 — initial `λ_0` |
+| `viability.lambda_learning_rate` | e.g. 0.1 — dual step `η` |
 | `return_risk_aversion_beta` | e.g. 0.1 |
 | `cumulative_qty_floor_at_spread_max` | decoder cumulative qty floor at `spread_max` |
 | `cumulative_qty_cap_at_spread_max` | optional decoder cumulative qty cap |
-| `book_quality.soft_scoring.presence_reference_qty` | book-score presence reference (needs `w_book > 0`) |
-| `book_quality.soft_scoring.tightness_spread_scale` | book-score tightness decay scale |
+| `book_quality.soft_scoring.presence_reference_qty` | presence sub-score reference |
+| `book_quality.soft_scoring.tightness_spread_scale` | tightness sub-score spread scale |
 | `reservation_skew.max_abs_skew` | learnable reservation skew bound |
-| `inventory_zone` | sigmoid band (see §7.4) |
 | `execution_model` maker fee | e.g. 0.0015 |
 | `soft_fill_queue_model` | `back_of_queue` |
 
@@ -578,90 +668,70 @@ Separate `local_optimizer` and `global_optimizer` blocks exist in joint mode.
 | --- | --- |
 | `cumulative_qty_floor_at_spread_max` | Decoder total base qty floor at outer spread |
 | `cumulative_qty_cap_at_spread_max` | Optional decoder total base qty cap |
-| `book_quality.soft_scoring` | Container for `w_book` scoring references |
+| `book_quality.soft_scoring` | Sub-score weights and references for `B` (§7.4) |
+| `validity` | `penalty_scale` (`μ`), `min_score` (`B_min`) |
+| `viability` | `min_viable_quote`, `margin_buffer`, `availability_target`, `lambda_init`, `lambda_learning_rate` |
 | `presence_reference_qty` | Presence sub-score reference qty |
 | `tightness_spread_scale` | Tightness sub-score spread scale |
 | `reservation_skew` | Learnable bid/ask curve skew block |
 | `max_abs_skew` | Bound on reservation skew parameter |
 
-Legacy aliases (`quote_size_min_per_side`, `reservation_offset`, `soft_target`, etc.) are rejected at parse time. Registry Postgres configs were migrated to canonical keys via `mm/tools/migrate_optimizer_config_keys.py`. Serialized diagnostics and `VenueOptimizerParams.as_config()` emit canonical keys only.
+Legacy keys (`w_inv`, `w_book`, `inventory_zone`, `min_quote_qty`, `quote_size_min_per_side`, etc.) are **rejected** at parse time. Registry Postgres configs were migrated via `mm/tools/migrate_optimizer_config_keys.py`.
 
 ---
 
-## 11. Weight coupling: fixed `w_inv` vs CE scale
+## 11. Coupling: CE scale vs validity `μ` vs viability `λ`
 
 ### 11.1 What is implemented
 
 | Quantity | Scale / units | Adaptive? |
 | --- | --- | --- |
-| CE (`risk_adjusted_return`) | Wealth-normalized return; optionally divided by EWMA `|CE_raw|` | CE only, via `objective_normalize` |
-| `w_book · B` | `B ∈ [0,1]` × fixed `w_book` | No |
-| `−w_inv · Z̄` | `Z̄ ∈ [0,1]` × fixed `w_inv` | No |
+| CE (`risk_adjusted_return`) | Wealth-normalized return; optionally ÷ EWMA `|CE_raw|` | CE only, via `objective_normalize` |
+| `−μ · max(0, B_min − B)` | `B ∈ [0,1]` × fixed `μ` | No — `validity.penalty_scale` |
+| `−λ · 𝒮` | `𝒮 ∈ [0, A*]` × `λ = exp(θ)` | **Yes** — dual update on `θ` after each decision (§7.6) |
 
-`w_inv` and `w_book` are **static config scalars** until changed in registry. They do not auto-adjust to `|CE|`, `|CE_raw|`, wallet size, or live imbalance.
+`μ` is a **static config scalar**. `λ` adapts to terminal availability gap `A* − Ā_H` but is **fixed during** each Adam solve.
 
 ### 11.2 Why tuning is non-obvious
 
-CE magnitude moves with:
+CE magnitude moves with fees, spread, fill rate, `horizon`, `n_samples`, `β`, wealth, EWMA state, and wallet fidelity in `State`.
 
-- Fee vs spread vs fill rate in simulation
-- `horizon`, `n_samples`, `β`
-- Wealth level and mark prices
-- CE EWMA state when normalization is on
-- Whether wallet in state matches economic reality
+Viability magnitude moves with:
 
-`Z̄` magnitude moves with:
+- `q_min` and `δ` (sigmoid calibration in **quote currency**)
+- Terminal simulated wallet after fills (`b_H`, `q_H`, `p_H`)
+- `A*` and current `λ`
+- Whether totals include locked funds the exchange treats as unavailable for new quotes
 
-- Current and simulated path imbalance
-- Zone geometry (comfort band, caps, ramp widths)
-- Horizon length (path mean over steps)
-- Same `imb = 0` floor for balanced and empty-degenerate states
+Validity magnitude moves with h=0 decoded shape only; it does not see horizon path depletion.
 
-There is **no single `w_inv`** that yields a constant economic trade-off against CE across regimes without additional structure.
+There is **no single `μ` or `λ_init`** that yields a constant economic trade-off against CE across regimes without recalibrating `q_min`, `δ`, and dual dynamics.
 
-### 11.3 Illustrative arithmetic (not a tuning guide)
+### 11.3 Illustrative viability arithmetic (not a tuning guide)
 
-For reference only, with `Z̄ ≈ 0.625` (saturated zone) and `Z̄ ≈ 0.018` (near floor at `imb = 0`):
+With `A* = 0.9`, `𝒮 = 0.15` (mean terminal shortfall), and `|CE_eff| = 1`:
 
-| `w_inv` | `\|−w_inv · Z̄\|` at `Z̄=0.625` | `\|−w_inv · Z̄\|` at `Z̄=0.018` | Share of `J` if `\|CE_eff\|=1` | Share if `CE_eff=0` |
-| --- | --- | --- | --- | --- |
-| 0.001 | 0.0006 | 0.000018 | ~0.06% | 100% |
-| 0.01 | 0.006 | 0.00018 | ~0.6% | 100% |
-| 0.03 | 0.019 | 0.00054 | ~1.9% | 100% |
-| 0.05 | 0.031 | 0.0009 | ~3.1% | 100% |
-| 0.10 | 0.063 | 0.0018 | ~5.9% | 100% |
+| `λ` | `\|−λ · 𝒮\|` | Share of `\|J\|` terms (CE + viability) |
+| --- | --- | --- |
+| 0.001 | 0.00015 | ~0.015% |
+| 0.01 | 0.0015 | ~0.15% |
+| 0.1 | 0.015 | ~1.5% |
+| 1.0 | 0.15 | ~13% |
 
-Relative share in `J` depends on contemporaneous `|CE_eff|` and whether `w_book` is active. Example: if `|CE_eff| = 1`, `w_inv = 0.05`, saturated `Z̄`, inventory share ≈ 3%. If `|CE_eff| = 0.01`, same settings give ≈ 75% share. If `CE_eff = 0`, inventory share is 100% regardless of absolute penalty size.
+If `|CE_eff| = 0.01` with `λ = 0.1`, viability share rises to ~60%. If `CE_eff = 0`, viability can dominate **relative** contribution fractions while absolute penalty stays small.
 
-**Contribution fraction from weighted terms** (when only CE and inventory are active):
-
-```text
-share_inv = |w_inv · Z̄| / (|CE_eff| + |w_inv · Z̄|)
-```
-
-**Sizing heuristic (not implemented in code; for manual tuning only):**
-
-To target inventory at approximately fraction `α` of `|J|` when `Z̄ ≈ Z_max` (saturated, ~0.625 default) and `|CE_eff| ≈ c`:
-
-```text
-w_inv ≈ α · c / Z_max
-```
-
-Example: `c = 1.0`, `Z_max = 0.625`, `α = 0.05` (5% share) → `w_inv ≈ 0.08`. At `α = 0.03` → `w_inv ≈ 0.05`. At `imb → 0`, the same `w_inv` applies to `Z̄ ≈ 0.018`, so the absolute penalty drops ~35× automatically.
-
-Increasing `w_inv` strengthens rebalance pressure when skewed but raises churn risk with short `horizon`, low `cumulative_qty_floor_at_spread_max`, and maker fees; there is no turnover penalty in `J`.
+**Dual steady state (sketch):** if `Ā_H` persistently sits below `A*`, `θ` drifts up and `λ` grows until the optimizer quotes more conservatively and terminal availability rises. If `q_min` is set far above realistic margins, `𝒮` stays near `A*` regardless of action → dual may raise `λ` without improving `Ā_H`.
 
 ### 11.4 Design space not implemented
 
-The codebase does **not** include any of the following; each would be a design change:
+- Inner dual loop during Adam (update `θ` each epoch)
+- `shortfall_tolerance` in the dual update (`λ ← λ + η(𝒮 − ε)`)
+- Path-min availability `min_h Ã_h` instead of terminal `Ã_H`
+- Free-balance margins separate from locked collateral
+- `μ` or `λ` proportional to EWMA `|CE_raw|`
+- Hard minimum spread or minimum two-sided size in `J` (only soft validity/viability)
 
-- `w_inv` proportional to `|CE_raw|` or `s` (EWMA scale)
-- Normalizing `Z̄` or `w_inv · Z̄` by the same `s` as CE
-- Per-frame adaptive weights from live imbalance
-- Separate weights for local vs global inventory in joint mode beyond existing `w_inv` per venue
-- Hard minimum spread or minimum two-sided size in `J` (only soft `w_book` or capacity)
-
-Experts may evaluate any of these (or other) couplings against the gaps in §15.
+See `docs/viability_term.md` for design alternatives discussed but not wired.
 
 ---
 
@@ -670,13 +740,15 @@ Experts may evaluate any of these (or other) couplings against the gaps in §15.
 | Field | What it reflects | Caveats |
 | --- | --- | --- |
 | `optimizer.objective.final.value` | Best `J` | Simulation objective, not realized PnL |
-| `optimizer.objective.final.components` | Weighted terms | See §7.5–7.6 |
+| `optimizer.objective.final.components` | Weighted terms | See §7.7–7.8 |
 | `optimizer.objective.contribution_fractions` | Relative \|term\| shares | Misleading when terms are near zero |
 | `optimizer.objective.best.expected_total_return` | Mean `R_i` over paths | Simulated |
 | `state.local_inventory`, `local_cash` | Wallet fed to MPC | May lag exchange; virtual vs physical |
-| `state.local_*_wallet` | Free/total/locked legs | Order locks may not match operator mental model |
-| `inventory_zone_imbalance` | Mean sim path imb | ≠ current wallet imb necessarily |
-| `inventory_zone_penalty_raw` | `Z̄` | Same `Z̄` for imb=0 balanced vs empty |
+| `state.local_*_wallet` | Free/total/locked legs | Viability uses **total**; capacity uses same totals |
+| `validity_book_score` | `B` at h=0 | Unweighted; penalty via `validity_penalty` |
+| `viability_min_availability` | `Ā_H` (mean terminal `Ã`) | Drives dual update (§7.6) |
+| `viability_penalty_raw` | `𝒮` | Unweighted shortfall |
+| `viability_lambda_learned` | `λ` for **next** decision | Tracks dual state; `viability_lambda` should match prior tick's learned |
 
 Postgres tables: `mm_optimizer_facts`, `mm_optimizer_component_facts`, `mm_events` diagnostics payloads.
 
@@ -687,10 +759,10 @@ Postgres tables: `mm_optimizer_facts`, `mm_optimizer_component_facts`, `mm_event
 | Intent | Implemented linkage | Gap / blind spot |
 | --- | --- | --- |
 | Profitable quoting | Maximize simulated CE | Sim ≠ live; model error; fee/slippage gaps |
-| Both sides quoted | Hard capacity; optional `w_book` | `w_book=0` → no soft two-sided reward; mins are 0 |
-| Don't run out of IRT/USDT | Capacity zeros depleted side | Doesn't prevent slow drift; locked funds not modeled in capacity formula as separate field |
-| Wide spread OK | No BBO term in CE | Tightness only if `w_book > 0` |
-| Rebalance to 50/50 value | `−w_inv · Z̄` on sim paths | Weak `w_inv` vs CE; churn risk if strong; target ≠ allocation config |
+| Both sides quoted | Hard capacity; optional validity on `B` | `μ=0` → no soft book-shape gate; mins are 0 |
+| Don't run out of IRT/USDT | Capacity zeros depleted side; viability on terminal `Ã_H` | Uses **total** balance; locked funds can hide free depletion |
+| Wide spread OK | No BBO term in CE | Tightness only if validity enabled |
+| Maintain quoting capacity | `−λ · 𝒮` on simulated paths | `q_min`/`δ` calibration; terminal-only `Ã_H`; small `λ` vs CE |
 | Safe live operation | Risk + reconcile | Outside `J`; can reject MPC output entirely |
 
 ---
@@ -715,12 +787,12 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 
 ### 14.3 Objective structure
 
-- **CE normalization applies only to CE**; `w_inv` and `w_book` sit in different units unless manually aligned.
-- **Fixed `w_inv`** has no documented invariant (e.g. constant rebalance half-life or constant fraction of CE).
-- **Inventory penalty is on simulated paths**, not explicitly on terminal wallet imbalance only.
-- **Sigmoid floor at imb = 0** applies even when balanced; penalty never fully turns off.
-- **`imb = 0` is ambiguous** (balanced, empty, or near-zero wealth).
-- **`w_book = 0`** removes all soft encouragement of two-sided book shape.
+- **CE normalization applies only to CE**; validity `μ` and viability `λ` sit in different units unless manually aligned.
+- **Viability `λ` adapts** on terminal availability gap, but `shortfall_tolerance` is not wired into the dual update.
+- **Viability shortfall uses terminal `Ã_H` only**, not minimum availability along the path.
+- **Viability margins use total balances**, not free-only; exchange may reject quotes when funds are locked in resting orders.
+- **`μ = 0`** disables validity; **`λ_init = 0`** starts with negligible viability penalty until dual raises `θ`.
+- **Sigmoid calibration:** at `m = 0`, each side has `σ(0) = 0.5`, so `Ã = 0.25` when both margins are exactly zero.
 
 ### 14.4 Capacity vs intent
 
@@ -731,7 +803,7 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 ### 14.5 Economics
 
 - Maker fee (e.g. 0.15%) vs typical spread width affects whether CE rewards quoting at all.
-- Negative CE triggers optional post-policy; behavior may quote floor/zero while inventory penalty still shaped the optimizer before gating.
+- Negative CE triggers optional post-policy; behavior may quote floor/zero while validity/viability still shaped the optimizer before gating.
 - No explicit adverse selection or toxicity term in `J`.
 
 ### 14.6 Joint vs single-venue divergence
@@ -739,18 +811,19 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 - **Liquidity sourcing** uses consolidated wealth CE; single-venue batched path uses local rollout (see code branch).
 - Joint rollout has **different VWAP timing** than local-only (documented lag in old implementation doc).
 - Joint objective **lacks** some regularizers still present in legacy single-venue objective (volatility, CVaR, quote-shape penalties — §15).
-- `global_optimizer.w_inv` and `local_optimizer.w_inv` can differ; consolidated imbalance in live wallet may not match per-venue penalties.
+- `global_*` validity/viability blocks can differ from local; consolidated wallet may not match per-venue penalties.
 
 ### 14.7 Diagnostics interpretation
 
 - Contribution fractions **≠** economic importance.
-- `inventory_zone_imbalance` is path mean, not necessarily `state` wallet imbalance.
+- `viability_min_availability` is mean terminal `Ã_H` over MC paths, not live wallet availability.
+- Plot **`viability_lambda_learned`** for dual time series; closure `viability_lambda` may lag or disagree if stamping is inconsistent.
 - `expected_total_return` is simulated mean return, not accounting PnL.
 - Component facts store initial/final/best snapshots; Grafana may show final fractions while operator inspects best CE.
 
 ### 14.8 Configuration and policy layers
 
-- Registry **allocation** (capital cap) is not the same as MPC **50/50 imbalance target**.
+- Registry **allocation** (capital cap) is not the same as viability `q_min` (minimum quote-notional per side).
 - Risk caps can block orders that MPC thought feasible if risk uses different ledger view or freshness rules.
 - `quote_imbalance_skew_strength` appears in legacy config validation; current `_quote_capacity_bounds_*` does not apply imbalance skew to mins (mins stay 0).
 
@@ -760,12 +833,12 @@ Areas where multiple valid approaches exist and the current code picks one:
 
 | Topic | Current approach | Alternatives not in code |
 | --- | --- | --- |
-| Return vs inventory trade-off | Fixed `w_inv`, fixed `w_book` | CE-linked weights, constraint formulation, Lagrangian on imbalance |
-| CE scale | Optional EWMA normalize CE only | Joint normalization; normalize all terms; no normalization |
-| Two-sided presence | Hard capacity + optional `w_book` | Hard min size per side; penalty for one-sided books |
-| Inventory target | Sigmoid zone on value imbalance | Target inventory in units; dollar-neutral; band on base ratio |
-| Risk in objective | Entropic CE over paths | Mean-variance, CVaR in terminal `J` (exists in legacy branch only) |
-| Horizon objective | Sum of `ΔW` then one CE | Per-step rewards, terminal wealth only, discounting |
+| Return vs capacity trade-off | Adaptive `λ` on terminal `𝒮`; fixed `μ` on `B` | Inner dual loop; CE-linked `μ`; constraint formulation |
+| CE scale | Optional EWMA normalize CE only | Joint normalization; normalize all terms |
+| Two-sided presence | Hard capacity + optional validity | Hard min size per side; path-min viability |
+| Capacity target | Soft `Ã_H` vs `A*` with dual `λ` | Free-balance margins; inventory ratio targets |
+| Risk in objective | Entropic CE over paths | Mean-variance, CVaR in terminal `J` (legacy branch only) |
+| Horizon objective | Sum of `ΔW` then one CE; terminal viability | Per-step viability; discounting |
 
 ---
 
@@ -775,11 +848,11 @@ Not all code paths share the same `J`.
 
 ### 15.1 Primary path (`monte_carlo_mpc_tensor_batched`)
 
-Terminal `J` = CE (+ optional `w_book`, `w_inv`) as in §7. Used when joint optimizer is not selected.
+Terminal `J` = CE − validity − viability as in §7. Used when joint optimizer is not selected.
 
 ### 15.2 Joint path (`optimize_joint_with_diagnostics`)
 
-Consolidated CE + per-venue `w_book` / `w_inv` terms. See §6.4 and old implementation doc for timing differences.
+Consolidated CE + per-venue validity and viability terms. See §6.4 and old implementation doc for timing differences.
 
 ### 15.3 Legacy single-venue objective (still in codebase)
 
@@ -803,9 +876,8 @@ Shortage/threshold inventory penalties in that branch are **no longer wired** in
 
 | Symbol | Definition |
 | --- | --- |
-| `Q`, `cash` | Base inventory and quote cash in optimizer state |
+| `Q`, `cash` | Base inventory and quote cash in optimizer state (totals) |
 | `mid` | Quote per base |
-| `imb` | `wallet_imbalance` ∈ [−1, +1] by economic value |
 | `W` | Mark-to-market wealth |
 | `W_0` | Initial wealth `max(1e-8, cash_0 + Q_0·mark_0)` |
 | `ΔW_i,h` | Per-step wealth change on path `i` |
@@ -813,13 +885,18 @@ Shortage/threshold inventory penalties in that branch are **no longer wired** in
 | `CE`, `CE_raw` | Entropic risk-adjusted return over paths (raw before normalization) |
 | `CE_eff` | CE after optional EWMA normalization (`risk_adjusted_return` in diagnostics) |
 | `β` | `return_risk_aversion_beta` |
-| `σ(x)` | Logistic sigmoid `1/(1+e^{−x})` (inventory zone only) |
+| `σ(x)` | Logistic sigmoid `1/(1+e^{−x})` |
 | `B` | Book quality score ∈ [0, 1] at h=0 |
-| `P_lo`, `P_hi` | Low / high side zone ramp before normalization |
-| `Z(imb)` | `(P_lo + P_hi)/(a_lo + a_hi)` ∈ [0, 1] |
-| `Z̄` | Mean `Z(imb)` over simulated path (`inventory_zone_penalty_raw`) |
-| `a_lo`, `a_hi` | `low_penalty_cap`, `high_penalty_cap` |
-| `d_lo`, `d_hi` | `low_ramp_width`, `high_ramp_width` |
-| `w_book`, `w_inv` | Fixed config weights on soft terms |
+| `B_min` | `validity.min_score` |
+| `μ` | `validity.penalty_scale` |
+| `q_min` | `viability.min_viable_quote` |
+| `δ` | `viability.margin_buffer` |
+| `m_bid`, `m_ask` | Quote-notional margins `q − q_min`, `b·p − q_min` |
+| `a_bid`, `a_ask` | Soft side availability `σ(m/δ)` |
+| `Ã`, `Ã_H` | Product availability; terminal value on path |
+| `A*` | `viability.availability_target` |
+| `𝒮` | Mean path shortfall `max(0, A* − Ã_H)` (`viability_penalty_raw`) |
+| `λ`, `θ` | Viability multiplier `λ = exp(θ)`; `θ` persisted on MPC instance |
+| `η` | `viability.lambda_learning_rate` |
 | `s` | CE EWMA scale when normalization enabled |
 | `fraction_k` | `\|component_k\| / Σ_j \|component_j\|` over weighted objective keys |
