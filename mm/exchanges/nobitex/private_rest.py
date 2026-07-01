@@ -239,12 +239,12 @@ def get_balances(api_token: NobitexAuth | None) -> dict[str, dict[str, float]]:
         for asset, w in wallets.items():
             if not isinstance(w, dict):
                 continue
-            from mm.core.wallet import wallet_legs_from_available_and_locked
+            from mm.core.wallet import wallet_legs_from_total_and_locked
 
-            # v2 ``balance`` is available; ``blocked`` is locked in open orders.
-            free = _safe_float(w.get("balance", 0))
+            # v2 ``balance`` matches v1 ``balance`` (wallet total); ``blocked`` is order collateral.
+            total = _safe_float(w.get("balance", 0))
             locked = _safe_float(w.get("blocked", 0))
-            result[str(asset).upper()] = wallet_legs_from_available_and_locked(free, locked)
+            result[str(asset).upper()] = wallet_legs_from_total_and_locked(total, locked)
     except Exception as exc:
         errors.append(f"/v2/wallets {type(exc).__name__}: {exc}")
     if result:
