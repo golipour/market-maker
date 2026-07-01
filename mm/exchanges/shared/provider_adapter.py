@@ -17,6 +17,18 @@ from mm.core.models.market import PriceLevel, RawOrderbook, RawTrade
 
 TransportMode = Literal["rest", "websocket"]
 
+_PERMANENT_MARKET_DATA_ERROR_MARKERS = (
+    "restricted area",
+    "not available in your country",
+    "service unavailable in your",
+    "access denied",
+)
+
+
+def is_permanent_market_data_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _PERMANENT_MARKET_DATA_ERROR_MARKERS)
+
 
 def now_ms() -> int:
     return int(time.time() * 1000)
@@ -99,12 +111,30 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
         self._max_seen_trades = max(1, int(max_seen_trades))
         self._seen_trade_order: deque[tuple] = deque()
         self._seen_trades: set[tuple] = set()
+        self._transient_backoff_s = self.poll_interval_ms / 1000.0
+        self._last_published_error: tuple[str, str] | None = None
 
     async def connect(self) -> None:
         self._connected = True
+        self._transient_backoff_s = self.poll_interval_ms / 1000.0
+        self._last_published_error = None
 
     async def disconnect(self) -> None:
         self._connected = False
+
+    async def _sleep_after_poll_error(self, source: str, exc: Exception) -> None:
+        await self._publish_error(source, exc)
+        if is_permanent_market_data_error(exc):
+            await asyncio.sleep(max(300.0, self.poll_interval_ms / 1000.0))
+            return
+        self._transient_backoff_s = min(
+            60.0,
+            max(self.poll_interval_ms / 1000.0, self._transient_backoff_s * 2.0),
+        )
+        await asyncio.sleep(self._transient_backoff_s)
+
+    def _reset_poll_backoff(self) -> None:
+        self._transient_backoff_s = self.poll_interval_ms / 1000.0
 
     async def trade_stream(self) -> AsyncIterator[RawTrade]:
         while self._connected:
@@ -114,10 +144,12 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
                     if not self._remember_trade(trade):
                         continue
                     yield trade
+                self._reset_poll_backoff()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self._publish_error("trade_stream", exc)
+                await self._sleep_after_poll_error("trade_stream", exc)
+                continue
             await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def orderbook_stream(self) -> AsyncIterator[RawOrderbook]:
@@ -132,10 +164,12 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
                 if key != last_key:
                     last_key = key
                     yield book
+                self._reset_poll_backoff()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                await self._publish_error("orderbook_stream", exc)
+                await self._sleep_after_poll_error("orderbook_stream", exc)
+                continue
             await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def error_stream(self) -> AsyncIterator[dict[str, str]]:
@@ -149,11 +183,16 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
         raise NotImplementedError
 
     async def _publish_error(self, source: str, exc: Exception) -> None:
+        message = str(exc)
+        key = (source, type(exc).__name__, message)
+        if key == self._last_published_error:
+            return
+        self._last_published_error = key
         await self._error_queue.put(
             {
                 "source": source,
                 "error": type(exc).__name__,
-                "message": str(exc),
+                "message": message,
             }
         )
 

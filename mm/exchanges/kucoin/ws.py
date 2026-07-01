@@ -11,7 +11,7 @@ from mm.core.interfaces.market_data import AbstractMarketDataAdapter
 from mm.core.models.market import RawOrderbook, RawTrade
 from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.kucoin import private_rest
-from mm.exchanges.shared.provider_adapter import parse_timestamp_ms, rows_to_levels
+from mm.exchanges.shared.provider_adapter import is_permanent_market_data_error, parse_timestamp_ms, rows_to_levels
 
 
 def _kucoin_ws_trade_time_ms(d: dict) -> int:
@@ -93,8 +93,11 @@ class KucoinWsMarketDataAdapter(AbstractMarketDataAdapter):
             except Exception as exc:
                 await self._publish_error("websocket", exc)
                 if self._connected:
-                    await asyncio.sleep(reconnect_s)
-                    reconnect_s = min(30.0, reconnect_s * 2.0)
+                    if is_permanent_market_data_error(exc):
+                        await asyncio.sleep(300.0)
+                    else:
+                        await asyncio.sleep(reconnect_s)
+                        reconnect_s = min(30.0, reconnect_s * 2.0)
 
     async def _subscribe(self, ws: Any) -> None:
         base = int(asyncio.get_event_loop().time() * 1000)

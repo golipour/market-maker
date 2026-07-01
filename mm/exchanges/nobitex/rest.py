@@ -27,7 +27,7 @@ class NobitexRestMarketDataAdapter(RestPollingMarketDataAdapter):
         super().__init__("nobitex", symbol, poll_interval_ms=poll_interval_ms)
         self.trades_limit = max(1, int(trades_limit))
         self.depth_limit = max(1, int(depth_limit))
-        self._client = RestClient(self.BASE_URL)
+        self._client = RestClient(self.BASE_URL, timeout_s=30.0)
         self._wire = build_instrument_wire("nobitex", symbol)
 
     async def fetch_trades(self) -> list[RawTrade]:

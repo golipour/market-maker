@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from mm.registry.models import MarketFeedRecord
 from mm.registry.store import RegistryStore
 from mm.runtime.ingestor_config import IngestorFeedConfig
+
+
+def _normalize_exclude_exchanges(exclude: Any) -> frozenset[str]:
+    if exclude is None:
+        return frozenset()
+    if isinstance(exclude, str):
+        items = [exclude]
+    elif isinstance(exclude, (list, tuple, set, frozenset)):
+        items = list(exclude)
+    else:
+        raise ValueError("exclude_exchanges must be a string or array of exchange names")
+    return frozenset(str(item).lower().strip() for item in items if str(item).strip())
 
 
 def market_feed_record_to_ingestor_feed(record: MarketFeedRecord) -> IngestorFeedConfig:
@@ -23,6 +37,7 @@ def ingestor_feeds_from_registry(
     store: RegistryStore,
     *,
     active_only: bool = True,
+    exclude_exchanges: frozenset[str] | None = None,
 ) -> tuple[IngestorFeedConfig, ...]:
     feeds = store.list_market_feeds()
     if active_only:
@@ -32,6 +47,9 @@ def ingestor_feeds_from_registry(
         feeds = [
             row for row in feeds if row.status == "active" and row.source_id in active_sources
         ]
+    excluded = exclude_exchanges or frozenset()
+    if excluded:
+        feeds = [row for row in feeds if row.exchange.lower() not in excluded]
     if not feeds:
         raise ValueError("registry has no market feeds configured")
     return tuple(market_feed_record_to_ingestor_feed(row) for row in feeds)
@@ -47,7 +65,8 @@ def merge_registry_feeds_into_mapping(
         return payload
     if store is None:
         raise ValueError("load_feeds_from_registry requires a registry store")
-    feeds = ingestor_feeds_from_registry(store)
+    exclude_exchanges = _normalize_exclude_exchanges(payload.get("exclude_exchanges"))
+    feeds = ingestor_feeds_from_registry(store, exclude_exchanges=exclude_exchanges)
     merged = dict(payload)
     merged["feeds"] = [
         {

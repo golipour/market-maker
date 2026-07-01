@@ -4899,7 +4899,10 @@ def fill_spread_pnl() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Private fill totals over the selected time range. Average prices are quantity-weighted; spread PnL uses paired bid/ask volume times average spread.",
+            "Private fill totals over the selected time range. Average prices are quantity-weighted. "
+            "Spread PnL is paired volume times average spread; inventory PnL marks unpaired fill volume "
+            "to the latest reference price using the dominant side's average fill price; fee PnL is "
+            "negative reported fill fees.",
             y=0,
         ),
         _panel(2, "Total filled bid volume", "stat", PG_DS, _fill_interval_stat_sql("bid_volume"), x=0, y=3, w=6, h=5),
@@ -4911,13 +4914,8 @@ def fill_spread_pnl() -> dict[str, Any]:
         _panel(8, "Global filled ask volume", "stat", PG_DS, _fill_interval_stat_sql("ask_volume", role="global"), x=12, y=8, w=6, h=5),
         _panel(9, "Average ask fill price", "stat", PG_DS, _fill_interval_stat_sql("ask_avg_price"), x=18, y=8, w=6, h=5, unit="currency"),
         _panel(10, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=0, y=13, w=6, h=5, unit="currency"),
-        _panel(11, "Total fill fee", "stat", PG_DS, _fill_interval_stat_sql("total_fee"), x=6, y=13, w=6, h=5, unit="currency"),
-        _panel(12, "Total delta cash", "stat", PG_DS, _portfolio_interval_delta_sql("delta_cash"), x=0, y=18, w=6, h=5, unit="currency"),
-        _panel(13, "Total delta inventory", "stat", PG_DS, _portfolio_interval_delta_sql("delta_inventory"), x=6, y=18, w=6, h=5),
-        _panel(14, "Total delta wealth", "stat", PG_DS, _portfolio_interval_delta_sql("delta_wealth"), x=12, y=18, w=6, h=5, unit="currency"),
-        _panel(15, "Total delta ref price", "stat", PG_DS, _portfolio_interval_delta_sql("delta_price"), x=18, y=18, w=6, h=5, unit="currency"),
-        _panel(16, "Latest total cash", "stat", PG_DS, _portfolio_latest_total_sql("cash"), x=0, y=23, w=6, h=5, unit="currency"),
-        _panel(17, "Latest total inventory", "stat", PG_DS, _portfolio_latest_total_sql("inventory"), x=6, y=23, w=6, h=5),
+        _panel(11, "Inventory PnL", "stat", PG_DS, _fill_interval_stat_sql("inventory_pnl"), x=6, y=13, w=6, h=5, unit="currency"),
+        _panel(12, "Fee PnL", "stat", PG_DS, _fill_interval_stat_sql("fee_pnl"), x=12, y=13, w=6, h=5, unit="currency"),
     ]
     return _dashboard(
         "mm-obs-v2-fill-spread-pnl",
@@ -6324,15 +6322,33 @@ WHERE exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
 ORDER BY 1"""
 
 
+def _fill_interval_mark_price_sql() -> str:
+    local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
+    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
+    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    return f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
+
+
 def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:
     if role is not None and role not in {"local", "global"}:
         raise ValueError(f"unsupported fill interval role: {role}")
+    mark_price = "interval_mark.mark_price"
     stat_exprs = {
         "bid_volume": "COALESCE(bid_qty, 0.0)",
         "ask_volume": "COALESCE(ask_qty, 0.0)",
         "bid_avg_price": "bid_avg_price",
         "ask_avg_price": "ask_avg_price",
         "spread_pnl": "LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) * (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0))",
+        "inventory_pnl": f"""CASE
+  WHEN COALESCE(bid_qty, 0.0) >= COALESCE(ask_qty, 0.0) THEN
+    (COALESCE(bid_qty, 0.0) - COALESCE(ask_qty, 0.0))
+    * ({mark_price} - COALESCE(bid_avg_price, 0.0))
+  ELSE
+    (COALESCE(ask_qty, 0.0) - COALESCE(bid_qty, 0.0))
+    * (COALESCE(ask_avg_price, 0.0) - {mark_price})
+END""",
+        "fee_pnl": "-COALESCE(total_fee, 0.0)",
         "total_fee": "COALESCE(total_fee, 0.0)",
     }
     if stat not in stat_exprs:
@@ -6351,8 +6367,16 @@ def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:
       FROM role_exchanges
       WHERE role = '{role}'
     )"""
+    mark_price_expr = _fill_interval_mark_price_sql()
     return f"""WITH latest_diagnostics AS (
   SELECT e.payload, e.exchange
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+  ORDER BY e.ts DESC
+  LIMIT 1
+),
+interval_mark AS (
+  SELECT {mark_price_expr} AS mark_price
   FROM mm_events e
   WHERE {_diagnostics_filter()}
   ORDER BY e.ts DESC
@@ -6396,7 +6420,8 @@ agg AS (
 )
 SELECT ($__timeTo())::timestamptz AS "time",
        {stat_exprs[stat]} AS value
-FROM agg"""
+FROM agg
+CROSS JOIN interval_mark"""
 
 
 def _venue_gates_sql() -> str:

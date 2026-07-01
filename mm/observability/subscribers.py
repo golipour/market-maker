@@ -30,6 +30,7 @@ class RuntimeObservabilitySubscriber:
         self._last_local_frame_by_exchange: dict[str, tuple[int, int]] = {}
         self._last_raw_market_ts_ms: dict[tuple[str, str, str], int] = {}
         self._live_order_side_keys: set[tuple[str, str, str]] = set()
+        self._runtime_error_last_logged: dict[tuple[str, str, str], float] = {}
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -841,9 +842,17 @@ class RuntimeObservabilitySubscriber:
                 )
 
     def _observe_error(self, topic: str, payload: dict[str, Any]) -> None:
+        error = str(payload.get("error", payload.get("type", "unknown")))
+        source = str(payload.get("source", ""))
+        dedupe_key = (topic, source, error)
+        now = time.monotonic()
+        last_logged = self._runtime_error_last_logged.get(dedupe_key, 0.0)
+        if now - last_logged < 60.0:
+            return
+        self._runtime_error_last_logged[dedupe_key] = now
         labels = {
             "topic": topic,
-            "error": str(payload.get("error", payload.get("type", "unknown"))),
+            "error": error,
         }
         counter_inc(obs_schema.MM_RUNTIME_ERRORS_TOTAL, labels=labels, help="Runtime errors observed")
         log_event(obs_schema.EVENT_RUNTIME_ERROR, {"topic": topic, **payload})
