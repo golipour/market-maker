@@ -1,6 +1,6 @@
 # MPC Market-Making Optimization: Objective, Mechanism, and Business Goals
 
-This document describes the implemented MPC controller: business intent, mathematics, data flow, configuration surface, diagnostics, and known gaps. It is written for external expert review. It records what the code does and what is uncertain; it does not prescribe tuning values or a preferred redesign.
+This document describes the implemented MPC controller: business intent, **mathematical problem formalization (§2)**, mechanism, data flow, configuration surface, diagnostics, and known gaps. It is written for external expert review. It records what the code does and what is uncertain; it does not prescribe tuning values or a preferred redesign.
 
 Related implementation references:
 
@@ -35,23 +35,23 @@ Implemented mechanisms that relate to this intent:
 | `−μ · max(0, B_min − B)` | Soft (optional) | **Validity** — penalizes poor h=0 book shape (`validity` block) |
 | `−λ · 𝒮` | Soft (optional) | **Viability** — penalizes low terminal two-sided **availability** along MC paths (`viability` block); `λ` adapts online |
 
-`w_book` and `w_inv` / `inventory_zone` were **removed**. Book scoring still exists via `book_quality.soft_scoring`, but enters `J` only through the validity gate (§7.3–7.4), not as a direct reward term.
+`w_book` and `w_inv` / `inventory_zone` were **removed**. Book scoring still exists via `book_quality.soft_scoring`, but enters `J` only through the validity gate (§8.3–7.4), not as a direct reward term.
 
 Current capacity decoder sets `bid_min = ask_min = 0`. There is **no hard minimum quote per side** at the capacity layer. `cumulative_qty_floor_at_spread_max` affects spread-structure decode at `spread_max`, but mins are clamped to feasible capacity and can be zero when a side has no free balance.
 
 ### 1.2 Profitability
 
-Profitability enters through **risk-adjusted horizon return** on simulated mark-to-market wealth, with maker fees and a differentiable soft-fill model. The optimizer maximizes CE (see §7.1). A separate **negative-objective policy** (§9) may alter the action when CE is negative; that policy is outside `J`.
+Profitability enters through **risk-adjusted horizon return** on simulated mark-to-market wealth, with maker fees and a differentiable soft-fill model. The optimizer maximizes CE (see §8.1). A separate **negative-objective policy** (§10) may alter the action when CE is negative; that policy is outside `J`.
 
 ### 1.3 Availability vs profitability (design split)
 
 The objective deliberately separates:
 
-- **CE (§7.1)** — risk-adjusted **return** on simulated wealth (price + fill uncertainty).
-- **Validity (§7.3)** — is the **h=0 quote shape** acceptable (spread/depth/balance/uniformity score)?
-- **Viability (§7.5–7.6)** — after simulating orderflow and fills over the horizon, is **two-sided quoting capacity** still above target?
+- **CE (§8.1)** — risk-adjusted **return** on simulated wealth (price + fill uncertainty).
+- **Validity (§8.3)** — is the **h=0 quote shape** acceptable (spread/depth/balance/uniformity score)?
+- **Viability (§8.5–7.6)** — after simulating orderflow and fills over the horizon, is **two-sided quoting capacity** still above target?
 
-Viability uses **total** wallet balances (`free + locked`, see §3.1). It does not model exchange min-notional, tick size, or free-vs-locked separately. Registry allocation caps, risk limits, and physical exchange balances remain outside `J`.
+Viability uses **total** wallet balances (`free + locked`, see §4.1). It does not model exchange min-notional, tick size, or free-vs-locked separately. Registry allocation caps, risk limits, and physical exchange balances remain outside `J`.
 
 ### 1.4 Outside the optimizer objective
 
@@ -67,7 +67,460 @@ The MPC outputs a **target book**; downstream layers decide live orders.
 
 ---
 
-## 2. End-to-end decision pipeline
+## 2. Mathematical formalization
+
+This section states the **constrained stochastic optimization problem** the controller approximates, the **action-space architecture** (what is actually optimized), how **hard vs soft constraints** enter, the **bi-level primal–dual solve**, and a **complete map from symbols to registry config keys**. Implementation details of each term are expanded in §8; rollout mechanics in §8.
+
+### 2.1 Problem class
+
+At each decision time \(t\), the controller solves a **finite-horizon stochastic program** over differentiable quote parameters, with optional **inequality targets** expressed as **soft penalties** and one **adaptive Lagrange multiplier** (viability \(\lambda\)).
+
+Conceptually this is a **bi-level** problem:
+
+```text
+OUTER (slow):   update dual state θ  from terminal availability diagnostics
+INNER (fast):   maximize J(u; ξ, θ) over action parameters u via Adam + MC rollout
+```
+
+where \(\xi\) is the exogenous market–wallet–model state at \(t\). The inner problem is **not convex** (sigmoid mixtures, soft fills, entropic CE). The implementation returns a **local** solution (best Adam epoch), not a global optimum.
+
+**Single-venue branch** (primary: `monte_carlo_mpc_tensor_batched`):
+
+```text
+maximize_{u ∈ 𝒰(ξ)}  J(u; ξ, θ_t)
+```
+
+**Joint / liquidity-sourcing branch** stacks local and global action blocks; consolidated wealth drives CE while validity and viability are evaluated **per venue** (§8.0, §16).
+
+---
+
+### 2.2 Exogenous state \(\xi_t\)
+
+The rollout and objective depend on state \(\xi_t\), implemented as `mm.mpc.mpc_state.State` (§4). At decision \(t\):
+
+| Symbol | Code field | Role in optimization |
+| --- | --- | --- |
+| \(p_t\) | `mid` | Quote anchor (quote per base) |
+| \(\mathcal{B}_t\) | `ob_rel` | Market-only book on spread grid \([0, S_{\max}]\) |
+| \(b_t\) | `inventory` | Total base balance (USDT) |
+| \(q_t\) | `cash` | Total quote balance (IRT) |
+| \(V^{\mathrm{buy}}_t, V^{\mathrm{sell}}_t\) | `buy_vwap`, `sell_vwap` | Inventory-aware marks |
+| \(\omega_t\) | `buy_vol`, `sell_vol` | Flow observations for MC models |
+| Global fields | `global_*` | Second venue when liquidity sourcing enabled |
+
+**Wallet sourcing:** totals use `free + locked` from ledger or private snapshot (§4.1). This is a modeling choice: viability margins use the same totals, not free-only balances.
+
+**Stochastic inputs:** for each MC path \(i=1,\ldots,N\), sample flow innovations and price residuals from configured models (`local_market_flow_model`, `local_price_model`, and global counterparts in joint mode). With `fixed_mc_samples = true`, the same draws are reused across all Adam epochs in one `optimize()` call.
+
+---
+
+### 2.3 Decision variable: flattened horizon action \(u\)
+
+The optimizer does **not** choose individual limit orders directly. It chooses a **continuous parameter vector** that decodes into **cumulative depth curves** on a fixed spread grid.
+
+#### 2.3.1 Horizon stacking
+
+Let \(H =\) `horizon`, \(K =\) `n_components` per venue.
+
+```text
+d_venue = 6K + 3
+u ∈ ℝ^{H · d_venue}        (local-only)
+u = [u^{(0)}, u^{(1)}, …, u^{(H-1)}]   each u^{(h)} ∈ ℝ^{d_venue}
+```
+
+**Initialization:** `x0_arr = tile(u_init, H)` — the same seed vector is copied to every horizon step; Adam may **diverge** steps during optimization. **Validity** and book-quality scoring use **only** \(u^{(0)}\) (the first horizon slice). **Viability** uses the full rollout triggered by the entire \(u\) stack.
+
+**Joint mode:** \(u = [u_{\mathrm{local}} \| u_{\mathrm{global}}]\) with separate \(K_{\mathrm{local}}\), \(K_{\mathrm{global}}\); length \(H \cdot (d_{\mathrm{local}} + d_{\mathrm{global}})\).
+
+#### 2.3.2 Per-venue flat layout (\(u^{(h)} \in \mathbb{R}^{6K+3}\))
+
+Indices are zero-based; \(i \in \{0,\ldots,K-1\}\) indexes sigmoid components.
+
+| Index block | Symbol | Decoder output | Adam box bound (default) |
+| --- | --- | --- | --- |
+| `[3i]` | \(u^L_i\) | logit → mixture weight \(L_i\) | \((-30, 30)\) |
+| `[3i+1]` | \(u^k_i\) | → steepness \(k_i > 0\) | \((10^{-6}, 100)\) |
+| `[3i+2]` | \(u^{x0}_i\) | → center \(x_{0,i}\) (spread quote units) | \((-S_{\max}, S_{\max})\) |
+| `[0:3K)` | bid side | components \(i\) on bid | same pattern |
+| `[3K:6K)` | ask side | components \(i\) on ask | same pattern |
+| `[6K]` | \(u^{\mathrm{depth}}_{\mathrm{bid}}\) | depth logit at \(S_{\max}\) | \((-30, 30)\) |
+| `[6K+1]` | \(u^{\mathrm{depth}}_{\mathrm{ask}}\) | depth logit at \(S_{\max}\) | \((-30, 30)\) |
+| `[6K+2]` | \(u^{r}\) | reservation skew logit | \((-30, 30)\) |
+
+Config: `controller.optimizer.local.n_components` (or `.global.n_components`).
+
+#### 2.3.3 Spread grid (structural domain)
+
+Discrete spreads (quote currency from mid):
+
+```text
+𝒮_grid = { s_j = j · Δ : j = 1, …, J },   Δ = spread_step,   S_max = spread_max,   J = ⌈S_max / Δ⌉
+```
+
+Config: `controller.orderbook_grid.spread_max`, `controller.orderbook_grid.spread_step`.
+
+All decoded cumulative depths are evaluated on \(\mathcal{S}_{\mathrm{grid}}\). Live orders are placed only on these bucket edges downstream.
+
+---
+
+### 2.4 Decode map: \(u^{(h)} \mapsto\) quote curves
+
+The **architecture constraint** is the parametric family — not a free choice of depth at each level.
+
+#### 2.4.1 Sigmoid mixture (per side)
+
+For side \(s \in \{\mathrm{bid}, \mathrm{ask}\}\), raw parameters materialize to \((L_i, k_i, x_{0,i})_{i=0}^{K-1}\), then:
+
+```text
+D_s(spread) = Σ_{i=0}^{K-1}  L_i · σ( k_i · (spread − x_{0,i}) )
+\tilde{D}_s(spread) = max(0, D_s(spread) − D_s(0))     # effective cumulative depth
+```
+
+\(\sigma\) is the logistic sigmoid. Implementation: `materialize_side_torch`, `effective_depth_*_tensor` in `mm.mpc.l_param`.
+
+#### 2.4.2 Depth at \(S_{\max}\) (size logit)
+
+Total cumulative base quantity at the outer grid edge:
+
+```text
+Q_s^{max} = Q_{\min} + σ(u^{\mathrm{depth}}_s) · (Q^{\mathrm{cap}}_s − Q_{\min})
+```
+
+| Symbol | Config key | Meaning |
+| --- | --- | --- |
+| \(Q_{\min}\) | `cumulative_qty_floor_at_spread_max` | Decoder floor at \(S_{\max}\) (base units) |
+| \(Q^{\mathrm{cap}}_s\) | `cumulative_qty_cap_at_spread_max` (optional) | Hard cap on max depth per side |
+| Dynamic cap | `_quote_capacity_bounds_*` | \(\min(Q_{\mathrm{cap}}, b_t)\) ask, \(\min(Q_{\mathrm{cap}}, q_t/p_t)\) bid |
+
+Tail mixture weights are scaled so cumulative depth at \(S_{\max}\) matches \(Q_s^{\max}\) (softmax / structured split per `LParamConfig`).
+
+#### 2.4.3 Optional spread geometry (`book_quality.hard_structure`)
+
+When `action_max_spread` \(= S^{\mathrm{touch}}_{\max} > 0\) is configured:
+
+| Constraint | Config | Enforcement |
+| --- | --- | --- |
+| First-touch spread sum | `action_max_spread` | \(x_{0,1}^{\mathrm{bid}} + x_{0,1}^{\mathrm{ask}} \le S^{\mathrm{touch}}_{\max}\) via scaled softmax on first centers |
+| Minimum depth at first center | `action_min_depth` | Lower bound on component-1 contribution when \(K \ge 2\) |
+| Center steepness floor | `action_k_epsilon` | Numerical floor on first \(k\) |
+
+Requires `n_components ≥ 2`. Mapped into `LParamConfig.quote_spread_max`, `quote_spread_min_depth`, `quote_spread_k_epsilon`.
+
+#### 2.4.4 Reservation skew (optional)
+
+When `reservation_skew.max_abs_skew` \(= r_{\max} > 0\):
+
+```text
+r_offset = r_max · tanh(u^r)     # shifts effective mid on spread grid, |r_offset| < r_max
+```
+
+Config: `controller.optimizer.local.reservation_skew.max_abs_skew`.
+
+---
+
+### 2.5 Feasible set \(\mathcal{U}(\xi)\): hard constraints
+
+Hard constraints are enforced by **projection, clamping, and infeasible-side zeros** — they do **not** appear as penalty terms in \(J\).
+
+#### 2.5.1 Parameter box constraints
+
+```text
+u_j ∈ [lo_j, hi_j]     default boxes in §2.3.2
+```
+
+Applied implicitly via bounded initialization and Adam (no explicit projection each step; best epoch is clamped when decoded).
+
+#### 2.5.2 Wallet capacity (rollout + decode)
+
+Per side \(s\), at each rollout step with wallet \((b, q)\) and mid \(p\):
+
+```text
+Q^{\mathrm{bid}}_{\max} = min(Q_{\mathrm{cap}}, q / p)
+Q^{\mathrm{ask}}_{\max} = min(Q_{\mathrm{cap}}, b)
+Q^{\mathrm{bid}}_{\min} = Q^{\mathrm{ask}}_{\min} = 0
+```
+
+Decoded sizes are clamped to \([Q^{\min}_s, Q^{\max}_s]\). **There is no hard minimum quote size** at the capacity layer (`bid_min = ask_min = 0`). One-sided quoting is feasible whenever CE and soft terms favor it.
+
+Config: `cumulative_qty_cap_at_spread_max`; capacity uses live \(b_t, q_t\) from rollout state.
+
+#### 2.5.3 Non-negativity of depths
+
+```text
+\tilde{D}_s(spread) ≥ 0     ∀ spread
+```
+
+via `max(0, ·)` on cumulative curves.
+
+#### 2.5.4 Structural decode inequalities
+
+When spread geometry is enabled (§2.4.3), feasible \((x_{0,i})\) lie in the image of the structured decoder — not an arbitrary spread vector.
+
+#### 2.5.5 Outside the optimizer feasible set
+
+These are enforced **after** MPC, not in \(\mathcal{U}(\xi)\):
+
+| Constraint | Layer |
+| --- | --- |
+| Tick / lot / min-notional | Order validation, reconcile |
+| Net delta / transition risk | Risk engine |
+| Allocation registry cap | Virtual ledger / halt |
+| Exchange min size | Venue API rejection |
+
+---
+
+### 2.6 Stochastic rollout operator \(\Phi\)
+
+Given \(u\) and \(\xi_t\), the closure simulates \(N\) paths:
+
+```text
+(b_{i,h}, q_{i,h}, p_{i,h}, W_{i,h})_{h=0}^{H} = Φ(u, ξ_t, ε_i),   ε_i ~ model samples
+```
+
+| Step | Operator | Config / notes |
+| --- | --- | --- |
+| Decode | \(u^{(h)} \mapsto \tilde{D}_{\mathrm{bid}}, \tilde{D}_{\mathrm{ask}}\) | §2.4 |
+| Match flow | `soft_fill_batched` | `soft_fill_temp`, `soft_fill_activation`, `soft_fill_queue_model` |
+| Fee | maker fee | `execution_model.local_maker_fee` |
+| Book evolve | limit-order-flow on public book | market-only book |
+| Mark | inventory-aware VWAP | `vwap_depth` from inventory |
+| Wealth | \(W_{i,h} = q_{i,h} + b_{i,h} \cdot \mathrm{mark}_{i,h}\) | — |
+
+Path return and CE are computed from \(\Delta W_{i,h}\) (§8.1). Viability snapshots \((b_{i,h}, q_{i,h}, p_{i,h})\) are recorded along each path; **terminal** availability uses index \(h=H\) only (§8.5.4).
+
+---
+
+### 2.7 Nominal constrained problem
+
+Let \(\pi\) denote the policy induced by decode map \(\Gamma\) and parameters \(u\). The **design intent** (see `docs/viability_term.md`) is:
+
+```text
+maximize_{u ∈ 𝒰(ξ)}   CE_eff(u; ξ)
+subject to            E[Ã_H(u; ξ)] ≥ A*
+                      B(u^{(0)}; ξ) ≥ B_min        (optional)
+```
+
+where:
+
+- \(CE_{\mathrm{eff}}\) = entropic certainty equivalent of horizon return \(R_i = \sum_h \Delta W_{i,h} / W_0\) (§8.1–8.2)
+- \(\tilde{A}_H\) = soft two-sided availability at **terminal** simulated wallet (§8.5)
+- \(B\) = book-quality score at **\(h=0\)** decoded action (§8.4)
+
+Expectation \(\mathbb{E}[\cdot]\) is **Monte Carlo average** over \(N =\) `n_samples` paths.
+
+---
+
+### 2.8 Implemented Lagrangian relaxation (scalar \(J\))
+
+Inequalities are **not** enforced as hard constraints in the solver. They enter as **one-sided penalties**:
+
+```text
+J(u; ξ, θ) = CE_eff(u; ξ)
+             − μ · [B_min − B(u^{(0)}; ξ)]_+
+             − λ(θ) · 𝒮(u; ξ)
+```
+
+| Term | Definition | Config |
+| --- | --- | --- |
+| \([x]_+ = \max(0, x)\) | hinge | — |
+| \(B_{\min}\) | validity floor | `validity.min_score` |
+| \(\mu\) | fixed validity scale | `validity.penalty_scale` |
+| \(\mathcal{S} = \mathbb{E}_i[[A^* - \tilde{A}_{H}^{(i)}]_+]\) | mean terminal shortfall | `viability.availability_target` \(= A^*\) |
+| \(\lambda(\theta) = e^{\theta}\) | adaptive viability multiplier | `viability.lambda_init` → \(\theta_0\) |
+
+If `validity.penalty_scale = 0` or block absent, the validity term is **omitted**. If `viability` is absent or \(\lambda=0\), viability is omitted.
+
+**Joint mode:**
+
+```text
+J = CE_eff
+    − μ_ℓ [B_min,ℓ − B_ℓ]_+ − λ_ℓ 𝒮_ℓ
+    − μ_g [B_min,g − B_g]_+ − λ_g 𝒮_g
+```
+
+with `controller.optimizer.local` vs `.global` blocks.
+
+---
+
+### 2.9 Bi-level solution algorithm
+
+#### Inner problem (each controller decision)
+
+```text
+u* = argmin_u  (−J(u; ξ, θ_t))     via Adam,  E = adam_epochs,  lr = adam_lr
+```
+
+| Hyperparameter | Config key | Typical role |
+| --- | --- | --- |
+| Adam steps | `optimizer.adam_epochs` | Inner iteration budget |
+| Learning rate | `optimizer.adam_lr` | Step size on \(u\) |
+| Gradient clip | `adam_grad_clip` (constructor) | Stability |
+| Warm start | `optimizer.warm_start` | Initialize from prior \(u\) |
+| Best epoch | lowest `loss = −J` | `best` action for target book |
+
+\(\theta_t\) is **fixed** for all inner epochs.
+
+#### Outer dual update (between decisions)
+
+After inner solve, from diagnostics \(\bar{A}_H = \frac{1}{N}\sum_i \tilde{A}_H^{(i)}\):
+
+```text
+gap_t = A* − Ā_H
+θ_{t+1} = θ_t + η · gap_t
+λ_{t+1} = exp(θ_{t+1})
+```
+
+| Symbol | Config key |
+| --- | --- |
+| \(\eta\) | `viability.lambda_learning_rate` |
+| \(\theta_0\) | `ln(max(lambda_init, ε))` from `viability.lambda_init` |
+
+`shortfall_tolerance` is stored but **not** used in the current update. There is **no inner dual loop** during Adam.
+
+```mermaid
+flowchart TB
+  subgraph outer["Outer loop (each frame)"]
+    xi["State ξ_t"]
+    inner["Inner: Adam on u with fixed θ_t"]
+    eval["MC rollout Φ, compute J"]
+    dual["θ_{t+1} = θ_t + η(A* − Ā_H)"]
+    xi --> inner
+    inner --> eval
+    eval --> dual
+  end
+  subgraph inner_detail["Inner loop"]
+    u0["u init (tile / warm_start)"]
+    adam["Adam epochs"]
+    u0 --> adam
+    adam -->|"loss = −J"| adam
+  end
+  inner --> inner_detail
+```
+
+---
+
+### 2.10 Relaxations and approximations
+
+The implemented solver is a **surrogate** for the nominal stochastic program. The table below is the authoritative list of what is exact vs relaxed.
+
+| Exact / ideal object | Implemented surrogate | Implication |
+| --- | --- | --- |
+| Discrete queue fills | `soft_fill_batched` proportional fill + sigmoid/hardsigmoid | Gradients exist; fill timing/volume approximate |
+| Queue position | `soft_fill_queue_model`: `back_of_queue` or `pro_rata` | Conservative vs optimistic queue share |
+| Constraint \( \mathbb{E}[\tilde{A}_H] \ge A^* \) | Penalty \(-\lambda \mathcal{S}\) with dual on \(\theta\) | Soft feasibility; strength depends on \(\lambda\) |
+| Pathwise viability \(\min_h \tilde{A}_h\) | **Terminal only** \(\tilde{A}_H\) | Early depletion along path may not bind; sim terminal can exceed live wallet |
+| Live wallet floor | MC **simulated** terminal wallet | Optimistic bias when sim fills recover inventory faster than live |
+| Total balances in \(\tilde{A}\) | `free + locked` totals | Locked quote can mark bid side viable while free cash is depleted |
+| Validity constraint | Fixed \(\mu\), optional (`penalty_scale=0` common) | Book shape may not enter \(J\) at all |
+| Hard min size / two-sided quoting | Only capacity zeros + soft terms | One-sided books allowed |
+| Global optimum of nonconvex \(J\) | Local Adam best epoch | Action may be sensitive to init / MC noise |
+| Same policy all horizon | \(H\) slices initialized equal; may diverge | Validity sees only \(u^{(0)}\) |
+| CE scale stationarity | Optional EWMA normalize CE only | Validity/viability not co-normalized |
+| Adverse selection / toxicity | Not in \(J\) | CE may reward fills that deplete wallet |
+| Own resting liquidity in future steps | Market-only book in rollout | Does not carry previous interval orders forward |
+| Exchange hard min-notional | Outside \(J\) | Optimizer may target shapes venue rejects |
+
+---
+
+### 2.11 Complete config map: symbols → registry keys
+
+Paths are relative to `controller` in the runtime registry JSON unless noted.
+
+#### 2.11.1 MPC shell (`optimizer`)
+
+| Math / algorithm | Config key | Type / notes |
+| --- | --- | --- |
+| Solver branch | `optimizer.kind` | `monte_carlo_mpc_tensor_batched` |
+| Horizon \(H\) | `optimizer.horizon` | int |
+| MC paths \(N\) | `optimizer.n_samples` | int |
+| Reuse MC draws | `optimizer.fixed_mc_samples` | bool |
+| Spread domain \(S_{\max}\) | `orderbook_grid.spread_max` | quote units |
+| Grid step \(\Delta\) | `orderbook_grid.spread_step` | quote units |
+| Adam epochs \(E\) | `optimizer.adam_epochs` | int |
+| Adam lr | `optimizer.adam_lr` | float |
+| Warm start | `optimizer.warm_start` | bool |
+| CE EWMA normalize | `optimizer.objective_normalize.enabled` | bool |
+| CE EWMA decay | `optimizer.objective_normalize.ce_ewma_decay` | float |
+| Reference price | `optimizer.reference_price_source` | `local` / `global` |
+| Device | `optimizer.device` | `cpu` / `cuda` |
+
+#### 2.11.2 Per-venue block (`optimizer.local` / `optimizer.global`)
+
+| Symbol | Config key | Default (example) |
+| --- | --- | --- |
+| \(K\) components | `n_components` | 4 (local), 2 (global) |
+| CE weight (joint) | `objective_weight` | 1.0 |
+| \(\beta\) risk aversion | `return_risk_aversion_beta` | 0.1 |
+| \(Q_{\min}\) at \(S_{\max}\) | `cumulative_qty_floor_at_spread_max` | 1.0 |
+| \(Q_{\mathrm{cap}}\) | `cumulative_qty_cap_at_spread_max` | optional |
+| Fill temperature | `soft_fill_temp` | 0.1 |
+| Fill activation | `soft_fill_activation` | `hardsigmoid` / `sigmoid` |
+| Queue model | `soft_fill_queue_model` | `back_of_queue` / `pro_rata` |
+| \(r_{\max}\) skew | `reservation_skew.max_abs_skew` | optional |
+
+#### 2.11.3 Validity + book quality (feeds \(B\))
+
+| Symbol | Config key | Parent |
+| --- | --- | --- |
+| \(B_{\min}\) | `validity.min_score` | `optimizer.local` |
+| \(\mu\) | `validity.penalty_scale` | `optimizer.local` |
+| Touch fraction | `book_quality.soft_scoring.touch_spread_fraction` | default 0.01 |
+| \(q_{\mathrm{ref}}\) presence | `book_quality.soft_scoring.presence_reference_qty` | |
+| Tightness scale | `book_quality.soft_scoring.tightness_spread_scale` | |
+| Weights \(v_{\cdot}\) | `book_quality.soft_scoring.v_presence`, `v_tightness`, `v_balance`, `v_uniformity` | default 0.25 each |
+| Measure | `book_quality.soft_scoring.measure` | `quoted` / `combined` |
+| \(S^{\mathrm{touch}}_{\max}\) | `book_quality.hard_structure.action_max_spread` | optional |
+| Min center depth | `book_quality.hard_structure.action_min_depth` | optional |
+| \(k\) floor | `book_quality.hard_structure.action_k_epsilon` | optional |
+
+#### 2.11.4 Viability (feeds \(\mathcal{S}\), dual \(\theta\))
+
+| Symbol | Config key | Parent |
+| --- | --- | --- |
+| \(q_{\min}\) | `viability.min_viable_quote` | quote currency (IRT) |
+| \(\delta\) margin buffer | `viability.margin_buffer` | quote currency |
+| \(A^*\) | `viability.availability_target` | \([0,1]\) |
+| \(\lambda_0\) | `viability.lambda_init` | maps to \(\theta_0\) |
+| \(\eta\) | `viability.lambda_learning_rate` | dual step |
+| \(\varepsilon\) (inert) | `viability.shortfall_tolerance` | parsed, unused in update |
+
+**Removed / rejected keys:** `w_inv`, `w_book`, `inventory_zone`, `min_quote_qty`, `margin_sharpness`, `lambda_leakage`, etc.
+
+#### 2.11.5 Execution and models (rollout \(\Phi\), not in \(J\) directly)
+
+| Role | Config path |
+| --- | --- |
+| Maker fee | `optimizer.execution_model.local_maker_fee` |
+| Local flow model | `controller.local_market_flow_model` |
+| Local price model | `controller.local_price_model` |
+| Global models | `controller.global_*` (joint mode) |
+
+#### 2.11.6 Post-optimizer policy (outside \(J\))
+
+| Config | Effect |
+| --- | --- |
+| `negative_objective_action` | `optimizer_action` / `floor_action` / `zero_action` when CE \(< 0\) |
+| Risk / reconcile | See §1.4, §15 |
+
+---
+
+### 2.12 Diagnostic identities (verify formalization against logs)
+
+On each frame, weighted terms should satisfy:
+
+```text
+J ≈ CE_eff + validity_penalty + viability_penalty     (penalties ≤ 0)
+validity_penalty ≈ −μ · validity_penalty_raw
+viability_penalty ≈ −λ · viability_penalty_raw
+gap = A* − viability_min_availability
+θ_{new} = θ_{old} + η · gap
+```
+
+Component keys are listed in §8.7. **Contribution fractions** (§8.8) are not Lagrange multipliers — they are normalized absolute term magnitudes.
+
+---
+
+## 3. End-to-end decision pipeline
 
 ```text
 Market + private snapshots
@@ -85,13 +538,13 @@ Market + private snapshots
   → OrderManager reconcile → venue
 ```
 
-Branch selection depends on `liquidity_sourcing` and `reference_price_source`; not all deployments use the same branch (see §15).
+Branch selection depends on `liquidity_sourcing` and `reference_price_source`; not all deployments use the same branch (see §16).
 
 Frames may be skipped when market or private data exceeds configured age limits.
 
 ---
 
-## 3. State vector and wallet sourcing
+## 4. State vector and wallet sourcing
 
 Optimizer input: `mm.mpc.mpc_state.State`.
 
@@ -123,7 +576,7 @@ Per-step wealth uses inventory-aware marks: bid VWAP when short inventory, sell 
 
 ---
 
-## 4. Action representation
+## 5. Action representation
 
 Sigmoid-mixture cumulative depth per side on a fixed spread grid:
 
@@ -139,7 +592,7 @@ Spread-structure decode (`book_quality.hard_structure`) maps logits to sizes wit
 
 ---
 
-## 5. Hard structural constraints (not in `J`)
+## 6. Hard structural constraints (not in `J`)
 
 ### 5.1 Side capacity
 
@@ -158,9 +611,9 @@ Zero `cash` → zero bid capacity in simulation. Zero `inventory` → zero ask c
 
 ---
 
-## 6. Monte Carlo rollout
+## 7. Monte Carlo rollout
 
-### 6.1 Closure structure
+### 7.1 Closure structure
 
 Each Adam closure:
 
@@ -170,7 +623,7 @@ Each Adam closure:
 
 `fixed_mc_samples = true` reuses the same random draws across all epochs in one optimize call.
 
-### 6.2 Single-venue rollout
+### 7.2 Single-venue rollout
 
 Per sample, per step `h`:
 
@@ -186,7 +639,7 @@ R_i = (Σ_h ΔW_i,h) / W_0
 W_0 = max(1e-8, cash_0 + inventory_0 · mark_0)
 ```
 
-### 6.3 Soft fill model
+### 7.3 Soft fill model
 
 Differentiable proportional-fill approximation:
 
@@ -201,17 +654,17 @@ inv_delta  = bid_fill_qty · (1 − fee) − ask_fill_qty
 
 This is not a discrete queue simulator, not adverse-selection modeling, and not partial-fill correlation across levels.
 
-### 6.4 Joint / liquidity-sourcing rollout
+### 7.4 Joint / liquidity-sourcing rollout
 
 Local and global books evolve in parallel; consolidated wealth drives CE. VWAP timing differs from single-venue rollout (eaten-book effect can lag one step in joint mode — see old implementation doc). Joint objective omits several regularizers present in the legacy single-venue branch (§15).
 
 ---
 
-## 7. Scalar objective `J`
+## 8. Scalar objective `J`
 
 The optimizer **maximizes** `J`. Adam minimizes `loss = −J`.
 
-### 7.0 Combined form
+### 8.0 Combined form
 
 **Local-only optimizer:**
 
@@ -245,11 +698,11 @@ J = CE_eff
 | Validity `B` | **Horizon step 0** decoded action only | Yes (h=0 action slice) |
 | Viability `𝒮` | **Terminal** wallet after simulated horizon fills | Yes (via rollout path) |
 
-During one `optimize()` call, **`λ` (via `θ`) is fixed** for all Adam epochs. It updates **once** after the decision completes (§7.6).
+During one `optimize()` call, **`λ` (via `θ`) is fixed** for all Adam epochs. It updates **once** after the decision completes (§8.6).
 
 ---
 
-### 7.1 Risk-adjusted return (CE)
+### 8.1 Risk-adjusted return (CE)
 
 #### Per-path horizon return
 
@@ -261,7 +714,7 @@ R_i    = (Σ_h ΔW_i,h) / W_0
 W_0    = max(1e-8, cash_0 + inventory_0 · mark_0)
 ```
 
-`mark_0` uses bid VWAP when short inventory, sell VWAP when long, else quote anchor (see §3.2).
+`mark_0` uses bid VWAP when short inventory, sell VWAP when long, else quote anchor (see §4.2).
 
 #### Entropic certainty equivalent
 
@@ -282,12 +735,12 @@ CE is computed from **simulated** fills and model-sampled flows, not realized li
 
 ---
 
-### 7.2 CE normalization (`objective_normalize`)
+### 8.2 CE normalization (`objective_normalize`)
 
 When `objective_normalize.enabled`:
 
 ```text
-CE_raw  = CE from §7.1 (before scaling)
+CE_raw  = CE from §8.1 (before scaling)
 s       = EWMA scale from prior decisions (fixed for entire Adam loop on this frame)
 CE_norm = CE_raw / s
 J       ← J − CE_raw + CE_norm
@@ -308,7 +761,7 @@ Diagnostics: `risk_adjusted_return_raw`, `risk_adjusted_return` (= `CE_norm`), `
 
 ---
 
-### 7.3 Validity term (book-shape gate)
+### 8.3 Validity term (book-shape gate)
 
 Validity penalizes a **low book-quality score** at the **current** (h=0) decoded action. It is **not** a reward for high `B`; only shortfall below `B_min` is penalized.
 
@@ -319,11 +772,11 @@ validity_penalty   = −μ · validity_shortfall  # μ = validity.penalty_scale
 
 If `validity` is absent, `penalty_scale = 0`, or `book_score` is unavailable, the term is skipped.
 
-`B` is the **book quality score** from `book_quality_score()` (§7.4). Diagnostics store `validity_book_score` (= `B`) and `validity_penalty_raw` (= shortfall).
+`B` is the **book quality score** from `book_quality_score()` (§8.4). Diagnostics store `validity_book_score` (= `B`) and `validity_penalty_raw` (= shortfall).
 
 ---
 
-### 7.4 Book quality score `B` (feeds validity only)
+### 8.4 Book quality score `B` (feeds validity only)
 
 `B ∈ [0, 1]` at **horizon step 0**. Let `d_bid_touch`, `d_ask_touch` be effective quoted depth at touch spread `touch = spread_max · touch_spread_fraction`, and `q_bid`, `q_ask` cumulative depth at `spread_max`:
 
@@ -350,13 +803,13 @@ Sub-scores are stored in diagnostics (`book_presence`, `book_tightness`, `book_b
 
 ---
 
-### 7.5 Viability term (availability shortfall)
+### 8.5 Viability term (availability shortfall)
 
 Viability encodes **two-sided quoting capacity** after simulating orderflow and fills. It replaces the removed inventory-zone penalty (`w_inv · Z̄`).
 
-Conceptual target (see `docs/viability_term.md`): maximize CE subject to maintaining enough **bid and ask capacity** to place minimum viable size `q_min`. The implementation uses a **soft availability** functional and a **Lagrangian penalty** with adaptive `λ` (§7.6).
+Conceptual target (see `docs/viability_term.md`): maximize CE subject to maintaining enough **bid and ask capacity** to place minimum viable size `q_min`. The implementation uses a **soft availability** functional and a **Lagrangian penalty** with adaptive `λ` (§8.6).
 
-#### 7.5.1 Wallet inputs
+#### 8.5.1 Wallet inputs
 
 At each viability snapshot along a rollout path:
 
@@ -366,7 +819,7 @@ At each viability snapshot along a rollout path:
 | `q_t` | `cash` | Total quote balance (IRT), `max(0, ·)` |
 | `p_t` | `mid` | Quote per base, `max(1e-12, ·)` |
 
-Totals use **reported wallet total** (`free + locked`) from ledger/snapshot (§3.1). **Free-only balances are not used.**
+Totals use **reported wallet total** (`free + locked`) from ledger/snapshot (§4.1). **Free-only balances are not used.**
 
 Config (`viability` block):
 
@@ -375,13 +828,13 @@ Config (`viability` block):
 | `min_viable_quote` | `q_min` | `50000` | Minimum operational quote-notional required on **each** side |
 | `margin_buffer` | `δ` | `5000` | Sigmoid scale for soft margins (same units as margins: quote currency) |
 | `availability_target` | `A*` | `0.99` | Target terminal availability |
-| `lambda_init` | `λ_0` | `0` | Initial multiplier (maps to `θ_0`, §7.6) |
+| `lambda_init` | `λ_0` | `0` | Initial multiplier (maps to `θ_0`, §8.6) |
 | `lambda_learning_rate` | `η` | `0.02` | Dual learning rate |
 | `shortfall_tolerance` | `ε` | `0.05` | Parsed and stored; **not used** in the current dual update rule |
 
 **Removed keys** (rejected at load): `min_quote_qty`, `margin_sharpness`, `inventory_zone`, `w_inv`, `lambda_leakage`, etc.
 
-#### 7.5.2 Quote-notional margins (both sides in quote currency)
+#### 8.5.2 Quote-notional margins (both sides in quote currency)
 
 ```text
 m_bid(t) = q_t − q_min
@@ -394,7 +847,7 @@ Interpretation:
 - `m_ask > 0` → base notional exceeds minimum required to fund asks.
 - Margins are in **quote currency** (IRT for USDT_IRT), not unitless ratios.
 
-#### 7.5.3 Soft side availability
+#### 8.5.3 Soft side availability
 
 Logistic sigmoid `σ(x) = 1 / (1 + e^{−x})`:
 
@@ -418,7 +871,7 @@ Diagnostics (batch means over path/time unless noted):
 | `viability_step_availability` | mean `Ã` |
 | `viability_min_availability` | mean terminal `Ã_H` (see below) |
 
-#### 7.5.4 Rollout path snapshots
+#### 8.5.4 Rollout path snapshots
 
 During each Adam closure, for each MC sample, the rollout records wallet/mid snapshots:
 
@@ -439,7 +892,7 @@ Viability reads **terminal availability only**:
 
 **Design note:** Shortfall uses `Ã_H`, not `min_h Ã_h` along the path. Simulated fills over the horizon can **improve** terminal availability relative to an early depleted step; the path minimum is intentionally **not** used (see `viability_path_shortfall` docstring).
 
-#### 7.5.5 Per-path and batch shortfall
+#### 8.5.5 Per-path and batch shortfall
 
 ```text
 S^(i) = max(0, A* − Ã_H^(i))
@@ -454,11 +907,11 @@ Gradients flow: action → fills → terminal `(b_H, q_H, p_H)` → `Ã_H` → `
 
 ---
 
-### 7.6 Dual optimization for `λ` (log-space)
+### 8.6 Dual optimization for `λ` (log-space)
 
 Viability uses a **primal–dual** pattern: `λ` is not hand-tuned each frame like `w_inv`; it is **state** on the `MonteCarloMPCTensorBatched` instance, persisted across controller decisions.
 
-#### 7.6.1 Multiplier parameterization
+#### 8.6.1 Multiplier parameterization
 
 ```text
 λ = exp(θ)     θ ∈ ℝ
@@ -469,7 +922,7 @@ If `λ_init = 0`, then `θ_0 = ln(ε_floor)` and `λ = 0` (no viability penalty 
 
 Implementation: `viability_theta_from_lambda_init`, `viability_lambda_from_theta` in `objective_terms.py`. State: `mpc._viability_theta_local`, `mpc._viability_theta_global` (joint mode).
 
-#### 7.6.2 Closure vs between-decision updates
+#### 8.6.2 Closure vs between-decision updates
 
 **Inside Adam closure** (each epoch, each `optimize()` call):
 
@@ -501,7 +954,7 @@ Implementation: `update_viability_theta`. Joint mode updates local and global `�
 
 There is **no** `ε` tolerance in the update rule (unlike classical `λ ← λ + η(S − ε)` on shortfall). `shortfall_tolerance` in config is currently **inert**.
 
-#### 7.6.3 Diagnostics: which `λ` to read
+#### 8.6.3 Diagnostics: which `λ` to read
 
 | Key | When | Meaning |
 | --- | --- | --- |
@@ -520,7 +973,7 @@ viability_penalty ≈ − viability_lambda · viability_penalty_raw
 
 Use `viability_lambda_learned` when correlating the **next** tick's penalty strength with the prior update.
 
-#### 7.6.4 Constrained optimization interpretation
+#### 8.6.4 Constrained optimization interpretation
 
 The implemented penalty is the Lagrangian form of:
 
@@ -537,7 +990,7 @@ subject to  E[Ã_H] ≥ A*     (softened via 𝒮)
 
 ---
 
-### 7.7 Combined objective and component keys
+### 8.7 Combined objective and component keys
 
 ```text
 J = CE_eff − μ · max(0, B_min − B) − λ · 𝒮        # local-only
@@ -557,13 +1010,13 @@ Representative diagnostics keys:
 | `viability_penalty_raw` | `𝒮` |
 | `viability_shortfall` | same as `𝒮` in tensor components |
 | `viability_min_availability` | `Ā_H` |
-| `viability_lambda` / `viability_lambda_learned` | see §7.6.3 |
+| `viability_lambda` / `viability_lambda_learned` | see §8.6.3 |
 
 Joint mode prefixes global venue keys with `global_`.
 
 ---
 
-### 7.8 Contribution fractions
+### 8.8 Contribution fractions
 
 From `compute_contribution_fractions()` on **weighted** terms only:
 
@@ -589,7 +1042,7 @@ Raw sub-scores (`viability_penalty_raw`, `book_presence`, etc.) are **excluded**
 
 ---
 
-### 7.9 Worked viability example (illustrative units)
+### 8.9 Worked viability example (illustrative units)
 
 Take `q_min = 5×10⁶` IRT, `δ = 5×10⁵` IRT, `A* = 0.9`, terminal wallet after rollout:
 
@@ -604,7 +1057,7 @@ With `λ = 0.01`, `𝒮 = 0.9` → `viability_penalty = −0.009`. With `λ = 1`
 This shows why **`q_min` calibration in quote currency** dominates viability behavior: wrong `q_min` saturates `𝒮` or leaves it near zero regardless of action.
 
 ---
-## 8. Optimization procedure
+## 9. Optimization procedure
 
 - Adam on flattened horizon action vector.
 - `loss = −J`.
@@ -615,7 +1068,7 @@ Diagnostics count nonfinite loss/gradient events. No guarantee that Adam finds g
 
 ---
 
-## 9. Post-optimizer policy
+## 10. Post-optimizer policy
 
 If `best_risk_adjusted_return < 0`, `negative_objective_action` may select:
 
@@ -629,7 +1082,7 @@ This gate uses optimizer diagnostics, not live PnL. Interaction with validity, v
 
 ---
 
-## 10. Configuration surface (example deployment)
+## 11. Configuration surface (example deployment)
 
 Illustrative values from MPC diagnostics snapshots (not authoritative; live registry may differ):
 
@@ -662,13 +1115,13 @@ Illustrative values from MPC diagnostics snapshots (not authoritative; live regi
 
 Separate `local_optimizer` and `global_optimizer` blocks exist in joint mode.
 
-### 10.1 Optimizer parameter names
+### 11.1 Optimizer parameter names
 
 | Key | Role |
 | --- | --- |
 | `cumulative_qty_floor_at_spread_max` | Decoder total base qty floor at outer spread |
 | `cumulative_qty_cap_at_spread_max` | Optional decoder total base qty cap |
-| `book_quality.soft_scoring` | Sub-score weights and references for `B` (§7.4) |
+| `book_quality.soft_scoring` | Sub-score weights and references for `B` (§8.4) |
 | `validity` | `penalty_scale` (`μ`), `min_score` (`B_min`) |
 | `viability` | `min_viable_quote`, `margin_buffer`, `availability_target`, `lambda_init`, `lambda_learning_rate` |
 | `presence_reference_qty` | Presence sub-score reference qty |
@@ -680,19 +1133,19 @@ Legacy keys (`w_inv`, `w_book`, `inventory_zone`, `min_quote_qty`, `quote_size_m
 
 ---
 
-## 11. Coupling: CE scale vs validity `μ` vs viability `λ`
+## 12. Coupling: CE scale vs validity `μ` vs viability `λ`
 
-### 11.1 What is implemented
+### 12.1 What is implemented
 
 | Quantity | Scale / units | Adaptive? |
 | --- | --- | --- |
 | CE (`risk_adjusted_return`) | Wealth-normalized return; optionally ÷ EWMA `|CE_raw|` | CE only, via `objective_normalize` |
 | `−μ · max(0, B_min − B)` | `B ∈ [0,1]` × fixed `μ` | No — `validity.penalty_scale` |
-| `−λ · 𝒮` | `𝒮 ∈ [0, A*]` × `λ = exp(θ)` | **Yes** — dual update on `θ` after each decision (§7.6) |
+| `−λ · 𝒮` | `𝒮 ∈ [0, A*]` × `λ = exp(θ)` | **Yes** — dual update on `θ` after each decision (§8.6) |
 
 `μ` is a **static config scalar**. `λ` adapts to terminal availability gap `A* − Ā_H` but is **fixed during** each Adam solve.
 
-### 11.2 Why tuning is non-obvious
+### 12.2 Why tuning is non-obvious
 
 CE magnitude moves with fees, spread, fill rate, `horizon`, `n_samples`, `β`, wealth, EWMA state, and wallet fidelity in `State`.
 
@@ -707,7 +1160,7 @@ Validity magnitude moves with h=0 decoded shape only; it does not see horizon pa
 
 There is **no single `μ` or `λ_init`** that yields a constant economic trade-off against CE across regimes without recalibrating `q_min`, `δ`, and dual dynamics.
 
-### 11.3 Illustrative viability arithmetic (not a tuning guide)
+### 12.3 Illustrative viability arithmetic (not a tuning guide)
 
 With `A* = 0.9`, `𝒮 = 0.15` (mean terminal shortfall), and `|CE_eff| = 1`:
 
@@ -722,7 +1175,7 @@ If `|CE_eff| = 0.01` with `λ = 0.1`, viability share rises to ~60%. If `CE_eff 
 
 **Dual steady state (sketch):** if `Ā_H` persistently sits below `A*`, `θ` drifts up and `λ` grows until the optimizer quotes more conservatively and terminal availability rises. If `q_min` is set far above realistic margins, `𝒮` stays near `A*` regardless of action → dual may raise `λ` without improving `Ā_H`.
 
-### 11.4 Design space not implemented
+### 12.4 Design space not implemented
 
 - Inner dual loop during Adam (update `θ` each epoch)
 - `shortfall_tolerance` in the dual update (`λ ← λ + η(𝒮 − ε)`)
@@ -735,18 +1188,18 @@ See `docs/viability_term.md` for design alternatives discussed but not wired.
 
 ---
 
-## 12. Diagnostics map
+## 13. Diagnostics map
 
 | Field | What it reflects | Caveats |
 | --- | --- | --- |
 | `optimizer.objective.final.value` | Best `J` | Simulation objective, not realized PnL |
-| `optimizer.objective.final.components` | Weighted terms | See §7.7–7.8 |
+| `optimizer.objective.final.components` | Weighted terms | See §8.7–7.8 |
 | `optimizer.objective.contribution_fractions` | Relative \|term\| shares | Misleading when terms are near zero |
 | `optimizer.objective.best.expected_total_return` | Mean `R_i` over paths | Simulated |
 | `state.local_inventory`, `local_cash` | Wallet fed to MPC | May lag exchange; virtual vs physical |
 | `state.local_*_wallet` | Free/total/locked legs | Viability uses **total**; capacity uses same totals |
 | `validity_book_score` | `B` at h=0 | Unweighted; penalty via `validity_penalty` |
-| `viability_min_availability` | `Ā_H` (mean terminal `Ã`) | Drives dual update (§7.6) |
+| `viability_min_availability` | `Ā_H` (mean terminal `Ã`) | Drives dual update (§8.6) |
 | `viability_penalty_raw` | `𝒮` | Unweighted shortfall |
 | `viability_lambda_learned` | `λ` for **next** decision | Tracks dual state; `viability_lambda` should match prior tick's learned |
 
@@ -754,7 +1207,7 @@ Postgres tables: `mm_optimizer_facts`, `mm_optimizer_component_facts`, `mm_event
 
 ---
 
-## 13. Business goal → mechanism mapping (with gaps)
+## 14. Business goal → mechanism mapping (with gaps)
 
 | Intent | Implemented linkage | Gap / blind spot |
 | --- | --- | --- |
@@ -767,25 +1220,25 @@ Postgres tables: `mm_optimizer_facts`, `mm_optimizer_component_facts`, `mm_event
 
 ---
 
-## 14. Blind spots, limitations, and open gaps
+## 15. Blind spots, limitations, and open gaps
 
 This section lists areas the documentation and diagnostics do not fully resolve. External review should treat these as first-class concerns.
 
-### 14.1 State and ledger fidelity
+### 15.1 State and ledger fidelity
 
 - Optimizer wallet may be **virtual allocation**, not full exchange wallet (`ledger_source`).
 - Ledger snapshot pipeline may stall; optimizer may optimize on **zeros or stale balances** while exchange holds funds.
 - Manual exchange rebalance may not appear in diagnostics until ingest catches up.
 - `inventory`/`cash` use reported wallet totals from ledger/snapshot; relationship to **locked in orders** depends on how balances are reported upstream.
 
-### 14.2 Simulation vs live execution
+### 15.2 Simulation vs live execution
 
 - Soft fill is differentiable approximation; live fills depend on queue position, latency, cancels, and competitor behavior.
 - Rollout uses **market-only** books; resting own orders from previous intervals are not carried as liquidity in future rollout steps.
 - Horizon `H` and interval length (e.g. 30s) may not match time to fill or mean-revert inventory.
 - MC sample count and fixed seeds affect gradient noise and chosen action.
 
-### 14.3 Objective structure
+### 15.3 Objective structure
 
 - **CE normalization applies only to CE**; validity `μ` and viability `λ` sit in different units unless manually aligned.
 - **Viability `λ` adapts** on terminal availability gap, but `shortfall_tolerance` is not wired into the dual update.
@@ -794,26 +1247,26 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 - **`μ = 0`** disables validity; **`λ_init = 0`** starts with negligible viability penalty until dual raises `θ`.
 - **Sigmoid calibration:** at `m = 0`, each side has `σ(0) = 0.5`, so `Ã = 0.25` when both margins are exactly zero.
 
-### 14.4 Capacity vs intent
+### 15.4 Capacity vs intent
 
 - `bid_min = ask_min = 0`: optimizer may choose **one-sided** quotes when CE favors it and capacity allows the other side.
 - Capacity uses `cash` and `inventory` totals, not separate buffers for “minimum operational reserve”.
 - Large rebalance trades in simulation can flip imbalance sign within short horizons → **churn** in objective landscape; no explicit turnover penalty in current `J`.
 
-### 14.5 Economics
+### 15.5 Economics
 
 - Maker fee (e.g. 0.15%) vs typical spread width affects whether CE rewards quoting at all.
 - Negative CE triggers optional post-policy; behavior may quote floor/zero while validity/viability still shaped the optimizer before gating.
 - No explicit adverse selection or toxicity term in `J`.
 
-### 14.6 Joint vs single-venue divergence
+### 15.6 Joint vs single-venue divergence
 
 - **Liquidity sourcing** uses consolidated wealth CE; single-venue batched path uses local rollout (see code branch).
 - Joint rollout has **different VWAP timing** than local-only (documented lag in old implementation doc).
-- Joint objective **lacks** some regularizers still present in legacy single-venue objective (volatility, CVaR, quote-shape penalties — §15).
+- Joint objective **lacks** some regularizers still present in legacy single-venue objective (volatility, CVaR, quote-shape penalties — §16).
 - `global_*` validity/viability blocks can differ from local; consolidated wallet may not match per-venue penalties.
 
-### 14.7 Diagnostics interpretation
+### 15.7 Diagnostics interpretation
 
 - Contribution fractions **≠** economic importance.
 - `viability_min_availability` is mean terminal `Ã_H` over MC paths, not live wallet availability.
@@ -821,13 +1274,13 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 - `expected_total_return` is simulated mean return, not accounting PnL.
 - Component facts store initial/final/best snapshots; Grafana may show final fractions while operator inspects best CE.
 
-### 14.8 Configuration and policy layers
+### 15.8 Configuration and policy layers
 
 - Registry **allocation** (capital cap) is not the same as viability `q_min` (minimum quote-notional per side).
 - Risk caps can block orders that MPC thought feasible if risk uses different ledger view or freshness rules.
 - `quote_imbalance_skew_strength` appears in legacy config validation; current `_quote_capacity_bounds_*` does not apply imbalance skew to mins (mins stay 0).
 
-### 14.9 Expert review dimensions (unresolved)
+### 15.9 Expert review dimensions (unresolved)
 
 Areas where multiple valid approaches exist and the current code picks one:
 
@@ -842,19 +1295,19 @@ Areas where multiple valid approaches exist and the current code picks one:
 
 ---
 
-## 15. Legacy and branch-specific objectives
+## 16. Legacy and branch-specific objectives
 
 Not all code paths share the same `J`.
 
-### 15.1 Primary path (`monte_carlo_mpc_tensor_batched`)
+### 16.1 Primary path (`monte_carlo_mpc_tensor_batched`)
 
-Terminal `J` = CE − validity − viability as in §7. Used when joint optimizer is not selected.
+Terminal `J` = CE − validity − viability as in §8. Used when joint optimizer is not selected.
 
-### 15.2 Joint path (`optimize_joint_with_diagnostics`)
+### 16.2 Joint path (`optimize_joint_with_diagnostics`)
 
-Consolidated CE + per-venue validity and viability terms. See §6.4 and old implementation doc for timing differences.
+Consolidated CE + per-venue validity and viability terms. See §7.4 and old implementation doc for timing differences.
 
-### 15.3 Legacy single-venue objective (still in codebase)
+### 16.3 Legacy single-venue objective (still in codebase)
 
 Some documentation and older configs reference a richer local-only objective:
 
@@ -872,7 +1325,7 @@ Shortage/threshold inventory penalties in that branch are **no longer wired** in
 
 ---
 
-## 16. Glossary
+## 17. Glossary
 
 | Symbol | Definition |
 | --- | --- |
