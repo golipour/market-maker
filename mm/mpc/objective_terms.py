@@ -402,12 +402,12 @@ def viability_path_shortfall(
     ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
     of simulated **total** wallet balances (free + locked) along each rollout path.
 
-    Per path: A_min = A_H where H is the terminal post-rollout step (last snapshot,
-    after all horizon fills); S = max(0, A* - A_H); return mean(S).
+    Per path: use availability after the first simulated step only (index 1, post h=0
+    orderflow/fill). S = max(0, A* - A_1); return mean(S).
 
-    Index 0 is the pre-action wallet and is excluded. Only the end-of-horizon
-    wallet is used so cumulative simulated fills can improve availability without
-    a path-min pinning on an early depleted step.
+    Index 0 is the pre-action wallet and is excluded. Terminal horizon availability
+    is not used — viability targets the immediate next wallet state, not optimistic
+    recovery at the end of the rollout.
     """
 
     torch = _torch()
@@ -423,18 +423,18 @@ def viability_path_shortfall(
     if step_avail.shape[1] <= 1:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    path_terminal_avail = step_avail[:, -1]
+    path_next_avail = step_avail[:, 1]
     shortfall_per_path = torch.clamp(
-        float(params.availability_target) - path_terminal_avail,
+        float(params.availability_target) - path_next_avail,
         min=0.0,
     )
     shortfall_mean = shortfall_per_path.mean()
     components = {
         "viability_shortfall": shortfall_mean,
-        "viability_min_availability": path_terminal_avail.mean(),
-        "viability_step_availability": step_parts["viability_step_availability"].mean(),
-        "viability_bid_margin": step_parts["viability_bid_margin"].mean(),
-        "viability_ask_margin": step_parts["viability_ask_margin"].mean(),
+        "viability_min_availability": path_next_avail.mean(),
+        "viability_step_availability": path_next_avail.mean(),
+        "viability_bid_margin": step_parts["viability_bid_margin"][:, 1].mean(),
+        "viability_ask_margin": step_parts["viability_ask_margin"][:, 1].mean(),
     }
     return shortfall_mean, components
 

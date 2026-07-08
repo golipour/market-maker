@@ -33,7 +33,7 @@ Implemented mechanisms that relate to this intent:
 | --- | --- | --- |
 | `bid_max = cash/mid`, `ask_max = inventory` | Hard | Cannot simulate quotes beyond wallet totals in rollout |
 | `−μ · max(0, B_min − B)` | Soft (optional) | **Validity** — penalizes poor h=0 book shape (`validity` block) |
-| `−λ · 𝒮` | Soft (optional) | **Viability** — penalizes low terminal two-sided **availability** along MC paths (`viability` block); `λ` adapts online |
+| `−λ · 𝒮` | Soft (optional) | **Viability** — penalizes low **next-step** two-sided **availability** after the first simulated fill (`viability` block); `λ` adapts online |
 
 `w_book` and `w_inv` / `inventory_zone` were **removed**. Book scoring still exists via `book_quality.soft_scoring`, but enters `J` only through the validity gate (§8.3–7.4), not as a direct reward term.
 
@@ -78,7 +78,7 @@ At each decision time \(t\), the controller solves a **finite-horizon stochastic
 Conceptually this is a **bi-level** problem:
 
 ```text
-OUTER (slow):   update dual state θ  from terminal availability diagnostics
+OUTER (slow):   update dual state θ  from next-step availability diagnostics
 INNER (fast):   maximize J(u; ξ, θ) over action parameters u via Adam + MC rollout
 ```
 
@@ -286,7 +286,7 @@ Given \(u\) and \(\xi_t\), the closure simulates \(N\) paths:
 | Mark | inventory-aware VWAP | `vwap_depth` from inventory |
 | Wealth | \(W_{i,h} = q_{i,h} + b_{i,h} \cdot \mathrm{mark}_{i,h}\) | — |
 
-Path return and CE are computed from \(\Delta W_{i,h}\) (§8.1). Viability snapshots \((b_{i,h}, q_{i,h}, p_{i,h})\) are recorded along each path; **terminal** availability uses index \(h=H\) only (§8.5.4).
+Path return and CE are computed from \(\Delta W_{i,h}\) (§8.1). Viability snapshots \((b_{i,h}, q_{i,h}, p_{i,h})\) are recorded along each path; **next-step** availability uses index \(h=1\) only (§8.5.4).
 
 ---
 
@@ -296,14 +296,14 @@ Let \(\pi\) denote the policy induced by decode map \(\Gamma\) and parameters \(
 
 ```text
 maximize_{u ∈ 𝒰(ξ)}   CE_eff(u; ξ)
-subject to            E[Ã_H(u; ξ)] ≥ A*
+subject to            E[Ã_1(u; ξ)] ≥ A*
                       B(u^{(0)}; ξ) ≥ B_min        (optional)
 ```
 
 where:
 
 - \(CE_{\mathrm{eff}}\) = entropic certainty equivalent of horizon return \(R_i = \sum_h \Delta W_{i,h} / W_0\) (§8.1–8.2)
-- \(\tilde{A}_H\) = soft two-sided availability at **terminal** simulated wallet (§8.5)
+- \(\tilde{A}_1\) = soft two-sided availability after the **first** simulated step (§8.5)
 - \(B\) = book-quality score at **\(h=0\)** decoded action (§8.4)
 
 Expectation \(\mathbb{E}[\cdot]\) is **Monte Carlo average** over \(N =\) `n_samples` paths.
@@ -325,7 +325,7 @@ J(u; ξ, θ) = CE_eff(u; ξ)
 | \([x]_+ = \max(0, x)\) | hinge | — |
 | \(B_{\min}\) | validity floor | `validity.min_score` |
 | \(\mu\) | fixed validity scale | `validity.penalty_scale` |
-| \(\mathcal{S} = \mathbb{E}_i[[A^* - \tilde{A}_{H}^{(i)}]_+]\) | mean terminal shortfall | `viability.availability_target` \(= A^*\) |
+| \(\mathcal{S} = \mathbb{E}_i[[A^* - \tilde{A}_{1}^{(i)}]_+]\) | mean next-step shortfall | `viability.availability_target` \(= A^*\) |
 | \(\lambda(\theta) = e^{\theta}\) | adaptive viability multiplier | `viability.lambda_init` → \(\theta_0\) |
 
 If `validity.penalty_scale = 0` or block absent, the validity term is **omitted**. If `viability` is absent or \(\lambda=0\), viability is omitted.
@@ -362,10 +362,10 @@ u* = argmin_u  (−J(u; ξ, θ_t))     via Adam,  E = adam_epochs,  lr = adam_lr
 
 #### Outer dual update (between decisions)
 
-After inner solve, from diagnostics \(\bar{A}_H = \frac{1}{N}\sum_i \tilde{A}_H^{(i)}\):
+After inner solve, from diagnostics \(\bar{A}_1 = \frac{1}{N}\sum_i \tilde{A}_1^{(i)}\):
 
 ```text
-gap_t = A* − Ā_H
+gap_t = A* − Ā_1
 θ_{t+1} = θ_t + η · gap_t
 λ_{t+1} = exp(θ_{t+1})
 ```
@@ -383,7 +383,7 @@ flowchart TB
     xi["State ξ_t"]
     inner["Inner: Adam on u with fixed θ_t"]
     eval["MC rollout Φ, compute J"]
-    dual["θ_{t+1} = θ_t + η(A* − Ā_H)"]
+    dual["θ_{t+1} = θ_t + η(A* − Ā_1)"]
     xi --> inner
     inner --> eval
     eval --> dual
@@ -407,9 +407,9 @@ The implemented solver is a **surrogate** for the nominal stochastic program. Th
 | --- | --- | --- |
 | Discrete queue fills | `soft_fill_batched` proportional fill + sigmoid/hardsigmoid | Gradients exist; fill timing/volume approximate |
 | Queue position | `soft_fill_queue_model`: `back_of_queue` or `pro_rata` | Conservative vs optimistic queue share |
-| Constraint \( \mathbb{E}[\tilde{A}_H] \ge A^* \) | Penalty \(-\lambda \mathcal{S}\) with dual on \(\theta\) | Soft feasibility; strength depends on \(\lambda\) |
-| Pathwise viability \(\min_h \tilde{A}_h\) | **Terminal only** \(\tilde{A}_H\) | Early depletion along path may not bind; sim terminal can exceed live wallet |
-| Live wallet floor | MC **simulated** terminal wallet | Optimistic bias when sim fills recover inventory faster than live |
+| Constraint \( \mathbb{E}[\tilde{A}_1] \ge A^* \) | Penalty \(-\lambda \mathcal{S}\) with dual on \(\theta\) | Soft feasibility; strength depends on \(\lambda\) |
+| Pathwise viability \(\min_h \tilde{A}_h\) | **Next step only** \(\tilde{A}_1\) | Terminal horizon recovery no longer masks a depleted immediate post-fill wallet |
+| Live wallet floor | MC **simulated** next-step wallet | Remaining gap vs live `A_0` if sim fill differs from production |
 | Total balances in \(\tilde{A}\) | `free + locked` totals | Locked quote can mark bid side viable while free cash is depleted |
 | Validity constraint | Fixed \(\mu\), optional (`penalty_scale=0` common) | Book shape may not enter \(J\) at all |
 | Hard min size / two-sided quoting | Only capacity zeros + soft terms | One-sided books allowed |
@@ -827,7 +827,7 @@ Config (`viability` block):
 | --- | --- | --- | --- |
 | `min_viable_quote` | `q_min` | `50000` | Minimum operational quote-notional required on **each** side |
 | `margin_buffer` | `δ` | `5000` | Sigmoid scale for soft margins (same units as margins: quote currency) |
-| `availability_target` | `A*` | `0.99` | Target terminal availability |
+| `availability_target` | `A*` | `0.99` | Target next-step availability |
 | `lambda_init` | `λ_0` | `0` | Initial multiplier (maps to `θ_0`, §8.6) |
 | `lambda_learning_rate` | `η` | `0.02` | Dual learning rate |
 | `shortfall_tolerance` | `ε` | `0.05` | Parsed and stored; **not used** in the current dual update rule |
@@ -869,7 +869,7 @@ Diagnostics (batch means over path/time unless noted):
 | `viability_ask_margin` | mean `m_ask` |
 | `viability_base_notional` | mean `b · p` |
 | `viability_step_availability` | mean `Ã` |
-| `viability_min_availability` | mean terminal `Ã_H` (see below) |
+| `viability_min_availability` | mean next-step `Ã_1` (see below) |
 
 #### 8.5.4 Rollout path snapshots
 
@@ -877,25 +877,26 @@ During each Adam closure, for each MC sample, the rollout records wallet/mid sna
 
 ```text
 index 0:  (b_0, q_0, p_0)     initial wallet before horizon step 0
-index 1:  after step 0 soft_fill + book evolution
+index 1:  after step 0 soft_fill + book evolution   ← viability uses this step
+index 2:  after step 1
 …
-index H:  after step H−1       terminal post-fill state
+index H:  after step H−1
 ```
 
-Path tensors have shape `(N_paths, H+1)`. Snapshots after each step use **post-fill** `(inventory, cash, mid)` from `soft_fill_batched` and evolved orderbook mids.
+Path tensors have shape `(N_paths, H+1)`.
 
-Viability reads **terminal availability only**:
+Viability reads **next-step availability only**:
 
 ```text
-Ã_H^(i) = Ã(b_H^(i), q_H^(i), p_H^(i))     last column of path i
+Ã_1^(i) = Ã(b_1^(i), q_1^(i), p_1^(i))     column 1 of path i
 ```
 
-**Design note:** Shortfall uses `Ã_H`, not `min_h Ã_h` along the path. Simulated fills over the horizon can **improve** terminal availability relative to an early depleted step; the path minimum is intentionally **not** used (see `viability_path_shortfall` docstring).
+**Design note:** Shortfall uses `Ã_1`, not terminal `Ã_H` and not `min_h Ã_h`. The penalty targets the wallet immediately after the first simulated action/fill, matching the goal of keeping both sides above `q_min` on every decision step rather than allowing optimistic end-of-horizon recovery in simulation.
 
 #### 8.5.5 Per-path and batch shortfall
 
 ```text
-S^(i) = max(0, A* − Ã_H^(i))
+S^(i) = max(0, A* − Ã_1^(i))
 𝒮     = (1/N) Σ_i S^(i)        # viability_penalty_raw / viability_shortfall
 ```
 
@@ -903,7 +904,7 @@ S^(i) = max(0, A* − Ã_H^(i))
 viability_penalty = −λ · 𝒮
 ```
 
-Gradients flow: action → fills → terminal `(b_H, q_H, p_H)` → `Ã_H` → `𝒮` → `J`.
+Gradients flow: action → first-step fills → `(b_1, q_1, p_1)` → `Ã_1` → `𝒮` → `J`.
 
 ---
 
@@ -936,8 +937,8 @@ J        ← J − λ_closure · 𝒮     # combine_viability_term
 **After `optimize()` completes** (once per controller decision):
 
 ```text
-Ā_H = mean_i(Ã_H^(i))            # from diagnostics: viability_min_availability
-gap = A* − Ā_H                   # signed availability gap
+Ā_1 = mean_i(Ã_1^(i))            # from diagnostics: viability_min_availability
+gap = A* − Ā_1                   # signed availability gap
 θ_{t+1} = θ_t + η · gap
 λ_{t+1} = exp(θ_{t+1})
 ```
@@ -948,9 +949,9 @@ Implementation: `update_viability_theta`. Joint mode updates local and global `�
 
 | Situation | `gap` | Effect on `θ`, `λ` |
 | --- | --- | --- |
-| Terminal availability below target (`Ā_H < A*`) | `> 0` | `θ` increases → `λ` increases → stronger viability penalty next decision |
-| Terminal availability above target (`Ā_H > A*`) | `< 0` | `θ` decreases → `λ` decreases → weaker penalty next decision |
-| At target (`Ā_H = A*`) | `0` | `θ` unchanged |
+| Next-step availability below target (`Ā_1 < A*`) | `> 0` | `θ` increases → `λ` increases → stronger viability penalty next decision |
+| Next-step availability above target (`Ā_1 > A*`) | `< 0` | `θ` decreases → `λ` decreases → weaker penalty next decision |
+| At target (`Ā_1 = A*`) | `0` | `θ` unchanged |
 
 There is **no** `ε` tolerance in the update rule (unlike classical `λ ← λ + η(S − ε)` on shortfall). `shortfall_tolerance` in config is currently **inert**.
 
@@ -982,9 +983,9 @@ maximize_π  CE_eff(π)
 subject to  E[Ã_H] ≥ A*     (softened via 𝒮)
 ```
 
-`λ` rises when the constraint is violated (low terminal availability) and falls when the constraint is slack. Unlike fixed `w_inv`, the trade-off against CE **adapts**, but:
+`λ` rises when the constraint is violated (low next-step availability) and falls when the constraint is slack. Unlike fixed `w_inv`, the trade-off against CE **adapts**, but:
 
-- Only **terminal** availability enters `𝒮` (not path-min).
+- Only **next-step** availability enters `𝒮` (index 1, not terminal).
 - `λ` is fixed during the inner Adam solve (no inner dual loop).
 - CE may still dominate if `λ` is small or `𝒮` is small (e.g. saturated sigmoid with miscalibrated `q_min`).
 
@@ -1009,7 +1010,7 @@ Representative diagnostics keys:
 | `viability_penalty` | `−λ · 𝒮` |
 | `viability_penalty_raw` | `𝒮` |
 | `viability_shortfall` | same as `𝒮` in tensor components |
-| `viability_min_availability` | `Ā_H` |
+| `viability_min_availability` | `Ā_1` |
 | `viability_lambda` / `viability_lambda_learned` | see §8.6.3 |
 
 Joint mode prefixes global venue keys with `global_`.
@@ -1044,9 +1045,9 @@ Raw sub-scores (`viability_penalty_raw`, `book_presence`, etc.) are **excluded**
 
 ### 8.9 Worked viability example (illustrative units)
 
-Take `q_min = 5×10⁶` IRT, `δ = 5×10⁵` IRT, `A* = 0.9`, terminal wallet after rollout:
+Take `q_min = 5×10⁶` IRT, `δ = 5×10⁵` IRT, `A* = 0.9`, wallet after first simulated step:
 
-| `q_H` (IRT) | `b_H` (USDT) | `p_H` | `m_bid` | `m_ask` | `Ã_H` (approx.) | `S^(i)` |
+| `q_1` (IRT) | `b_1` (USDT) | `p_1` | `m_bid` | `m_ask` | `Ã_1` (approx.) | `S^(i)` |
 | --- | --- | --- | --- | --- | --- | --- |
 | 18×10⁶ | 0.005 | 170k | 13×10⁶ | −8.5×10⁵ | ~0 | 0.9 |
 | 10×10⁶ | 45 | 170k | 5×10⁶ | 2.65×10⁶ | ~0.88 | 0.02 |
@@ -1177,7 +1178,7 @@ Legacy keys (`w_inv`, `w_book`, `inventory_zone`, `min_quote_qty`, `quote_size_m
 | `−μ · max(0, B_min − B)` | `B ∈ [0,1]` × fixed `μ` | No — `validity.penalty_scale` |
 | `−λ · 𝒮` | `𝒮 ∈ [0, A*]` × `λ = exp(θ)` | **Yes** — dual update on `θ` after each decision (§8.6) |
 
-`μ` is a **static config scalar**. `λ` adapts to terminal availability gap `A* − Ā_H` but is **fixed during** each Adam solve.
+`μ` is a **static config scalar**. `λ` adapts to next-step availability gap `A* − Ā_1` but is **fixed during** each Adam solve.
 
 ### 12.2 Why tuning is non-obvious
 
@@ -1196,7 +1197,7 @@ There is **no single `μ` or `λ_init`** that yields a constant economic trade-o
 
 ### 12.3 Illustrative viability arithmetic (not a tuning guide)
 
-With `A* = 0.9`, `𝒮 = 0.15` (mean terminal shortfall), and `|CE_eff| = 1`:
+With `A* = 0.9`, `𝒮 = 0.15` (mean next-step shortfall), and `|CE_eff| = 1`:
 
 | `λ` | `\|−λ · 𝒮\|` | Share of `\|J\|` terms (CE + viability) |
 | --- | --- | --- |
@@ -1207,13 +1208,13 @@ With `A* = 0.9`, `𝒮 = 0.15` (mean terminal shortfall), and `|CE_eff| = 1`:
 
 If `|CE_eff| = 0.01` with `λ = 0.1`, viability share rises to ~60%. If `CE_eff = 0`, viability can dominate **relative** contribution fractions while absolute penalty stays small.
 
-**Dual steady state (sketch):** if `Ā_H` persistently sits below `A*`, `θ` drifts up and `λ` grows until the optimizer quotes more conservatively and terminal availability rises. If `q_min` is set far above realistic margins, `𝒮` stays near `A*` regardless of action → dual may raise `λ` without improving `Ā_H`.
+**Dual steady state (sketch):** if `Ā_1` persistently sits below `A*`, `θ` drifts up and `λ` grows until the optimizer quotes more conservatively and next-step availability rises. If `q_min` is set far above realistic margins, `𝒮` stays near `A*` regardless of action → dual may raise `λ` without improving `Ā_1`.
 
 ### 12.4 Design space not implemented
 
 - Inner dual loop during Adam (update `θ` each epoch)
 - `shortfall_tolerance` in the dual update (`λ ← λ + η(𝒮 − ε)`)
-- Path-min availability `min_h Ã_h` instead of terminal `Ã_H`
+- Path-min availability `min_h Ã_h` instead of next-step `Ã_1`
 - Free-balance margins separate from locked collateral
 - `μ` or `λ` proportional to EWMA `|CE_raw|`
 - Hard minimum spread or minimum two-sided size in `J` (only soft validity/viability)
@@ -1233,7 +1234,7 @@ See `docs/viability_term.md` for design alternatives discussed but not wired.
 | `state.local_inventory`, `local_cash` | Wallet fed to MPC | May lag exchange; virtual vs physical |
 | `state.local_*_wallet` | Free/total/locked legs | Viability uses **total**; capacity uses same totals |
 | `validity_book_score` | `B` at h=0 | Unweighted; penalty via `validity_penalty` |
-| `viability_min_availability` | `Ā_H` (mean terminal `Ã`) | Drives dual update (§8.6) |
+| `viability_min_availability` | `Ā_1` (mean next-step `Ã`) | Drives dual update (§8.6) |
 | `viability_penalty_raw` | `𝒮` | Unweighted shortfall |
 | `viability_lambda_learned` | `λ` for **next** decision | Tracks dual state; `viability_lambda` should match prior tick's learned |
 
@@ -1247,9 +1248,9 @@ Postgres tables: `mm_optimizer_facts`, `mm_optimizer_component_facts`, `mm_event
 | --- | --- | --- |
 | Profitable quoting | Maximize simulated CE | Sim ≠ live; model error; fee/slippage gaps |
 | Both sides quoted | Hard capacity; optional validity on `B` | `μ=0` → no soft book-shape gate; mins are 0 |
-| Don't run out of IRT/USDT | Capacity zeros depleted side; viability on terminal `Ã_H` | Uses **total** balance; locked funds can hide free depletion |
+| Don't run out of IRT/USDT | Capacity zeros depleted side; viability on next-step `Ã_1` | Uses **total** balance; locked funds can hide free depletion |
 | Wide spread OK | No BBO term in CE | Tightness only if validity enabled |
-| Maintain quoting capacity | `−λ · 𝒮` on simulated paths | `q_min`/`δ` calibration; terminal-only `Ã_H`; small `λ` vs CE |
+| Maintain quoting capacity | `−λ · 𝒮` on simulated paths | `q_min`/`δ` calibration; next-step `Ã_1`; small `λ` vs CE |
 | Safe live operation | Risk + reconcile | Outside `J`; can reject MPC output entirely |
 
 ---
@@ -1275,8 +1276,8 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 ### 15.3 Objective structure
 
 - **CE normalization applies only to CE**; validity `μ` and viability `λ` sit in different units unless manually aligned.
-- **Viability `λ` adapts** on terminal availability gap, but `shortfall_tolerance` is not wired into the dual update.
-- **Viability shortfall uses terminal `Ã_H` only**, not minimum availability along the path.
+- **Viability `λ` adapts** on next-step availability gap, but `shortfall_tolerance` is not wired into the dual update.
+- **Viability shortfall uses next-step `Ã_1` only** (first post-fill snapshot), not terminal horizon availability.
 - **Viability margins use total balances**, not free-only; exchange may reject quotes when funds are locked in resting orders.
 - **`μ = 0`** disables validity; **`λ_init = 0`** starts with negligible viability penalty until dual raises `θ`.
 - **Sigmoid calibration:** at `m = 0`, each side has `σ(0) = 0.5`, so `Ã = 0.25` when both margins are exactly zero.
@@ -1303,7 +1304,7 @@ This section lists areas the documentation and diagnostics do not fully resolve.
 ### 15.7 Diagnostics interpretation
 
 - Contribution fractions **≠** economic importance.
-- `viability_min_availability` is mean terminal `Ã_H` over MC paths, not live wallet availability.
+- `viability_min_availability` is mean next-step `Ã_1` over MC paths, not live wallet availability.
 - Plot **`viability_lambda_learned`** for dual time series; closure `viability_lambda` may lag or disagree if stamping is inconsistent.
 - `expected_total_return` is simulated mean return, not accounting PnL.
 - Component facts store initial/final/best snapshots; Grafana may show final fractions while operator inspects best CE.
@@ -1320,12 +1321,12 @@ Areas where multiple valid approaches exist and the current code picks one:
 
 | Topic | Current approach | Alternatives not in code |
 | --- | --- | --- |
-| Return vs capacity trade-off | Adaptive `λ` on terminal `𝒮`; fixed `μ` on `B` | Inner dual loop; CE-linked `μ`; constraint formulation |
+| Return vs capacity trade-off | Adaptive `λ` on next-step `𝒮`; fixed `μ` on `B` | Inner dual loop; CE-linked `μ`; constraint formulation |
 | CE scale | Optional EWMA normalize CE only | Joint normalization; normalize all terms |
 | Two-sided presence | Hard capacity + optional validity | Hard min size per side; path-min viability |
 | Capacity target | Soft `Ã_H` vs `A*` with dual `λ` | Free-balance margins; inventory ratio targets |
 | Risk in objective | Entropic CE over paths | Mean-variance, CVaR in terminal `J` (legacy branch only) |
-| Horizon objective | Sum of `ΔW` then one CE; terminal viability | Per-step viability; discounting |
+| Horizon objective | Sum of `ΔW` then one CE; next-step viability | Per-step viability over full horizon; discounting |
 
 ---
 
@@ -1380,9 +1381,9 @@ Shortage/threshold inventory penalties in that branch are **no longer wired** in
 | `δ` | `viability.margin_buffer` |
 | `m_bid`, `m_ask` | Quote-notional margins `q − q_min`, `b·p − q_min` |
 | `a_bid`, `a_ask` | Soft side availability `σ(m/δ)` |
-| `Ã`, `Ã_H` | Product availability; terminal value on path |
+| `Ã`, `Ã_1` | Product availability; next-step value on path (column 1) |
 | `A*` | `viability.availability_target` |
-| `𝒮` | Mean path shortfall `max(0, A* − Ã_H)` (`viability_penalty_raw`) |
+| `𝒮` | Mean path shortfall `max(0, A* − Ã_1)` (`viability_penalty_raw`) |
 | `λ`, `θ` | Viability multiplier `λ = exp(θ)`; `θ` persisted on MPC instance |
 | `η` | `viability.lambda_learning_rate` |
 | `s` | CE EWMA scale when normalization enabled |
