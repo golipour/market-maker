@@ -122,6 +122,33 @@ def _maybe_seed_worker_registry(services: list[StackService]) -> None:
         print("[stack] seeded local registry for worker-1", flush=True)
 
 
+def _redis_url_from_env() -> str:
+    return os.environ.get("MM_BUS_REDIS_URL", "redis://localhost:6379/0").strip()
+
+
+def _check_redis_available(redis_url: str) -> bool:
+    try:
+        import redis
+    except ImportError:
+        return True
+    try:
+        client = redis.from_url(redis_url, socket_connect_timeout=2.0)
+        try:
+            return bool(client.ping())
+        finally:
+            client.close()
+    except Exception as exc:
+        print(
+            f"[stack] warning: Redis unreachable at {redis_url} ({type(exc).__name__}: {exc})",
+            flush=True,
+        )
+        print(
+            "[stack] start infrastructure first: docker compose up -d redis db",
+            flush=True,
+        )
+        return False
+
+
 def run_stack(
     services: list[StackService],
     *,
@@ -129,6 +156,8 @@ def run_stack(
     ingestor_warmup_s: float,
 ) -> int:
     load_mm_env()
+    if not _check_redis_available(_redis_url_from_env()):
+        return 1
     _maybe_seed_worker_registry(services)
     procs: list[tuple[str, subprocess.Popen[str]]] = []
     stop_requested = False
