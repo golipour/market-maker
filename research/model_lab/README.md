@@ -8,6 +8,7 @@ Walk-forward flow/price model research on persisted Postgres market data.
 |-----|----------|
 | **[GUIDE.md](GUIDE.md) §1** | Problem domain, interval steps, walk-forward NLL metric |
 | **[GUIDE.md](GUIDE.md) §2** | **Current production models** — formulas, configs, trained-parameter examples |
+| **[THEORETICAL_ROADMAP.md](THEORETICAL_ROADMAP.md)** | First-principles problem definition, limits of prediction, and evidence-led online research programme |
 | **[GUIDE.md](GUIDE.md) §5** | Quick start commands |
 
 ## One-command benchmark (production models)
