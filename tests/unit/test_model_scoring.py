@@ -56,6 +56,106 @@ def test_local_mid_delta_skips_invalid_sigma() -> None:
     assert result.nll is None
 
 
+def test_conditional_mechanical_mid_uses_mixture_params_not_ewma_defaults() -> None:
+    from mm.models.scoring import score_conditional_mechanical_mid_delta
+
+    params = {
+        "kind": "conditional_mechanical_mixture",
+        "gate_beta": [0.0, 0.0],  # q_market ≈ 0.5
+        "market_beta": {"mid": [0.0, 1.0]},
+        "refresh_mean": {"mid": 0.0},
+        "market_sigma": {"mid": 50.0},
+        "refresh_sigma": {"mid": 50.0},
+        "student_df": 3.0,
+    }
+    # mech_mid_delta=10 → market mean=10; mixture mean ≈ 5, sigma ≈ 50.
+    mixture = score_conditional_mechanical_mid_delta(
+        delta_mid=10.0,
+        mech_mid_delta=10.0,
+        total_flow=0.0,
+        params_before=params,
+    )
+    # Old bug scored mixture with residual EWMA defaults (mu=0, sigma=1).
+    broken = score_local_mid_delta(
+        delta_mid=10.0,
+        params_before={"mu_mid": 0.0, "sigma_mid": 1.0},
+    )
+    assert mixture.skip_reason is None
+    assert broken.skip_reason is None
+    assert mixture.nll is not None and broken.nll is not None
+    assert mixture.nll < broken.nll
+    assert mixture.observation["sigma_mid_before"] > 10.0
+    assert abs(mixture.observation["mu_mid_before"] - 5.0) < 1e-6  # 0.5*10 + 0.5*0
+    assert mixture.observation["market_sigma_mid"] == pytest.approx(50.0)
+
+
+def test_score_frame_models_mixture_does_not_use_sigma_one_default() -> None:
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+    from mm.core.models.strategy import StrategyInputFrame
+    from mm.models.scoring import score_frame_models
+    from mm.mpc.mpc_state import OrderbookRelative, State
+    from mm.mpc.price_torch import TorchConditionalMechanicalMixturePriceModel
+
+    def _book(bid: float, ask: float, ts: int) -> RawOrderbook:
+        return RawOrderbook(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            timestamp_ms=ts,
+            bids=(PriceLevel(bid, 100.0),),
+            asks=(PriceLevel(ask, 100.0),),
+            is_snapshot=True,
+        )
+
+    def _event(book: RawOrderbook, *, buy: float, sell: float, t0: int, t1: int) -> MarketEvent:
+        return MarketEvent(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            interval_ms=t1 - t0,
+            t_start_ms=t0,
+            t_end_ms=t1,
+            orderbook=book,
+            trades=(),
+            buy_volume=buy,
+            sell_volume=sell,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=0.5 * (book.bids[0].price + book.asks[0].price),
+        )
+
+    prev = StrategyInputFrame(local=_event(_book(100.0, 102.0, 1000), buy=0.0, sell=0.0, t0=0, t1=1000))
+    curr = StrategyInputFrame(local=_event(_book(110.0, 112.0, 2000), buy=5.0, sell=0.0, t0=1000, t1=2000))
+    model = TorchConditionalMechanicalMixturePriceModel(initial_sigma=50.0, initial_log_sigma=0.25)
+    state = State(
+        mid=111.0,
+        ob_rel=OrderbookRelative(bids=(), asks=()),
+        buy_vol=5.0,
+        sell_vol=0.0,
+        inventory=0.0,
+        cash=0.0,
+        buy_vwap=111.0,
+        sell_vwap=110.0,
+    )
+    scores = score_frame_models(
+        frame=curr,
+        previous_frame=prev,
+        state=state,
+        local_market_flow_model=None,
+        local_price_model=model,
+        global_market_flow_model=None,
+        global_price_model=None,
+        local_market_flow_kind="hurdle_lognormal",
+        local_price_kind="conditional_mechanical_mixture",
+        global_market_flow_kind="hurdle_lognormal",
+        global_price_kind="gaussian",
+    )
+    score = scores["local_price"]
+    assert score.skip_reason is None
+    assert score.nll is not None
+    assert score.nll < 100.0  # old bug produced NLL in the thousands for ~10 IRT moves
+    assert score.observation["sigma_mid_before"] == pytest.approx(50.0, rel=0.05)
+    assert score.params_before.get("kind") == "conditional_mechanical_mixture"
+
+
 def test_strategy_price_model_update_uses_true_vwap_residuals() -> None:
     from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
     from mm.core.models.strategy import StrategyInputFrame

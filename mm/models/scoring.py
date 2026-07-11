@@ -161,7 +161,7 @@ def score_local_mid_delta(
     delta_mid: float,
     params_before: dict[str, Any],
 ) -> ScoreResult:
-    """Gaussian NLL for realized local mid change."""
+    """Gaussian NLL for realized local mid change (residual / EWMA price models)."""
 
     mu = float(params_before.get("mu_mid", 0.0))
     sigma = float(params_before.get("sigma_mid", params_before.get("sigma_buy", 1e-6)))
@@ -181,7 +181,233 @@ def score_local_mid_delta(
     )
 
 
-def _price_params_before(model: Any) -> dict[str, float]:
+_MIXTURE_PRICE_KINDS = frozenset(
+    {"conditional_mechanical_mixture", "flow_gated_mixture"}
+)
+
+
+def _is_mixture_price_kind(kind: str, params: dict[str, Any] | None = None) -> bool:
+    kind_l = str(kind or "").strip().lower()
+    if kind_l in _MIXTURE_PRICE_KINDS:
+        return True
+    if params is None:
+        return False
+    return str(params.get("kind", "")).strip().lower() in _MIXTURE_PRICE_KINDS
+
+
+def _normal_logpdf_var(error: float, variance: float, *, sigma_min: float = 1e-6) -> float:
+    var = max(sigma_min * sigma_min, float(variance))
+    return -0.5 * (math.log(2.0 * math.pi * var) + (error * error) / var)
+
+
+def _student_t_logpdf_var(
+    error: float,
+    variance: float,
+    *,
+    student_df: float,
+    sigma_min: float = 1e-6,
+) -> float:
+    nu = max(2.1, float(student_df))
+    var = max(sigma_min * sigma_min, float(variance))
+    scale2 = max(sigma_min * sigma_min, var * (nu - 2.0) / nu)
+    return (
+        math.lgamma((nu + 1.0) / 2.0)
+        - math.lgamma(nu / 2.0)
+        - 0.5 * math.log(nu * math.pi * scale2)
+        - ((nu + 1.0) / 2.0) * math.log1p((error * error) / (nu * scale2))
+    )
+
+
+def _mixture_market_probability(gate_beta: Any, total_flow: float) -> float:
+    beta = list(gate_beta) if gate_beta is not None else [0.0, 0.0]
+    b0 = float(beta[0]) if len(beta) > 0 else 0.0
+    b1 = float(beta[1]) if len(beta) > 1 else 0.0
+    log_flow = min(math.log1p(max(0.0, float(total_flow))), 12.0)
+    score = b0 + b1 * log_flow
+    if not math.isfinite(score):
+        return 0.5
+    # Match TorchConditionalMechanicalMixturePriceModel._market_probability_np.
+    return min(0.999, max(0.001, float(1.0 / (1.0 + math.exp(-score)))))
+
+
+def score_conditional_mechanical_mid_delta(
+    *,
+    delta_mid: float,
+    mech_mid_delta: float,
+    total_flow: float,
+    params_before: dict[str, Any],
+) -> ScoreResult:
+    """
+    Mixture NLL for realized mid change under conditional_mechanical_mixture.
+
+    Predictive density (pre-update params):
+      q · Normal(μ_mkt, σ_mkt²) + (1−q) · StudentT(μ_ref, σ_ref², ν)
+    where μ_mkt = β₀ + β₁ · mech_mid_delta and q is the flow gate.
+    """
+
+    sigma_min = 1e-6
+    market_beta = params_before.get("market_beta") or {}
+    mid_beta = market_beta.get("mid") if isinstance(market_beta, dict) else None
+    if mid_beta is None:
+        mid_beta = [0.0, 0.0]
+    b0 = float(mid_beta[0]) if len(mid_beta) > 0 else 0.0
+    b1 = float(mid_beta[1]) if len(mid_beta) > 1 else 0.0
+    market_mean = b0 + b1 * float(mech_mid_delta)
+
+    refresh_mean_map = params_before.get("refresh_mean") or {}
+    refresh_mean = (
+        float(refresh_mean_map.get("mid", 0.0))
+        if isinstance(refresh_mean_map, dict)
+        else 0.0
+    )
+
+    market_sigma_map = params_before.get("market_sigma") or {}
+    refresh_sigma_map = params_before.get("refresh_sigma") or {}
+    market_sigma = (
+        float(market_sigma_map.get("mid", 50.0))
+        if isinstance(market_sigma_map, dict)
+        else 50.0
+    )
+    refresh_sigma = (
+        float(refresh_sigma_map.get("mid", 50.0))
+        if isinstance(refresh_sigma_map, dict)
+        else 50.0
+    )
+    if not math.isfinite(market_sigma) or market_sigma <= 0.0:
+        return ScoreResult(
+            skip_reason="invalid_sigma",
+            observation={
+                "delta_mid": float(delta_mid),
+                "mech_mid_delta": float(mech_mid_delta),
+                "market_sigma_mid": market_sigma,
+            },
+        )
+    if not math.isfinite(refresh_sigma) or refresh_sigma <= 0.0:
+        return ScoreResult(
+            skip_reason="invalid_sigma",
+            observation={
+                "delta_mid": float(delta_mid),
+                "mech_mid_delta": float(mech_mid_delta),
+                "refresh_sigma_mid": refresh_sigma,
+            },
+        )
+
+    student_df = float(params_before.get("student_df", 3.0))
+    q_market = _mixture_market_probability(params_before.get("gate_beta"), total_flow)
+    q_refresh = 1.0 - q_market
+
+    market_err = float(delta_mid) - market_mean
+    refresh_err = float(delta_mid) - refresh_mean
+    market_ll = math.log(max(_MIN_PROB, q_market)) + _normal_logpdf_var(
+        market_err, market_sigma * market_sigma, sigma_min=sigma_min
+    )
+    refresh_ll = math.log(max(_MIN_PROB, q_refresh)) + _student_t_logpdf_var(
+        refresh_err,
+        refresh_sigma * refresh_sigma,
+        student_df=student_df,
+        sigma_min=sigma_min,
+    )
+    # log(q N + (1-q) T) via log-sum-exp
+    m = max(market_ll, refresh_ll)
+    ll = m + math.log(math.exp(market_ll - m) + math.exp(refresh_ll - m))
+    nll = -ll
+
+    # Mixture mean / variance for a standardized residual diagnostic.
+    mixture_mean = q_market * market_mean + q_refresh * refresh_mean
+    # Student-t with ν>2 has variance = scale² * ν/(ν-2); model stores that variance in refresh_var.
+    mixture_var = (
+        q_market * (market_sigma * market_sigma + (market_mean - mixture_mean) ** 2)
+        + q_refresh * (refresh_sigma * refresh_sigma + (refresh_mean - mixture_mean) ** 2)
+    )
+    mixture_sigma = math.sqrt(max(sigma_min * sigma_min, mixture_var))
+    z = (float(delta_mid) - mixture_mean) / mixture_sigma
+
+    return ScoreResult(
+        log_likelihood=ll,
+        nll=nll,
+        observation={
+            "delta_mid": float(delta_mid),
+            "mech_mid_delta": float(mech_mid_delta),
+            "total_flow": float(total_flow),
+            "mu_mid_before": float(mixture_mean),
+            "sigma_mid_before": float(mixture_sigma),
+            "market_prob": float(q_market),
+            "market_mean_mid": float(market_mean),
+            "refresh_mean_mid": float(refresh_mean),
+            "market_sigma_mid": float(market_sigma),
+            "refresh_sigma_mid": float(refresh_sigma),
+        },
+        standardized_residual=float(z),
+    )
+
+
+def _mechanical_mid_delta_from_frames(
+    previous_frame: StrategyInputFrame,
+    frame: StrategyInputFrame,
+    *,
+    price_model: Any | None = None,
+) -> float | None:
+    """Mechanical mid move from MOF-only consumption of the previous book."""
+
+    from types import SimpleNamespace
+
+    from mm.core.order_constraints import mid_from_orderbook
+
+    prev_ob = previous_frame.local.orderbook
+    buy_vol = float(frame.local.buy_volume)
+    sell_vol = float(frame.local.sell_volume)
+    try:
+        prev_mid = float(mid_from_orderbook(prev_ob))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    # Price-model helpers expect a mid-bearing book view (see mpc_engine._orderbook_with_mid).
+    book_view = SimpleNamespace(bids=prev_ob.bids, asks=prev_ob.asks, mid=prev_mid)
+    if hasattr(price_model, "_transition_mechanical_best"):
+        try:
+            mech_bid, mech_ask = price_model._transition_mechanical_best(
+                book_view, buy_vol, sell_vol
+            )
+            return 0.5 * (float(mech_bid) + float(mech_ask)) - prev_mid
+        except Exception:
+            pass
+    try:
+        from mm.pricing.reference_prices_ticks import _consume_depth, _depth_by_price
+
+        bid_prev = _depth_by_price(book_view, "bid")
+        ask_prev = _depth_by_price(book_view, "ask")
+        bid_after = _consume_depth(bid_prev, sell_vol, best_first_asc=False)
+        ask_after = _consume_depth(ask_prev, buy_vol, best_first_asc=True)
+        mech_bid = float(max(bid_after.keys())) if bid_after else prev_mid
+        mech_ask = float(min(ask_after.keys())) if ask_after else prev_mid
+        return 0.5 * (mech_bid + mech_ask) - prev_mid
+    except Exception:
+        return None
+
+
+def _price_params_before(model: Any) -> dict[str, Any]:
+    """Extract scoreable pre-update params; prefer ``get_params()`` when present."""
+
+    if hasattr(model, "get_params"):
+        try:
+            params = dict(model.get_params())
+        except Exception:
+            params = {}
+        if params:
+            # Residual / EWMA-style models already expose mu_mid / sigma_mid.
+            if "mu_mid" in params and "sigma_mid" in params:
+                return {
+                    "mu_mid": float(params["mu_mid"]),
+                    "sigma_mid": float(params["sigma_mid"]),
+                    "mu_buy": float(params.get("mu_buy", params["mu_mid"])),
+                    "mu_sell": float(params.get("mu_sell", params["mu_mid"])),
+                    "sigma_buy": float(params.get("sigma_buy", params["sigma_mid"])),
+                    "sigma_sell": float(params.get("sigma_sell", params["sigma_mid"])),
+                    "kind": params.get("kind"),
+                }
+            if _is_mixture_price_kind(str(params.get("kind", "")), params):
+                return params
+
+    # Legacy fallback for residual models that expose private EWMA state only.
     sigma_buy = math.sqrt(max(0.0, float(getattr(model, "_sigma2_buy", 1.0))))
     sigma_sell = math.sqrt(max(0.0, float(getattr(model, "_sigma2_sell", 1.0))))
     sigma_min = float(getattr(model, "_sigma_min", 1e-6))
@@ -320,7 +546,30 @@ def score_frame_models(
                 result = ScoreResult(skip_reason="missing_previous_frame", observation={})
             else:
                 delta = float(curr_mid - prev_mid)
-                result = score_local_mid_delta(delta_mid=delta, params_before=params_before)
+                if _is_mixture_price_kind(local_price_kind, params_before):
+                    mech_mid_delta = _mechanical_mid_delta_from_frames(
+                        previous_frame,
+                        frame,
+                        price_model=local_price_model,
+                    )
+                    if mech_mid_delta is None:
+                        result = ScoreResult(
+                            skip_reason="missing_mechanical_mid",
+                            observation={"delta_mid": delta},
+                        )
+                    else:
+                        total_flow = max(
+                            0.0,
+                            float(frame.local.buy_volume) + float(frame.local.sell_volume),
+                        )
+                        result = score_conditional_mechanical_mid_delta(
+                            delta_mid=delta,
+                            mech_mid_delta=float(mech_mid_delta),
+                            total_flow=total_flow,
+                            params_before=params_before,
+                        )
+                else:
+                    result = score_local_mid_delta(delta_mid=delta, params_before=params_before)
         scores["local_price"] = _to_model_score(
             model="local_price",
             kind=local_price_kind,
