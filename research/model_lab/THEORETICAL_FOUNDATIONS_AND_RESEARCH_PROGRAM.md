@@ -263,11 +263,12 @@ directional edge.  It is not an entropy-rate estimate and it has not been held o
 The logged production performance deserves an immediate data-quality/calibration audit,
 not an architecture race.  Across the supplied file the flow NLL has median 13.06, P99
 21.46 and nine extreme scores above 100 (maximum 690.78), consistent with cold-start or
-support-floor events.  The price score has median 79.04 but mean 2,155, P99 26,451 and
-4,209 scores above 100; its logged standardized residuals have SD about 65.6.  Because
-that price score combines several transformed components, these values are not comparable
-to flow NLL or to another target.  They *do* show that support, scale, missing-data and
-conditional calibration must be audited before reading its mean as model quality.
+support-floor events.  The price score has median 79.04 but mean 2,155, P99 26,451,
+maximum 235,642, and 4,209 scores above 100; its logged standardized residuals have SD
+about 65.6.  Because that price score combines several transformed components, these
+values are not comparable to flow NLL or to another target.  They *do* show that support,
+scale, missing-data and conditional calibration must be audited before reading its mean as
+model quality.
 
 The export does not include raw depth levels, despite reporting depth counts.  Full-book
 state discovery and mechanical counterfactual tests must therefore query `mm_events` in

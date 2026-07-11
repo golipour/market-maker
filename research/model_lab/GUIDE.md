@@ -2,12 +2,16 @@
 
 This folder is a **standalone research sandbox** for fitting and comparing **market-flow** and **price** models on data already persisted by the market-maker runtime (Postgres `mm_events` / `mm_market_facts`).
 
-It is designed so an agent **with no prior context** can run experiments, add models, and pick winners by **walk-forward negative log-likelihood (NLL)**.
+It is designed so an agent **with no prior context** can reproduce a causal online
+benchmark, add an implementation of an already justified modelling assumption, and compare
+like-for-like forecasts by **walk-forward negative log-likelihood (NLL)**. It is not the
+document that decides which assumptions or model classes deserve to be tried.
 
 **Read this first if you are new:**
-1. [§1 Problem details](#1-problem-details-what-you-are-modeling) — domain, inputs, outputs, success metric
-2. [§2 Current production models (examples)](#2-current-production-models-examples) — exact formulas + config used in the live bot
-3. [§4 Quick start](#5-quick-start) — run your first benchmark
+1. [Theoretical foundations and research programme](THEORETICAL_FOUNDATIONS_AND_RESEARCH_PROGRAM.md) — first-principles target, predictability limits, evidence gates, and online-selection protocol
+2. [§1 Problem details](#1-problem-details-what-you-are-modeling) — domain, inputs, outputs, operational metric
+3. [§2 Current production models (examples)](#2-current-production-models-examples) — exact formulas + config used in the live bot
+4. [§5 Quick start](#5-quick-start) — reproduce a benchmark only after the target contract is fixed
 
 ---
 
@@ -83,7 +87,7 @@ For each scored step:
 | `median_nll` | median of per-step NLL | Robust to burst intervals with tiny \(P\) |
 | `total_nll` | sum of NLL | Comparable across runs with same \(T\) |
 
-**Compare within family:** flow NLL and price NLL are not on the same scale. Compare `flow:*` models against each other, and `price:*` models against each other.
+**Compare within family:** flow NLL and price NLL are not on the same scale. Compare `flow:*` models against each other, and `price:*` models against each other. The current price score is conditional on realised flow, so choosing a complete simulator from separate family leaderboards is invalid: use the chained joint score on one fixed target contract when comparing end-to-end transition laws. See the foundations document for the required calibration, tail-risk and decision gates.
 
 ### 1.5 What this lab is NOT
 
@@ -611,7 +615,13 @@ python -m research.model_lab.experiments.compare \
 
 Open `research/model_lab/outputs/*_summary.json`. Sort by `mean_nll` ascending.
 
-### Step D — Parameter sweep (manual)
+### Step D — Sensitivity check after an assumption is justified
+
+Do not use a decay grid to choose a research direction. First run the data audit,
+predictive-information and residual-dependence tests in
+`THEORETICAL_FOUNDATIONS_AND_RESEARCH_PROGRAM.md`. Once a model family and online update
+mechanism are justified, a small, pre-declared sensitivity check can test whether the
+conclusion depends on its adaptation-timescale assumption:
 
 Repeat with inline JSON configs, e.g. decay grids:
 
@@ -624,9 +634,12 @@ for d in 0.90 0.95 0.99; do
 done
 ```
 
-### Step E — Validate on holdout window
+### Step E — Validate on untouched future episodes
 
-Run twice with different `--since` / `--until` windows; the model that wins on both is more robust.
+Freeze the target contract and candidate before opening several later, contiguous episodes.
+Compare paired scores on identical timestamps; report calibration and regime/tail slices with
+dependence-aware uncertainty, not only a mean from two arbitrary windows. The full protocol
+is in `THEORETICAL_FOUNDATIONS_AND_RESEARCH_PROGRAM.md`.
 
 ---
 
@@ -680,11 +693,25 @@ Reference docs in repo:
 
 ## 15. Suggested research agenda
 
-1. **Flow family bake-off** — hurdle_lognormal vs hurdle_gamma vs weibull on 30s and 10s intervals.
-2. **Price family bake-off** — residual vs conditional_mechanical_mixture on full `mm_events` books.
-3. **Decay sensitivity** — sweep `decay` / `residual_decay` and plot mean NLL vs decay.
-4. **Regime slices** — filter steps by volume quantile; score models per regime.
-5. **New models** — implement AR features, microprice delta, or copula joint flow; register and compare.
+This is an implementation checklist for the programme in
+`THEORETICAL_FOUNDATIONS_AND_RESEARCH_PROGRAM.md`, not a model-shopping list.
+
+1. **Create a decision-time data contract** — audit availability timestamps, gaps, book
+   staleness, trade classification, raw depth, reference venues, and own action exposure.
+2. **Build a predictability atlas** — add causal information sets one at a time to nested,
+   online baselines and measure paired score gains by horizon with block-resampled
+   uncertainty.
+3. **Test factorisations and residual hypotheses** — assess joint buy/sell flow,
+   flow-to-price lead/lag conditional on pre-trade state, conditional scale/tails, and
+   change points. A candidate model must correspond to a dependency that survives this
+   stage.
+4. **Audit the incumbent forecast** — report randomized PIT/coverage, calibration by
+   predicted scale and regime, score tails, skips, and the chained joint score. Diagnose
+   support or measurement failures before interpreting architecture comparisons.
+5. **Implement one falsifiable online mechanism** — specify its state, update/fallback,
+   target, comparator and failure criterion before writing it. State-space, change-point,
+   point-process, neural and transformer approaches are estimators selected by this record,
+   not an unranked menu.
 
 ---
 
