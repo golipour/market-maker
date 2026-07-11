@@ -1,9 +1,25 @@
-# Research
+# Model Lab
 
-Offline experiments that are not part of the live runtime.
+Walk-forward flow/price model research on persisted Postgres market data.
 
-| Project | Description |
-|---------|-------------|
-| [model_lab/](model_lab/) | Walk-forward flow/price model comparison — **[GUIDE.md §1 problem](model_lab/GUIDE.md#1-problem-details-what-you-are-modeling)**, **[§2 models](model_lab/GUIDE.md#2-current-production-models-examples)**, **[EXPERIMENT_PLAN.md](model_lab/EXPERIMENT_PLAN.md)**, **[EXPERIMENT_PLAN_2.md](model_lab/EXPERIMENT_PLAN_2.md)** |
+## Start here
 
-Start with [model_lab/GUIDE.md](model_lab/GUIDE.md). For experiment plans, see [EXPERIMENT_PLAN.md](model_lab/EXPERIMENT_PLAN.md) and [EXPERIMENT_PLAN_2.md](model_lab/EXPERIMENT_PLAN_2.md).
+| Doc | Contents |
+|-----|----------|
+| **[GUIDE.md](GUIDE.md) §1** | Problem domain, interval steps, walk-forward NLL metric |
+| **[GUIDE.md](GUIDE.md) §2** | **Current production models** — formulas, configs, trained-parameter examples |
+| **[EXPERIMENT_PLAN.md](EXPERIMENT_PLAN.md)** | Full problem restatement, model taxonomy, experiment groups, caveats |
+| **[EXPERIMENT_PLAN_2.md](EXPERIMENT_PLAN_2.md)** | Extended agenda: three exploration tracks, execution order, implementation checklist |
+| **[GUIDE.md](GUIDE.md) §5** | Quick start commands |
+| **[notebooks/production_models_walkforward.ipynb](notebooks/production_models_walkforward.ipynb)** | Interactive walk-forward NLL for production flow + price models |
+
+## One-command benchmark (production models)
+
+```bash
+python -m research.model_lab.experiments.compare \
+  --exchange nobitex --symbol USDT_IRT --interval-ms 30000 \
+  --since 48h \
+  --models flow:hurdle_lognormal,price:conditional_mechanical_mixture,price:residual,baseline:zero_flow
+```
+
+See `experiments/configs/default.json` for the full model list matching `mm/configs/market_maker.runtime.example.json`.
