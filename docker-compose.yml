@@ -16,11 +16,24 @@
 #
 services:
   redis:
-    image: redis:latest
+    # Pin a slim image: redis:latest (8.x) bundles search/bloom modules and is heavy.
+    # Streams are an ephemeral bus (Postgres/Parquet is durable); disable RDB/AOF so
+    # BGSAVE does not fork ~6GB and OOM-kill the container on a small dev machine.
+    image: redis:7.2-alpine
     container_name: redis
     restart: unless-stopped
     ports:
       - "6379:6379"
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 2gb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis-data:/data
 
