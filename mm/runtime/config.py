@@ -15,6 +15,12 @@ from mm.core.models.instrument import (
 )
 from mm.core.risk_limits import GlobalVenueRiskLimits, VenueRiskLimits
 from mm.persistence.retention import RetentionPolicy, retention_policy_from_mapping
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    REMOVED_VENUE_OPTIMIZER_ALIASES,
+    RESERVATION_SKEW,
+)
 
 SourceRole = Literal["local", "global"]
 NegativeObjectiveActionMode = Literal["optimizer_action", "floor_action", "zero_action"]
@@ -135,10 +141,13 @@ class PrivateRuntimeConfig:
     """Private state and execution observation config for one exchange."""
 
     mode: str = "rest"
+    auth_mode: str | None = None
     api_token: str | None = None
     api_token_env: str | None = None
     api_key: str | None = None
     api_key_env: str | None = None
+    api_secret: str | None = None
+    api_secret_env: str | None = None
     api_private_key: str | None = None
     api_private_key_env: str | None = None
     api_passphrase: str | None = None
@@ -154,13 +163,19 @@ class PrivateRuntimeConfig:
 
     @property
     def enabled(self) -> bool:
-        return bool(
-            self.resolved_api_token()
-            or (
-                self.resolved_api_key()
-                and self.resolved_api_private_key()
-            )
-        )
+        return bool(self.resolved_api_key() or self.resolved_api_token())
+
+    def resolved_auth_mode(self, exchange: str | None = None) -> str:
+        exchange_key = str(exchange or "").lower().strip()
+        has_secret = bool(self.resolved_api_secret(exchange_key or None))
+        has_passphrase = bool(self.resolved_api_passphrase(exchange_key or None))
+        if exchange_key == "kucoin" and has_secret and has_passphrase:
+            return "signed_key_passphrase"
+        if has_secret and exchange_key in ("nobitex", "tabdeal", "bitpin", "kucoin"):
+            return "signed_key"
+        if self.auth_mode:
+            return str(self.auth_mode).strip()
+        return "api_key"
 
     def resolved_api_token(self, exchange: str | None = None) -> str | None:
         if self.api_token:
@@ -180,14 +195,23 @@ class PrivateRuntimeConfig:
             return os.environ.get(f"{exchange.upper()}_API_KEY")
         return None
 
-    def resolved_api_private_key(self, exchange: str | None = None) -> str | None:
+    def resolved_api_secret(self, exchange: str | None = None) -> str | None:
+        if self.api_secret:
+            return self.api_secret
         if self.api_private_key:
             return self.api_private_key
+        if self.api_secret_env:
+            return os.environ.get(self.api_secret_env)
         if self.api_private_key_env:
             return os.environ.get(self.api_private_key_env)
         if exchange:
-            return os.environ.get(f"{exchange.upper()}_API_PRIVATE_KEY")
+            return os.environ.get(f"{exchange.upper()}_API_SECRET") or os.environ.get(
+                f"{exchange.upper()}_API_PRIVATE_KEY"
+            )
         return None
+
+    def resolved_api_private_key(self, exchange: str | None = None) -> str | None:
+        return self.resolved_api_secret(exchange)
 
     def resolved_api_passphrase(self, exchange: str | None = None) -> str | None:
         if self.api_passphrase:
@@ -200,32 +224,29 @@ class PrivateRuntimeConfig:
 
     def resolved_api_credentials(self, exchange: str | None = None) -> Any:
         exchange_key = str(exchange or "").lower().strip()
-        api_key = self.resolved_api_key(exchange_key or None)
-        api_private_key = self.resolved_api_private_key(exchange_key or None)
-        if exchange_key == "nobitex" and api_key and api_private_key:
-            from mm.exchanges.nobitex.private_rest import NobitexApiKeyAuth
+        api_key = self.resolved_api_key(exchange_key or None) or self.resolved_api_token(
+            exchange_key or None
+        )
+        if not api_key and not self.resolved_api_secret(exchange_key or None):
+            return None
+        if not exchange_key:
+            return api_key
+        from mm.exchanges.auth import exchange_auth_spec, resolve_exchange_auth
 
-            return NobitexApiKeyAuth(api_key, api_private_key)
-        if exchange_key == "tabdeal":
-            from mm.exchanges.tabdeal.private_rest import TabdealApiKeyAuth
-
-            tabdeal_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            if tabdeal_api_key and api_private_key:
-                return TabdealApiKeyAuth(tabdeal_api_key, api_private_key)
-        if exchange_key == "bitpin":
-            from mm.exchanges.bitpin.private_rest import BitpinApiKeyAuth
-
-            bitpin_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            if bitpin_api_key and api_private_key:
-                return BitpinApiKeyAuth(bitpin_api_key, api_private_key)
-        if exchange_key == "kucoin":
-            from mm.exchanges.kucoin.private_rest import KucoinApiKeyAuth
-
-            kucoin_api_key = api_key or self.resolved_api_token(exchange_key or None)
-            api_passphrase = self.resolved_api_passphrase(exchange_key or None)
-            if kucoin_api_key and api_private_key and api_passphrase:
-                return KucoinApiKeyAuth(kucoin_api_key, api_private_key, api_passphrase)
-        return self.resolved_api_token(exchange_key or None)
+        spec = exchange_auth_spec(exchange_key) if exchange_key else None
+        auth_mode = self.resolved_auth_mode(exchange_key or None)
+        if spec is not None and auth_mode not in spec.supported_modes:
+            auth_mode = spec.default_mode
+        try:
+            return resolve_exchange_auth(
+                exchange_key,
+                auth_mode=auth_mode,
+                api_key=api_key,
+                api_secret=self.resolved_api_secret(exchange_key or None),
+                api_passphrase=self.resolved_api_passphrase(exchange_key or None),
+            )
+        except ValueError:
+            return api_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -850,12 +871,17 @@ class MarketMakerRuntimeConfig:
 def _private_contract(private: PrivateRuntimeConfig | None) -> dict[str, Any] | None:
     if private is None:
         return None
+    has_secret = bool(private.resolved_api_secret())
+    auth_mode = private.auth_mode
+    if not auth_mode:
+        auth_mode = "signed_key" if has_secret else "api_key"
     return {
         "mode": private.mode,
         "poll_interval_ms": private.poll_interval_ms,
         "fill_event_source": private.fill_event_source,
         "enabled": private.enabled,
-        "auth_type": "api_key" if private.resolved_api_key() and private.resolved_api_private_key() else "token",
+        "auth_mode": auth_mode,
+        "auth_type": auth_mode,
     }
 
 
@@ -1298,10 +1324,13 @@ def _private_from_mapping(payload: Any) -> PrivateRuntimeConfig | None:
         )
     return PrivateRuntimeConfig(
         mode=str(payload.get("mode", "rest")),
+        auth_mode=payload.get("auth_mode"),
         api_token=payload.get("api_token"),
         api_token_env=payload.get("api_token_env"),
         api_key=payload.get("api_key"),
         api_key_env=payload.get("api_key_env"),
+        api_secret=payload.get("api_secret"),
+        api_secret_env=payload.get("api_secret_env"),
         api_private_key=payload.get("api_private_key"),
         api_private_key_env=payload.get("api_private_key_env"),
         api_passphrase=payload.get("api_passphrase"),
@@ -1392,16 +1421,18 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         )
     optimizer_payload = payload.get("optimizer")
     if isinstance(optimizer_payload, dict):
+        payload = dict(payload)
+        optimizer_payload = dict(optimizer_payload)
+        payload["optimizer"] = optimizer_payload
         venue_optimizer_keys = {
             "n_components",
             "return_risk_aversion_beta",
             "objective_weight",
-            "quote_size_min_per_side",
-            "quote_size_max_per_side",
-            "reservation_offset",
-            "w_book",
-            "w_inv",
-            "inventory_zone",
+            CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+            CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+            RESERVATION_SKEW,
+            "validity",
+            "viability",
             "book_quality",
             "soft_fill_temp",
             "soft_fill_activation",
@@ -1426,6 +1457,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             }
         )
         removed_venue_optimizer_aliases = {
+            **REMOVED_VENUE_OPTIMIZER_ALIASES,
             "soft_fill_queue_penalty": "soft_fill_queue_model",
             "spread_structure": "book_quality.hard_structure",
         }
@@ -1444,8 +1476,8 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 "n_components",
                 "objective_weight",
                 *sorted(removed_threshold_objective_keys),
-                "quote_size_min_per_side",
-                "quote_size_max_per_side",
+                CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+                CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
                 "spread_structure",
                 "soft_fill_temp",
                 "soft_fill_activation",
@@ -1484,6 +1516,20 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 raise ValueError(
                     f"removed venue optimizer aliases under controller.optimizer.{venue}: "
                     f"{replacements}"
+                )
+            removed_inventory_zone = sorted(
+                key for key in ("w_inv", "inventory_zone") if key in venue_payload
+            )
+            if removed_inventory_zone:
+                raise ValueError(
+                    f"removed controller.optimizer.{venue} keys {', '.join(removed_inventory_zone)}; "
+                    "use viability {min_viable_quote, margin_buffer, availability_target, "
+                    "shortfall_tolerance, lambda_init, lambda_learning_rate}"
+                )
+            if "w_book" in venue_payload:
+                raise ValueError(
+                    f"removed controller.optimizer.{venue} key w_book; "
+                    "use validity {min_score, penalty_scale} with book_quality.soft_scoring"
                 )
             unknown_keys = sorted(
                 key for key in venue_payload if key not in venue_optimizer_keys
@@ -1667,10 +1713,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "optimizer": config.optimizer or {"kind": "monte_carlo_mpc_tensor_batched"},
         },
         "spread_depth_semantics": (
-            "optimizer.local/global quote_size_min_per_side is the venue lot-size floor "
-            "for spread-structured decoding; quote_size_max_per_side is an optional safety "
-            "cap. Cash/inventory capacity structurally caps each side; two-sided presence "
-            "is encouraged via w_book * book_quality when configured."
+            "optimizer.local/global cumulative_qty_floor_at_spread_max is the venue lot-size "
+            "floor for spread-structured decoding at spread_max; "
+            "cumulative_qty_cap_at_spread_max is an optional safety cap. "
+            "Cash/inventory capacity structurally caps each side; book-shape validity "
+            "is enforced via validity {min_score, penalty_scale} when configured."
         ),
         "risk": {
             "enabled": config.risk.enabled,
@@ -1695,28 +1742,31 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             "return_risk_aversion_beta": (
                 "venue risk aversion beta in (-1/beta)*ln(mean(exp(-beta*R_i)))"
             ),
-            "quote_size_min_per_side": (
-                "venue lot-size floor for spread-structured decoding at spread_max; "
+            "cumulative_qty_floor_at_spread_max": (
+                "venue lot-size floor for decoder total cumulative base qty at spread_max; "
                 "capacity bounds keep side mins at zero"
             ),
-            "quote_size_max_per_side": "optional venue cumulative quote depth safety cap per side at spread_max",
-            "w_book": "weight on normalized h=0 book-quality score added to the MPC objective",
-            "w_inv": "weight on trajectory inventory-zone penalty subtracted from the MPC objective",
-            "inventory_zone": (
-                "sigmoid comfort band on wallet imbalance (Q·mid−cash)/(|Q·mid|+|cash|); "
-                "keys {comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap}"
+            "cumulative_qty_cap_at_spread_max": (
+                "optional decoder cumulative base qty safety cap per side at spread_max"
+            ),
+            "validity": (
+                "book-shape validity gate with fixed penalty scale; "
+                "keys {min_score, penalty_scale}; uses book_quality.soft_scoring for B"
+            ),
+            "viability": (
+                "availability shortfall term with adaptive Lagrange multiplier; "
+                "keys {min_viable_quote, margin_buffer, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
             ),
             "book_quality": (
                 "book shape preferences: hard_structure caps first-touch decode "
                 "(action_max_spread, action_min_depth, action_k_epsilon); "
-                "soft_target sets spread/depth targets for w_book scoring "
+                "soft_scoring sets presence/tightness references for validity scoring "
                 "(measure='quoted' or 'combined')"
             ),
-            "reservation_offset": (
-                "optional relative reservation-price shift: r_max bounds dimensionless "
-                "r_offset with mid_eff = mid * (1 + r_offset); curve evaluation uses "
-                "D(x ± mid * r_offset) on the market spread grid"
+            "reservation_skew": (
+                "optional learnable reservation skew: max_abs_skew bounds dimensionless "
+                "r_skew; curve evaluation uses D(x ± mid * r_skew) on the market spread grid"
             ),
             "soft_fill_temp": "venue soft-fill temperature",
             "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",

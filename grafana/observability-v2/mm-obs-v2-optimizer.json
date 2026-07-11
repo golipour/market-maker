@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), and timing.",
+        "content": "Optimizer objective J, weighted-term contribution fractions (CE, book quality, inventory zone), final weighted components plus objective total, and timing.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -53,7 +53,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", stage AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective',stage,'value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['initial','final','best']) AS stage\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective',stage,'value'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -99,7 +99,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],\n    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','objective','contribution_fractions'],\n    e.payload #> ARRAY['optimizer','objective','final','contribution_fractions'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('risk_adjusted_return', 'validity_penalty', 'viability_penalty', 'global_validity_penalty', 'global_viability_penalty')\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -145,7 +145,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n       CASE WHEN kv.key LIKE '%_sec' THEN (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0 ELSE (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) END AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric,\n       CASE WHEN kv.key LIKE '%_sec' THEN (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0 ELSE (CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND) END AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(COALESCE(e.payload #> ARRAY['optimizer','timing'], '{}'::jsonb)) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND trim(kv.value) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -191,7 +191,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND kv.key IN ('risk_adjusted_return', 'book_quality', 'inventory_zone_penalty', 'global_book_quality', 'global_inventory_zone_penalty')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('risk_adjusted_return', 'validity_penalty', 'viability_penalty', 'global_validity_penalty', 'global_viability_penalty')\nUNION ALL\nSELECT e.ts AS \"time\", 'objective_total' AS metric, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective','final','value'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','objective','final','value'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['optimizer','objective','final','value'] IS NOT NULL\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -237,7 +237,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND (\n    kv.key LIKE 'book_%'\n    OR kv.key LIKE 'global_book_%'\n  )\n  AND kv.key NOT IN (\n    'book_quality',\n    'global_book_quality',\n    'book_quality_score',\n    'global_book_quality_score'\n  )\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND (\n    kv.key LIKE 'book_%'\n    OR kv.key LIKE 'global_book_%'\n  )\n  AND kv.key NOT IN (\n    'validity_penalty',\n    'global_validity_penalty',\n    'validity_book_score',\n    'global_validity_book_score'\n  )\nORDER BY 1",
           "refId": "A"
         }
       ],
@@ -283,11 +283,103 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND (\n    kv.key IN (\n      'inventory_zone_penalty_raw',\n      'inventory_zone_imbalance',\n      'inventory_zone_low_penalty',\n      'inventory_zone_high_penalty',\n      'global_inventory_zone_penalty_raw',\n      'global_inventory_zone_imbalance',\n      'global_inventory_zone_low_penalty',\n      'global_inventory_zone_high_penalty'\n    )\n  )\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND (\n    kv.key IN (\n      'viability_penalty_raw',\n      'viability_shortfall',\n      'viability_min_availability',\n      'viability_step_availability',\n      'viability_bid_margin',\n      'viability_ask_margin',\n      'viability_base_notional',\n      'global_viability_penalty_raw',\n      'global_viability_shortfall',\n      'global_viability_min_availability',\n      'global_viability_step_availability',\n      'global_viability_bid_margin',\n      'global_viability_ask_margin',\n      'global_viability_base_notional'\n    )\n  )\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Inventory zone breakdown",
+      "title": "Viability breakdown",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "sci",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH comps AS (\n  SELECT e.ts,\n         COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb) AS c\n  FROM mm_events e\n  WHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n)\nSELECT ts AS \"time\", metric, value\nFROM (\n  SELECT ts,\n         'λ applied (local)' AS metric,\n         COALESCE(\n           NULLIF((CASE\n  WHEN trim(COALESCE(c->>'viability_lambda', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_lambda', ''))::double precision\n  ELSE NULL\nEND), 0),\n           CASE\n             WHEN abs(CASE\n  WHEN trim(COALESCE(c->>'viability_penalty_raw', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_penalty_raw', ''))::double precision\n  ELSE 0\nEND) > 1e-15\n             THEN abs(CASE\n  WHEN trim(COALESCE(c->>'viability_penalty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_penalty', ''))::double precision\n  ELSE 0\nEND)\n                  / abs(CASE\n  WHEN trim(COALESCE(c->>'viability_penalty_raw', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_penalty_raw', ''))::double precision\n  ELSE 1\nEND)\n             ELSE CASE\n  WHEN trim(COALESCE(c->>'viability_lambda', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_lambda', ''))::double precision\n  ELSE NULL\nEND\n           END\n         ) AS value\n  FROM comps\n  WHERE c ? 'viability_penalty' OR c ? 'viability_lambda'\n  UNION ALL\n  SELECT ts,\n         'λ next (local)' AS metric,\n         CASE\n  WHEN trim(COALESCE(c->>'viability_lambda_learned', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'viability_lambda_learned', ''))::double precision\n  ELSE NULL\nEND AS value\n  FROM comps\n  WHERE c ? 'viability_lambda_learned'\n  UNION ALL\n  SELECT ts,\n         'λ applied (global)' AS metric,\n         COALESCE(\n           NULLIF((CASE\n  WHEN trim(COALESCE(c->>'global_viability_lambda', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_lambda', ''))::double precision\n  ELSE NULL\nEND), 0),\n           CASE\n             WHEN abs(CASE\n  WHEN trim(COALESCE(c->>'global_viability_penalty_raw', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_penalty_raw', ''))::double precision\n  ELSE 0\nEND) > 1e-15\n             THEN abs(CASE\n  WHEN trim(COALESCE(c->>'global_viability_penalty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_penalty', ''))::double precision\n  ELSE 0\nEND)\n                  / abs(CASE\n  WHEN trim(COALESCE(c->>'global_viability_penalty_raw', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_penalty_raw', ''))::double precision\n  ELSE 1\nEND)\n             ELSE CASE\n  WHEN trim(COALESCE(c->>'global_viability_lambda', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_lambda', ''))::double precision\n  ELSE NULL\nEND\n           END\n         ) AS value\n  FROM comps\n  WHERE c ? 'global_viability_penalty' OR c ? 'global_viability_lambda'\n  UNION ALL\n  SELECT ts,\n         'λ next (global)' AS metric,\n         CASE\n  WHEN trim(COALESCE(c->>'global_viability_lambda_learned', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(c->>'global_viability_lambda_learned', ''))::double precision\n  ELSE NULL\nEND AS value\n  FROM comps\n  WHERE c ? 'global_viability_lambda_learned'\n) s\nWHERE value IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Viability λ (applied vs next)",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       (scope || '.' || kv.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','config', scope, 'viability'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('min_viable_quote', 'margin_buffer', 'availability_target', 'shortfall_tolerance', 'lambda_init', 'lambda_learning_rate')\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Viability config",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -317,9 +409,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 27
+        "y": 35
       },
-      "id": 8,
+      "id": 10,
       "targets": [
         {
           "datasource": {
@@ -329,11 +421,57 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\",\n       (scope || '.' || kv.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','config', scope, 'inventory_zone'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic = '${diagnostics_topic}'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND ($__timeFilter(e.ts))\n  AND kv.key IN ('comfort_low', 'comfort_high', 'low_ramp_width', 'high_ramp_width', 'low_penalty_cap', 'high_penalty_cap')\nORDER BY 1",
+          "rawSql": "SELECT e.ts AS \"time\", kv.key AS metric, CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{}'::jsonb)\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND (\n    kv.key IN (\n      'validity_penalty_raw',\n      'validity_shortfall',\n      'validity_book_score',\n      'global_validity_penalty_raw',\n      'global_validity_shortfall',\n      'global_validity_book_score'\n    )\n  )\nORDER BY 1",
           "refId": "A"
         }
       ],
-      "title": "Inventory zone config",
+      "title": "Validity breakdown",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\",\n       (scope || '.' || kv.key) AS metric,\n       CASE\n  WHEN trim(COALESCE(kv.value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(kv.value, ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL unnest(ARRAY['local_optimizer', 'global_optimizer']) AS scope\nCROSS JOIN LATERAL jsonb_each_text(\n  COALESCE(\n    e.payload #> ARRAY['optimizer','config', scope, 'validity'],\n    '{}'::jsonb\n  )\n) AS kv\nWHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND kv.key IN ('min_score', 'penalty_scale')\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Validity config",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -368,14 +506,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT substring(topic from '^private:state:([^:]+):errors$') AS exchange, ts\n  FROM mm_events\n  WHERE topic LIKE 'private:state:%:errors'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": true,
         "label": "Exchange",
         "multi": true,
         "name": "exchange",
         "options": [],
-        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT substring(topic from '^private:state:([^:]+):errors$') AS exchange, ts\n  FROM mm_events\n  WHERE topic LIKE 'private:state:%:errors'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"

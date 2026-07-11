@@ -57,6 +57,7 @@ def runtime_config_mapping_from_registry(
             private = exchange_config.get("private")
             exchange_config["private"] = merge_private_config(
                 private if isinstance(private, dict) else None,
+                exchange=exchange_name,
                 credential_ref=account.credential_ref,
             )
         else:

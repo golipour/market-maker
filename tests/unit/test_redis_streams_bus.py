@@ -187,6 +187,7 @@ async def test_redis_streams_bus_publish_keeps_local_delivery_when_stream_write_
     await bus.publish("strategy:decisions", event)
 
     assert await asyncio.wait_for(queue.get(), timeout=1.0) is event
+    assert bus._redis is None
     await bus.close()
 
 

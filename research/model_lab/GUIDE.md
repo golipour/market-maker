@@ -414,6 +414,14 @@ python -m mm.runtime --config mm/configs/market_maker.runtime.example.json
 
 ## 5. Quick start
 
+**Notebook (recommended for experiments):**
+
+```bash
+jupyter notebook research/model_lab/notebooks/production_models_walkforward.ipynb
+```
+
+**CLI:**
+
 ```bash
 # List built-in model specs
 python -m research.model_lab.experiments.compare --list-models
@@ -455,6 +463,8 @@ research/model_lab/
   experiments/
     compare.py             ← CLI entry point
     configs/default.json   ← example experiment config
+  notebooks/
+    production_models_walkforward.ipynb  ← interactive baseline notebook
   tests/
     test_walk_forward.py   ← synthetic smoke tests (no DB)
   outputs/                 ← gitignored results

@@ -113,6 +113,35 @@ def test_registry_feeds_expand_persistence_topics() -> None:
     assert "market:events:tabdeal:USDT_IRT:10000" in topics
 
 
+def test_registry_feeds_exclude_exchanges() -> None:
+    store = MemoryRegistryStore()
+    store.upsert_exchange(exchange="nobitex")
+    store.upsert_exchange(exchange="kucoin")
+    nobitex = store.upsert_market_source(exchange="nobitex", symbol="USDT_IRT")
+    kucoin = store.upsert_market_source(exchange="kucoin", symbol="BTC_USDT")
+    store.upsert_market_feed(source_id=nobitex.source_id, interval_ms=10_000)
+    store.upsert_market_feed(source_id=kucoin.source_id, interval_ms=10_000)
+    feeds = ingestor_feeds_from_registry(store, exclude_exchanges=frozenset({"kucoin"}))
+    assert len(feeds) == 1
+    assert feeds[0].exchange == "nobitex"
+
+
+def test_merge_registry_feeds_honors_exclude_exchanges() -> None:
+    store = MemoryRegistryStore()
+    store.upsert_exchange(exchange="nobitex")
+    store.upsert_exchange(exchange="kucoin")
+    nobitex = store.upsert_market_source(exchange="nobitex", symbol="USDT_IRT")
+    kucoin = store.upsert_market_source(exchange="kucoin", symbol="BTC_USDT")
+    store.upsert_market_feed(source_id=nobitex.source_id, interval_ms=10_000)
+    store.upsert_market_feed(source_id=kucoin.source_id, interval_ms=10_000)
+    payload = merge_registry_feeds_into_mapping(
+        {"load_feeds_from_registry": True, "exclude_exchanges": ["kucoin"], "feeds": []},
+        store,
+    )
+    assert len(payload["feeds"]) == 1
+    assert payload["feeds"][0]["exchange"] == "nobitex"
+
+
 def test_multiple_intervals_share_one_market_source() -> None:
     store = MemoryRegistryStore()
     store.upsert_exchange(

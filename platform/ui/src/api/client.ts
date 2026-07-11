@@ -111,11 +111,19 @@ export interface RegistryList<T> {
   items: T[];
 }
 
+export interface ExchangeAuthSpec {
+  exchange: string;
+  default_mode: string;
+  supported_modes: string[];
+  mode_labels: Record<string, string>;
+}
+
 export interface Exchange {
   exchange: string;
   status: string;
   capabilities?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  auth_spec?: ExchangeAuthSpec | null;
 }
 
 export interface ExchangeUpsertPayload {
@@ -189,7 +197,13 @@ export interface WorkerAssignmentUpsertPayload {
 export interface AccountUpsertPayload {
   account_id: string;
   exchange: string;
-  credential_ref: string;
+  credentials?: {
+    auth_mode: string;
+    api_key: string;
+    api_secret?: string;
+    api_passphrase?: string;
+  };
+  credential_ref?: string;
   role?: string;
   status?: string;
 }
@@ -217,7 +231,16 @@ export interface StrategyRuntimeConfig {
 export interface Account {
   account_id: string;
   exchange: string;
-  credential_ref: string;
+  credential_ref?: string;
+  credentials?: {
+    auth_mode: string;
+    api_key: string;
+    api_secret?: string;
+    api_passphrase?: string;
+    api_secret_set?: boolean;
+    api_passphrase_set?: boolean;
+  } | null;
+  credential_storage?: "stored" | "legacy_env";
   role: string;
   status: string;
 }

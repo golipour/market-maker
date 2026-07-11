@@ -52,33 +52,33 @@ def test_contribution_fractions_sum_to_one() -> None:
         "risk_adjusted_return": 10.0,
         "local_risk_adjusted_return": 6.0,
         "global_risk_adjusted_return": 4.0,
-        "book_quality": 2.0,
+        "validity_penalty": -2.0,
         "book_presence": 0.8,
     }
     fracs = compute_contribution_fractions(components)
-    assert set(fracs) == {"risk_adjusted_return", "book_quality"}
+    assert set(fracs) == {"risk_adjusted_return", "validity_penalty"}
     assert fracs["risk_adjusted_return"] == pytest.approx(10.0 / 12.0, rel=1e-9)
-    assert fracs["book_quality"] == pytest.approx(2.0 / 12.0, rel=1e-9)
+    assert fracs["validity_penalty"] == pytest.approx(2.0 / 12.0, rel=1e-9)
     assert sum(fracs.values()) == pytest.approx(1.0, rel=1e-9)
 
 
 def test_contribution_fractions_include_soft_objective_terms() -> None:
     components = {
         "risk_adjusted_return": 8.0,
-        "book_quality": 1.0,
-        "inventory_zone_penalty": -0.5,
-        "global_book_quality": 0.25,
-        "global_inventory_zone_penalty": -0.25,
+        "validity_penalty": -1.0,
+        "viability_penalty": -0.5,
+        "global_validity_penalty": -0.25,
+        "global_viability_penalty": -0.25,
         "book_presence": 0.9,
         "book_tightness": 0.7,
     }
     fracs = compute_contribution_fractions(components)
     assert set(fracs) == {
         "risk_adjusted_return",
-        "book_quality",
-        "inventory_zone_penalty",
-        "global_book_quality",
-        "global_inventory_zone_penalty",
+        "validity_penalty",
+        "viability_penalty",
+        "global_validity_penalty",
+        "global_viability_penalty",
     }
     total_abs = 8.0 + 1.0 + 0.5 + 0.25 + 0.25
     assert fracs["risk_adjusted_return"] == pytest.approx(8.0 / total_abs, rel=1e-9)
@@ -132,8 +132,8 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
         fixed_mc_samples=True,
         warm_start=False,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     action, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     payload = diagnostics.to_payload()
@@ -168,8 +168,8 @@ def test_optimizer_ignores_nonfinite_warm_start_action() -> None:
         fixed_mc_samples=True,
         warm_start=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     mpc._last_raw_flat = torch.full((6,), float("nan"), dtype=torch.float64).numpy()
 
@@ -195,8 +195,8 @@ def test_payload_contribution_fractions_match_final_only() -> None:
         adam_epochs=2,
         fixed_mc_samples=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     payload = diagnostics.to_payload()
@@ -220,8 +220,8 @@ def test_objective_snapshot_payload_improvement_fields() -> None:
         adam_epochs=3,
         fixed_mc_samples=True,
         device="cpu",
-        quote_size_min_per_side=1.0,
-        quote_size_max_per_side=10.0,
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
     )
     _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
     improvement = diagnostics.to_payload()["objective"]["improvement"]

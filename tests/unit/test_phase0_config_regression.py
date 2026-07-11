@@ -105,8 +105,8 @@ def test_example_runtime_config_loads() -> None:
     assert "execution:errors" in config.effective_persistence_topics
     assert "private:state:bitpin:errors" in config.effective_persistence_topics
     local_optimizer = (config.controller.optimizer or {}).get("local", {})
-    assert local_optimizer.get("w_book") == pytest.approx(0.002)
-    assert local_optimizer.get("w_inv") == pytest.approx(0.01)
+    assert local_optimizer.get("validity", {}).get("min_score") == pytest.approx(0.3)
+    assert local_optimizer.get("viability", {}).get("lambda_init") == pytest.approx(0.0)
     assert "spread_structure" not in local_optimizer
     global_optimizer = (config.controller.optimizer or {}).get("global", {})
     assert global_optimizer.get("book_quality") == {
@@ -115,9 +115,9 @@ def test_example_runtime_config_loads() -> None:
             "action_min_depth": 0.3,
             "action_k_epsilon": 0.01,
         },
-        "soft_target": {
-            "spread_target": 100.0,
-            "depth_target": 1.0,
+        "soft_scoring": {
+            "tightness_spread_scale": 100.0,
+            "presence_reference_qty": 1.0,
             "measure": "quoted",
         },
     }
@@ -163,7 +163,7 @@ def test_flat_quote_spread_keys_are_rejected_in_optimizer_config() -> None:
         "enabled": True,
         "optimizer": {
             "local": {
-                "quote_size_min_per_side": 1.0,
+                "cumulative_qty_floor_at_spread_max": 1.0,
                 "quote_spread_max": 100.0,
             }
         },
@@ -178,7 +178,7 @@ def test_quote_imbalance_skew_strength_is_rejected_in_optimizer_config() -> None
         "enabled": True,
         "optimizer": {
             "local": {
-                "quote_size_min_per_side": 1.0,
+                "cumulative_qty_floor_at_spread_max": 1.0,
                 "quote_imbalance_skew_strength": 0.5,
             }
         },
@@ -193,7 +193,7 @@ def test_quote_capacity_ratio_is_rejected_in_optimizer_config() -> None:
         "enabled": True,
         "optimizer": {
             "local": {
-                "quote_size_min_per_side": 1.0,
+                "cumulative_qty_floor_at_spread_max": 1.0,
                 "quote_capacity_ratio": 0.5,
             }
         },

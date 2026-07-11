@@ -417,8 +417,8 @@ async def test_strategy_runner_routes_both_venues_when_live(
             execution_after_steps=0,
             risk=RiskRuntimeConfig(enabled=True),
             optimizer={
-                "local": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
-                "global": {"quote_size_min_per_side": 1.0, "quote_size_max_per_side": 10.0},
+                "local": {"cumulative_qty_floor_at_spread_max": 1.0, "cumulative_qty_cap_at_spread_max": 10.0},
+                "global": {"cumulative_qty_floor_at_spread_max": 1.0, "cumulative_qty_cap_at_spread_max": 10.0},
             },
         ),
         binding=runtime.binding,

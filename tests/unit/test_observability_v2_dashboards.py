@@ -1,4 +1,5 @@
 from mm.tools.generate_observability_v2_dashboards import (
+    _optimizer_weighted_components_sql,
     _runtime_fill_rate_sql,
     action_pipeline,
     action_pipeline_side_counts,
@@ -11,6 +12,7 @@ from mm.tools.generate_observability_v2_dashboards import (
     market_data_quality,
     model_parameters,
     model_quality,
+    optimizer_diagnostics,
     orderbook_depth,
     pipeline_time_profile,
     portfolio_pnl,
@@ -18,6 +20,18 @@ from mm.tools.generate_observability_v2_dashboards import (
     runtime_overview,
     target_order_stems,
 )
+
+
+def test_optimizer_weighted_components_sql_includes_final_objective_total() -> None:
+    sql = _optimizer_weighted_components_sql()
+    dashboard = optimizer_diagnostics()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert "UNION ALL" in sql
+    assert "'objective_total' AS metric" in sql
+    assert "ARRAY['optimizer','objective','final','value']" in sql
+    assert "ARRAY['optimizer','objective','final','components']" in sql
+    assert panels_by_title["Objective components (weighted J terms)"]["targets"][0]["rawSql"] == sql
 
 
 def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
@@ -534,21 +548,55 @@ def test_action_pipeline_side_counts_dashboard_splits_bid_and_ask() -> None:
 def test_exchange_account_dashboard_uses_physical_snapshot_sources() -> None:
     dashboard = exchange_account()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
 
     assert dashboard["uid"] == "mm-obs-v2-exchange-account"
+    assert dashboard["time"]["from"] == "now-24h"
+    assert templating["diagnostics_topic"]["hide"] == 2
+    assert templating["interval_ms"]["hide"] == 2
+
     balances_sql = panels_by_title["Latest account balances"]["targets"][0]["rawSql"]
     assert "PrivateStateSnapshot" in balances_sql
     assert "private:state:%:snapshot" in balances_sql
+    assert "$__timeFilter(e.ts)" not in balances_sql
+
+    age_sql = panels_by_title["Private snapshot age"]["targets"][0]["rawSql"]
+    assert "$__timeFilter(e.ts)" not in age_sql
+
+    errors_sql = panels_by_title["Recent private poll errors"]["targets"][0]["rawSql"]
+    assert "private:state:%:errors" in errors_sql
+    assert "401" not in errors_sql
+
+    step_sql = panels_by_title["Private poll errors / step"]["targets"][0]["rawSql"]
+    assert "private:state:%:errors" in step_sql
+    assert "$__timeFilter(e.ts)" in step_sql
 
     venue_sql = panels_by_title["Latest venue ledger"]["targets"][0]["rawSql"]
     assert "VenueLedgerSnapshot" in venue_sql
-    assert "ledger:snapshot:%" in venue_sql
+    assert "JointLedgerSnapshot" in venue_sql
+    assert "ledger:snapshot" in venue_sql
     assert "available_base" in venue_sql
     assert "open_orders" in venue_sql
+    assert "$__timeFilter(e.ts)" not in venue_sql
 
     inventory_sql = panels_by_title["Trading inventory (base)"]["targets"][0]["rawSql"]
     assert "available_base" in inventory_sql
     assert "locked_base" in inventory_sql
+    assert "$__timeFilter(e.ts)" in inventory_sql
+
+
+def test_diagnostics_and_target_book_filters_use_topic_patterns() -> None:
+    combined_sql = "\n".join(
+        target["rawSql"]
+        for dashboard in dashboards()
+        for panel in dashboard["panels"]
+        for target in panel.get("targets", ())
+        if target.get("datasource", {}).get("type") == "postgres"
+    )
+    assert "e.topic = '${diagnostics_topic}'" not in combined_sql
+    assert "topic = '${target_books_topic}'" not in combined_sql
+    assert "e.topic LIKE 'strategy:diagnostics:%'" in combined_sql
+    assert "e.topic LIKE 'strategy:target_books:%'" in combined_sql
 
 
 def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
@@ -904,13 +952,8 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "Global filled ask volume": (12, 8, 6),
         "Average ask fill price": (18, 8, 6),
         "Spread PnL": (0, 13, 6),
-        "Total fill fee": (6, 13, 6),
-        "Total delta cash": (0, 18, 6),
-        "Total delta inventory": (6, 18, 6),
-        "Total delta wealth": (12, 18, 6),
-        "Total delta ref price": (18, 18, 6),
-        "Latest total cash": (0, 23, 6),
-        "Latest total inventory": (6, 23, 6),
+        "Inventory PnL": (6, 13, 6),
+        "Fee PnL": (12, 13, 6),
     }
 
     for title, (x, y, w) in expected_positions.items():
@@ -927,43 +970,13 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         }
         sql = panel["targets"][0]["rawSql"]
         assert "$__timeFilter(e.ts)" in sql
-        if title.startswith("Latest total "):
-            assert "e.event_type = 'ControllerDiagnostics'" in sql
-            assert "ORDER BY e.ts DESC" in sql
-            assert "LIMIT 1" in sql
-            if title == "Latest total cash":
-                assert "ARRAY['state','local_quote_wallet','total']" in sql
-                assert "ARRAY['state','global_quote_wallet','total']" in sql
-            else:
-                assert "ARRAY['state','local_base_wallet','total']" in sql
-                assert "ARRAY['state','global_base_wallet','total']" in sql
-        elif title.startswith("Total delta "):
-            assert "e.event_type = 'ControllerDiagnostics'" in sql
-            assert "'delta_cash'" in sql
-            assert "'delta_inventory'" in sql
-            assert "'delta_wealth'" in sql
-            assert "'delta_price'" in sql
-            assert "last_cash - first_cash" in sql
-            assert "last_inventory - first_inventory" in sql
-            assert "last_wealth - first_wealth" in sql
-            assert "last_price - first_price" in sql
-            assert "ARRAY['state','local_quote_wallet','total']" in sql
-            assert "ARRAY['state','global_quote_wallet','total']" in sql
-            assert "ARRAY['optimizer','config','reference_price']" in sql
-            expected_metric = {
-                "Total delta cash": "delta_cash",
-                "Total delta inventory": "delta_inventory",
-                "Total delta wealth": "delta_wealth",
-                "Total delta ref price": "delta_price",
-            }[title]
-            assert f"AND metric = '{expected_metric}'" in sql
-        else:
-            assert "private:state:%:fills" in sql
-            assert "role_exchanges" in sql
-            assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
-            assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
-            assert "SUM(price * qty) FILTER" in sql
-            assert "e.payload->>'fee'" in sql
+        assert "private:state:%:fills" in sql
+        assert "role_exchanges" in sql
+        assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
+        assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
+        assert "SUM(price * qty) FILTER" in sql
+        assert "e.payload->>'fee'" in sql
+        assert "interval_mark" in sql
 
     total_bid_volume_sql = panels_by_title["Total filled bid volume"]["targets"][0]["rawSql"]
     assert "COALESCE(bid_qty, 0.0) AS value" in total_bid_volume_sql
@@ -1003,9 +1016,14 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "* (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0)) AS value"
     ) in spread_sql
 
-    fee_sql = panels_by_title["Total fill fee"]["targets"][0]["rawSql"]
+    inventory_sql = panels_by_title["Inventory PnL"]["targets"][0]["rawSql"]
+    assert "WHEN COALESCE(bid_qty, 0.0) >= COALESCE(ask_qty, 0.0) THEN" in inventory_sql
+    assert "interval_mark.mark_price - COALESCE(bid_avg_price, 0.0)" in inventory_sql
+    assert "COALESCE(ask_avg_price, 0.0) - interval_mark.mark_price" in inventory_sql
+
+    fee_sql = panels_by_title["Fee PnL"]["targets"][0]["rawSql"]
     assert "SUM(fee) AS total_fee" in fee_sql
-    assert "COALESCE(total_fee, 0.0) AS value" in fee_sql
+    assert "-COALESCE(total_fee, 0.0) AS value" in fee_sql
     assert "global_maker_fee" not in fee_sql
     assert "local_maker_fee" not in fee_sql
     assert "fee_config" not in fee_sql

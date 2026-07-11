@@ -28,6 +28,7 @@ from mm.core.adapters.joint import joint_target_book_to_action
 from mm.models.scoring import refresh_score_params_after, score_frame_models
 from mm.mpc.joint_mpc import enrich_state_for_joint, ob_rel_from_market_event
 from mm.mpc.objective_terms import ObjectiveNormalizeParams
+from mm.mpc.warm_start import WarmStartParams
 from mm.mpc.mpc_state import State
 from mm.pricing import quote_anchor_price, two_sided_mid, vwap_from_raw_orderbook
 from mm.runtime.config import (
@@ -41,18 +42,23 @@ from mm.strategies.target_book_builder import (
     build_joint_target_book_from_sigmoid,
     local_constraints_from_spec,
 )
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    REMOVED_VENUE_OPTIMIZER_ALIASES,
+    RESERVATION_SKEW,
+)
 
 
 _VENUE_OPTIMIZER_KEYS = {
     "n_components",
     "return_risk_aversion_beta",
     "objective_weight",
-    "quote_size_min_per_side",
-    "quote_size_max_per_side",
-    "reservation_offset",
-    "w_book",
-    "w_inv",
-    "inventory_zone",
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    RESERVATION_SKEW,
+    "validity",
+    "viability",
     "book_quality",
     "soft_fill_temp",
     "soft_fill_activation",
@@ -77,6 +83,7 @@ _REMOVED_VENUE_OPTIMIZER_KEYS = frozenset(
     }
 )
 _REMOVED_VENUE_OPTIMIZER_ALIASES = {
+    **{k: v for k, v in REMOVED_VENUE_OPTIMIZER_ALIASES.items()},
     "soft_fill_queue_penalty": "soft_fill_queue_model",
     "spread_structure": "book_quality.hard_structure",
 }
@@ -620,6 +627,9 @@ def _build_controller(
     objective_normalize_cfg = optimizer_cfg.pop("objective_normalize", None)
     if objective_normalize_cfg is not None:
         ObjectiveNormalizeParams.from_mapping(objective_normalize_cfg)
+    warm_start_cfg = optimizer_cfg.pop("warm_start", None)
+    if warm_start_cfg is not None:
+        WarmStartParams.from_mapping(warm_start_cfg)
     optimizer_kind = str(optimizer_cfg.pop("kind", "monte_carlo_mpc_tensor_batched")).lower()
     if optimizer_kind != "monte_carlo_mpc_tensor_batched":
         raise ValueError(f"unsupported optimizer kind: {optimizer_kind}")
@@ -638,10 +648,10 @@ def _build_controller(
     local_min_qty = float(order_constraints.min_qty or 1.0)
     global_min_qty = float(global_constraints.min_qty or local_min_qty)
     local_optimizer_defaults = {
-        "quote_size_min_per_side": local_min_qty,
+        CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: local_min_qty,
     }
     global_optimizer_defaults = {
-        "quote_size_min_per_side": global_min_qty,
+        CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: global_min_qty,
     }
     local_optimizer_defaults.update(local_optimizer_cfg)
     global_optimizer_defaults.update(global_optimizer_cfg)
@@ -678,6 +688,7 @@ def _build_controller(
         global_market_flow_model=global_market_flow_model if global_models_enabled else None,
         global_price_model=sourcing_global_price_model if global_models_enabled else None,
         objective_normalize=objective_normalize_cfg,
+        warm_start=warm_start_cfg,
         **optimizer_defaults,
     )
 

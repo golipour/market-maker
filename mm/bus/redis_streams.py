@@ -87,6 +87,8 @@ class RedisStreamsBus(AbstractEventBus):
             r = await self._client()
             await r.xadd(self._stream(topic), {"data": encode_envelope(envelope)}, **kwargs)
         except Exception as exc:
+            if _is_redis_connection_error(exc):
+                await self._reset_client()
             self._log_stream_error("redis_stream_publish_failed", topic, exc)
 
     async def collect(self, topic: str, limit: int) -> list[Any]:
@@ -200,8 +202,19 @@ class RedisStreamsBus(AbstractEventBus):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if _is_redis_connection_error(exc):
+                    await self._reset_client()
                 self._log_stream_error("redis_stream_subscribe_failed", topic, exc)
-                await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
+                await asyncio.sleep(_redis_retry_sleep_seconds(exc, read_block_ms=self.read_block_ms))
+
+    async def _reset_client(self) -> None:
+        if self._redis is None:
+            return
+        try:
+            await self._redis.aclose()
+        except Exception:
+            pass
+        self._redis = None
 
     async def _client(self) -> Any:
         if self._redis is None:
@@ -211,6 +224,10 @@ class RedisStreamsBus(AbstractEventBus):
                 self.url,
                 decode_responses=True,
                 max_connections=self.max_connections,
+                socket_connect_timeout=5.0,
+                socket_timeout=5.0,
+                retry_on_timeout=True,
+                health_check_interval=30,
             )
         return self._redis
 
@@ -238,6 +255,28 @@ class RedisStreamsBus(AbstractEventBus):
             )
         except Exception:
             return
+
+
+def _is_redis_connection_error(exc: Exception) -> bool:
+    if isinstance(exc, (ConnectionError, ConnectionRefusedError, ConnectionResetError, TimeoutError, OSError)):
+        return True
+    try:
+        from redis.exceptions import BusyLoadingError
+        from redis.exceptions import ConnectionError as RedisConnectionError
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+    except Exception:
+        return False
+    return isinstance(exc, (RedisConnectionError, RedisTimeoutError, BusyLoadingError))
+
+
+def _redis_retry_sleep_seconds(exc: Exception, *, read_block_ms: int) -> float:
+    try:
+        from redis.exceptions import BusyLoadingError
+    except Exception:
+        return max(0.1, read_block_ms / 1000.0)
+    if isinstance(exc, BusyLoadingError):
+        return max(2.0, read_block_ms / 1000.0)
+    return max(0.1, read_block_ms / 1000.0)
 
 
 def _balance_is_zero(balance: Balance) -> bool:

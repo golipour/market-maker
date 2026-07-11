@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from mm.core.events import to_jsonable
 
-from mm.registry.market_data import market_data_settings_from_exchange, market_source_as_dict
+from mm.registry.credentials import (
+    credentials_to_ref,
+    is_legacy_env_ref,
+    merge_credentials_update,
+    private_credentials_from_ref,
+)
 from mm.registry.audit import record_admin_audit
 from mm.registry.memory import RegistryConflictError, RegistryNotFoundError
 from mm.registry.runtime_config import runtime_config_mapping_from_registry
@@ -28,10 +33,18 @@ class ExchangeUpsertRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class AccountCredentialsRequest(BaseModel):
+    auth_mode: str
+    api_key: str
+    api_secret: str = ""
+    api_passphrase: str = ""
+
+
 class AccountUpsertRequest(BaseModel):
     account_id: str
     exchange: str
-    credential_ref: str
+    credentials: AccountCredentialsRequest | None = None
+    credential_ref: str | None = None
     role: str = "trading"
     status: str = "active"
 
@@ -209,16 +222,43 @@ def create_registry_router(
         user: str = Depends(require_auth),
         store: RegistryStore = Depends(_store),
     ) -> dict[str, Any]:
+        exchange_key = body.exchange.lower().strip()
+        try:
+            store.get_exchange(exchange_key)
+        except RegistryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        credential_ref = str(body.credential_ref or "").strip()
+        if body.credentials is not None:
+            previous_ref = ""
+            try:
+                previous_ref = store.get_account(body.account_id).credential_ref
+            except RegistryNotFoundError:
+                pass
+            merged = merge_credentials_update(
+                previous_ref,
+                exchange=exchange_key,
+                auth_mode=body.credentials.auth_mode,
+                api_key=body.credentials.api_key,
+                api_secret=body.credentials.api_secret,
+                api_passphrase=body.credentials.api_passphrase,
+            )
+            credential_ref = credentials_to_ref(merged)
+        elif not credential_ref:
+            raise HTTPException(status_code=400, detail="credentials or credential_ref is required")
+        elif is_legacy_env_ref(credential_ref):
+            private_credentials_from_ref(credential_ref)
         try:
             record = store.upsert_account(
                 account_id=body.account_id,
-                exchange=body.exchange,
-                credential_ref=body.credential_ref,
+                exchange=exchange_key,
+                credential_ref=credential_ref,
                 role=body.role,
                 status=body.status,
             )
-        except RegistryNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RegistryNotFoundError, ValueError) as exc:
+            if isinstance(exc, RegistryNotFoundError):
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit(user, "registry.account.upsert", "accepted", record.as_dict())
         return record.as_dict()
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "market-maker-postgres": {
+      "url": "https://mcp.example.com/mcp",
+      "auth": {
+        "CLIENT_ID": "${env:MCP_OAUTH_CLIENT_ID}",
+        "CLIENT_SECRET": "${env:MCP_OAUTH_CLIENT_SECRET}",
+        "scopes": ["mcp:postgres"]
+      }
+    }
+  }
+}

@@ -1,11 +1,23 @@
-"""Normalized soft objective terms for MPC (book quality and inventory zone)."""
+"""Normalized soft objective terms for MPC (book validity, viability availability)."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 from mm.mpc.l_param import LParamConfig, materialize_side_torch, reservation_r_offset_from_params
+from mm.mpc.optimizer_config_keys import (
+    MAX_ABS_SKEW,
+    PRESENCE_REFERENCE_QTY,
+    REMOVED_BOOK_QUALITY_ALIASES,
+    RESERVATION_SKEW,
+    SOFT_SCORING,
+    TIGHTNESS_SPREAD_SCALE,
+    reject_removed_book_quality_keys,
+    reject_removed_keys,
+    reject_removed_reservation_skew_keys,
+)
 from mm.mpc.state_tensor import (
     depth_bid_derivative_tensor,
     depth_ask_derivative_tensor,
@@ -20,66 +32,111 @@ def _torch():
     return torch
 
 
-_LEGACY_INVENTORY_ZONE_POWER_KEYS = frozenset({"q_min", "q_max", "p"})
-_LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES = frozenset(
-    {"q_lo", "q_hi", "d_lo", "d_hi", "a_lo", "a_hi"}
-)
-
-
 @dataclass(frozen=True, slots=True)
-class InventoryZoneParams:
-    """Sigmoid operational zone on wallet imbalance (proposal §4.3 option B)."""
+class ViabilityParams:
+    """Availability shortfall on total wallet balances (docs/viability_term.md)."""
 
-    comfort_low: float = -0.2
-    comfort_high: float = 0.2
-    low_ramp_width: float = 0.05
-    high_ramp_width: float = 0.05
-    low_penalty_cap: float = 1.0
-    high_penalty_cap: float = 0.6
+    min_viable_quote: float = 50_000.0
+    margin_buffer: float = 5_000.0
+    availability_target: float = 0.99
+    shortfall_tolerance: float = 0.05
+    lambda_init: float = 0.0
+    lambda_learning_rate: float = 0.02
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> InventoryZoneParams | None:
+    def from_mapping(cls, payload: Any) -> ViabilityParams | None:
         if payload is None:
             return None
         if not isinstance(payload, dict):
-            raise ValueError("inventory_zone must be an object")
-        removed_power = sorted(k for k in _LEGACY_INVENTORY_ZONE_POWER_KEYS if k in payload)
-        if removed_power:
+            raise ValueError("viability must be an object")
+        removed = sorted(
+            key
+            for key in payload
+            if key
+            in {
+                "comfort_low",
+                "comfort_high",
+                "low_ramp_width",
+                "high_ramp_width",
+                "low_penalty_cap",
+                "high_penalty_cap",
+                "min_quote_qty",
+                "min_free_quote",
+                "margin_sharpness",
+                "lambda_leakage",
+                "lambda_reset_on_target",
+                "lambda_log_update",
+            }
+        )
+        if removed:
             raise ValueError(
-                "inventory_zone power-zone keys were removed; use sigmoid zone "
-                "{comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap}: "
-                + ", ".join(removed_power)
+                "removed viability keys; use "
+                "{min_viable_quote, margin_buffer, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
+                + ", ".join(removed)
             )
-        removed_aliases = sorted(k for k in _LEGACY_INVENTORY_ZONE_SIGMOID_ALIASES if k in payload)
-        if removed_aliases:
-            raise ValueError(
-                "inventory_zone keys renamed to descriptive sigmoid names "
-                "(comfort_low, comfort_high, low_ramp_width, high_ramp_width, "
-                "low_penalty_cap, high_penalty_cap); remove: "
-                + ", ".join(removed_aliases)
-            )
-        comfort_low = float(payload.get("comfort_low", -0.2))
-        comfort_high = float(payload.get("comfort_high", 0.2))
-        if comfort_low >= comfort_high:
-            raise ValueError("inventory_zone.comfort_low must be < comfort_high")
+        availability_target = float(payload.get("availability_target", 0.99))
+        if not (0.0 < availability_target <= 1.0):
+            raise ValueError("viability.availability_target must be in (0, 1]")
+        shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
+        if shortfall_tolerance < 0.0:
+            raise ValueError("viability.shortfall_tolerance must be >= 0")
+        lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.02))
+        if lambda_learning_rate <= 0.0:
+            raise ValueError("viability.lambda_learning_rate must be > 0")
         return cls(
-            comfort_low=comfort_low,
-            comfort_high=comfort_high,
-            low_ramp_width=max(1e-9, float(payload.get("low_ramp_width", 0.05))),
-            high_ramp_width=max(1e-9, float(payload.get("high_ramp_width", 0.05))),
-            low_penalty_cap=max(0.0, float(payload.get("low_penalty_cap", 1.0))),
-            high_penalty_cap=max(0.0, float(payload.get("high_penalty_cap", 0.6))),
+            min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
+            margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
+            availability_target=availability_target,
+            shortfall_tolerance=shortfall_tolerance,
+            lambda_init=max(0.0, float(payload.get("lambda_init", 0.0))),
+            lambda_learning_rate=lambda_learning_rate,
         )
 
     def as_mapping(self) -> dict[str, float]:
         return {
-            "comfort_low": self.comfort_low,
-            "comfort_high": self.comfort_high,
-            "low_ramp_width": self.low_ramp_width,
-            "high_ramp_width": self.high_ramp_width,
-            "low_penalty_cap": self.low_penalty_cap,
-            "high_penalty_cap": self.high_penalty_cap,
+            "min_viable_quote": self.min_viable_quote,
+            "margin_buffer": self.margin_buffer,
+            "availability_target": self.availability_target,
+            "shortfall_tolerance": self.shortfall_tolerance,
+            "lambda_init": self.lambda_init,
+            "lambda_learning_rate": self.lambda_learning_rate,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValidityParams:
+    """Book-shape validity gate with fixed penalty scale (docs/validity_term.md)."""
+
+    min_score: float = 0.3
+    penalty_scale: float = 100.0
+
+    @classmethod
+    def from_mapping(cls, payload: Any) -> ValidityParams | None:
+        if payload is None:
+            return None
+        if not isinstance(payload, dict):
+            raise ValueError("validity must be an object")
+        if "w_book" in payload:
+            raise ValueError(
+                "validity must not include w_book; use "
+                "{min_score, penalty_scale} and book_quality.soft_scoring"
+            )
+        min_score = float(payload.get("min_score", 0.3))
+        if not (0.0 <= min_score < 1.0):
+            raise ValueError("validity.min_score must be in [0, 1)")
+        penalty_scale = float(payload.get("penalty_scale", 100.0))
+        if penalty_scale < 0.0:
+            raise ValueError("validity.penalty_scale must be >= 0")
+        return cls(
+            min_score=min_score,
+            penalty_scale=penalty_scale,
+        )
+
+    def as_mapping(self) -> dict[str, float]:
+        return {
+            "min_score": self.min_score,
+            "penalty_scale": self.penalty_scale,
         }
 
 
@@ -117,10 +174,10 @@ class ObjectiveNormalizeParams:
         }
 
 
-_LEGACY_BOOK_QUALITY_SOFT_KEYS = frozenset(
+_BOOK_QUALITY_SOFT_KEYS = frozenset(
     {
-        "spread_target",
-        "depth_target",
+        TIGHTNESS_SPREAD_SCALE,
+        PRESENCE_REFERENCE_QTY,
         "touch_spread_fraction",
         "measure",
         "v_presence",
@@ -174,11 +231,11 @@ class BookQualityHardStructure:
 
 
 @dataclass(frozen=True, slots=True)
-class BookQualitySoftTarget:
-    """Soft book-quality objective targets and sub-weights."""
+class BookQualitySoftScoring:
+    """Soft book-quality objective scoring references and sub-weights."""
 
-    spread_target: float = 50.0
-    depth_target: float = 1.0
+    tightness_spread_scale: float = 50.0
+    presence_reference_qty: float = 1.0
     touch_spread_fraction: float = 0.01
     measure: str = "quoted"
     v_presence: float = 0.25
@@ -187,21 +244,19 @@ class BookQualitySoftTarget:
     v_uniformity: float = 0.25
 
     @classmethod
-    def from_mapping(cls, payload: Any) -> BookQualitySoftTarget:
+    def from_mapping(cls, payload: Any) -> BookQualitySoftScoring:
         if payload is None:
             return cls()
         if not isinstance(payload, dict):
-            raise ValueError("book_quality.soft_target must be an object")
+            raise ValueError(f"book_quality.{SOFT_SCORING} must be an object")
+        reject_removed_keys(payload, removed=REMOVED_BOOK_QUALITY_ALIASES, scope=f"book_quality.{SOFT_SCORING}")
         measure = str(payload.get("measure", "quoted")).strip().lower()
         if measure not in ("quoted", "combined"):
-            raise ValueError("book_quality.soft_target.measure must be 'quoted' or 'combined'")
+            raise ValueError(f"book_quality.{SOFT_SCORING}.measure must be 'quoted' or 'combined'")
         return cls(
-            spread_target=max(1e-9, float(payload.get("spread_target", 50.0))),
-            depth_target=max(1e-9, float(payload.get("depth_target", 1.0))),
-            touch_spread_fraction=max(
-                1e-9,
-                float(payload.get("touch_spread_fraction", 0.01)),
-            ),
+            tightness_spread_scale=max(1e-9, float(payload.get(TIGHTNESS_SPREAD_SCALE, 50.0))),
+            presence_reference_qty=max(1e-9, float(payload.get(PRESENCE_REFERENCE_QTY, 1.0))),
+            touch_spread_fraction=max(1e-9, float(payload.get("touch_spread_fraction", 0.01))),
             measure=measure,
             v_presence=float(payload.get("v_presence", 0.25)),
             v_tightness=float(payload.get("v_tightness", 0.25)),
@@ -211,8 +266,8 @@ class BookQualitySoftTarget:
 
     def as_mapping(self) -> dict[str, float | str]:
         out: dict[str, float | str] = {
-            "spread_target": self.spread_target,
-            "depth_target": self.depth_target,
+            TIGHTNESS_SPREAD_SCALE: self.tightness_spread_scale,
+            PRESENCE_REFERENCE_QTY: self.presence_reference_qty,
             "measure": self.measure,
         }
         if self.touch_spread_fraction != 0.01:
@@ -230,42 +285,42 @@ class BookQualitySoftTarget:
 
 @dataclass(frozen=True, slots=True)
 class BookQualityParams:
-    """Venue book geometry: optional hard decoder structure plus soft targets."""
+    """Venue book geometry: optional hard decoder structure plus soft scoring."""
 
     hard_structure: BookQualityHardStructure | None = None
-    soft_target: BookQualitySoftTarget = BookQualitySoftTarget()
-
-    @property
-    def spread_target(self) -> float:
-        return self.soft_target.spread_target
-
-    @property
-    def depth_target(self) -> float:
-        return self.soft_target.depth_target
+    soft_scoring: BookQualitySoftScoring = BookQualitySoftScoring()
 
     @property
     def touch_spread_fraction(self) -> float:
-        return self.soft_target.touch_spread_fraction
+        return self.soft_scoring.touch_spread_fraction
 
     @property
     def measure(self) -> str:
-        return self.soft_target.measure
+        return self.soft_scoring.measure
 
     @property
     def v_presence(self) -> float:
-        return self.soft_target.v_presence
+        return self.soft_scoring.v_presence
 
     @property
     def v_tightness(self) -> float:
-        return self.soft_target.v_tightness
+        return self.soft_scoring.v_tightness
 
     @property
     def v_balance(self) -> float:
-        return self.soft_target.v_balance
+        return self.soft_scoring.v_balance
 
     @property
     def v_uniformity(self) -> float:
-        return self.soft_target.v_uniformity
+        return self.soft_scoring.v_uniformity
+
+    @property
+    def tightness_spread_scale(self) -> float:
+        return self.soft_scoring.tightness_spread_scale
+
+    @property
+    def presence_reference_qty(self) -> float:
+        return self.soft_scoring.presence_reference_qty
 
     @classmethod
     def from_mapping(cls, payload: Any) -> BookQualityParams | None:
@@ -278,109 +333,110 @@ class BookQualityParams:
                 "spread_structure belongs under book_quality.hard_structure "
                 "(action_max_spread, action_min_depth, action_k_epsilon)"
             )
-        flat_soft = sorted(k for k in _LEGACY_BOOK_QUALITY_SOFT_KEYS if k in payload)
+        reject_removed_book_quality_keys(payload)
+        flat_soft = sorted(k for k in _BOOK_QUALITY_SOFT_KEYS if k in payload)
         if flat_soft:
             raise ValueError(
-                "book_quality soft keys belong under book_quality.soft_target: "
+                f"book_quality soft keys belong under book_quality.{SOFT_SCORING}: "
                 + ", ".join(flat_soft)
             )
         hard = BookQualityHardStructure.from_mapping(payload.get("hard_structure"))
-        soft = BookQualitySoftTarget.from_mapping(payload.get("soft_target"))
-        return cls(hard_structure=hard, soft_target=soft)
+        soft = BookQualitySoftScoring.from_mapping(payload.get(SOFT_SCORING))
+        return cls(hard_structure=hard, soft_scoring=soft)
 
     def as_mapping(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"soft_target": self.soft_target.as_mapping()}
+        out: dict[str, Any] = {SOFT_SCORING: self.soft_scoring.as_mapping()}
         if self.hard_structure is not None:
             out["hard_structure"] = self.hard_structure.as_mapping()
         return out
 
 
-def wallet_imbalance(
+def soft_availability_margin(
     inventory: Any,
     *,
-    mid_price: Any,
     cash: Any,
-    eps: float = 1e-12,
-) -> Any:
+    mid_price: Any,
+    params: ViabilityParams,
+) -> tuple[Any, dict[str, Any]]:
     """
-    Normalized cash/base mix in [-1, 1].
+    Smooth two-sided quoting availability in [0, 1] from total wallet margins.
 
-    (Q·mid − cash) / (|Q·mid| + |cash| + eps)
-    Negative ⇒ cash-heavy (low base, ask-side capacity risk).
-    Positive ⇒ base-heavy (low cash, bid-side capacity risk).
-    """
+    ``cash`` is total quote balance q_t (free + locked); ``inventory`` is total
+    base balance b_t. ``min_viable_quote`` is q_min. Both margins are in quote
+    currency for a shared ``margin_buffer``:
 
-    inv_value = inventory * mid_price
-    denom = inv_value.abs() + cash.abs() + float(eps)
-    return (inv_value - cash) / denom
-
-
-def inventory_zone_penalty(
-    imbalance: Any,
-    zone: InventoryZoneParams,
-    *,
-    return_components: bool = False,
-) -> Any | tuple[Any, dict[str, Any]]:
-    """
-    Normalized sigmoid zone-of-indifference penalty in [0, 1].
-
-    Z(imb) = (a_lo * sigmoid((comfort_low - imb) / d_lo)
-              + a_hi * sigmoid((imb - comfort_high) / d_hi))
-             / (a_lo + a_hi)
+    m_bid = q_t - q_min; m_ask = b_t * p_t - q_min;
+    a_side = sigmoid(m_side / margin_buffer); A = a_bid * a_ask.
     """
 
     torch = _torch()
-    cap_sum = float(zone.low_penalty_cap) + float(zone.high_penalty_cap)
-    if cap_sum <= 0.0:
-        zero = torch.zeros_like(imbalance)
-        if return_components:
-            return zero, {
-                "inventory_zone_low_penalty": zero,
-                "inventory_zone_high_penalty": zero,
-            }
-        return zero
-    d_lo = max(1e-9, float(zone.low_ramp_width))
-    d_hi = max(1e-9, float(zone.high_ramp_width))
-    low_penalty = float(zone.low_penalty_cap) * torch.sigmoid(
-        (float(zone.comfort_low) - imbalance) / d_lo
-    )
-    high_penalty = float(zone.high_penalty_cap) * torch.sigmoid(
-        (imbalance - float(zone.comfort_high)) / d_hi
-    )
-    total = (low_penalty + high_penalty) / cap_sum
-    if return_components:
-        return total, {
-            "inventory_zone_low_penalty": low_penalty / cap_sum,
-            "inventory_zone_high_penalty": high_penalty / cap_sum,
-        }
-    return total
+    q_min = max(1e-12, float(params.min_viable_quote))
+    delta = max(1e-9, float(params.margin_buffer))
+    mid_safe = torch.clamp(mid_price, min=1e-12)
+    quote_total = torch.clamp(cash, min=0.0)
+    base_total = torch.clamp(inventory, min=0.0)
+    base_notional = base_total * mid_safe
+    m_bid = quote_total - q_min
+    m_ask = base_notional - q_min
+    a_bid = torch.sigmoid(m_bid / delta)
+    a_ask = torch.sigmoid(m_ask / delta)
+    availability = a_bid * a_ask
+    return availability, {
+        "viability_bid_margin": m_bid,
+        "viability_ask_margin": m_ask,
+        "viability_base_notional": base_notional,
+        "viability_step_availability": availability,
+    }
 
 
-def inventory_zone_path_mean(
+def viability_path_shortfall(
     inventory_path: Any,
     *,
     cash_path: Any,
     mid_path: Any,
-    zone: InventoryZoneParams | None,
+    params: ViabilityParams | None,
 ) -> tuple[Any, dict[str, Any]]:
+    """
+    Expected availability shortfall over Monte Carlo paths.
+
+    ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
+    of simulated **total** wallet balances (free + locked) along each rollout path.
+
+    Per path: use availability after the first simulated step only (index 1, post h=0
+    orderflow/fill). S = max(0, A* - A_1); return mean(S).
+
+    Index 0 is the pre-action wallet and is excluded. Terminal horizon availability
+    is not used — viability targets the immediate next wallet state, not optimistic
+    recovery at the end of the rollout.
+    """
+
     torch = _torch()
-    if zone is None:
+    if params is None:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    imbalance = wallet_imbalance(inventory_path, mid_price=mid_path, cash=cash_path)
-    step_penalty, step_components = inventory_zone_penalty(
-        imbalance,
-        zone,
-        return_components=True,
+    step_avail, step_parts = soft_availability_margin(
+        inventory_path,
+        cash=cash_path,
+        mid_price=mid_path,
+        params=params,
     )
-    path_mean = step_penalty.mean()
+    if step_avail.shape[1] <= 1:
+        zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
+        return zero, {}
+    path_next_avail = step_avail[:, 1]
+    shortfall_per_path = torch.clamp(
+        float(params.availability_target) - path_next_avail,
+        min=0.0,
+    )
+    shortfall_mean = shortfall_per_path.mean()
     components = {
-        "inventory_zone_penalty": path_mean,
-        "inventory_zone_imbalance": imbalance.mean(),
-        "inventory_zone_low_penalty": step_components["inventory_zone_low_penalty"].mean(),
-        "inventory_zone_high_penalty": step_components["inventory_zone_high_penalty"].mean(),
+        "viability_shortfall": shortfall_mean,
+        "viability_min_availability": path_next_avail.mean(),
+        "viability_step_availability": path_next_avail.mean(),
+        "viability_bid_margin": step_parts["viability_bid_margin"][:, 1].mean(),
+        "viability_ask_margin": step_parts["viability_ask_margin"][:, 1].mean(),
     }
-    return path_mean, components
+    return shortfall_mean, components
 
 
 def _market_level_from_cumulative(cum: Any) -> Any:
@@ -538,11 +594,11 @@ def book_quality_score(
         )
 
     smooth_min = torch.minimum(d_bid_touch, d_ask_touch)
-    q_ref = max(1e-9, float(params.depth_target))
+    q_ref = max(1e-9, float(params.presence_reference_qty))
     presence = smooth_min / (q_ref + smooth_min)
 
     spread_sum = bid_x0[0] + ask_x0[0]
-    tightness = torch.exp(-spread_sum / max(1e-9, float(params.spread_target)))
+    tightness = torch.exp(-spread_sum / max(1e-9, float(params.tightness_spread_scale)))
 
     q_bid_notional = q_bid * max(0.0, float(mid_price))
     q_ask_notional = q_ask * max(0.0, float(mid_price))
@@ -575,10 +631,10 @@ def book_quality_score(
 OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
     {
         "risk_adjusted_return",
-        "book_quality",
-        "inventory_zone_penalty",
-        "global_book_quality",
-        "global_inventory_zone_penalty",
+        "validity_penalty",
+        "viability_penalty",
+        "global_validity_penalty",
+        "global_viability_penalty",
     }
 )
 
@@ -643,41 +699,264 @@ def update_ce_ewma_scale(
     return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
-def combine_soft_objective_terms(
+_LAMBDA_INIT_FLOOR = 1e-300
+
+
+def viability_theta_from_lambda_init(lambda_init: float) -> float:
+    """Map configured ``lambda_init`` to log-space dual state ``θ`` with ``λ = exp(θ)``."""
+
+    return math.log(max(0.0, float(lambda_init), _LAMBDA_INIT_FLOOR))
+
+
+def viability_lambda_from_theta(viability_theta: float) -> float:
+    """Positive Lagrange multiplier from log-space dual state."""
+
+    theta = float(viability_theta)
+    if not math.isfinite(theta):
+        return 0.0
+    if theta <= math.log(_LAMBDA_INIT_FLOOR):
+        return 0.0
+    lam = math.exp(theta)
+    return lam if math.isfinite(lam) and lam > 0.0 else 0.0
+
+
+def _viability_shortfall_raw_from_components(
+    components: dict[str, Any],
+    *,
+    component_prefix: str = "",
+) -> float | None:
+    for key in (
+        f"{component_prefix}viability_penalty_raw",
+        f"{component_prefix}viability_shortfall",
+    ):
+        value = _float_component(components.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def viability_lambda_applied_from_components(
+    components: dict[str, Any],
+    *,
+    theta_applied: float,
+    component_prefix: str = "",
+) -> float:
+    """
+    λ used in this decision's viability penalty.
+
+  Prefer ``|penalty| / shortfall`` when both are present so diagnostics match ``J``
+  even if closure-side keys were missing or stale.
+    """
+
+    shortfall = _viability_shortfall_raw_from_components(
+        components,
+        component_prefix=component_prefix,
+    )
+    penalty = _float_component(components.get(f"{component_prefix}viability_penalty"))
+    if shortfall is not None and penalty is not None and abs(shortfall) > 1e-15:
+        implied = abs(penalty) / abs(shortfall)
+        if math.isfinite(implied) and implied >= 0.0:
+            return implied
+    return viability_lambda_from_theta(theta_applied)
+
+
+def stamp_viability_dual_diagnostics(
+    components: dict[str, Any],
+    *,
+    local_theta_applied: float,
+    local_theta_learned: float,
+    global_theta_applied: float | None = None,
+    global_theta_learned: float | None = None,
+) -> None:
+    """
+    Stamp viability dual state on optimizer objective components.
+
+    - ``viability_lambda`` / ``viability_lambda_theta``: multiplier used in this decision.
+    - ``viability_lambda_learned`` / ``viability_lambda_theta_learned``: state for next decision.
+    """
+
+    components["viability_lambda"] = viability_lambda_applied_from_components(
+        components,
+        theta_applied=local_theta_applied,
+    )
+    components["viability_lambda_theta"] = float(local_theta_applied)
+    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta_learned)
+    components["viability_lambda_theta_learned"] = float(local_theta_learned)
+    if global_theta_applied is not None and global_theta_learned is not None:
+        components["global_viability_lambda"] = viability_lambda_applied_from_components(
+            components,
+            theta_applied=global_theta_applied,
+            component_prefix="global_",
+        )
+        components["global_viability_lambda_theta"] = float(global_theta_applied)
+        components["global_viability_lambda_learned"] = viability_lambda_from_theta(
+            global_theta_learned
+        )
+        components["global_viability_lambda_theta_learned"] = float(global_theta_learned)
+
+
+def stamp_learned_viability_dual(
+    components: dict[str, Any],
+    *,
+    local_theta: float,
+    global_theta: float | None = None,
+) -> None:
+    """Deprecated: only stamps learned keys. Use ``stamp_viability_dual_diagnostics``."""
+
+    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta)
+    components["viability_lambda_theta_learned"] = float(local_theta)
+    if global_theta is not None:
+        components["global_viability_lambda_learned"] = viability_lambda_from_theta(global_theta)
+        components["global_viability_lambda_theta_learned"] = float(global_theta)
+
+
+def _viability_shortfall_from_components(
+    components: dict[str, Any],
+    *,
+    shortfall_key: str = "viability_shortfall",
+    shortfall_raw_key: str = "viability_penalty_raw",
+) -> Any | None:
+    raw = components.get(shortfall_key)
+    if raw is None:
+        raw = components.get(shortfall_raw_key)
+    return raw
+
+
+def _float_component(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw.detach().item() if hasattr(raw, "detach") else raw)
+    except Exception:
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _signed_availability_gap(
+    components: dict[str, Any],
+    *,
+    params: ViabilityParams,
+    min_availability_key: str,
+) -> float | None:
+    a_min = _float_component(components.get(min_availability_key))
+    if a_min is None:
+        return None
+    return float(params.availability_target) - a_min
+
+
+def update_viability_theta(
+    viability_theta: float,
+    components: dict[str, Any],
+    *,
+    params: ViabilityParams | None,
+    min_availability_key: str = "viability_min_availability",
+) -> float:
+    """
+    Log-space dual ascent: θ <- θ + η (A* - E[A_min]); λ = exp(θ).
+
+    Uses the signed availability gap (not one-sided shortfall) so λ can decrease
+    when availability is above target. No reset, leakage, or ε in the dual update.
+    """
+
+    if params is None:
+        return float(viability_theta)
+    gap = _signed_availability_gap(
+        components,
+        params=params,
+        min_availability_key=min_availability_key,
+    )
+    if gap is None:
+        return float(viability_theta)
+    eta = float(params.lambda_learning_rate)
+    return float(viability_theta) + eta * gap
+
+
+def validity_book_shortfall(
+    book_score: Any,
+    *,
+    params: ValidityParams | None,
+) -> tuple[Any, dict[str, Any]]:
+    """Shortfall below minimum acceptable h=0 book-quality score: max(0, B_min - B)."""
+
+    torch = _torch()
+    if params is None or float(params.penalty_scale) <= 0.0:
+        if torch.is_tensor(book_score):
+            zero = torch.zeros((), dtype=book_score.dtype, device=book_score.device)
+        else:
+            zero = 0.0
+        return zero, {}
+    if torch.is_tensor(book_score):
+        shortfall = torch.clamp(float(params.min_score) - book_score, min=0.0)
+    else:
+        shortfall = max(0.0, float(params.min_score) - float(book_score))
+    return shortfall, {
+        "validity_shortfall": shortfall,
+        "validity_book_score": book_score,
+    }
+
+
+def combine_validity_term(
     base_objective: Any,
     components: dict[str, Any],
     *,
-    w_book: float,
-    w_inv: float,
+    params: ValidityParams | None,
     book_score: Any | None = None,
-    inventory_zone_mean: Any | None = None,
     book_components: dict[str, Any] | None = None,
-    zone_components: dict[str, Any] | None = None,
-    book_term: str = "book_quality",
-    zone_term: str = "inventory_zone_penalty",
+    validity_term: str = "validity_penalty",
     component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
-    """Combine CE return with optional book-quality reward and inventory-zone penalty."""
+    """Subtract fixed-scale validity penalty: -mu * max(0, B_min - B)."""
 
     out = dict(components)
     objective = base_objective
-    if book_score is not None and float(w_book) > 0.0:
-        weighted_book = float(w_book) * book_score
-        objective = objective + weighted_book
-        out[book_term] = weighted_book
-        for key, value in (book_components or {}).items():
-            if key == "book_quality":
-                out[f"{book_term}_score"] = value
-            else:
-                diag_key = key if key.startswith("book_") else f"book_{key}"
-                out[f"{component_prefix}{diag_key}"] = value
-    if inventory_zone_mean is not None and float(w_inv) > 0.0:
-        weighted_zone = -float(w_inv) * inventory_zone_mean
-        objective = objective + weighted_zone
-        out[zone_term] = weighted_zone
-        for key, value in (zone_components or {}).items():
-            if key == "inventory_zone_penalty":
-                out[f"{zone_term}_raw"] = value
-            else:
-                out[f"{component_prefix}{key}"] = value
+    if book_score is None or params is None or float(params.penalty_scale) <= 0.0:
+        return objective, out
+    shortfall, validity_components = validity_book_shortfall(book_score, params=params)
+    weighted = -float(params.penalty_scale) * shortfall
+    objective = objective + weighted
+    out[validity_term] = weighted
+    for key, value in validity_components.items():
+        if key == "validity_shortfall":
+            out[f"{validity_term}_raw"] = value
+        else:
+            out[f"{component_prefix}{key}"] = value
+    for key, value in (book_components or {}).items():
+        if key == "book_quality":
+            out[f"{component_prefix}validity_book_score"] = value
+        else:
+            diag_key = key if key.startswith("book_") else f"book_{key}"
+            out[f"{component_prefix}{diag_key}"] = value
+    return objective, out
+
+
+def combine_viability_term(
+    base_objective: Any,
+    components: dict[str, Any],
+    *,
+    viability_theta: float,
+    viability_params: ViabilityParams | None = None,
+    viability_shortfall: Any | None = None,
+    viability_components: dict[str, Any] | None = None,
+    viability_term: str = "viability_penalty",
+    component_prefix: str = "",
+) -> tuple[Any, dict[str, Any]]:
+    """Subtract adaptive Lagrange penalty: -exp(theta) * expected availability shortfall."""
+
+    out = dict(components)
+    objective = base_objective
+    if viability_shortfall is None:
+        return objective, out
+    lam = viability_lambda_from_theta(viability_theta)
+    weighted = -lam * viability_shortfall
+    objective = objective + weighted
+    out[viability_term] = weighted
+    out[f"{component_prefix}viability_lambda"] = lam
+    out[f"{component_prefix}viability_lambda_theta"] = float(viability_theta)
+    for key, value in (viability_components or {}).items():
+        if key == "viability_shortfall":
+            out[f"{viability_term}_raw"] = value
+        else:
+            out[f"{component_prefix}{key}"] = value
     return objective, out

@@ -47,6 +47,32 @@ def _seed_strategy(store: MemoryRegistryStore) -> str:
     return "btc-maker"
 
 
+def test_registry_admin_stores_account_credentials(registry_client) -> None:
+    client, store, _bus = registry_client
+    store.upsert_exchange(exchange="wallex", config={"private": {"mode": "rest"}})
+
+    response = client.post(
+        "/api/admin/registry/accounts",
+        json={
+            "account_id": "wallex-main",
+            "exchange": "wallex",
+            "credentials": {
+                "auth_mode": "api_key",
+                "api_key": "wallex-secret-key",
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["credentials"]["auth_mode"] == "api_key"
+    assert body["credentials"]["api_key"] == "wallex-secret-key"
+    assert body["credential_storage"] == "stored"
+
+    record = store.get_account("wallex-main")
+    assert '"v":2' in record.credential_ref
+    assert "wallex-secret-key" in record.credential_ref
+
+
 def test_registry_admin_crud_and_runtime_config(registry_client) -> None:
     client, store, _bus = registry_client
     strategy_id = _seed_strategy(store)

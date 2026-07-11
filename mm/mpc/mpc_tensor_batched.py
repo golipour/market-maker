@@ -16,24 +16,40 @@ import torch.nn.functional as F
 
 from mm.mpc.l_param import (
     LParamConfig,
-    ReservationOffsetParams,
+    ReservationSkewParams,
     SpreadStructureParams,
     action_param_len,
     reservation_r_offset_from_params,
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
 )
+from mm.mpc.optimizer_config_keys import (
+    CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,
+    CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
+    RESERVATION_SKEW,
+    reject_removed_venue_optimizer_keys,
+)
 from mm.mpc.objective_terms import (
     BookQualityParams,
-    InventoryZoneParams,
     ObjectiveNormalizeParams,
+    ValidityParams,
+    ViabilityParams,
     apply_ce_objective_normalization,
     book_quality_score,
-    combine_soft_objective_terms,
-    inventory_zone_path_mean,
+    combine_validity_term,
+    combine_viability_term,
     update_ce_ewma_scale,
+    update_viability_theta,
+    stamp_viability_dual_diagnostics,
+    viability_path_shortfall,
+    viability_theta_from_lambda_init,
 )
-from mm.mpc.mpc_state import State
+from mm.mpc.warm_start import (
+    WarmStartParams,
+    prepare_warm_start_initial_flat,
+    warm_action_from_mpc_state,
+)
+from mm.mpc.mpc_state import SigmoidMixtureAction, State
 from mm.core.wallet import portfolio_wealth
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.state_tensor import (
@@ -80,12 +96,11 @@ class VenueOptimizerParams:
     n_components: int | None = None
     return_risk_aversion_beta: float = 1.0
     objective_weight: float = 1.0
-    quote_size_min_per_side: float = 0.0
-    quote_size_max_per_side: float | None = None
-    reservation_offset: ReservationOffsetParams | None = None
-    w_book: float = 0.0
-    w_inv: float = 0.0
-    inventory_zone: InventoryZoneParams | None = None
+    cumulative_qty_floor_at_spread_max: float = 0.0
+    cumulative_qty_cap_at_spread_max: float | None = None
+    reservation_skew: ReservationSkewParams | None = None
+    validity: ValidityParams | None = None
+    viability: ViabilityParams | None = None
     book_quality: BookQualityParams | None = None
     soft_fill_temp: float = 0.1
     soft_fill_activation: str = "sigmoid"
@@ -100,10 +115,22 @@ class VenueOptimizerParams:
     ) -> "VenueOptimizerParams":
         base = defaults or cls()
         data = dict(payload or {})
+        reject_removed_venue_optimizer_keys(data, venue="optimizer")
         if data.get("spread_structure") is not None:
             raise ValueError(
                 "optimizer spread_structure was removed; use "
                 "book_quality.hard_structure.{action_max_spread, action_min_depth, action_k_epsilon}"
+            )
+        if "w_inv" in data or "inventory_zone" in data:
+            raise ValueError(
+                "optimizer venue keys w_inv and inventory_zone were removed; "
+                "use viability {min_viable_quote, margin_buffer, availability_target, "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
+            )
+        if "w_book" in data:
+            raise ValueError(
+                "optimizer venue key w_book was removed; use validity "
+                "{min_score, penalty_scale} with book_quality.soft_scoring"
             )
         return cls(
             n_components=(
@@ -116,25 +143,28 @@ class VenueOptimizerParams:
                 float(data.get("return_risk_aversion_beta", base.return_risk_aversion_beta)),
             ),
             objective_weight=max(0.0, float(data.get("objective_weight", base.objective_weight))),
-            quote_size_min_per_side=float(
-                data.get("quote_size_min_per_side", base.quote_size_min_per_side)
+            cumulative_qty_floor_at_spread_max=float(
+                data.get(CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX, base.cumulative_qty_floor_at_spread_max)
             ),
-            quote_size_max_per_side=(
-                float(data.get("quote_size_max_per_side"))
-                if data.get("quote_size_max_per_side") is not None
-                else base.quote_size_max_per_side
+            cumulative_qty_cap_at_spread_max=(
+                float(data[CUMULATIVE_QTY_CAP_AT_SPREAD_MAX])
+                if CUMULATIVE_QTY_CAP_AT_SPREAD_MAX in data
+                else base.cumulative_qty_cap_at_spread_max
             ),
-            reservation_offset=(
-                ReservationOffsetParams.from_mapping(data.get("reservation_offset"))
-                if data.get("reservation_offset") is not None
-                else base.reservation_offset
+            reservation_skew=(
+                ReservationSkewParams.from_mapping(data.get(RESERVATION_SKEW))
+                if data.get(RESERVATION_SKEW) is not None
+                else base.reservation_skew
             ),
-            w_book=max(0.0, float(data.get("w_book", base.w_book))),
-            w_inv=max(0.0, float(data.get("w_inv", base.w_inv))),
-            inventory_zone=(
-                InventoryZoneParams.from_mapping(data.get("inventory_zone"))
-                if data.get("inventory_zone") is not None
-                else base.inventory_zone
+            validity=(
+                ValidityParams.from_mapping(data.get("validity"))
+                if data.get("validity") is not None
+                else base.validity
+            ),
+            viability=(
+                ViabilityParams.from_mapping(data.get("viability"))
+                if data.get("viability") is not None
+                else base.viability
             ),
             book_quality=(
                 BookQualityParams.from_mapping(data.get("book_quality"))
@@ -151,9 +181,9 @@ class VenueOptimizerParams:
         )
 
     def validate(self, *, spread_max: float, n_components: int | None, venue: str) -> None:
-        if float(self.quote_size_min_per_side) < 0.0:
+        if float(self.cumulative_qty_floor_at_spread_max) < 0.0:
             raise ValueError(
-                f"optimizer.{venue}.quote_size_min_per_side must be >= 0"
+                f"optimizer.{venue}.{CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX} must be >= 0"
             )
         l_param = self.l_param_config(
             spread_max=spread_max,
@@ -180,17 +210,17 @@ class VenueOptimizerParams:
             }
         )
         return LParamConfig(
-            quote_size_min=float(self.quote_size_min_per_side),
+            quote_size_min=float(self.cumulative_qty_floor_at_spread_max),
             quote_size_max=(
-                float(self.quote_size_max_per_side)
-                if self.quote_size_max_per_side is not None
+                float(self.cumulative_qty_cap_at_spread_max)
+                if self.cumulative_qty_cap_at_spread_max is not None
                 else None
             ),
             spread_max=spread_max,
             n_components=n_components,
             reservation_r_max=(
-                float(self.reservation_offset.r_max)
-                if self.reservation_offset is not None
+                float(self.reservation_skew.max_abs_skew)
+                if self.reservation_skew is not None
                 else 0.0
             ),
             **spread_fields,
@@ -202,18 +232,18 @@ class VenueOptimizerParams:
             "n_components": int(self.n_components or n_components),
             "return_risk_aversion_beta": self.return_risk_aversion_beta,
             "objective_weight": self.objective_weight,
-            "quote_size_min_per_side": self.quote_size_min_per_side,
-            "quote_size_max_per_side": self.quote_size_max_per_side,
-            "w_book": self.w_book,
-            "w_inv": self.w_inv,
+            CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: self.cumulative_qty_floor_at_spread_max,
+            CUMULATIVE_QTY_CAP_AT_SPREAD_MAX: self.cumulative_qty_cap_at_spread_max,
             "soft_fill_temp": self.soft_fill_temp,
             "soft_fill_activation": self.soft_fill_activation,
             "soft_fill_queue_model": self.soft_fill_queue_model,
         }
-        if self.reservation_offset is not None:
-            out["reservation_offset"] = self.reservation_offset.as_mapping()
-        if self.inventory_zone is not None:
-            out["inventory_zone"] = self.inventory_zone.as_mapping()
+        if self.reservation_skew is not None:
+            out[RESERVATION_SKEW] = self.reservation_skew.as_mapping()
+        if self.validity is not None:
+            out["validity"] = self.validity.as_mapping()
+        if self.viability is not None:
+            out["viability"] = self.viability.as_mapping()
         if self.book_quality is not None:
             out["book_quality"] = self.book_quality.as_mapping()
         return out
@@ -735,8 +765,8 @@ def _quote_capacity_bounds_batched(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Hard side caps from wallet totals; side mins stay at zero (presence is soft)."""
     hard_cap_value = (
-        float(optimizer.quote_size_max_per_side)
-        if optimizer.quote_size_max_per_side is not None
+        float(optimizer.cumulative_qty_cap_at_spread_max)
+        if optimizer.cumulative_qty_cap_at_spread_max is not None
         else float("inf")
     )
     hard_cap = torch.full_like(cash, max(0.0, hard_cap_value))
@@ -757,8 +787,8 @@ def _quote_capacity_bounds_scalar(
     optimizer: VenueOptimizerParams,
 ) -> tuple[float, float, float, float]:
     hard_cap = (
-        max(0.0, float(optimizer.quote_size_max_per_side))
-        if optimizer.quote_size_max_per_side is not None
+        max(0.0, float(optimizer.cumulative_qty_cap_at_spread_max))
+        if optimizer.cumulative_qty_cap_at_spread_max is not None
         else float("inf")
     )
     mid_safe = max(1e-12, float(mid_price))
@@ -791,7 +821,7 @@ class MonteCarloMPCTensorBatched:
         adam_grad_clip: float = 10.0,
         device: str | None = None,
         bounds: list[tuple[float, float]] | None = None,
-        warm_start: bool = False,
+        warm_start: bool | dict[str, Any] | WarmStartParams | None = False,
         fixed_mc_samples: bool = False,
         verbose: bool = False,
         return_risk_aversion_beta: float = 1.0,
@@ -801,8 +831,8 @@ class MonteCarloMPCTensorBatched:
         local_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         global_optimizer: dict[str, Any] | VenueOptimizerParams | None = None,
         reference_price_source: str = "global",
-        quote_size_min_per_side: float | int | None = None,
-        quote_size_max_per_side: float | int | None = None,
+        cumulative_qty_floor_at_spread_max: float | int | None = None,
+        cumulative_qty_cap_at_spread_max: float | int | None = None,
         objective_normalize: dict[str, Any] | ObjectiveNormalizeParams | None = None,
     ):
         self.local_price_model = local_price_model
@@ -818,7 +848,10 @@ class MonteCarloMPCTensorBatched:
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
         self.device = device
-        self.warm_start = warm_start
+        if isinstance(warm_start, WarmStartParams):
+            self.warm_start = warm_start
+        else:
+            self.warm_start = WarmStartParams.from_mapping(warm_start)
         self.fixed_mc_samples = fixed_mc_samples
         self.verbose = verbose
         self.liquidity_sourcing_enabled = bool(liquidity_sourcing_enabled)
@@ -831,11 +864,15 @@ class MonteCarloMPCTensorBatched:
             n_components=self.n_components,
             return_risk_aversion_beta=return_risk_aversion_beta,
             objective_weight=1.0,
-            quote_size_min_per_side=(
-                float(quote_size_min_per_side) if quote_size_min_per_side is not None else 0.0
+            cumulative_qty_floor_at_spread_max=(
+                float(cumulative_qty_floor_at_spread_max)
+                if cumulative_qty_floor_at_spread_max is not None
+                else 0.0
             ),
-            quote_size_max_per_side=(
-                float(quote_size_max_per_side) if quote_size_max_per_side is not None else None
+            cumulative_qty_cap_at_spread_max=(
+                float(cumulative_qty_cap_at_spread_max)
+                if cumulative_qty_cap_at_spread_max is not None
+                else None
             ),
             soft_fill_temp=float(soft_fill_temp),
             soft_fill_activation=_normalize_soft_fill_activation(soft_fill_activation),
@@ -864,8 +901,10 @@ class MonteCarloMPCTensorBatched:
             venue="global",
         )
         self.return_risk_aversion_beta = self.local_optimizer.return_risk_aversion_beta
-        self.quote_size_min_per_side = self.local_optimizer.quote_size_min_per_side
-        self.quote_size_max_per_side = self.local_optimizer.quote_size_max_per_side
+        self.cumulative_qty_floor_at_spread_max = (
+            self.local_optimizer.cumulative_qty_floor_at_spread_max
+        )
+        self.cumulative_qty_cap_at_spread_max = self.local_optimizer.cumulative_qty_cap_at_spread_max
         self.soft_fill_temp = self.local_optimizer.soft_fill_temp
         self.soft_fill_activation = self.local_optimizer.soft_fill_activation
         self.soft_fill_queue_model = self.local_optimizer.soft_fill_queue_model
@@ -890,6 +929,18 @@ class MonteCarloMPCTensorBatched:
         else:
             self.objective_normalize = ObjectiveNormalizeParams.from_mapping(objective_normalize)
         self._ce_ewma_scale = 0.0
+        local_viability = self.local_optimizer.viability
+        global_viability = self.global_optimizer.viability
+        self._viability_theta_local = (
+            viability_theta_from_lambda_init(local_viability.lambda_init)
+            if local_viability is not None
+            else viability_theta_from_lambda_init(0.0)
+        )
+        self._viability_theta_global = (
+            viability_theta_from_lambda_init(global_viability.lambda_init)
+            if global_viability is not None
+            else viability_theta_from_lambda_init(0.0)
+        )
 
         if bounds is None:
             logit_bound = (-30.0, 30.0)
@@ -1034,18 +1085,35 @@ class MonteCarloMPCTensorBatched:
         single_len = action_param_len(n)
         param_len = self.horizon * single_len
 
-        one_action = None
-        if self.warm_start and self._last_raw_flat is not None:
-            one_action = _finite_action_flat_or_none(self._last_raw_flat, single_len)
-        if one_action is None and self.warm_start and self._last_action is not None:
-            one_action = _finite_action_flat_or_none(self._last_action.to_flat(), single_len)
-        if one_action is None:
-            one_action = _initial_action_uniform_marginal_qrange(
-                n_components=n,
-                spread_max=self.spread_max,
-                l_param=self._l_param_config(),
+        u_default = _initial_action_uniform_marginal_qrange(
+            n_components=n,
+            spread_max=self.spread_max,
+            l_param=self._l_param_config(),
+        )
+        u_warm = warm_action_from_mpc_state(
+            params=self.warm_start,
+            last_raw_flat=self._last_raw_flat,
+            last_action_flat=(
+                self._last_action.to_flat() if self._last_action is not None else None
+            ),
+            expected_len=single_len,
+            finite_flat_or_none=_finite_action_flat_or_none,
+        )
+        needs_adaptive_probe = (
+            self.warm_start.enabled
+            and u_warm is not None
+            and self.warm_start.alpha_mode == "adaptive"
+        )
+        if needs_adaptive_probe:
+            x0_arr = np.tile(u_default, self.horizon)
+            warm_meta: dict[str, float] = {}
+        else:
+            x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                params=self.warm_start,
+                u_default=u_default,
+                u_warm=u_warm,
+                horizon=self.horizon,
             )
-        x0_arr = np.tile(one_action, self.horizon)
 
         bounds_raw = _bounds_effective_to_raw(self.bounds)
         bounds_full = bounds_raw * self.horizon
@@ -1058,9 +1126,7 @@ class MonteCarloMPCTensorBatched:
         else:
             with torch_mod.no_grad():
                 self._x_torch.data = torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
-            # If warm start is disabled, do not carry Adam moments across optimize()
-            # calls; otherwise one-step updates can be dominated by stale momentum.
-            if not self.warm_start:
+            if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
                 self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
         x_torch = self._x_torch
         optimizer = self._optimizer
@@ -1149,13 +1215,14 @@ class MonteCarloMPCTensorBatched:
         nonfinite_grad_count = 0
         last_eval_x = best_x.detach().clone()
         t0 = time.perf_counter()
+        adaptive_warm_resolved = not needs_adaptive_probe
 
         for epoch in range(self.adam_epochs):
             if self.verbose:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
-            def closure():
+            def closure(probe_only: bool = False):
                 nonlocal batch_time_sec, captured_initial_components
                 nonlocal initial_metrics, final_metrics
                 nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
@@ -1192,6 +1259,15 @@ class MonteCarloMPCTensorBatched:
                 inv_path: list[Any] = []
                 cash_path: list[Any] = []
                 mid_path: list[Any] = []
+                mid_init = _mid_from_book_best_levels_batched(
+                    ob_bids,
+                    ob_asks,
+                    mid_fallback_t,
+                    spread_grid,
+                )
+                inv_path.append(inv_t.squeeze(1))
+                cash_path.append(cash_t.squeeze(1))
+                mid_path.append(mid_init.squeeze(1))
                 conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
                 conditional_buy_vwap_t = None
                 conditional_sell_vwap_t = None
@@ -1371,9 +1447,9 @@ class MonteCarloMPCTensorBatched:
                     step_reward = step_reward_main
                     if h == 0:
                         step_reward_0 = step_reward
-                    inv_path.append(inv_t.squeeze(1))
-                    cash_path.append(cash_t.squeeze(1))
-                    mid_path.append(mid_t.squeeze(1))
+                    inv_path.append(inv_next.squeeze(1))
+                    cash_path.append(cash_next.squeeze(1))
+                    mid_path.append(mid_next.squeeze(1))
                     total_reward = total_reward + step_reward
                     total_main_reward = total_main_reward + step_reward_main
 
@@ -1401,7 +1477,7 @@ class MonteCarloMPCTensorBatched:
                 )
                 J, components = self.normalize_terminal_objective(J, components)
                 venue_opt = self.local_optimizer
-                if float(venue_opt.w_book) > 0.0:
+                if venue_opt.validity is not None:
                     book_params = venue_opt.book_quality or BookQualityParams()
                     use_combined = book_params.measure == "combined"
                     book_score, book_components = book_quality_score(
@@ -1418,31 +1494,30 @@ class MonteCarloMPCTensorBatched:
                         market_cum_bid=book_cum_bid if use_combined else None,
                         market_cum_ask=book_cum_ask if use_combined else None,
                     )
-                    J, components = combine_soft_objective_terms(
+                    J, components = combine_validity_term(
                         J,
                         components,
-                        w_book=venue_opt.w_book,
-                        w_inv=0.0,
+                        params=venue_opt.validity,
                         book_score=book_score,
                         book_components=book_components,
                     )
-                if float(venue_opt.w_inv) > 0.0 and venue_opt.inventory_zone is not None:
+                if venue_opt.viability is not None:
                     inv_path_t = torch_mod.stack(inv_path, dim=1)
                     cash_path_t = torch_mod.stack(cash_path, dim=1)
                     mid_path_t = torch_mod.stack(mid_path, dim=1)
-                    zone_mean, zone_components = inventory_zone_path_mean(
+                    shortfall, viability_components = viability_path_shortfall(
                         inv_path_t,
                         cash_path=cash_path_t,
                         mid_path=mid_path_t,
-                        zone=venue_opt.inventory_zone,
+                        params=venue_opt.viability,
                     )
-                    J, components = combine_soft_objective_terms(
+                    J, components = combine_viability_term(
                         J,
                         components,
-                        w_book=0.0,
-                        w_inv=venue_opt.w_inv,
-                        inventory_zone_mean=zone_mean,
-                        zone_components=zone_components,
+                        viability_theta=self._viability_theta_local,
+                        viability_params=venue_opt.viability,
+                        viability_shortfall=shortfall,
+                        viability_components=viability_components,
                     )
 
                 def _finite_item(t) -> float:
@@ -1453,27 +1528,28 @@ class MonteCarloMPCTensorBatched:
                         return 0.0
 
                 obj_value = _finite_item(J)
-                epoch_metrics = EpochObjectiveMetrics.from_tensors(
-                    objective_value=obj_value,
-                    components={k: _finite_item(v) for k, v in components.items()},
-                    expected_total_reward=_finite_item(J_mean_raw),
-                    expected_total_return=_finite_item(J_return_raw),
-                    expected_next_reward=_finite_item(J_mean_next_raw),
-                    main_reward_mean=_finite_item(main_reward_mean_raw),
-                    global_reward_mean=_finite_item(global_reward_mean_raw),
-                )
-                self._last_J_components = dict(epoch_metrics.components)
-                if not captured_initial_components:
-                    self._last_J_components_initial = dict(epoch_metrics.components)
-                    self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
-                    self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
-                    initial_metrics = epoch_metrics
-                    captured_initial_components = True
-                final_metrics = epoch_metrics
-                self._last_J_mean_raw = epoch_metrics.expected_total_reward
-                self._last_E_dW_next = epoch_metrics.expected_next_reward
-                self._last_main_reward_mean = epoch_metrics.main_reward_mean
-                self._last_global_reward_mean = epoch_metrics.global_reward_mean
+                if not probe_only:
+                    epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                        objective_value=obj_value,
+                        components={k: _finite_item(v) for k, v in components.items()},
+                        expected_total_reward=_finite_item(J_mean_raw),
+                        expected_total_return=_finite_item(J_return_raw),
+                        expected_next_reward=_finite_item(J_mean_next_raw),
+                        main_reward_mean=_finite_item(main_reward_mean_raw),
+                        global_reward_mean=_finite_item(global_reward_mean_raw),
+                    )
+                    self._last_J_components = dict(epoch_metrics.components)
+                    if not captured_initial_components:
+                        self._last_J_components_initial = dict(epoch_metrics.components)
+                        self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
+                        self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
+                        initial_metrics = epoch_metrics
+                        captured_initial_components = True
+                    final_metrics = epoch_metrics
+                    self._last_J_mean_raw = epoch_metrics.expected_total_reward
+                    self._last_E_dW_next = epoch_metrics.expected_next_reward
+                    self._last_main_reward_mean = epoch_metrics.main_reward_mean
+                    self._last_global_reward_mean = epoch_metrics.global_reward_mean
                 loss = -J
                 if not torch_mod.isfinite(loss):
                     nonfinite_loss_count += 1
@@ -1487,7 +1563,40 @@ class MonteCarloMPCTensorBatched:
                             torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
                 return loss
 
-            loss = optimizer.step(closure)
+            if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
+
+                def _grad_norm_probe(one_flat: np.ndarray) -> float:
+                    tiled = np.tile(one_flat, self.horizon)
+                    with torch_mod.no_grad():
+                        x_torch.data.copy_(
+                            torch_mod.tensor(tiled, dtype=dtype, device=_device)
+                        )
+                    optimizer.zero_grad()
+                    closure(probe_only=True)
+                    if x_torch.grad is None:
+                        return 0.0
+                    grad_norm = float(x_torch.grad.detach().norm().item())
+                    if not math.isfinite(grad_norm):
+                        return 0.0
+                    return grad_norm
+
+                x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                    params=self.warm_start,
+                    u_default=u_default,
+                    u_warm=u_warm,
+                    horizon=self.horizon,
+                    grad_norm_probe=_grad_norm_probe,
+                )
+                with torch_mod.no_grad():
+                    x_torch.data.copy_(
+                        torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
+                    )
+                if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
+                    self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+                    optimizer = self._optimizer
+                adaptive_warm_resolved = True
+
+            loss = optimizer.step(lambda: closure(probe_only=False))
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
                 best_x = last_eval_x.detach().clone()
@@ -1545,7 +1654,7 @@ class MonteCarloMPCTensorBatched:
         if best_main_reward_mean is not None and math.isfinite(float(best_main_reward_mean)):
             self._last_main_reward_mean = float(best_main_reward_mean)
         self._last_global_reward_mean = 0.0
-        if self.warm_start:
+        if self.warm_start.enabled:
             self._last_action = best_action
             self._last_raw_flat = np.array(best_flat_slice, dtype=np.float64)
         if best_metrics is None and final_metrics is not None:
@@ -1558,6 +1667,19 @@ class MonteCarloMPCTensorBatched:
                 best_metrics.components,
                 normalize=self.objective_normalize,
             )
+            theta_applied_local = self._viability_theta_local
+            self._viability_theta_local = update_viability_theta(
+                self._viability_theta_local,
+                best_metrics.components,
+                params=self.local_optimizer.viability,
+            )
+            for metrics in (initial_metrics, final_metrics, best_metrics):
+                if metrics is not None:
+                    stamp_viability_dual_diagnostics(
+                        metrics.components,
+                        local_theta_applied=theta_applied_local,
+                        local_theta_learned=self._viability_theta_local,
+                    )
         diagnostics = OptimizerRunDiagnostics(
             config={
                 "kind": "monte_carlo_mpc_tensor_batched",
@@ -1570,6 +1692,8 @@ class MonteCarloMPCTensorBatched:
                 "vwap_depth": vwap_depth,
                 "reference_price_source": self.reference_price_source,
                 "objective_normalize": self.objective_normalize.as_mapping(),
+                "warm_start": self.warm_start.as_mapping(),
+                "warm_start_resolved": warm_meta,
                 "local_optimizer": self.local_optimizer.as_config(
                     spread_max=self.spread_max,
                     n_components=self.local_n_components,

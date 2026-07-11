@@ -122,6 +122,49 @@ def _maybe_seed_worker_registry(services: list[StackService]) -> None:
         print("[stack] seeded local registry for worker-1", flush=True)
 
 
+def _redis_url_from_env() -> str:
+    return os.environ.get("MM_BUS_REDIS_URL", "redis://localhost:6379/0").strip()
+
+
+def _check_redis_available(redis_url: str, *, timeout_s: float = 60.0) -> bool:
+    try:
+        import redis
+        from redis.exceptions import BusyLoadingError
+    except ImportError:
+        return True
+    deadline = time.monotonic() + max(1.0, float(timeout_s))
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        client = redis.from_url(redis_url, socket_connect_timeout=2.0, socket_timeout=2.0)
+        try:
+            if client.ping():
+                return True
+        except BusyLoadingError as exc:
+            last_error = exc
+            print(
+                "[stack] waiting for Redis to finish loading dataset…",
+                flush=True,
+            )
+        except Exception as exc:
+            last_error = exc
+        finally:
+            client.close()
+        time.sleep(1.0)
+    if last_error is not None:
+        print(
+            f"[stack] warning: Redis not ready at {redis_url} "
+            f"({type(last_error).__name__}: {last_error})",
+            flush=True,
+        )
+    else:
+        print(f"[stack] warning: Redis not ready at {redis_url}", flush=True)
+    print(
+        "[stack] start infrastructure first: docker compose up -d redis db",
+        flush=True,
+    )
+    return False
+
+
 def run_stack(
     services: list[StackService],
     *,
@@ -129,6 +172,8 @@ def run_stack(
     ingestor_warmup_s: float,
 ) -> int:
     load_mm_env()
+    if not _check_redis_available(_redis_url_from_env()):
+        return 1
     _maybe_seed_worker_registry(services)
     procs: list[tuple[str, subprocess.Popen[str]]] = []
     stop_requested = False

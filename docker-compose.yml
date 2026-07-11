@@ -16,11 +16,24 @@
 #
 services:
   redis:
-    image: redis:latest
+    # Pin a slim image: redis:latest (8.x) bundles search/bloom modules and is heavy.
+    # Streams are an ephemeral bus (Postgres/Parquet is durable); disable RDB/AOF so
+    # BGSAVE does not fork ~6GB and OOM-kill the container on a small dev machine.
+    image: redis:7.2-alpine
     container_name: redis
-    restart: "no"
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 2gb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis-data:/data
 
@@ -153,6 +166,29 @@ services:
       - loki
       - tempo
       - redis
+
+  # Read-only Postgres MCP server (streamable HTTP at http://localhost:8787/mcp).
+  # Set MCP_API_KEY in .env when exposing via Cloudflare Tunnel.
+  mcp-postgres:
+    build:
+      context: .
+      dockerfile: mcp_servers/postgres/Dockerfile
+    container_name: mcp-postgres
+    restart: "no"
+    environment:
+      MM_DATABASE_URL: postgresql://meysam:Welcome123@db:5432/postgres
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8787
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}
+      MCP_OAUTH_CLIENT_ID: ${MCP_OAUTH_CLIENT_ID:-}
+      MCP_OAUTH_CLIENT_SECRET: ${MCP_OAUTH_CLIENT_SECRET:-}
+      MCP_OAUTH_USERNAME: ${MCP_OAUTH_USERNAME:-}
+      MCP_OAUTH_PASSWORD: ${MCP_OAUTH_PASSWORD:-}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+    ports:
+      - "8787:8787"
+    depends_on:
+      - db
 
 volumes:
   redis-data:

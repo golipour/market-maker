@@ -94,6 +94,13 @@ def extend_shared_account_pool(
         api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
         if not api_credentials:
             continue
+        auth_mode = private_config.resolved_auth_mode(source.normalized_exchange())
+        cred_kind = type(api_credentials).__name__ if not isinstance(api_credentials, str) else "token"
+        print(
+            f"[account-pool] {account_id} {source.normalized_exchange()} "
+            f"private auth_mode={auth_mode} credential={cred_kind}",
+            flush=True,
+        )
         private_selection = select_private_state_adapter(
             source.normalized_exchange(),
             source.symbol,

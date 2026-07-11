@@ -1,6 +1,7 @@
 {
   "_comment": "Shared ingestor. Set load_feeds_from_registry when feeds are managed in the platform UI (requires MM_DATABASE_URL). Restart ingestor after registry feed changes.",
   "load_feeds_from_registry": true,
+  "exclude_exchanges": ["kucoin"],
   "feeds": [
     {
       "exchange": "nobitex",
