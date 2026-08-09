@@ -20,6 +20,7 @@ from mm.registry.credentials import (
     private_credentials_from_ref,
 )
 from mm.registry.audit import record_admin_audit
+from mm.registry.market_data import market_source_as_dict
 from mm.registry.memory import RegistryConflictError, RegistryNotFoundError
 from mm.registry.runtime_config import runtime_config_mapping_from_registry
 from mm.registry.store import RegistryStore, build_registry_store

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,9 +22,16 @@ class RuntimeControlState:
 class RuntimeControlPlane:
     """Consumes admin commands and exposes deterministic runtime safety state."""
 
-    def __init__(self, *, bus: AbstractEventBus, state: RuntimeControlState | None = None):
+    def __init__(
+        self,
+        *,
+        bus: AbstractEventBus,
+        state: RuntimeControlState | None = None,
+        on_actor_start: Callable[[str], Awaitable[None]] | None = None,
+    ):
         self.bus = bus
         self.state = state or RuntimeControlState()
+        self._on_actor_start = on_actor_start
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
 
@@ -38,6 +46,9 @@ class RuntimeControlPlane:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
+    async def publish_state(self, *, command: str = "bootstrap", command_id: str | None = None) -> None:
+        await self._publish_state({"command": command, "command_id": command_id})
+
     async def _run(self) -> None:
         try:
             async for command in self.bus.subscribe("admin:commands"):
@@ -51,8 +62,23 @@ class RuntimeControlPlane:
         if name == "pause" and actor_id:
             self.state.paused_actors.add(str(actor_id))
         elif name == "resume" and actor_id:
-            self.state.paused_actors.discard(str(actor_id))
-            self.state.allocation_breached_actors.discard(str(actor_id))
+            actor = str(actor_id)
+            try:
+                if self._on_actor_start is not None:
+                    await self._on_actor_start(actor)
+            except Exception as exc:
+                log_event(
+                    "actor_start_failed",
+                    {
+                        "actor_id": actor,
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+                # Stay paused if config reload / slot rebuild fails.
+            else:
+                self.state.paused_actors.discard(actor)
+                self.state.allocation_breached_actors.discard(actor)
         elif name == "kill_switch":
             self.state.kill_switch = bool(command.get("enabled", True))
         elif name in ("dry_run", "observe_only"):

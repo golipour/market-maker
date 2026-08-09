@@ -17,7 +17,7 @@ from mm.registry.runtime_config import runtime_config_from_registry
 from mm.registry.store import RegistryStore, build_registry_store
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import BusRuntimeConfig, MarketMakerRuntimeConfig, _bus_from_mapping
-from mm.runtime.control import RuntimeControlPlane
+from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
 
 from mm.worker.account_pool import SharedAccountPool, build_shared_account_pool
 from mm.worker.strategy_slot import StrategySlot, build_strategy_slot
@@ -53,13 +53,15 @@ class WorkerComponents:
     async def start(self) -> None:
         if self._started:
             return
-        if self.control_plane is not None:
-            await self.control_plane.start()
         if self.virtual_ledger_service is not None:
             await self.virtual_ledger_service.start()
         await self.account_pool.start()
+        # Start slots while paused, then expose control plane so Start can reload+resume.
         for supervisor in self.supervisors:
             await supervisor.start()
+        if self.control_plane is not None:
+            await self.control_plane.start()
+            await self.control_plane.publish_state(command="worker_boot_paused")
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._started = True
 
@@ -198,7 +200,24 @@ async def build_worker_components(
         (item.strategy_id, item.account_id, item.config) for item in strategies
     )
     account_pool = build_shared_account_pool(strategy_triples, bus=runtime_bus, options=options)
-    control_plane = RuntimeControlPlane(bus=runtime_bus)
+    actor_ids = {
+        item.config.controller.actor_id
+        for item in strategies
+        if item.config.controller is not None and item.config.controller.actor_id
+    }
+    supervisors_by_actor: dict[str, StrategySupervisor] = {}
+
+    async def _on_actor_start(actor_id: str) -> None:
+        supervisor = supervisors_by_actor.get(actor_id)
+        if supervisor is None:
+            return
+        await supervisor.reload()
+
+    control_plane = RuntimeControlPlane(
+        bus=runtime_bus,
+        state=RuntimeControlState(paused_actors=set(actor_ids)),
+        on_actor_start=_on_actor_start,
+    )
     allocations = load_worker_virtual_allocations(
         registry,
         tuple(item.strategy_id for item in strategies),
@@ -218,6 +237,21 @@ async def build_worker_components(
             control_plane=control_plane,
         )
 
+    def _rebuild_slot(strategy_id: str) -> StrategySlot:
+        bundle = registry.load_runtime_bundle(strategy_id)
+        strategy = bundle["strategy"]
+        runtime_config = runtime_config_from_registry(**bundle)
+        return build_strategy_slot(
+            strategy_id=strategy_id,
+            account_id=strategy.account_id,
+            config=runtime_config,
+            bus=runtime_bus,
+            account_pool=account_pool,
+            control_plane=control_plane,
+            virtual_ledger_service=virtual_ledger_service,
+            ledger_source=strategy.ledger_source,
+        )
+
     slots = tuple(
         build_strategy_slot(
             strategy_id=item.strategy_id,
@@ -231,16 +265,20 @@ async def build_worker_components(
         )
         for item in strategies
     )
-    supervisors = tuple(
-        StrategySupervisor(
+    supervisors_list: list[StrategySupervisor] = []
+    for item, slot in zip(strategies, slots, strict=True):
+        supervisor = StrategySupervisor(
             slot=slot,
             backoff=StrategyBackoffConfig(
                 initial_s=config.backoff.initial_s,
                 max_s=config.backoff.max_s,
             ),
+            rebuild_slot=lambda strategy_id=item.strategy_id: _rebuild_slot(strategy_id),
         )
-        for slot in slots
-    )
+        supervisors_list.append(supervisor)
+        if item.config.controller is not None and item.config.controller.actor_id:
+            supervisors_by_actor[item.config.controller.actor_id] = supervisor
+    supervisors = tuple(supervisors_list)
 
     log_event(
         "worker_build_complete",
@@ -255,6 +293,7 @@ async def build_worker_components(
             "bus_kind": bus_config.kind,
             "consumer_group": bus_config.consumer_group,
             "consumer_name": bus_config.consumer_name,
+            "boot_paused_actors": sorted(actor_ids),
         },
     )
 

@@ -1,4 +1,4 @@
-"""Per-strategy supervision with restart backoff."""
+"""Per-strategy supervision with restart backoff and config reload."""
 
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ class StrategySupervisor:
         self._rebuild_slot = rebuild_slot
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+        self._reload_event = asyncio.Event()
+        self._reload_done: asyncio.Event | None = None
         self._delay_s = backoff.initial_s
 
     async def start(self) -> None:
@@ -39,11 +41,30 @@ class StrategySupervisor:
 
     async def stop(self) -> None:
         self._stopped.set()
+        self._reload_event.set()
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
         await self.slot.stop()
+        if self._reload_done is not None:
+            self._reload_done.set()
+            self._reload_done = None
+
+    async def reload(self) -> None:
+        """Rebuild the slot from ``rebuild_slot`` and wait until it is running again."""
+
+        if self._rebuild_slot is None:
+            return
+        if self._task is None or self._task.done():
+            await self.slot.stop()
+            self.slot = self._rebuild_slot()
+            return
+        done = asyncio.Event()
+        self._reload_done = done
+        self._reload_event.set()
+        await self.slot.stop()
+        await done.wait()
 
     async def _supervise(self) -> None:
         try:
@@ -52,7 +73,11 @@ class StrategySupervisor:
                     self.slot = self._rebuild_slot()
                 try:
                     await self.slot.start()
-                    await self._wait_for_slot_exit()
+                    self._delay_s = self.backoff.initial_s
+                    if self._reload_done is not None:
+                        self._reload_done.set()
+                        self._reload_done = None
+                    await self._wait_for_slot_exit_or_reload()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -69,6 +94,16 @@ class StrategySupervisor:
                     await self.slot.stop()
                 if self._stopped.is_set():
                     break
+                if self._reload_event.is_set():
+                    self._reload_event.clear()
+                    log_event(
+                        "strategy_supervisor_reload",
+                        {
+                            "strategy_id": self.slot.strategy_id,
+                            "account_id": self.slot.account_id,
+                        },
+                    )
+                    continue
                 log_event(
                     "strategy_supervisor_restart_scheduled",
                     {
@@ -76,19 +111,37 @@ class StrategySupervisor:
                         "delay_s": self._delay_s,
                     },
                 )
-                await asyncio.sleep(self._delay_s)
+                try:
+                    await asyncio.wait_for(self._reload_event.wait(), timeout=self._delay_s)
+                except asyncio.TimeoutError:
+                    pass
+                if self._reload_event.is_set():
+                    self._reload_event.clear()
+                    log_event(
+                        "strategy_supervisor_reload",
+                        {
+                            "strategy_id": self.slot.strategy_id,
+                            "account_id": self.slot.account_id,
+                        },
+                    )
+                    continue
                 self._delay_s = min(self.backoff.max_s, self._delay_s * 2.0)
         except asyncio.CancelledError:
             raise
 
-    async def _wait_for_slot_exit(self) -> None:
+    async def _wait_for_slot_exit_or_reload(self) -> None:
         tasks = [task for task in self.slot.monitor_tasks() if isinstance(task, asyncio.Task)]
-        if not tasks:
-            await self._stopped.wait()
+        reload_waiter = asyncio.create_task(self._reload_event.wait())
+        stop_waiter = asyncio.create_task(self._stopped.wait())
+        waiters: set[asyncio.Task] = {reload_waiter, stop_waiter, *tasks}
+        done, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        if self._reload_event.is_set() or self._stopped.is_set():
             return
-        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            if task.cancelled():
+            if task in (reload_waiter, stop_waiter) or task.cancelled():
                 continue
             exc = task.exception()
             if exc is not None:

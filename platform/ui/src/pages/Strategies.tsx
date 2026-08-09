@@ -205,7 +205,7 @@ export function StrategiesPage() {
       const result = await api.post<{ actor_id: string }>(
         `/api/admin/registry/strategies/${strategyId}/start`,
       );
-      setMessage(`Start (resume) accepted for actor ${result.actor_id}`);
+      setMessage(`Start accepted for actor ${result.actor_id} (reload config + resume)`);
       await loadRuntime();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Start failed");
@@ -222,7 +222,7 @@ export function StrategiesPage() {
       const result = await api.post<{ actor_id: string }>(
         `/api/admin/registry/strategies/${strategyId}/stop`,
       );
-      setMessage(`Stop (pause) accepted for actor ${result.actor_id}`);
+      setMessage(`Stop accepted for actor ${result.actor_id} (pause trading)`);
       await loadRuntime();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Stop failed");
@@ -279,8 +279,9 @@ export function StrategiesPage() {
         <h1>Strategies</h1>
         <p>
           Bot instances, sizing ledger (physical account vs virtual capital pool), and linked
-          presets. <strong>Start / Stop</strong> sends resume / pause to a running worker; restart
-          the worker after registry or preset changes.
+          presets. <strong>Stop</strong> pauses trading. <strong>Start</strong> reloads the strategy
+          config from the registry, then resumes. Workers boot paused — Start is required after a
+          worker restart.
         </p>
         <EditModeNote mode="hybrid" />
       </header>

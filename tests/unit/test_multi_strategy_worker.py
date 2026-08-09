@@ -83,6 +83,83 @@ async def test_build_worker_components_loads_registry_assignment(monkeypatch: py
     assert len(worker.supervisors) == 2
     assert len(worker.account_pool.private_reconcilers) == 1
     assert "nobitex" in worker.account_pool.order_managers
+    assert worker.control_plane is not None
+    assert worker.control_plane.state.paused_actors == {
+        "btc-maker-actor",
+        "usdt-maker-actor",
+    }
+    assert all(supervisor._rebuild_slot is not None for supervisor in worker.supervisors)
+
+
+@pytest.mark.asyncio
+async def test_worker_start_publishes_boot_paused_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
+    store = MemoryRegistryStore()
+    assignment_id, _ = _seed_worker_registry(store)
+    bus = InMemoryBus()
+    events: list[dict] = []
+    original_publish = bus.publish
+
+    async def capture(topic: str, event: object) -> None:
+        if topic == "admin:events" and isinstance(event, dict):
+            events.append(event)
+        await original_publish(topic, event)
+
+    bus.publish = capture  # type: ignore[method-assign]
+    worker = await build_worker_components(
+        worker_config_from_mapping({"worker_id": "worker-1", "assignment_id": assignment_id}),
+        store=store,
+        bus=bus,
+    )
+    await worker.start()
+    try:
+        assert events
+        assert events[-1]["paused_actors"] == ["btc-maker-actor", "usdt-maker-actor"]
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_resume_reloads_strategy_slot_from_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
+    store = MemoryRegistryStore()
+    assignment_id, _ = _seed_worker_registry(store)
+    bus = InMemoryBus()
+    worker = await build_worker_components(
+        worker_config_from_mapping({"worker_id": "worker-1", "assignment_id": assignment_id}),
+        store=store,
+        bus=bus,
+    )
+    await worker.start()
+    try:
+        assert "btc-maker-actor" in worker.control_plane.state.paused_actors
+        rebuilds = 0
+        supervisor = next(
+            item
+            for item in worker.supervisors
+            if item.slot.strategy_id == "btc-maker"
+        )
+        original_rebuild = supervisor._rebuild_slot
+
+        def counting_rebuild():
+            nonlocal rebuilds
+            rebuilds += 1
+            return original_rebuild()
+
+        supervisor._rebuild_slot = counting_rebuild
+        await worker.control_plane.apply(
+            {
+                "command": "resume",
+                "actor_id": "btc-maker-actor",
+                "command_id": "test-resume",
+            }
+        )
+        assert "btc-maker-actor" not in worker.control_plane.state.paused_actors
+        assert rebuilds >= 1
+    finally:
+        await worker.stop()
 
 
 @pytest.mark.asyncio
