@@ -1,5 +1,6 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ConfigEditor } from "../components/ConfigEditor";
 import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
 import { WalletPoolsPanel } from "../components/WalletPoolsPanel";
@@ -15,6 +16,7 @@ import {
   type StrategyRuntimeConfig,
   type StrategyUpsertPayload,
 } from "../api/client";
+import { cloneConfig, serializeOverrides, type JsonObject } from "../lib/presetConfig";
 import {
   canStartTrading,
   canStopTrading,
@@ -52,7 +54,7 @@ export function StrategiesPage() {
   const [detail, setDetail] = useState<Strategy | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<StrategyRuntimeConfig | null>(null);
   const [form, setForm] = useState<StrategyUpsertPayload>(EMPTY_FORM);
-  const [overridesJson, setOverridesJson] = useState("{}");
+  const [overrides, setOverrides] = useState<JsonObject>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,11 @@ export function StrategiesPage() {
   const [controlBusy, setControlBusy] = useState<string | null>(null);
 
   const runtimeByStrategy = runtime ? runtimeByStrategyId(runtime.strategies) : new Map();
+
+  const inheritedPreset = useMemo(() => {
+    const row = presets.find((item) => item.preset_id === form.preset_id);
+    return row ? cloneConfig((row.config ?? {}) as JsonObject) : null;
+  }, [presets, form.preset_id]);
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -169,7 +176,7 @@ export function StrategiesPage() {
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_FORM);
-    setOverridesJson("{}");
+    setOverrides({});
     setShowForm(true);
     setMessage(null);
     setError(null);
@@ -190,7 +197,7 @@ export function StrategiesPage() {
       wallet_id: row.wallet_id ?? null,
       ledger_source: row.ledger_source ?? "virtual",
     });
-    setOverridesJson(JSON.stringify(row.config_overrides ?? {}, null, 2));
+    setOverrides(cloneConfig((row.config_overrides ?? {}) as JsonObject));
     setSelectedId(row.strategy_id);
     setShowForm(true);
     setMessage(null);
@@ -248,7 +255,7 @@ export function StrategiesPage() {
     setError(null);
     setMessage(null);
     try {
-      const config_overrides = JSON.parse(overridesJson) as Record<string, unknown>;
+      const config_overrides = serializeOverrides(overrides);
       const body: StrategyUpsertPayload = {
         ...form,
         config_overrides,
@@ -263,11 +270,7 @@ export function StrategiesPage() {
       await loadList();
       await loadDetail(saved.strategy_id);
     } catch (err) {
-      if (err instanceof SyntaxError) {
-        setError("Config overrides must be valid JSON");
-      } else {
-        setError(err instanceof ApiError ? err.message : "Save failed");
-      }
+      setError(err instanceof ApiError ? err.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -460,16 +463,13 @@ export function StrategiesPage() {
               </div>
             ) : null}
           </div>
-          <div className="form-field">
-            <label htmlFor="strategy-overrides">Config overrides (JSON)</label>
-            <textarea
-              id="strategy-overrides"
-              className="json-textarea"
-              rows={8}
-              value={overridesJson}
-              onChange={(e) => setOverridesJson(e.target.value)}
-            />
-          </div>
+          <ConfigEditor
+            label="Config overrides"
+            mode="overrides"
+            value={overrides}
+            onChange={setOverrides}
+            inherited={inheritedPreset}
+          />
           <div className="form-actions">
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save"}

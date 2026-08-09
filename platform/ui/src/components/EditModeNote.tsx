@@ -3,7 +3,8 @@ export type RegistryEditMode = "form" | "json" | "hybrid";
 const COPY: Record<RegistryEditMode, string> = {
   form: "Structured form — scalar registry fields. Secrets are .env names only, never values.",
   json: "JSON editor — nested runtime config blobs (presets, platform settings).",
-  hybrid: "Hybrid — form for identity/status; JSON for nested exchange config and capabilities.",
+  hybrid:
+    "Hybrid — form for identity/status; advanced Form|JSON editor for nested preset/override config.",
 };
 
 interface EditModeNoteProps {

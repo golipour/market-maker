@@ -400,7 +400,7 @@ table.data-table tbody tr:hover {
 
 .form-card {
   margin-bottom: 1.25rem;
-  max-width: 960px;
+  max-width: 1120px;
 }
 
 .form-card h3 {
@@ -534,4 +534,170 @@ table.data-table tbody tr:hover {
     flex-direction: row;
     flex-wrap: wrap;
   }
+}
+
+/* Advanced preset / override config editor */
+.config-editor {
+  margin: 1rem 0;
+}
+
+.config-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.config-editor-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.view-tabs {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.view-tab {
+  border: none;
+  background: var(--bg);
+  color: var(--text-muted);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+}
+
+.view-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.view-tab.active {
+  background: rgba(61, 139, 253, 0.18);
+  color: var(--accent);
+}
+
+.config-json-textarea {
+  width: 100%;
+  min-height: 280px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem 0.75rem;
+  color: var(--text);
+  resize: vertical;
+}
+
+.preset-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.advanced-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.advanced-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border: none;
+  background: var(--bg-elevated);
+  color: var(--text);
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.advanced-section-header:hover {
+  background: var(--bg-hover);
+}
+
+.advanced-section-chevron {
+  color: var(--text-muted);
+  width: 1rem;
+}
+
+.advanced-section-body {
+  padding: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.advanced-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem 1rem;
+}
+
+.advanced-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.field-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.35rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--accent);
+  cursor: help;
+  vertical-align: middle;
+}
+
+.field-inherited-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.advanced-field.is-overridden input,
+.advanced-field.is-overridden select {
+  border-color: rgba(61, 139, 253, 0.55);
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.btn-link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 0.75rem;
+  text-decoration: underline;
+}
+
+.btn-link:hover {
+  color: var(--text);
+}
+
+.advanced-section-actions {
+  margin-top: 0.65rem;
+}
+
+.advanced-form-footnote {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }

@@ -1,7 +1,9 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { ConfigEditor } from "../components/ConfigEditor";
 import { EditModeNote } from "../components/EditModeNote";
 import { JsonBlock } from "../components/JsonBlock";
+import { ALL_FIELD_PATHS } from "../config/presetSchema";
 import {
   ApiError,
   api,
@@ -9,6 +11,13 @@ import {
   type PresetUpsertPayload,
   type RegistryList,
 } from "../api/client";
+import {
+  cloneConfig,
+  deepMerge,
+  mergeFormIntoConfig,
+  stripHelperKeys,
+  type JsonObject,
+} from "../lib/presetConfig";
 
 const STATUSES = ["active", "disabled"] as const;
 
@@ -23,7 +32,8 @@ export function PresetsPage() {
   const [items, setItems] = useState<Preset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<PresetUpsertPayload>(EMPTY);
-  const [configJson, setConfigJson] = useState("{}");
+  const [config, setConfig] = useState<JsonObject>({});
+  const [loadedConfig, setLoadedConfig] = useState<JsonObject>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +59,23 @@ export function PresetsPage() {
     void load();
   }, [load]);
 
+  function bindPreset(row: Preset) {
+    const cleaned = cloneConfig((row.config ?? {}) as JsonObject);
+    setEditingId(row.preset_id);
+    setForm({
+      preset_id: row.preset_id,
+      config: cleaned,
+      version: row.version,
+      status: row.status,
+    });
+    setLoadedConfig(cleaned);
+    setConfig(cleaned);
+    setSelectedId(row.preset_id);
+    setShowForm(true);
+    setMessage(null);
+    setError(null);
+  }
+
   useEffect(() => {
     const presetId = searchParams.get("preset_id")?.trim();
     if (!presetId || loading || openedFromQuery.current === presetId) {
@@ -59,16 +86,7 @@ export function PresetsPage() {
       return;
     }
     openedFromQuery.current = presetId;
-    setEditingId(row.preset_id);
-    setForm({
-      preset_id: row.preset_id,
-      config: row.config,
-      version: row.version,
-      status: row.status,
-    });
-    setConfigJson(JSON.stringify(row.config ?? {}, null, 2));
-    setSelectedId(row.preset_id);
-    setShowForm(true);
+    bindPreset(row);
     setSearchParams({}, { replace: true });
   }, [items, loading, searchParams, setSearchParams]);
 
@@ -77,22 +95,8 @@ export function PresetsPage() {
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY);
-    setConfigJson("{}");
-    setShowForm(true);
-    setMessage(null);
-    setError(null);
-  }
-
-  function openEdit(row: Preset) {
-    setEditingId(row.preset_id);
-    setForm({
-      preset_id: row.preset_id,
-      config: row.config,
-      version: row.version,
-      status: row.status,
-    });
-    setConfigJson(JSON.stringify(row.config ?? {}, null, 2));
-    setSelectedId(row.preset_id);
+    setLoadedConfig({});
+    setConfig({});
     setShowForm(true);
     setMessage(null);
     setError(null);
@@ -103,15 +107,19 @@ export function PresetsPage() {
     setSaving(true);
     setError(null);
     try {
-      const config = JSON.parse(configJson) as Record<string, unknown>;
-      const saved = await api.post<Preset>("/api/admin/registry/presets", { ...form, config });
+      const fromForm = mergeFormIntoConfig(loadedConfig, config, ALL_FIELD_PATHS);
+      const merged = deepMerge(fromForm, stripHelperKeys(config)) as JsonObject;
+      const saved = await api.post<Preset>("/api/admin/registry/presets", {
+        ...form,
+        config: merged,
+      });
       setMessage(`Preset ${saved.preset_id} saved`);
       setShowForm(false);
       setEditingId(null);
       setSelectedId(saved.preset_id);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Save failed (check JSON)");
+      setError(err instanceof ApiError ? err.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -121,8 +129,11 @@ export function PresetsPage() {
     <>
       <header className="page-header">
         <h1>Presets</h1>
-        <p>Reusable strategy logic templates (MPC, risk, execution) without symbol or account binding.</p>
-        <EditModeNote mode="json" />
+        <p>
+          Reusable strategy logic templates (MPC, risk, execution) without symbol or account
+          binding. Edit via form or raw JSON; save uses the same registry config object.
+        </p>
+        <EditModeNote mode="hybrid" />
       </header>
       <div className="page-toolbar">
         <button type="button" className="btn btn-primary" onClick={openCreate}>
@@ -163,15 +174,12 @@ export function PresetsPage() {
               </select>
             </div>
           </div>
-          <div className="form-field">
-            <label htmlFor="preset-config">Config JSON</label>
-            <textarea
-              id="preset-config"
-              rows={14}
-              value={configJson}
-              onChange={(e) => setConfigJson(e.target.value)}
-            />
-          </div>
+          <ConfigEditor
+            label="Preset config"
+            mode="full"
+            value={config}
+            onChange={setConfig}
+          />
           <div className="form-actions">
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save"}
@@ -214,7 +222,7 @@ export function PresetsPage() {
                   <button type="button" className="btn" onClick={() => setSelectedId(row.preset_id)}>
                     View
                   </button>{" "}
-                  <button type="button" className="btn" onClick={() => openEdit(row)}>
+                  <button type="button" className="btn" onClick={() => bindPreset(row)}>
                     Edit
                   </button>
                 </td>
