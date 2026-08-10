@@ -1,3 +1,7 @@
+import type { AccountCredentials, AuthMode, ExchangeAuthSpec } from "../lib/accountCredentials";
+
+export type { AccountCredentials, AuthMode, ExchangeAuthSpec };
+
 const TOKEN_KEY = "MM_ADMIN_TOKEN";
 
 export function getToken(): string {
@@ -111,13 +115,6 @@ export interface RegistryList<T> {
   items: T[];
 }
 
-export interface ExchangeAuthSpec {
-  exchange: string;
-  default_mode: string;
-  supported_modes: string[];
-  mode_labels: Record<string, string>;
-}
-
 export interface Exchange {
   exchange: string;
   status: string;
@@ -197,12 +194,7 @@ export interface WorkerAssignmentUpsertPayload {
 export interface AccountUpsertPayload {
   account_id: string;
   exchange: string;
-  credentials?: {
-    auth_mode: string;
-    api_key: string;
-    api_secret?: string;
-    api_passphrase?: string;
-  };
+  credentials?: AccountCredentials;
   credential_ref?: string;
   role?: string;
   status?: string;
@@ -232,14 +224,7 @@ export interface Account {
   account_id: string;
   exchange: string;
   credential_ref?: string;
-  credentials?: {
-    auth_mode: string;
-    api_key: string;
-    api_secret?: string;
-    api_passphrase?: string;
-    api_secret_set?: boolean;
-    api_passphrase_set?: boolean;
-  } | null;
+  credentials?: AccountCredentials | null;
   credential_storage?: "stored" | "legacy_env";
   role: string;
   status: string;

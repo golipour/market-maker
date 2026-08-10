@@ -2,6 +2,16 @@
 
 export type AuthMode = "api_key" | "signed_key" | "signed_key_passphrase";
 
+const AUTH_MODES: readonly AuthMode[] = ["api_key", "signed_key", "signed_key_passphrase"];
+
+export function isAuthMode(value: unknown): value is AuthMode {
+  return typeof value === "string" && (AUTH_MODES as readonly string[]).includes(value);
+}
+
+export function asAuthMode(value: unknown, fallback: AuthMode = "api_key"): AuthMode {
+  return isAuthMode(value) ? value : fallback;
+}
+
 export const AUTH_MODE_LABELS: Record<AuthMode, string> = {
   api_key: "API key",
   signed_key: "API key + secret",
@@ -10,9 +20,10 @@ export const AUTH_MODE_LABELS: Record<AuthMode, string> = {
 
 export interface ExchangeAuthSpec {
   exchange: string;
-  default_mode: AuthMode;
-  supported_modes: AuthMode[];
-  mode_labels: Record<AuthMode, string>;
+  /** API may send a plain string; helpers normalize via asAuthMode. */
+  default_mode: AuthMode | string;
+  supported_modes: Array<AuthMode | string>;
+  mode_labels: Partial<Record<AuthMode, string>> & Record<string, string>;
 }
 
 export interface AccountCredentials {
@@ -49,7 +60,7 @@ export function defaultAuthModeForExchange(
   authSpec?: ExchangeAuthSpec | null,
 ): AuthMode {
   if (authSpec?.default_mode) {
-    return authSpec.default_mode;
+    return asAuthMode(authSpec.default_mode, "signed_key");
   }
   const key = exchange.toLowerCase();
   if (key === "kucoin") {
@@ -66,7 +77,10 @@ export function supportedModesForExchange(
   authSpec?: ExchangeAuthSpec | null,
 ): AuthMode[] {
   if (authSpec?.supported_modes?.length) {
-    return authSpec.supported_modes;
+    const modes = authSpec.supported_modes.filter(isAuthMode);
+    if (modes.length > 0) {
+      return modes;
+    }
   }
   const key = exchange.toLowerCase();
   if (key === "wallex") {
@@ -82,7 +96,7 @@ export function supportedModesForExchange(
 }
 
 export function credentialsFormFromAccount(
-  credentials: AccountCredentials | null | undefined,
+  credentials: AccountCredentials | { auth_mode?: string; api_key?: string; api_secret?: string; api_passphrase?: string; api_secret_set?: boolean; api_passphrase_set?: boolean } | null | undefined,
   exchange: string,
   authSpec?: ExchangeAuthSpec | null,
 ): CredentialsFormState {
@@ -93,7 +107,7 @@ export function credentialsFormFromAccount(
     };
   }
   return {
-    auth_mode: credentials.auth_mode,
+    auth_mode: asAuthMode(credentials.auth_mode, defaultAuthModeForExchange(exchange, authSpec)),
     api_key: credentials.api_key ?? "",
     api_secret: credentials.api_secret_set ? MASK : credentials.api_secret ?? "",
     api_passphrase: credentials.api_passphrase_set ? MASK : credentials.api_passphrase ?? "",
