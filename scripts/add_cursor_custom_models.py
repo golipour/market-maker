@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 DB_PATH = Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb"
@@ -67,12 +65,6 @@ def main() -> int:
         print("ERROR: Cursor is still running.")
         print("Quit Cursor fully with Cmd+Q, wait a second, then re-run this script.")
         return 2
-
-    backup = DB_PATH.with_name(
-        f"state.vscdb.bak-models-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    )
-    shutil.copy2(DB_PATH, backup)
-    print(f"Backup: {backup}")
 
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     try:
