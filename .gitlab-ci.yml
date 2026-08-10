@@ -4,14 +4,17 @@
 #
 # DinD (TLS disabled). Runner needs privileged = true for Docker-in-Docker.
 #
-# If CI_REGISTRY is empty (common on self-hosted GitLab without registry
-# configured), set project CI/CD variables (Settings → CI/CD → Variables):
+# Required CI/CD variables (Settings → CI/CD → Variables):
 #   CI_REGISTRY          e.g. repo.tmhezardastan.ir:5050
 #   CI_REGISTRY_IMAGE    e.g. repo.tmhezardastan.ir:5050/typhon/market-maker
-#   CI_REGISTRY_USER     deploy-token username (e.g. gitlab+deploy-token-N)
+#   CI_REGISTRY_USER     deploy-token username
 #   CI_REGISTRY_PASSWORD deploy-token password
-# Create the token under: Settings → Repository → Deploy tokens
-#   scopes: read_registry, write_registry
+#
+# Because the runner cannot reach Docker Hub, also mirror base images once
+# (from a machine that can pull docker.io), then set:
+#   BASE_NODE_IMAGE      e.g. repo.tmhezardastan.ir:5050/typhon/base/node:20-bookworm-slim
+#   BASE_PYTHON_IMAGE    e.g. repo.tmhezardastan.ir:5050/typhon/base/python:3.11-slim-bookworm
+# Seed script: ./scripts/seed_registry_base_images.sh
 
 stages:
   - build
@@ -46,26 +49,22 @@ build:
       echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-<empty>}"
       echo "CI_REGISTRY_USER=${CI_REGISTRY_USER:-<empty>}"
       if [ -z "${CI_REGISTRY}" ] || [ -z "${CI_REGISTRY_IMAGE}" ]; then
-        echo ""
-        echo "ERROR: GitLab Container Registry variables are not set."
-        echo "Either enable Container Registry for this GitLab instance/project,"
-        echo "or set these CI/CD variables (Settings → CI/CD → Variables):"
-        echo "  CI_REGISTRY"
-        echo "  CI_REGISTRY_IMAGE"
-        echo "  CI_REGISTRY_USER"
-        echo "  CI_REGISTRY_PASSWORD"
-        echo ""
-        echo "Create a Deploy Token (Settings → Repository → Deploy tokens)"
-        echo "with read_registry + write_registry, then use it as USER/PASSWORD."
+        echo "ERROR: set CI_REGISTRY and CI_REGISTRY_IMAGE in CI/CD Variables."
         exit 1
       fi
+      # Default base images live in *your* registry (not Docker Hub).
+      export BASE_NODE_IMAGE="${BASE_NODE_IMAGE:-${CI_REGISTRY}/typhon/base/node:20-bookworm-slim}"
+      export BASE_PYTHON_IMAGE="${BASE_PYTHON_IMAGE:-${CI_REGISTRY}/typhon/base/python:3.11-slim-bookworm}"
+      echo "BASE_NODE_IMAGE=${BASE_NODE_IMAGE}"
+      echo "BASE_PYTHON_IMAGE=${BASE_PYTHON_IMAGE}"
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export IMAGE_TAG="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
     - export IMAGE_LATEST="${CI_REGISTRY_IMAGE}:latest"
     - |
       docker build \
-        --pull \
+        --build-arg "NODE_IMAGE=${BASE_NODE_IMAGE}" \
+        --build-arg "PYTHON_IMAGE=${BASE_PYTHON_IMAGE}" \
         -t "$IMAGE_TAG" \
         -t "$IMAGE_LATEST" \
         .

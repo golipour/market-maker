@@ -1,8 +1,17 @@
 # Multi-stage runtime image for ingestor / worker / persistence / admin.
-# Built with Kaniko in GitLab CI (no Docker-in-Docker).
+#
+# Base images are overridable so CI can use your GitLab registry when Docker Hub
+# is unreachable from the runner:
+#   docker build \
+#     --build-arg NODE_IMAGE=registry.host/typhon/base/node:20-bookworm-slim \
+#     --build-arg PYTHON_IMAGE=registry.host/typhon/base/python:3.11-slim-bookworm \
+#     .
+
+ARG NODE_IMAGE=node:20-bookworm-slim
+ARG PYTHON_IMAGE=python:3.11-slim-bookworm
 
 # --- Frontend (discarded after copying dist) ---
-FROM node:20-bookworm-slim AS ui
+FROM ${NODE_IMAGE} AS ui
 WORKDIR /ui
 COPY platform/ui/package.json platform/ui/package-lock.json ./
 RUN npm ci
@@ -11,7 +20,7 @@ RUN npm run build \
     && rm -rf node_modules
 
 # --- Python deps (wheels only; keep compilers out of final image) ---
-FROM python:3.11-slim-bookworm AS python-deps
+FROM ${PYTHON_IMAGE} AS python-deps
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -31,7 +40,7 @@ RUN python -m venv /opt/venv \
     && find /opt/venv -name "*.pyc" -delete
 
 # --- Runtime image ---
-FROM python:3.11-slim-bookworm AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
