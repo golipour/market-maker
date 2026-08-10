@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Seed base images into your GitLab Container Registry for CI.
-# Run on a machine that CAN reach Docker Hub + download.pytorch.org.
+# Seed linux/amd64 base images into GitLab Container Registry for CI.
+# Run on a machine that can reach Docker Hub + download.pytorch.org.
 #
-# IMPORTANT: CI runners are linux/amd64. Always seed that platform, even on
-# Apple Silicon Macs (Docker Desktop will cross-build/pull amd64).
+# Always seeds linux/amd64 (GitLab runner arch), even on Apple Silicon.
 #
 # Usage:
 #   export CI_REGISTRY='registry.tmhezardastan.ir'
-#   export CI_REGISTRY_USER='gitlab+deploy-token-...'
+#   export CI_REGISTRY_USER='...'
 #   export CI_REGISTRY_PASSWORD='...'
 #   bash ./scripts/seed_registry_base_images.sh
+#
+# Do NOT use bare `sudo` (it drops env vars). Use `sudo -E` or `sudo env ...` if needed.
 
 set -euo pipefail
 
@@ -29,39 +30,45 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "$PASSWORD" | docker login -u "$USER_NAME" --password-stdin "$REGISTRY"
 
-echo "Platform for CI: ${PLATFORM}"
+echo "Seeding platform: ${PLATFORM}"
 
-echo "Pulling ${NODE_SRC} (${PLATFORM})..."
-docker pull --platform "${PLATFORM}" "$NODE_SRC"
-echo "Pulling ${PYTHON_SRC} (${PLATFORM})..."
-docker pull --platform "${PLATFORM}" "$PYTHON_SRC"
+# Retag via buildx so the pushed manifest is unambiguously $PLATFORM
+# (plain docker tag on Apple Silicon often keeps an arm64 image).
+mirror_image() {
+  local src="$1"
+  local dst="$2"
+  echo "Mirroring ${src} -> ${dst} (${PLATFORM})..."
+  docker buildx build \
+    --platform "${PLATFORM}" \
+    --build-arg "SRC=${src}" \
+    -t "${dst}" \
+    --push \
+    -f - \
+    "${ROOT}" <<'EOF'
+ARG SRC
+FROM --platform=$TARGETPLATFORM ${SRC}
+EOF
+  echo "Inspect ${dst}:"
+  docker buildx imagetools inspect "${dst}" | sed -n '1,20p'
+}
 
-docker tag "$NODE_SRC" "$NODE_DST"
-docker tag "$PYTHON_SRC" "$PYTHON_DST"
-
-echo "Pushing ${NODE_DST}..."
-docker push "$NODE_DST"
-echo "Pushing ${PYTHON_DST}..."
-docker push "$PYTHON_DST"
+mirror_image "${NODE_SRC}" "${NODE_DST}"
+mirror_image "${PYTHON_SRC}" "${PYTHON_DST}"
 
 echo "Building ${PYTHON_DEPS_DST} (${PLATFORM}, torch CPU + requirements)..."
-docker build \
+docker buildx build \
   --platform "${PLATFORM}" \
   --build-arg "PYTHON_IMAGE=${PYTHON_DST}" \
   -f "${ROOT}/docker/Dockerfile.python-deps" \
   -t "${PYTHON_DEPS_DST}" \
+  --push \
   "${ROOT}"
 
-echo "Pushing ${PYTHON_DEPS_DST}..."
-docker push "$PYTHON_DEPS_DST"
+echo "Inspect ${PYTHON_DEPS_DST}:"
+docker buildx imagetools inspect "${PYTHON_DEPS_DST}" | sed -n '1,30p'
 
 echo ""
-echo "Verify platform (should include linux/amd64):"
-docker buildx imagetools inspect "${PYTHON_DEPS_DST}" 2>/dev/null \
-  || docker image inspect "${PYTHON_DEPS_DST}" --format '{{.Os}}/{{.Architecture}}'
-
-echo ""
-echo "Done. Set these GitLab CI/CD variables:"
+echo "Done. Confirm Platform is amd64 above, then set CI/CD variables:"
 echo "  CI_REGISTRY=${REGISTRY}"
 echo "  BASE_NODE_IMAGE=${NODE_DST}"
 echo "  BASE_PYTHON_IMAGE=${PYTHON_DST}"
