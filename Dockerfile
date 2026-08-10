@@ -1,16 +1,14 @@
 # Multi-stage runtime image for ingestor / worker / persistence / admin.
 #
-# Base images are overridable so CI can use your GitLab registry when Docker Hub
-# is unreachable from the runner:
-#   docker build \
-#     --build-arg NODE_IMAGE=registry.host/typhon/base/node:20-bookworm-slim \
-#     --build-arg PYTHON_IMAGE=registry.host/typhon/base/python:3.11-slim-bookworm \
-#     .
+# Prefer a prebuilt PYTHON_DEPS_IMAGE (venv with torch) seeded via:
+#   ./scripts/seed_registry_base_images.sh
 
 ARG NODE_IMAGE=node:20-bookworm-slim
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
+# Defaults to PYTHON_IMAGE; CI should override with typhon/base/python-deps:...
+ARG PYTHON_DEPS_IMAGE=python:3.11-slim-bookworm
 
-# --- Frontend (discarded after copying dist) ---
+# --- Frontend ---
 FROM ${NODE_IMAGE} AS ui
 WORKDIR /ui
 COPY platform/ui/package.json platform/ui/package-lock.json ./
@@ -19,27 +17,20 @@ COPY platform/ui/ ./
 RUN npm run build \
     && rm -rf node_modules
 
-# --- Python deps (wheels only; keep compilers out of final image) ---
-FROM ${PYTHON_IMAGE} AS python-deps
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
-WORKDIR /build
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-# CPU-only torch is dramatically smaller than the default CUDA wheel.
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch \
-    && /opt/venv/bin/pip install -r requirements.txt \
-    && find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
-    && find /opt/venv -name "*.pyc" -delete
+# --- Python deps (prebuilt image already has /opt/venv + torch) ---
+FROM ${PYTHON_DEPS_IMAGE} AS python-deps
+COPY requirements.txt /tmp/requirements.txt
+RUN set -eux; \
+    if [ -x /opt/venv/bin/python ] && /opt/venv/bin/python -c "import torch"; then \
+      echo "Using prebuilt /opt/venv"; \
+      /opt/venv/bin/pip install -r /tmp/requirements.txt; \
+      /opt/venv/bin/python -c "import torch; print('torch', torch.__version__)"; \
+    else \
+      echo "ERROR: PYTHON_DEPS_IMAGE has no torch. Seed with scripts/seed_registry_base_images.sh"; \
+      exit 1; \
+    fi
 
-# --- Runtime image ---
+# --- Runtime ---
 FROM ${PYTHON_IMAGE} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -61,13 +52,10 @@ COPY --from=python-deps /opt/venv /opt/venv
 COPY mm/ mm/
 COPY --from=ui /ui/dist platform/ui/dist
 
-RUN chown -R marketmaker:marketmaker /config /data/parquet /var/log/mm /app/platform
+RUN set -eux; \
+    /opt/venv/bin/python -c "import torch; print('torch OK', torch.__version__)"; \
+    chown -R marketmaker:marketmaker /config /data/parquet /var/log/mm /app/platform
 
 USER marketmaker
 
-# Deployments override the command, for example:
-#   python3 -m mm.ingestor --config /config/ingestor.json
-#   python3 -m mm.worker --config /config/worker.json
-#   python3 -m mm.persistence --config /config/persistence.json
-#   python3 -m mm.api.admin
 CMD ["python3", "-m", "mm.api.admin"]

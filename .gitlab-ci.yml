@@ -5,16 +5,14 @@
 # DinD (TLS disabled). Runner needs privileged = true for Docker-in-Docker.
 #
 # Required CI/CD variables (Settings → CI/CD → Variables):
-#   CI_REGISTRY          e.g. repo.tmhezardastan.ir:5050
-#   CI_REGISTRY_IMAGE    e.g. repo.tmhezardastan.ir:5050/typhon/market-maker
-#   CI_REGISTRY_USER     deploy-token username
-#   CI_REGISTRY_PASSWORD deploy-token password
+#   CI_REGISTRY / CI_REGISTRY_IMAGE / CI_REGISTRY_USER / CI_REGISTRY_PASSWORD
 #
-# Because the runner cannot reach Docker Hub, also mirror base images once
-# (from a machine that can pull docker.io), then set:
-#   BASE_NODE_IMAGE      e.g. repo.tmhezardastan.ir:5050/typhon/base/node:20-bookworm-slim
-#   BASE_PYTHON_IMAGE    e.g. repo.tmhezardastan.ir:5050/typhon/base/python:3.11-slim-bookworm
-# Seed script: ./scripts/seed_registry_base_images.sh
+# Base images (seed once from a machine that can reach Docker Hub + pytorch.org):
+#   bash ./scripts/seed_registry_base_images.sh
+# then set:
+#   BASE_NODE_IMAGE         e.g. registry.../typhon/base/node:20-bookworm-slim
+#   BASE_PYTHON_IMAGE       e.g. registry.../typhon/base/python:3.11-slim-bookworm
+#   BASE_PYTHON_DEPS_IMAGE  e.g. registry.../typhon/base/python-deps:3.11-slim-bookworm
 
 stages:
   - build
@@ -47,16 +45,16 @@ build:
     - |
       echo "CI_REGISTRY=${CI_REGISTRY:-<empty>}"
       echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-<empty>}"
-      echo "CI_REGISTRY_USER=${CI_REGISTRY_USER:-<empty>}"
       if [ -z "${CI_REGISTRY}" ] || [ -z "${CI_REGISTRY_IMAGE}" ]; then
         echo "ERROR: set CI_REGISTRY and CI_REGISTRY_IMAGE in CI/CD Variables."
         exit 1
       fi
-      # Default base images live in *your* registry (not Docker Hub).
       export BASE_NODE_IMAGE="${BASE_NODE_IMAGE:-${CI_REGISTRY}/typhon/base/node:20-bookworm-slim}"
       export BASE_PYTHON_IMAGE="${BASE_PYTHON_IMAGE:-${CI_REGISTRY}/typhon/base/python:3.11-slim-bookworm}"
+      export BASE_PYTHON_DEPS_IMAGE="${BASE_PYTHON_DEPS_IMAGE:-${CI_REGISTRY}/typhon/base/python-deps:3.11-slim-bookworm}"
       echo "BASE_NODE_IMAGE=${BASE_NODE_IMAGE}"
       echo "BASE_PYTHON_IMAGE=${BASE_PYTHON_IMAGE}"
+      echo "BASE_PYTHON_DEPS_IMAGE=${BASE_PYTHON_DEPS_IMAGE}"
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - export IMAGE_TAG="${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
@@ -65,6 +63,7 @@ build:
       docker build \
         --build-arg "NODE_IMAGE=${BASE_NODE_IMAGE}" \
         --build-arg "PYTHON_IMAGE=${BASE_PYTHON_IMAGE}" \
+        --build-arg "PYTHON_DEPS_IMAGE=${BASE_PYTHON_DEPS_IMAGE}" \
         -t "$IMAGE_TAG" \
         -t "$IMAGE_LATEST" \
         .

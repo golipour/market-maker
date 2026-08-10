@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
-# One-time: pull Docker Hub base images on a machine that CAN reach docker.io,
-# then push them into your GitLab Container Registry for the CI runner to use.
+# Seed base images into your GitLab Container Registry for CI.
+# Run on a machine that CAN reach Docker Hub + download.pytorch.org
+# (not the GitLab runner).
 #
 # Usage:
-#   export CI_REGISTRY=repo.tmhezardastan.ir:5050
+#   export CI_REGISTRY='registry.tmhezardastan.ir'
 #   export CI_REGISTRY_USER='gitlab+deploy-token-...'
 #   export CI_REGISTRY_PASSWORD='...'
-#   ./scripts/seed_registry_base_images.sh
-#
-# Then set CI/CD variables (or rely on defaults in .gitlab-ci.yml):
-#   BASE_NODE_IMAGE=$CI_REGISTRY/typhon/base/node:20-bookworm-slim
-#   BASE_PYTHON_IMAGE=$CI_REGISTRY/typhon/base/python:3.11-slim-bookworm
+#   bash ./scripts/seed_registry_base_images.sh
 
 set -euo pipefail
 
-REGISTRY="${CI_REGISTRY:?Set CI_REGISTRY (e.g. repo.tmhezardastan.ir:5050)}"
+REGISTRY="${CI_REGISTRY:?Set CI_REGISTRY (e.g. registry.tmhezardastan.ir)}"
 USER_NAME="${CI_REGISTRY_USER:?Set CI_REGISTRY_USER}"
 PASSWORD="${CI_REGISTRY_PASSWORD:?Set CI_REGISTRY_PASSWORD}"
 PREFIX="${BASE_IMAGE_PREFIX:-${REGISTRY}/typhon/base}"
@@ -23,12 +20,15 @@ NODE_SRC="${NODE_SRC:-node:20-bookworm-slim}"
 PYTHON_SRC="${PYTHON_SRC:-python:3.11-slim-bookworm}"
 NODE_DST="${PREFIX}/node:20-bookworm-slim"
 PYTHON_DST="${PREFIX}/python:3.11-slim-bookworm"
+PYTHON_DEPS_DST="${PREFIX}/python-deps:3.11-slim-bookworm"
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "$PASSWORD" | docker login -u "$USER_NAME" --password-stdin "$REGISTRY"
 
-echo "Pulling ${NODE_SRC} from Docker Hub..."
+echo "Pulling ${NODE_SRC}..."
 docker pull "$NODE_SRC"
-echo "Pulling ${PYTHON_SRC} from Docker Hub..."
+echo "Pulling ${PYTHON_SRC}..."
 docker pull "$PYTHON_SRC"
 
 docker tag "$NODE_SRC" "$NODE_DST"
@@ -39,7 +39,19 @@ docker push "$NODE_DST"
 echo "Pushing ${PYTHON_DST}..."
 docker push "$PYTHON_DST"
 
+echo "Building ${PYTHON_DEPS_DST} (torch CPU + requirements)..."
+docker build \
+  --build-arg "PYTHON_IMAGE=${PYTHON_DST}" \
+  -f "${ROOT}/docker/Dockerfile.python-deps" \
+  -t "${PYTHON_DEPS_DST}" \
+  "${ROOT}"
+
+echo "Pushing ${PYTHON_DEPS_DST}..."
+docker push "$PYTHON_DEPS_DST"
+
 echo ""
-echo "Done. In GitLab → Settings → CI/CD → Variables, set (or confirm):"
+echo "Done. Set these GitLab CI/CD variables:"
+echo "  CI_REGISTRY=${REGISTRY}"
 echo "  BASE_NODE_IMAGE=${NODE_DST}"
 echo "  BASE_PYTHON_IMAGE=${PYTHON_DST}"
+echo "  BASE_PYTHON_DEPS_IMAGE=${PYTHON_DEPS_DST}"

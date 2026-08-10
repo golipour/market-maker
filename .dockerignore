@@ -17,7 +17,7 @@ data
 tests
 docs
 grafana
-docker
+# Keep docker/Dockerfile.python-deps available for local seed builds; ignore bulky dirs only.
 deploy
 research
 mcp_servers

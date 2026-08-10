@@ -1,0 +1,27 @@
+# Pre-build Python venv (torch CPU + requirements) on a machine that can reach
+# download.pytorch.org, then push to GitLab for CI to consume.
+ARG PYTHON_IMAGE=python:3.11-slim-bookworm
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=100
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+
+RUN set -eux; \
+    python -m venv /opt/venv; \
+    /opt/venv/bin/pip install --upgrade pip; \
+    /opt/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch; \
+    /opt/venv/bin/pip install -r requirements.txt; \
+    /opt/venv/bin/python -c "import torch; print('torch', torch.__version__)"; \
+    find /opt/venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true; \
+    find /opt/venv -name '*.pyc' -delete
