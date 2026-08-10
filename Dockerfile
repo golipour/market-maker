@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1.7
+# Multi-stage runtime image for ingestor / worker / persistence / admin.
+# Built with Kaniko in GitLab CI (no Docker-in-Docker).
 
 # --- Frontend (discarded after copying dist) ---
 FROM node:20-bookworm-slim AS ui

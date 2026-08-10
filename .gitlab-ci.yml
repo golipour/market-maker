@@ -2,50 +2,44 @@
 # All MM services (ingestor / worker / persistence / admin) use this same image
 # with different `command:` overrides in Kubernetes.
 #
-# Required GitLab project settings:
-#   Settings → General → Visibility → Container registry: Enabled
+# Uses Kaniko (no Docker-in-Docker / privileged runner required).
+# Your runner log showed DinD failing on gitlab-runner 12.5; Kaniko avoids that.
 #
-# The image path is automatic: $CI_REGISTRY_IMAGE (e.g.
-#   registry.example.com/typhon/market-maker:abc1234)
+# Required:
+#   Settings → General → Visibility → Container registry: Enabled
 
 stages:
   - build
 
 variables:
-  DOCKER_TLS_CERTDIR: "/certs"
-  # Use BuildKit for multi-stage cache mounts when the runner supports it.
-  DOCKER_BUILDKIT: "1"
   IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
   IMAGE_LATEST: "$CI_REGISTRY_IMAGE:latest"
 
-default:
-  image: docker:24.0.5
-  services:
-    - name: docker:24.0.5-dind
-      alias: docker
-  before_script:
-    - docker info
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-
 build:
   stage: build
+  # Kaniko builds from a Dockerfile and pushes directly; no docker.sock / dind.
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
   script:
+    - mkdir -p /kaniko/.docker
     - |
-      docker build \
-        --pull \
-        -t "$IMAGE_TAG" \
-        -t "$IMAGE_LATEST" \
-        .
-    - docker push "$IMAGE_TAG"
-    - docker push "$IMAGE_LATEST"
-    - echo "Pushed $IMAGE_TAG"
-    - echo "Pushed $IMAGE_LATEST"
+      AUTH="$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')"
+      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${CI_REGISTRY}" "${AUTH}" > /kaniko/.docker/config.json
+    - |
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}" \
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile" \
+        --destination "${IMAGE_TAG}" \
+        --destination "${IMAGE_LATEST}" \
+        --snapshot-mode=redo \
+        --use-new-run \
+        --verbosity=info
+    - echo "Pushed ${IMAGE_TAG}"
+    - echo "Pushed ${IMAGE_LATEST}"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: manual
       allow_failure: true
-  # Keep one successful image artifact reference in the job log for deploy.
-  after_script:
-    - docker image ls "$CI_REGISTRY_IMAGE" || true
