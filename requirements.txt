@@ -1,6 +1,10 @@
+# Torch is installed from the CPU wheel index (see Dockerfile / local note below).
+# Local install:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install -r requirements.txt
+
 # Core runtime
 numpy
-torch
 scipy
 msgspec>=0.20
 requests
@@ -14,12 +18,10 @@ psycopg2-binary>=2.9
 pyarrow
 
 # Admin API
-fastapi
+fastapi>=0.100
 pydantic
-uvicorn
+uvicorn>=0.23
 
 # Observability (optional at runtime; imported lazily when enabled)
 opentelemetry-api
 opentelemetry-sdk
-fastapi>=0.100
-uvicorn>=0.23

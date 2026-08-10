@@ -19,6 +19,19 @@ docs
 grafana
 docker
 deploy
+research
+mcp_servers
+scripts
 agent-transcripts
+persistence_spool
 *.md
 !mm/**/*.md
+
+# Frontend build context — never ship node_modules into the build context
+platform/ui/node_modules
+platform/ui/dist
+platform/ui/.vite
+
+**/.DS_Store
+**/__pycache__
+**/*.pyc

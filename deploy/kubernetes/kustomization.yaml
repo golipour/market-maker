@@ -9,7 +9,19 @@ resources:
   - persistence.yaml
   - worker.yaml
   - admin.yaml
+# Replace newName with your GitLab Container Registry path from
+# Deploy → Container Registry (or the $CI_REGISTRY_IMAGE CI variable).
+# Example self-hosted: repo.tmhezardastan.ir:5050/typhon/market-maker
 images:
   - name: market-maker
-    newName: market-maker
+    newName: repo.tmhezardastan.ir:5050/typhon/market-maker
     newTag: latest
+patches:
+  - target:
+      kind: Deployment
+      labelSelector: "app.kubernetes.io/part-of=market-maker,app.kubernetes.io/name!=redis"
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: gitlab-registry
