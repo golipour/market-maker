@@ -2,41 +2,63 @@
 # All MM services (ingestor / worker / persistence / admin) use this same image
 # with different `command:` overrides in Kubernetes.
 #
-# Uses Kaniko (no Docker-in-Docker / privileged runner required).
-# Your runner log showed DinD failing on gitlab-runner 12.5; Kaniko avoids that.
+# DinD (TLS disabled) — your runner already has docker:24.0.5 images cached,
+# but gcr.io/kaniko is blocked (403). The GitLab runner must allow privileged
+# containers for Docker-in-Docker:
+#   /etc/gitlab-runner/config.toml → [runners.docker] privileged = true
 #
-# Required:
+# Required project setting:
 #   Settings → General → Visibility → Container registry: Enabled
 
 stages:
   - build
 
 variables:
+  # Non-TLS DinD (avoids the tcp://docker:2375 /certs mismatch).
+  DOCKER_HOST: "tcp://docker:2375"
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: "overlay2"
+  DOCKER_BUILDKIT: "1"
   IMAGE_TAG: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
   IMAGE_LATEST: "$CI_REGISTRY_IMAGE:latest"
 
 build:
   stage: build
-  # Kaniko builds from a Dockerfile and pushes directly; no docker.sock / dind.
-  image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
-    entrypoint: [""]
+  image: docker:24.0.5
+  services:
+    - name: docker:24.0.5-dind
+      alias: docker
+      # Older runners ignore this; DOCKER_TLS_CERTDIR="" is the important part.
+      command: ["--tls=false"]
+  before_script:
+    - |
+      echo "Waiting for Docker daemon..."
+      i=0
+      until docker info >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -gt 45 ]; then
+          echo "Docker daemon did not become ready."
+          echo "Ask a GitLab admin to set privileged = true on runner CsRzYNKe."
+          docker info || true
+          exit 1
+        fi
+        sleep 2
+      done
+      docker info
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
-    - mkdir -p /kaniko/.docker
     - |
-      AUTH="$(printf '%s:%s' "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')"
-      printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${CI_REGISTRY}" "${AUTH}" > /kaniko/.docker/config.json
-    - |
-      /kaniko/executor \
-        --context "${CI_PROJECT_DIR}" \
-        --dockerfile "${CI_PROJECT_DIR}/Dockerfile" \
-        --destination "${IMAGE_TAG}" \
-        --destination "${IMAGE_LATEST}" \
-        --snapshot-mode=redo \
-        --use-new-run \
-        --verbosity=info
-    - echo "Pushed ${IMAGE_TAG}"
-    - echo "Pushed ${IMAGE_LATEST}"
+      docker build \
+        --pull \
+        -t "$IMAGE_TAG" \
+        -t "$IMAGE_LATEST" \
+        .
+    - docker push "$IMAGE_TAG"
+    - docker push "$IMAGE_LATEST"
+    - echo "Pushed $IMAGE_TAG"
+    - echo "Pushed $IMAGE_LATEST"
+  after_script:
+    - docker image ls "$CI_REGISTRY_IMAGE" || true
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
