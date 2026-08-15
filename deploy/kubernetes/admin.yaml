@@ -52,6 +52,13 @@ spec:
               value: mm-admin
             - name: MM_BUS_CONSUMER_NAME
               value: admin-1
+            # Overview probes these in-cluster URLs (defaults are localhost for laptop dev).
+            - name: MM_PLATFORM_SERVICE_TARGETS
+              value: >-
+                [{"id":"admin","name":"Control Plane (Admin)","metrics_url":"http://market-maker-admin:8080/metrics","health_url":"http://market-maker-admin:8080/api/admin/health"},
+                 {"id":"ingestor","name":"Market Data Ingestor","metrics_url":"http://market-maker-ingestor:8001/metrics","health_url":""},
+                 {"id":"persistence","name":"Persistence","metrics_url":"http://market-maker-persistence:8002/metrics","health_url":""},
+                 {"id":"worker","name":"Strategy Worker","metrics_url":"http://market-maker-worker:8003/metrics","health_url":""}]
           envFrom:
             - secretRef:
                 name: market-maker-secrets
