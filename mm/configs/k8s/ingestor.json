@@ -1,11 +1,6 @@
 {
-  "feeds": [
-    {
-      "exchange": "nobitex",
-      "symbol": "USDT_IRT",
-      "interval_ms": 10000
-    }
-  ],
+  "load_feeds_from_registry": true,
+  "feeds": [],
   "exchanges": {
     "nobitex": {
       "market_data": {
