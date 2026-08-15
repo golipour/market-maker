@@ -5,23 +5,30 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - redis.yaml
+  - postgres.yaml
   - ingestor.yaml
   - persistence.yaml
   - worker.yaml
   - admin.yaml
-# Replace newName with your GitLab Container Registry path from
-# Deploy → Container Registry (or the $CI_REGISTRY_IMAGE CI variable).
-# Example self-hosted: repo.tmhezardastan.ir:5050/typhon/market-maker
+  - seed-registry-job.yaml
+# GitLab Container Registry path (must match $CI_REGISTRY_IMAGE).
 images:
   - name: market-maker
-    newName: repo.tmhezardastan.ir:5050/typhon/market-maker
+    newName: registry.tmhezardastan.ir/typhon/market-maker
     newTag: latest
 patches:
   - target:
       kind: Deployment
-      labelSelector: "app.kubernetes.io/part-of=market-maker,app.kubernetes.io/name!=redis"
+      labelSelector: "app.kubernetes.io/part-of=market-maker,app.kubernetes.io/name!=redis,app.kubernetes.io/name!=postgres"
     patch: |-
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
           - name: gitlab-registry
+  - target:
+      kind: Deployment
+      labelSelector: "app.kubernetes.io/part-of=market-maker,app.kubernetes.io/name!=redis,app.kubernetes.io/name!=postgres"
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always

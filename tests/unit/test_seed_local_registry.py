@@ -22,6 +22,10 @@ def test_seed_local_worker_registry_creates_active_assignment() -> None:
     bundle = store.load_runtime_bundle(LOCAL_STRATEGY_ID)
     assert bundle["strategy"].strategy_id == LOCAL_STRATEGY_ID
     assert bundle["exchanges"]["nobitex"].config["market_data"]["market_data_source"] == "bus"
+    assert store.get_platform_settings().bus["redis_url"] == "redis://localhost:6379/0"
+
+    assert bundle["strategy"].strategy_id == LOCAL_STRATEGY_ID
+    assert store.get_platform_settings().bus["redis_url"] == "redis://localhost:6379/0"
 
     preset = store.get_preset("thin_local_liquidity_weighted_mpc")
     optimizer = preset.config["controller"]["optimizer"]
@@ -54,3 +58,10 @@ def test_ensure_local_worker_registry_requires_database_url(
     monkeypatch.setattr("mm.tools.seed_local_registry.registry_database_url", lambda: "")
     with pytest.raises(RuntimeError, match="MM_DATABASE_URL"):
         ensure_local_worker_registry()
+
+
+def test_seed_uses_bus_redis_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MM_BUS_REDIS_URL", "redis://redis:6379/0")
+    store = MemoryRegistryStore()
+    seed_local_worker_registry(store)
+    assert store.get_platform_settings().bus["redis_url"] == "redis://redis:6379/0"

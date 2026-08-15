@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +26,11 @@ _RUNTIME_EXAMPLE_PATH = (
 
 
 def _local_platform_settings() -> dict[str, Any]:
+    redis_url = os.environ.get("MM_BUS_REDIS_URL", "").strip() or "redis://localhost:6379/0"
     return {
         "bus": {
             "kind": "redis_streams",
-            "redis_url": "redis://localhost:6379/0",
+            "redis_url": redis_url,
             "stream_prefix": "mm",
             "consumer_group": "mm-worker",
             "consumer_name": "worker-1",
@@ -185,3 +187,24 @@ def ensure_local_worker_registry(
         seed_local_worker_registry(store, worker_id=worker_id)
         return True
     return False
+
+
+def _apply_bus_redis_url(store: RegistryStore, redis_url: str) -> None:
+    platform = store.get_platform_settings()
+    bus = dict(platform.bus)
+    bus["redis_url"] = redis_url
+    store.upsert_platform_settings(bus=bus)
+
+
+def main() -> None:
+    seeded = ensure_local_worker_registry()
+    redis_url = os.environ.get("MM_BUS_REDIS_URL", "").strip()
+    if redis_url:
+        store = build_registry_store()
+        _apply_bus_redis_url(store, redis_url)
+    print(f"seeded={seeded} redis_url={redis_url or 'unchanged'}")
+
+
+if __name__ == "__main__":
+    main()
+

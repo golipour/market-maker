@@ -1,3 +1,5 @@
+# Postgres-only event writer for Grafana SQL dashboards (`mm_events`).
+# No parquet / replay volume — omit this file from kustomization for live-only.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,7 +43,7 @@ spec:
             - name: MM_ENV
               value: prod
             - name: MM_PARQUET_ROOT
-              value: /data/parquet
+              value: ""
           envFrom:
             - secretRef:
                 name: market-maker-secrets
@@ -49,15 +51,13 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
-            - name: parquet
-              mountPath: /data/parquet
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 50m
+              memory: 128Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             httpGet:
               path: /metrics
@@ -74,9 +74,6 @@ spec:
         - name: config
           configMap:
             name: market-maker-config
-        - name: parquet
-          persistentVolumeClaim:
-            claimName: market-maker-parquet
 ---
 apiVersion: v1
 kind: Service

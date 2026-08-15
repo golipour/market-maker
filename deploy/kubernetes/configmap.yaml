@@ -31,7 +31,7 @@ data:
         "stream_prefix": "mm",
         "consumer_group": "mm-ingestor",
         "consumer_name": "ingestor-1",
-        "max_stream_length": 100000,
+        "max_stream_length": 5000,
         "read_block_ms": 1000
       },
       "observability": {
@@ -62,13 +62,12 @@ data:
         "stream_prefix": "mm",
         "consumer_group": "persistence",
         "consumer_name": "persistence-1",
-        "max_stream_length": 100000,
+        "max_stream_length": 5000,
         "read_block_ms": 1000
       },
       "persistence": {
         "enabled": true,
         "database_url_env": "MM_DATABASE_URL",
-        "parquet_root_env": "MM_PARQUET_ROOT",
         "batch_size": 100,
         "flush_interval_ms": 1000
       },
@@ -93,7 +92,7 @@ data:
         "stream_prefix": "mm",
         "consumer_group": "mm-worker",
         "consumer_name": "worker-1",
-        "max_stream_length": 100000,
+        "max_stream_length": 5000,
         "read_block_ms": 1000
       },
       "backoff": {
