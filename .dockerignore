@@ -20,7 +20,6 @@ grafana
 # Keep docker/Dockerfile.python-deps available for local seed builds; ignore bulky dirs only.
 deploy
 research
-mcp_servers
 scripts
 agent-transcripts
 persistence_spool
