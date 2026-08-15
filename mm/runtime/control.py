@@ -46,8 +46,14 @@ class RuntimeControlPlane:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
-    async def publish_state(self, *, command: str = "bootstrap", command_id: str | None = None) -> None:
-        await self._publish_state({"command": command, "command_id": command_id})
+    async def publish_state(
+        self,
+        *,
+        command: str = "bootstrap",
+        command_id: str | None = None,
+        observe: bool = True,
+    ) -> None:
+        await self._publish_state({"command": command, "command_id": command_id}, observe=observe)
 
     async def _run(self) -> None:
         try:
@@ -140,7 +146,7 @@ class RuntimeControlPlane:
             },
         )
 
-    async def _publish_state(self, command: dict[str, Any]) -> None:
+    async def _publish_state(self, command: dict[str, Any], *, observe: bool = True) -> None:
         payload = {
             "type": "RuntimeControlState",
             "command_id": command.get("command_id"),
@@ -153,6 +159,7 @@ class RuntimeControlPlane:
         }
         gauge("mm_kill_switch_state", 1.0 if self.state.kill_switch else 0.0, help="Runtime kill switch state")
         gauge("mm_dry_run_state", 1.0 if self.state.dry_run else 0.0, help="Runtime dry-run state")
-        counter_inc("mm_admin_commands_total", labels={"command": str(command.get("command", ""))})
-        log_event("admin_command_applied", payload)
+        if observe:
+            counter_inc("mm_admin_commands_total", labels={"command": str(command.get("command", ""))})
+            log_event("admin_command_applied", payload)
         await self.bus.publish("admin:events", payload)

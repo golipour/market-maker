@@ -70,6 +70,7 @@ class RuntimeControlCache:
 
     async def start(self) -> None:
         self._task = asyncio.create_task(self._run())
+        await self._hydrate()
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -77,14 +78,29 @@ class RuntimeControlCache:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
+    def _apply(self, event: dict[str, Any]) -> None:
+        if str(event.get("type", "")).strip() != "RuntimeControlState":
+            return
+        snapshot = RuntimeControlSnapshot.from_payload(event)
+        if snapshot.updated_at_ms >= self.snapshot.updated_at_ms:
+            self.snapshot = snapshot
+
+    async def _hydrate(self) -> None:
+        latest = getattr(self.bus, "latest_event", None)
+        if not callable(latest):
+            return
+        try:
+            event = await latest("admin:events", event_type="RuntimeControlState")
+        except Exception:
+            return
+        if isinstance(event, dict):
+            self._apply(event)
+
     async def _run(self) -> None:
         try:
             async for event in self.bus.subscribe("admin:events"):
-                if not isinstance(event, dict):
-                    continue
-                if str(event.get("type", "")).strip() != "RuntimeControlState":
-                    continue
-                self.snapshot = RuntimeControlSnapshot.from_payload(event)
+                if isinstance(event, dict):
+                    self._apply(event)
         except asyncio.CancelledError:
             raise
 

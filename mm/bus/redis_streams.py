@@ -122,6 +122,54 @@ class RedisStreamsBus(AbstractEventBus):
         finally:
             await self._remove_subscriber(topic, queue)
 
+    async def latest_event(
+        self,
+        topic: str,
+        *,
+        event_type: str | None = None,
+        limit: int = 100,
+    ) -> Any | None:
+        """Return the newest matching stream payload, or None if the stream is empty."""
+
+        try:
+            r = await self._client()
+        except Exception:
+            return None
+        xrevrange = getattr(r, "xrevrange", None)
+        if not callable(xrevrange):
+            return None
+        try:
+            rows = await xrevrange(
+                self._stream(topic),
+                max="+",
+                min="-",
+                count=max(1, int(limit)),
+            )
+        except Exception as exc:
+            if _is_redis_connection_error(exc):
+                await self._reset_client()
+            self._log_stream_error("redis_stream_latest_failed", topic, exc)
+            return None
+        for _message_id, fields in rows or ():
+            raw = fields.get("data") if isinstance(fields, dict) else None
+            if raw is None:
+                continue
+            try:
+                envelope = decode_envelope(raw)
+            except Exception:
+                continue
+            event = _parse_remote_stream_payload(topic, envelope.payload)
+            if event_type is None:
+                return event
+            actual_type = ""
+            if isinstance(event, dict):
+                actual_type = str(event.get("type", "")).strip()
+            if not actual_type:
+                actual_type = str(getattr(envelope, "event_type", "")).strip()
+            if actual_type == event_type:
+                return event
+        return None
+
     async def subscribe_envelopes(self, topic: str, *, start_id: str = "0-0") -> AsyncIterator[Any]:
         """Read envelopes from a topic, useful for replay and persistence daemons."""
 

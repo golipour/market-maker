@@ -53,6 +53,12 @@ class SharedFakeRedis:
     async def aclose(self):
         pass
 
+    async def xrevrange(self, stream, max="+", min="-", count=None):
+        messages = list(reversed(self.streams.get(stream, [])))
+        if count is not None:
+            messages = messages[: int(count)]
+        return messages
+
     def _start_index(self, stream, last_id):
         messages = self.streams.get(stream, [])
         if last_id == "$":
@@ -343,3 +349,25 @@ async def test_redis_streams_bus_joint_strategy_frame_cross_process_round_trip()
 
     await publisher.close()
     await subscriber.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_latest_event_skips_other_types() -> None:
+    redis = SharedFakeRedis()
+    bus = RedisStreamsBus(stream_prefix="test")
+    bus._redis = redis
+
+    await bus.publish(
+        "admin:events",
+        {"type": "RuntimeControlState", "paused_actors": ["a1"], "timestamp_ms": 1},
+    )
+    await bus.publish(
+        "admin:events",
+        {"type": "AdminCommandAccepted", "command": "resume", "timestamp_ms": 2},
+    )
+
+    event = await bus.latest_event("admin:events", event_type="RuntimeControlState")
+    assert event is not None
+    assert event["type"] == "RuntimeControlState"
+    assert event["paused_actors"] == ["a1"]
+    await bus.close()

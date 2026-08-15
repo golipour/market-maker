@@ -102,6 +102,18 @@ class WorkerComponents:
                             "message": str(exc),
                         },
                     )
+                if self.control_plane is not None:
+                    try:
+                        await self.control_plane.publish_state(command="heartbeat", observe=False)
+                    except Exception as exc:
+                        log_event(
+                            "worker_control_state_publish_failed",
+                            {
+                                "assignment_id": self.assignment.assignment_id,
+                                "error": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                        )
                 await asyncio.sleep(self.config.heartbeat_interval_s)
         except asyncio.CancelledError:
             raise

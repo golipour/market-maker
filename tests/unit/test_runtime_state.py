@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -135,3 +136,36 @@ def test_build_runtime_overview_maps_worker_to_strategy() -> None:
     assert overview["strategies"][0]["strategy_id"] == "btc-maker"
     assert overview["strategies"][0]["worker_id"] == "worker-1"
     assert overview["strategies"][0]["trading_status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_runtime_control_cache_hydrates_latest_runtime_state() -> None:
+    from mm.api.runtime_state import RuntimeControlCache
+
+    class HydratingBus:
+        async def latest_event(self, topic: str, *, event_type: str | None = None, limit: int = 100):
+            assert topic == "admin:events"
+            assert event_type == "RuntimeControlState"
+            return {
+                "type": "RuntimeControlState",
+                "paused_actors": ["mpc-controller"],
+                "allocation_breached_actors": [],
+                "paused_venue_roles": [],
+                "dry_run": False,
+                "kill_switch": False,
+                "timestamp_ms": 1_700_000_000_000,
+            }
+
+        async def subscribe(self, topic: str):
+            if False:
+                yield {}
+            raise asyncio.CancelledError
+
+    cache = RuntimeControlCache(bus=HydratingBus())  # type: ignore[arg-type]
+    await cache.start()
+    try:
+        assert cache.connected is True
+        assert cache.snapshot.paused_actors == ("mpc-controller",)
+        assert cache.snapshot.updated_at_ms == 1_700_000_000_000
+    finally:
+        await cache.stop()
