@@ -89,7 +89,19 @@ class WorkerComponents:
                         lease_ttl_seconds=self.config.lease_ttl_seconds,
                     )
                 except RegistryNotFoundError:
-                    return
+                    log_event(
+                        "worker_heartbeat_assignment_missing",
+                        {"assignment_id": self.assignment.assignment_id},
+                    )
+                except Exception as exc:
+                    log_event(
+                        "worker_heartbeat_failed",
+                        {
+                            "assignment_id": self.assignment.assignment_id,
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    )
                 await asyncio.sleep(self.config.heartbeat_interval_s)
         except asyncio.CancelledError:
             raise
