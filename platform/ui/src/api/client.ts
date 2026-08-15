@@ -107,6 +107,7 @@ export interface GrafanaSoloPanel {
 
 export interface GrafanaConfig {
   base_url: string;
+  embed?: boolean;
   dashboards: GrafanaDashboard[];
   solo_panels: GrafanaSoloPanel[];
 }

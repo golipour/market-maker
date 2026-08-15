@@ -53,6 +53,11 @@ spec:
             - name: MM_BUS_CONSUMER_NAME
               value: admin-1
             # Overview probes these in-cluster URLs (defaults are localhost for laptop dev).
+            # Cluster Grafana (NodePort). Iframes are off: this Grafana does not allow embedding.
+            - name: MM_GRAFANA_URL
+              value: http://192.168.41.83:30081
+            - name: MM_GRAFANA_EMBED
+              value: "false"
             - name: MM_PLATFORM_SERVICE_TARGETS
               value: >-
                 [{"id":"admin","name":"Control Plane (Admin)","metrics_url":"http://market-maker-admin:8080/metrics","health_url":"http://market-maker-admin:8080/api/admin/health"},

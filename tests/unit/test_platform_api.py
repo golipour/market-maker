@@ -37,6 +37,7 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
     assert response.status_code == 200
     body = response.json()
     assert body["base_url"] == "http://grafana.test:3000"
+    assert body["embed"] is True
     uids = {d["uid"] for d in body["dashboards"]}
     assert uids == {
         "mm-obs-v2-market-data",
@@ -63,6 +64,18 @@ def test_platform_grafana_config(platform_client: TestClient, monkeypatch: pytes
         "Fill Spread PnL",
     ]
     assert body["solo_panels"] == []
+
+
+def test_platform_grafana_embed_can_be_disabled(
+    platform_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MM_GRAFANA_URL", "http://192.168.41.83:30081")
+    monkeypatch.setenv("MM_GRAFANA_EMBED", "false")
+    response = platform_client.get("/api/admin/platform/grafana")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_url"] == "http://192.168.41.83:30081"
+    assert body["embed"] is False
 
 
 def test_grafana_embed_urls_use_kiosk() -> None:

@@ -33,7 +33,7 @@ export function ObservabilityPage() {
       <header className="page-header">
         <h1>Observability</h1>
         <p>
-          Embedded Grafana panels from{" "}
+          Grafana dashboards from{" "}
           {config ? (
             <a href={config.base_url} target="_blank" rel="noreferrer">
               {config.base_url}
@@ -41,7 +41,9 @@ export function ObservabilityPage() {
           ) : (
             "Grafana"
           )}
-          . Start Grafana with <code>docker compose up grafana</code> for local embeds.
+          {config?.embed === false
+            ? ". Cluster Grafana requires login, so this tab opens dashboards in a new tab instead of embedding them."
+            : ". Start Grafana with docker compose up grafana for local embeds."}
         </p>
       </header>
 
@@ -50,10 +52,18 @@ export function ObservabilityPage() {
 
       {config ? (
         <>
-          <div className="alert alert-info" style={{ fontSize: "0.85rem" }}>
-            If panels show a login screen, ensure Grafana allows embedding and anonymous
-            viewer access (see docker-compose Grafana env vars).
-          </div>
+          {config.embed !== false ? (
+            <div className="alert alert-info" style={{ fontSize: "0.85rem" }}>
+              If panels show a login screen, ensure Grafana allows embedding and anonymous
+              viewer access (see docker-compose Grafana env vars).
+            </div>
+          ) : (
+            <div className="alert alert-info" style={{ fontSize: "0.85rem" }}>
+              Import the Observability v2 dashboards into Grafana and add a Postgres
+              datasource with UID <code>postgres-mm</code> before these links have data.
+              Prometheus panels use datasource UID <code>mimir</code> on this cluster.
+            </div>
+          )}
 
           <h2 style={{ fontSize: "1rem", marginBottom: "0.75rem" }}>Dashboards</h2>
           <div className="dashboard-tabs">
@@ -70,12 +80,23 @@ export function ObservabilityPage() {
           </div>
 
           {activeDashboard ? (
-            <GrafanaPanel
-              title={activeDashboard.title}
-              embedUrl={activeDashboard.embed_url}
-              openUrl={activeDashboard.open_url}
-              variant="full"
-            />
+            config.embed === false ? (
+              <div className="card">
+                <h3>{activeDashboard.title}</h3>
+                <p>
+                  <a href={activeDashboard.open_url} target="_blank" rel="noreferrer">
+                    Open in Grafana
+                  </a>
+                </p>
+              </div>
+            ) : (
+              <GrafanaPanel
+                title={activeDashboard.title}
+                embedUrl={activeDashboard.embed_url}
+                openUrl={activeDashboard.open_url}
+                variant="full"
+              />
+            )
           ) : null}
         </>
       ) : null}

@@ -30,6 +30,7 @@ def create_platform_router(*, require_auth: Any) -> APIRouter:
         base_url = os.environ.get("MM_GRAFANA_URL", "http://localhost:3000").rstrip("/")
         return {
             "base_url": base_url,
+            "embed": _grafana_embed_enabled(),
             "dashboards": _grafana_dashboards(base_url),
             "solo_panels": _grafana_solo_panels(base_url),
         }
@@ -139,6 +140,11 @@ async def _probe_url(url: str, *, expect_metrics: bool) -> tuple[bool, str]:
             return False, type(exc).__name__
 
     return await asyncio.to_thread(_fetch)
+
+
+def _grafana_embed_enabled() -> bool:
+    raw = os.environ.get("MM_GRAFANA_EMBED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
