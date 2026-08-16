@@ -43,7 +43,7 @@ export function ObservabilityPage() {
           )}
           {config?.embed === false
             ? ". Cluster Grafana requires login, so this tab opens dashboards in a new tab instead of embedding them."
-            : ". Start Grafana with docker compose up grafana for local embeds."}
+            : "."}
         </p>
       </header>
 
@@ -54,8 +54,8 @@ export function ObservabilityPage() {
         <>
           {config.embed !== false ? (
             <div className="alert alert-info" style={{ fontSize: "0.85rem" }}>
-              If panels show a login screen, ensure Grafana allows embedding and anonymous
-              viewer access (see docker-compose Grafana env vars).
+              If an embed shows Grafana login, log in once at the Grafana URL, or use a
+              public-dashboard token. Use Open in Grafana for the full editor.
             </div>
           ) : (
             <div className="alert alert-info" style={{ fontSize: "0.85rem" }}>

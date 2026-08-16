@@ -28,10 +28,11 @@ def create_platform_router(*, require_auth: Any) -> APIRouter:
     @router.get("/grafana")
     async def grafana_config(_: str = Depends(require_auth)) -> dict[str, Any]:
         base_url = os.environ.get("MM_GRAFANA_URL", "http://localhost:3000").rstrip("/")
+        tokens = _grafana_public_tokens()
         return {
             "base_url": base_url,
-            "embed": _grafana_embed_enabled(),
-            "dashboards": _grafana_dashboards(base_url),
+            "embed": bool(tokens) or _grafana_embed_enabled(),
+            "dashboards": _grafana_dashboards(base_url, public_tokens=tokens),
             "solo_panels": _grafana_solo_panels(base_url),
         }
 
@@ -147,7 +148,29 @@ def _grafana_embed_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
-def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
+def _grafana_public_tokens() -> dict[str, str]:
+    raw = os.environ.get("MM_GRAFANA_PUBLIC_TOKENS", "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(uid).strip(): str(token).strip()
+        for uid, token in payload.items()
+        if str(uid).strip() and str(token).strip()
+    }
+
+
+def _grafana_dashboards(
+    base_url: str,
+    *,
+    public_tokens: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    tokens = public_tokens if public_tokens is not None else _grafana_public_tokens()
     rows = [
         ("Market Data Quality", "mm-obs-v2-market-data"),
         ("Orderbook Depth", "mm-obs-v2-orderbook-depth"),
@@ -160,17 +183,22 @@ def _grafana_dashboards(base_url: str) -> list[dict[str, Any]]:
         ("Exchange Accounts", "mm-obs-v2-exchange-account"),
         ("Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
     ]
-    return [
-        {
-            "title": title,
-            "uid": uid,
-            "embed_url": (
-                f"{base_url}/d/{uid}?orgId=1&theme=dark&kiosk=1&from=now-1h&to=now"
-            ),
-            "open_url": f"{base_url}/d/{uid}?orgId=1&from=now-6h&to=now",
-        }
-        for title, uid in rows
-    ]
+    dashboards = []
+    for title, uid in rows:
+        token = tokens.get(uid, "")
+        if token:
+            embed_url = f"{base_url}/public-dashboards/{token}?theme=dark"
+        else:
+            embed_url = f"{base_url}/d/{uid}?orgId=1&theme=dark&kiosk=1&from=now-1h&to=now"
+        dashboards.append(
+            {
+                "title": title,
+                "uid": uid,
+                "embed_url": embed_url,
+                "open_url": f"{base_url}/d/{uid}?orgId=1&from=now-6h&to=now",
+            }
+        )
+    return dashboards
 
 
 def _grafana_solo_panels(base_url: str) -> list[dict[str, Any]]:

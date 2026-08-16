@@ -78,6 +78,23 @@ def test_platform_grafana_embed_can_be_disabled(
     assert body["embed"] is False
 
 
+def test_grafana_public_token_embed_urls(
+    platform_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MM_GRAFANA_URL", "http://grafana.test:3000")
+    monkeypatch.setenv("MM_GRAFANA_EMBED", "false")
+    monkeypatch.setenv(
+        "MM_GRAFANA_PUBLIC_TOKENS",
+        json.dumps({"mm-obs-v2-market-data": "pub-token-1"}),
+    )
+    response = platform_client.get("/api/admin/platform/grafana")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["embed"] is True
+    market_data = next(d for d in body["dashboards"] if d["uid"] == "mm-obs-v2-market-data")
+    assert market_data["embed_url"] == "http://grafana.test:3000/public-dashboards/pub-token-1?theme=dark"
+
+
 def test_grafana_embed_urls_use_kiosk() -> None:
     dashboards = _grafana_dashboards("http://localhost:3000")
     market_data = next(d for d in dashboards if d["uid"] == "mm-obs-v2-market-data")

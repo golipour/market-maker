@@ -57,7 +57,13 @@ spec:
             - name: MM_GRAFANA_URL
               value: http://192.168.41.83:30081
             - name: MM_GRAFANA_EMBED
-              value: "false"
+              value: "true"
+            - name: MM_GRAFANA_PUBLIC_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-grafana-public
+                  key: tokens.json
+                  optional: true
             - name: MM_PLATFORM_SERVICE_TARGETS
               value: >-
                 [{"id":"admin","name":"Control Plane (Admin)","metrics_url":"http://market-maker-admin:8080/metrics","health_url":"http://market-maker-admin:8080/api/admin/health"},

@@ -25,7 +25,8 @@ export function GrafanaPanel({
         title={title}
         src={embedUrl}
         loading="lazy"
-        sandbox="allow-scripts allow-same-origin allow-popups"
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-popups-to-escape-sandbox"
       />
     </div>
   );

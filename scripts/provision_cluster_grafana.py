@@ -17,6 +17,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,18 @@ KUBECONFIG = None  # inherit env
 GRAFANA_URL = "http://192.168.41.83:30081"
 POSTGRES_HOST = "postgres.market-maker.svc.cluster.local:5432"
 FOLDER_TITLE = "Market Maker"
+PUBLIC_DASHBOARD_UIDS = (
+    "mm-obs-v2-market-data",
+    "mm-obs-v2-orderbook-depth",
+    "mm-obs-v2-target-order-stems",
+    "mm-obs-v2-action-pipeline-side-counts",
+    "mm-obs-v2-optimizer",
+    "mm-obs-v2-model-parameters",
+    "mm-obs-v2-pipeline-time-profile",
+    "mm-obs-v2-portfolio-pnl",
+    "mm-obs-v2-exchange-account",
+    "mm-obs-v2-fill-spread-pnl",
+)
 UID_REMAP = {
     "prometheus-mm": "mimir",
     "loki-mm": "loki",
@@ -119,6 +132,9 @@ class GrafanaClient:
 
     def put(self, path: str, body: dict) -> tuple[int, dict | list | None]:
         return self.request("PUT", path, body)
+
+    def patch(self, path: str, body: dict) -> tuple[int, dict | list | None]:
+        return self.request("PATCH", path, body)
 
 
 def _ensure_folder(client: GrafanaClient) -> str:
@@ -285,6 +301,111 @@ def _patch_grafana_postgres_datasource(*, user: str, password: str) -> bool:
     return True
 
 
+def _patch_allow_embedding() -> bool:
+    cm = _kubectl_json("-n", "observability", "get", "configmap", "grafana")
+    ini = str((cm.get("data") or {}).get("grafana.ini") or "")
+    changed = False
+    patched = ini.rstrip() + "\n"
+    if not (
+        "allow_embedding" in patched
+        and "true" in patched.split("allow_embedding", 1)[-1][:40].lower()
+    ):
+        patched += "\n[security]\nallow_embedding = true\n"
+        changed = True
+    if "[auth.anonymous]" not in patched:
+        patched += "\n[auth.anonymous]\nenabled = true\norg_role = Viewer\n"
+        changed = True
+    elif "enabled = true" not in patched.split("[auth.anonymous]", 1)[-1][:80]:
+        patched += "\n[auth.anonymous]\nenabled = true\norg_role = Viewer\n"
+        changed = True
+    if not changed:
+        return False
+    result = subprocess.run(
+        [
+            "kubectl",
+            "-n",
+            "observability",
+            "patch",
+            "configmap",
+            "grafana",
+            "--type",
+            "merge",
+            "--patch",
+            json.dumps({"data": {"grafana.ini": patched}}),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"patch grafana.ini failed: {result.stderr.strip()}")
+    return True
+
+
+def _ensure_public_dashboards(client: GrafanaClient) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for uid in PUBLIC_DASHBOARD_UIDS:
+        status, existing = client.get(f"/api/dashboards/uid/{uid}/public-dashboards")
+        token = ""
+        public_uid = ""
+        enabled = False
+        if status == 200 and isinstance(existing, dict):
+            token = str(existing.get("accessToken") or "")
+            public_uid = str(existing.get("uid") or "")
+            enabled = bool(existing.get("isEnabled"))
+        if token and enabled:
+            tokens[uid] = token
+            print(f"public dashboard {uid}")
+            continue
+        body = {
+            "isEnabled": True,
+            "share": "public",
+            "timeSelectionEnabled": True,
+            "annotationsEnabled": False,
+        }
+        if public_uid:
+            status, created = client.patch(
+                f"/api/dashboards/uid/{uid}/public-dashboards/{public_uid}",
+                body,
+            )
+        else:
+            status, created = client.post(
+                f"/api/dashboards/uid/{uid}/public-dashboards",
+                body,
+            )
+        if status not in {200, 201} or not isinstance(created, dict):
+            print(f"public dashboard {uid} failed http {status}")
+            continue
+        token = str(created.get("accessToken") or token)
+        if token:
+            tokens[uid] = token
+            print(f"public dashboard {uid} enabled")
+    return tokens
+
+
+def _write_public_token_configmap(tokens: dict[str, str]) -> None:
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "market-maker-grafana-public",
+            "namespace": "market-maker",
+            "labels": {"app.kubernetes.io/part-of": "market-maker"},
+        },
+        "data": {"tokens.json": json.dumps(tokens, separators=(",", ":"))},
+    }
+    result = subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(manifest),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"apply grafana public tokens failed: {result.stderr.strip()}")
+    print(result.stdout.strip() or "configmap/market-maker-grafana-public")
+
+
 def _argocd_grafana_sync_policy() -> dict | None:
     app = _kubectl_json("-n", "argocd", "get", "application", "grafana-staging")
     return (app.get("spec") or {}).get("syncPolicy")
@@ -329,6 +450,10 @@ def _provision_postgres_via_grafana_configmap(*, user: str, password: str) -> No
     try:
         _patch_grafana_postgres_datasource(user=user, password=password)
         print("patched grafana cm with postgres-mm")
+        if _patch_allow_embedding():
+            print("patched grafana.ini allow_embedding")
+        else:
+            print("grafana.ini already allows embedding")
         restart = subprocess.run(
             ["kubectl", "-n", "observability", "rollout", "restart", "deploy/grafana"],
             capture_output=True,
@@ -364,28 +489,29 @@ def _health(client: GrafanaClient) -> None:
 def main() -> int:
     _apply_dashboard_configmaps()
 
-    grafana = _secret_data("observability", "grafana")
     mm = _secret_data("market-maker", "market-maker-secrets")
-    user = (grafana.get("admin-user") or "admin").strip()
-    password = (grafana.get("admin-password") or "").strip()
     pg_user = (mm.get("POSTGRES_USER") or "mm").strip()
     pg_password = (mm.get("POSTGRES_PASSWORD") or "").strip()
-    if not password:
-        raise SystemExit("grafana admin-password missing")
     if not pg_password:
         raise SystemExit("POSTGRES_PASSWORD missing")
 
-    client = GrafanaClient(GRAFANA_URL, user, password)
+    api_user = os.environ.get("GRAFANA_USER", "").strip()
+    api_password = os.environ.get("GRAFANA_PASSWORD", "").strip()
+    _provision_postgres_via_grafana_configmap(user=pg_user, password=pg_password)
+    if not api_user or not api_password:
+        print("grafana embedding enabled; set GRAFANA_USER and GRAFANA_PASSWORD to publish public dashboards")
+        return 0
+
+    client = GrafanaClient(GRAFANA_URL, api_user, api_password)
     _health(client)
     if not client.login():
-        print("grafana session login failed; provisioning postgres-mm via Grafana ConfigMap")
-        _provision_postgres_via_grafana_configmap(user=pg_user, password=pg_password)
-        print("done")
-        return 0
+        raise SystemExit("grafana login failed with GRAFANA_USER/GRAFANA_PASSWORD")
     print("grafana session login ok")
-    _upsert_postgres(client, user=pg_user, password=pg_password)
-    folder_uid = _ensure_folder(client)
-    _import_dashboards(client, folder_uid)
+    tokens = _ensure_public_dashboards(client)
+    if not tokens:
+        raise SystemExit("no public dashboard tokens created")
+    _write_public_token_configmap(tokens)
+    print(f"published {len(tokens)} public dashboards")
     print("done")
     return 0
 
