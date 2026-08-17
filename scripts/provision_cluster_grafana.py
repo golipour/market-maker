@@ -69,6 +69,28 @@ def _remap_uids(value):
     return value
 
 
+def _default_all_multi_vars(dashboard: dict) -> dict:
+    """Kiosk embeds keep empty multi-var currents, which filter every SQL panel to nothing."""
+    templating = dashboard.get("templating")
+    if not isinstance(templating, dict):
+        return dashboard
+    rows = templating.get("list")
+    if not isinstance(rows, list):
+        return dashboard
+    all_current = {"selected": False, "text": "All", "value": "$__all"}
+    patched = []
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and row.get("multi")
+            and row.get("name") in {"exchange", "symbol", "actor_id", "run_id"}
+        ):
+            patched.append({**row, "current": all_current, "includeAll": True})
+        else:
+            patched.append(row)
+    return {**dashboard, "templating": {**templating, "list": patched}}
+
+
 class GrafanaClient:
     def __init__(self, base_url: str, user: str, password: str):
         self.base_url = base_url.rstrip("/")
@@ -191,7 +213,7 @@ def _import_dashboards(client: GrafanaClient, folder_uid: str) -> None:
     imported = 0
     for path in files:
         dashboard = json.loads(path.read_text(encoding="utf-8"))
-        dashboard = _remap_uids(dashboard)
+        dashboard = _default_all_multi_vars(_remap_uids(dashboard))
         dashboard["id"] = None
         dashboard["uid"] = path.stem
         status, payload = client.post(
@@ -215,7 +237,9 @@ def _apply_dashboard_configmaps() -> None:
     if not files:
         raise SystemExit(f"no dashboards in {DASHBOARD_DIR}")
     for path in files:
-        dashboard = _remap_uids(json.loads(path.read_text(encoding="utf-8")))
+        dashboard = _default_all_multi_vars(
+            _remap_uids(json.loads(path.read_text(encoding="utf-8")))
+        )
         dashboard["id"] = None
         dashboard["uid"] = path.stem
         name = f"grafana-{path.stem}"[:63]

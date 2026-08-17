@@ -658,14 +658,12 @@ def _templating(*, hide: frozenset[str] | None = None) -> list[dict[str, Any]]:
             "Exchange",
             exchange_var_query(),
             multi=True,
-            default_all=False,
         ),
         _query_var(
             "symbol",
             "Symbol",
             symbol_var_query(),
             multi=True,
-            default_all=False,
         ),
         _query_var(
             "actor_id",

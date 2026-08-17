@@ -37,15 +37,14 @@ def test_optimizer_weighted_components_sql_includes_final_objective_total() -> N
 def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
     dashboard = market_data_quality()
     templating = {item["name"]: item for item in dashboard["templating"]["list"]}
+    all_current = {"selected": False, "text": "All", "value": "$__all"}
 
     assert dashboard["time"] == {"from": "now-15m", "to": "now"}
-    assert templating["exchange"]["current"] == {"selected": False, "text": [], "value": []}
-    assert templating["symbol"]["current"] == {"selected": False, "text": [], "value": []}
-    assert templating["actor_id"]["current"] == {
-        "selected": False,
-        "text": "All",
-        "value": "$__all",
-    }
+    # Empty multi-var currents interpolate to ARRAY[] / exchange=~"" and blank every panel,
+    # including Grafana kiosk embeds that cannot auto-pick the first query option.
+    assert templating["exchange"]["current"] == all_current
+    assert templating["symbol"]["current"] == all_current
+    assert templating["actor_id"]["current"] == all_current
 
 
 def test_runtime_fill_rate_sql_keeps_private_fills_with_missing_symbol_column() -> None:

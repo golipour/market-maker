@@ -189,7 +189,10 @@ def _grafana_dashboards(
         if token:
             embed_url = f"{base_url}/public-dashboards/{token}?theme=dark"
         else:
-            embed_url = f"{base_url}/d/{uid}?orgId=1&theme=dark&kiosk=1&from=now-1h&to=now"
+            embed_url = (
+                f"{base_url}/d/{uid}?orgId=1&theme=dark&kiosk=1&from=now-1h&to=now"
+                "&var-exchange=$__all&var-symbol=$__all&var-actor_id=$__all&var-run_id=$__all"
+            )
         dashboards.append(
             {
                 "title": title,

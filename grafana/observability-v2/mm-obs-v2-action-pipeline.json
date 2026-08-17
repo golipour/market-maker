@@ -453,8 +453,8 @@
       {
         "current": {
           "selected": false,
-          "text": [],
-          "value": []
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": {
           "type": "postgres",
@@ -475,8 +475,8 @@
       {
         "current": {
           "selected": false,
-          "text": [],
-          "value": []
+          "text": "All",
+          "value": "$__all"
         },
         "datasource": {
           "type": "postgres",
