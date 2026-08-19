@@ -55,12 +55,13 @@ def registered_exchanges() -> tuple[str, ...]:
 
 def _load_builtin_registrations() -> None:
     from mm.exchanges.bitpin.registration import REGISTRATION as bitpin
+    from mm.exchanges.bitwana.registration import REGISTRATION as bitwana
     from mm.exchanges.kucoin.registration import REGISTRATION as kucoin
     from mm.exchanges.nobitex.registration import REGISTRATION as nobitex
     from mm.exchanges.tabdeal.registration import REGISTRATION as tabdeal
     from mm.exchanges.wallex.registration import REGISTRATION as wallex
 
-    for registration in (nobitex, wallex, tabdeal, bitpin, kucoin):
+    for registration in (nobitex, wallex, tabdeal, bitpin, kucoin, bitwana):
         register_exchange(registration)
 
 

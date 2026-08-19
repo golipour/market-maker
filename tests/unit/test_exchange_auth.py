@@ -51,3 +51,16 @@ def test_private_runtime_config_api_secret_env_alias(monkeypatch) -> None:
 
     credentials = config.resolved_api_credentials("tabdeal")
     assert isinstance(credentials, TabdealApiKeyAuth)
+
+
+def test_private_runtime_config_resolves_bitwana_jwt(monkeypatch) -> None:
+    monkeypatch.setenv("BITWANA_API_TOKEN", "access")
+    monkeypatch.setenv("BITWANA_REFRESH_TOKEN", "refresh")
+    config = PrivateRuntimeConfig(api_token_env="BITWANA_API_TOKEN")
+    from mm.exchanges.bitwana.private_rest import BitwanaJwtAuth
+
+    credentials = config.resolved_api_credentials("bitwana")
+    assert isinstance(credentials, BitwanaJwtAuth)
+    assert credentials.access_token == "access"
+    assert credentials.refresh_token == "refresh"
+

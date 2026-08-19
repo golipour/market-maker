@@ -41,6 +41,14 @@
         "trades_limit": 200,
         "poll_interval_ms": 2000
       }
+    },
+    "bitwana": {
+      "market_data": {
+        "mode": "rest",
+        "depth_limit": 200,
+        "trades_limit": 200,
+        "poll_interval_ms": 2000
+      }
     }
   },
   "bus": {

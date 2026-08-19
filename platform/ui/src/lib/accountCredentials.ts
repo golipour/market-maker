@@ -92,6 +92,9 @@ export function supportedModesForExchange(
   if (key === "nobitex") {
     return ["signed_key", "api_key"];
   }
+  if (key === "bitwana") {
+    return ["signed_key"];
+  }
   return ["signed_key"];
 }
 

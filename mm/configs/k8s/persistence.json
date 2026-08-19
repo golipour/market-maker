@@ -1,7 +1,7 @@
 {
   "load_feeds_from_registry": true,
   "feeds": [],
-  "exchanges": ["nobitex"],
+  "exchanges": ["nobitex", "bitwana"],
   "actors": ["mpc-controller"],
   "bus": {
     "kind": "redis_streams",

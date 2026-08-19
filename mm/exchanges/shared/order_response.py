@@ -22,4 +22,9 @@ def order_id_from_response(resp: dict[str, Any]) -> str:
         nested = order_id_from_response(result)
         if nested:
             return nested
+    content = resp.get("content")
+    if isinstance(content, dict):
+        nested = order_id_from_response(content)
+        if nested:
+            return nested
     return ""

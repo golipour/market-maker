@@ -153,6 +153,9 @@ def _legacy_env_defaults(exchange: str, token_env: str) -> dict[str, str]:
     except ValueError:
         return out
     prefix = exchange_key.upper()
+    if exchange_key == "bitwana":
+        out["api_secret_env"] = "BITWANA_REFRESH_TOKEN"
+        return out
     if "signed_key" in spec.supported_modes or "signed_key_passphrase" in spec.supported_modes:
         out["api_secret_env"] = f"{prefix}_API_SECRET"
         out["api_private_key_env"] = f"{prefix}_API_PRIVATE_KEY"

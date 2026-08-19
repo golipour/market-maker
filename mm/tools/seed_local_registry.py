@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mm.env_loader import load_mm_env
 from mm.registry.memory import RegistryNotFoundError
 from mm.registry.store import RegistryStore, build_registry_store, registry_database_url
 
@@ -19,6 +20,8 @@ LOCAL_ACCOUNT_ID = "account-nobitex-main"
 LOCAL_EXCHANGE = "nobitex"
 LOCAL_SYMBOL = "USDT_IRT"
 LOCAL_ACTOR_ID = "mpc-controller"
+BITWANA_ACCOUNT_ID = "account-bitwana-main"
+BITWANA_EXCHANGE = "bitwana"
 
 _RUNTIME_EXAMPLE_PATH = (
     Path(__file__).resolve().parents[1] / "configs" / "market_maker.runtime.example.json"
@@ -63,6 +66,25 @@ def _local_exchange_config() -> dict[str, Any]:
             "fill_event_source": "exchange_fill_history",
         },
         "fees": {"maker_fee": 1.5e-05},
+    }
+
+
+def _bitwana_exchange_config() -> dict[str, Any]:
+    return {
+        "market_data": {
+            "mode": "rest",
+            "market_data_source": "bus",
+            "poll_interval_ms": 2000,
+            "depth_limit": 200,
+            "trades_limit": 200,
+        },
+        "private": {
+            "mode": "rest",
+            "auth_mode": "signed_key",
+            "poll_interval_ms": 10000,
+            "fill_event_source": "exchange_fill_history",
+        },
+        "fees": {"maker_fee": 0.002},
     }
 
 
@@ -163,7 +185,32 @@ def seed_local_worker_registry(
         lease_ttl_seconds=300,
         status="active",
     )
+    seed_bitwana_venue(store)
     return True
+
+
+def seed_bitwana_venue(store: RegistryStore) -> None:
+    """Upsert Bitwana exchange, account, and USDT_IRT market feed."""
+
+    store.upsert_exchange(
+        exchange=BITWANA_EXCHANGE,
+        config=_bitwana_exchange_config(),
+    )
+    store.upsert_account(
+        account_id=BITWANA_ACCOUNT_ID,
+        exchange=BITWANA_EXCHANGE,
+        credential_ref="BITWANA_API_TOKEN",
+    )
+    store.upsert_market_source(
+        source_id=f"{BITWANA_EXCHANGE}-{LOCAL_SYMBOL}",
+        exchange=BITWANA_EXCHANGE,
+        symbol=LOCAL_SYMBOL,
+    )
+    store.upsert_market_feed(
+        feed_id=f"{BITWANA_EXCHANGE}-{LOCAL_SYMBOL}-10000",
+        source_id=f"{BITWANA_EXCHANGE}-{LOCAL_SYMBOL}",
+        interval_ms=10_000,
+    )
 
 
 def ensure_local_worker_registry(
@@ -181,12 +228,14 @@ def ensure_local_worker_registry(
             "MM_DATABASE_URL is not set; cannot seed registry for multi-strategy worker"
         )
     store = build_registry_store(database_url=url)
+    seeded = False
     try:
         store.get_active_worker_assignment(worker_id)
     except RegistryNotFoundError:
         seed_local_worker_registry(store, worker_id=worker_id)
-        return True
-    return False
+        seeded = True
+    seed_bitwana_venue(store)
+    return seeded
 
 
 def _apply_bus_redis_url(store: RegistryStore, redis_url: str) -> None:
@@ -197,6 +246,7 @@ def _apply_bus_redis_url(store: RegistryStore, redis_url: str) -> None:
 
 
 def main() -> None:
+    load_mm_env()
     seeded = ensure_local_worker_registry()
     redis_url = os.environ.get("MM_BUS_REDIS_URL", "").strip()
     if redis_url:

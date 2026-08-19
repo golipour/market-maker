@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from mm.exchanges.bitwana.rest import BitwanaRestMarketDataAdapter
 from mm.exchanges.bitpin.rest import BitpinRestMarketDataAdapter
 from mm.exchanges.bitpin.ws import BitpinWsMarketDataAdapter
 from mm.exchanges.nobitex.rest import NobitexRestMarketDataAdapter
@@ -126,6 +127,30 @@ async def test_bitpin_rest_payloads_normalize_to_raw_events():
     assert [trade.trade_id for trade in trades] == ["10", "11"]
     assert [trade.side for trade in trades] == ["sell", "buy"]
     assert adapter._client.calls[0] == ("/v1/mkt/markets/", {"page": 1})
+
+
+@pytest.mark.asyncio
+async def test_bitwana_rest_payloads_normalize_to_raw_events():
+    adapter = BitwanaRestMarketDataAdapter("USDT_IRT", depth_limit=2, trades_limit=2)
+    adapter._client = FakeRestClient(
+        {
+            "/api/1/orders/orderBook/market/USDT_IRT/level2": load_fixture(
+                "bitwana_rest_orderbook.json"
+            ),
+            "/api/1/trades/recent/market/USDT_IRT": load_fixture("bitwana_rest_trades.json"),
+        }
+    )
+
+    book = await adapter.fetch_orderbook()
+    trades = await adapter.fetch_trades()
+
+    assert book.exchange == "bitwana"
+    assert book.symbol == "USDT_IRT"
+    assert [level.price for level in book.bids] == [186692.0, 186600.0]
+    assert [level.qty for level in book.asks] == [21.49, 4.0]
+    assert [trade.side for trade in trades] == ["sell", "buy"]
+    assert trades[0].price == 186681.0
+    assert trades[0].timestamp_ms == 1787047216000
 
 
 @pytest.mark.asyncio

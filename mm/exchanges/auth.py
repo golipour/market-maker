@@ -21,11 +21,14 @@ class ExchangeAuthSpec:
     supported_modes: tuple[AuthMode, ...]
 
     def as_dict(self) -> dict[str, Any]:
+        labels = {mode: AUTH_MODE_LABELS[mode] for mode in self.supported_modes}
+        if self.exchange == "bitwana":
+            labels["signed_key"] = "Access token + refresh token"
         return {
             "exchange": self.exchange,
             "default_mode": self.default_mode,
             "supported_modes": list(self.supported_modes),
-            "mode_labels": {mode: AUTH_MODE_LABELS[mode] for mode in self.supported_modes},
+            "mode_labels": labels,
         }
 
 
@@ -35,6 +38,7 @@ EXCHANGE_AUTH_SPECS: dict[str, ExchangeAuthSpec] = {
     "tabdeal": ExchangeAuthSpec("tabdeal", "signed_key", ("signed_key",)),
     "bitpin": ExchangeAuthSpec("bitpin", "signed_key", ("signed_key",)),
     "kucoin": ExchangeAuthSpec("kucoin", "signed_key_passphrase", ("signed_key_passphrase",)),
+    "bitwana": ExchangeAuthSpec("bitwana", "signed_key", ("signed_key",)),
 }
 
 
@@ -109,5 +113,10 @@ def resolve_exchange_auth(
         from mm.exchanges.kucoin.private_rest import KucoinApiKeyAuth
 
         return KucoinApiKeyAuth(key, secret, passphrase)
+
+    if exchange_key == "bitwana":
+        from mm.exchanges.bitwana.private_rest import BitwanaJwtAuth
+
+        return BitwanaJwtAuth(access_token=key, refresh_token=secret)
 
     raise ValueError(f"unsupported signed auth for exchange: {exchange_key}")

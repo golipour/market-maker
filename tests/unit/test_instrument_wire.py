@@ -32,6 +32,13 @@ def test_wallex_irt_domain_maps_to_tmn_market_symbol():
     assert w.public_price_scale_from_api == 1.0
 
 
+def test_bitwana_keeps_underscore_market_ids():
+    w = build_instrument_wire("bitwana", "USDT_IRT")
+    assert w.api_market_symbol == "USDT_IRT"
+    assert w.private_order_currencies() == ("usdt", "irt")
+    assert w.public_price_scale_from_api == 1.0
+
+
 def test_merge_wallet_balances_wallex_folds_tmn_alias():
     raw = {"TMN": {"free": 100.0, "locked": 0.0, "total": 100.0}, "USDT": {"free": 1.0, "locked": 0.0, "total": 1.0}}
     out = merge_wallet_balances_raw("wallex", raw)

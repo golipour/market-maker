@@ -171,7 +171,7 @@ class PrivateRuntimeConfig:
         has_passphrase = bool(self.resolved_api_passphrase(exchange_key or None))
         if exchange_key == "kucoin" and has_secret and has_passphrase:
             return "signed_key_passphrase"
-        if has_secret and exchange_key in ("nobitex", "tabdeal", "bitpin", "kucoin"):
+        if has_secret and exchange_key in ("nobitex", "tabdeal", "bitpin", "kucoin", "bitwana"):
             return "signed_key"
         if self.auth_mode:
             return str(self.auth_mode).strip()
@@ -205,8 +205,11 @@ class PrivateRuntimeConfig:
         if self.api_private_key_env:
             return os.environ.get(self.api_private_key_env)
         if exchange:
-            return os.environ.get(f"{exchange.upper()}_API_SECRET") or os.environ.get(
-                f"{exchange.upper()}_API_PRIVATE_KEY"
+            prefix = exchange.upper()
+            return (
+                os.environ.get(f"{prefix}_API_SECRET")
+                or os.environ.get(f"{prefix}_API_PRIVATE_KEY")
+                or os.environ.get(f"{prefix}_REFRESH_TOKEN")
             )
         return None
 

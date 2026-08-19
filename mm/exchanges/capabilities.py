@@ -200,6 +200,26 @@ EXCHANGE_CAPABILITIES: dict[str, ExchangeCapabilities] = {
             place_rest=True, cancel_rest=True, market_order_rest=True
         ),
     ),
+    "bitwana": ExchangeCapabilities(
+        exchange="bitwana",
+        public_market_data=PublicMarketDataCapabilities(
+            trades_rest=True,
+            trades_websocket=False,
+            orderbook_rest=True,
+            orderbook_websocket=False,
+            preferred_transport="rest",
+        ),
+        private_state=PrivateStateCapabilities(
+            balances_rest=True,
+            open_orders_rest=True,
+            order_updates_websocket=False,
+            fills_websocket=False,
+            preferred_mode="rest",
+        ),
+        order_commands=OrderCommandCapabilities(
+            place_rest=True, cancel_rest=True, market_order_rest=True
+        ),
+    ),
 }
 
 

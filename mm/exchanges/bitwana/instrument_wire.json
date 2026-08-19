@@ -1,0 +1,5 @@
+{
+  "api_market_symbol": {
+    "use_domain_symbol": true
+  }
+}

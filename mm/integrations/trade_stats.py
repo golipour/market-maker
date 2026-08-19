@@ -9,7 +9,7 @@ Design (simple):
 
 So: previous orderbook is X; trades in the next window give fills for X → Y.
 
-Supported exchanges: tabdeal, nobitex, wallex, bitpin, kucoin, binance.
+Supported exchanges: tabdeal, nobitex, wallex, bitpin, kucoin, binance, bitwana.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Protocol
+import os
 
 import requests
 from urllib.parse import quote
@@ -1051,6 +1052,94 @@ class BinanceAdapter:
         return {}
 
 
+class BitwanaAdapter:
+    """Bitwana / YSHM public REST. Domain symbols match wire ids (``USDT_IRT``)."""
+
+    BASE_URL = os.environ.get("BITWANA_API_BASE_URL", "https://bit.yshm.ir").rstrip("/")
+
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        r = requests.get(f"{self.BASE_URL}{path}", params=params or {}, timeout=15)
+        r.raise_for_status()
+        payload = r.json()
+        if isinstance(payload, dict) and "content" in payload:
+            code = payload.get("statusCode")
+            if code not in (None, 200, 201):
+                raise ValueError(payload.get("message") or f"bitwana HTTP {code}")
+            return payload.get("content")
+        return payload
+
+    def _symbol(self, symbol: str) -> str:
+        from mm.exchanges.instrument_wire import build_instrument_wire
+
+        return build_instrument_wire("bitwana", symbol).api_market_symbol
+
+    def server_time_ms(self) -> int:
+        return int(time.time() * 1000)
+
+    def depth(self, symbol: str, limit: int = 100) -> dict[str, Any]:
+        s = self._symbol(symbol)
+        content = self._get(f"/api/1/orders/orderBook/market/{s}/level2") or {}
+        if not isinstance(content, dict):
+            raise ValueError("bitwana depth error")
+
+        def rows(arr: Any, n: int) -> list[list[str]]:
+            out: list[list[str]] = []
+            for item in (arr or [])[:n]:
+                if isinstance(item, dict):
+                    out.append([str(item.get("price", "0")), str(item.get("size", "0"))])
+            return out
+
+        return {"bids": rows(content.get("bids"), limit), "asks": rows(content.get("asks"), limit)}
+
+    def trades(self, symbol: str, limit: int = 1000) -> list[dict]:
+        s = self._symbol(symbol)
+        rows = self._get(f"/api/1/trades/recent/market/{s}") or []
+        lst: list[dict] = []
+        for item in rows[:limit]:
+            if not isinstance(item, dict):
+                continue
+            taker = str(item.get("takerSide") or "").upper()
+            ts = item.get("time")
+            try:
+                ts_i = int(float(ts))
+            except (TypeError, ValueError):
+                ts_i = int(time.time())
+            if ts_i < 10**12:
+                ts_i *= 1000
+            lst.append(
+                {
+                    "time": ts_i,
+                    "price": str(item.get("unitPrice", "0")),
+                    "qty": str(item.get("amount", "0")),
+                    "isBuyerMaker": taker.startswith("S"),
+                }
+            )
+        return lst
+
+    def exchange_info(self, symbol: str) -> dict[str, Any]:
+        s = self._symbol(symbol)
+        market = self._get(f"/api/1/markets/{s}") or {}
+        qty_prec = int(market.get("quantityPrecision") or 2)
+        price_prec = int(market.get("userOrderPricePrecision") or 0)
+        min_notional = market.get("minimumOrder") or 0
+        qty_step = 10 ** (-qty_prec) if qty_prec >= 0 else 0.01
+        tick = 10 ** (-price_prec) if price_prec > 0 else 1.0
+        return {
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": str(tick)},
+                {"filterType": "LOT_SIZE", "minQty": str(qty_step), "stepSize": str(qty_step)},
+                {"filterType": "MIN_NOTIONAL", "minNotional": str(min_notional)},
+            ]
+        }
+
+    def balances(self, api_token: str | None = None) -> dict[str, dict[str, float]]:
+        if not api_token:
+            return {}
+        from mm.exchanges.bitwana.private_rest import get_balances
+
+        return get_balances(api_token)
+
+
 EXCHANGES: dict[str, ExchangeAdapter] = {
     "tabdeal": TabdealAdapter(),
     "nobitex": NobitexAdapter(),
@@ -1058,6 +1147,7 @@ EXCHANGES: dict[str, ExchangeAdapter] = {
     "bitpin": BitPinAdapter(),
     "kucoin": KucoinAdapter(),
     "binance": BinanceAdapter(),
+    "bitwana": BitwanaAdapter(),
 }
 
 

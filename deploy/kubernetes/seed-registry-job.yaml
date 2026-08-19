@@ -35,11 +35,12 @@ spec:
             - -c
             - |
               import os
-              from mm.tools.seed_local_registry import ensure_local_worker_registry
+              from mm.tools.seed_local_registry import ensure_local_worker_registry, seed_bitwana_venue
               from mm.registry.store import build_registry_store
               seeded = ensure_local_worker_registry()
               redis_url = os.environ.get("MM_BUS_REDIS_URL", "redis://redis:6379/0").strip()
               store = build_registry_store()
+              seed_bitwana_venue(store)
               platform = store.get_platform_settings()
               bus = dict(platform.bus)
               bus["redis_url"] = redis_url

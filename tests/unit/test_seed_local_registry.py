@@ -22,6 +22,8 @@ def test_seed_local_worker_registry_creates_active_assignment() -> None:
     bundle = store.load_runtime_bundle(LOCAL_STRATEGY_ID)
     assert bundle["strategy"].strategy_id == LOCAL_STRATEGY_ID
     assert bundle["exchanges"]["nobitex"].config["market_data"]["market_data_source"] == "bus"
+    assert store.get_account("account-bitwana-main").exchange == "bitwana"
+    assert store.get_market_source("bitwana-USDT_IRT").symbol == "USDT_IRT"
     assert store.get_platform_settings().bus["redis_url"] == "redis://localhost:6379/0"
 
     assert bundle["strategy"].strategy_id == LOCAL_STRATEGY_ID

@@ -6,6 +6,11 @@ those rules generically; it does not branch on exchange names.
 
 **``instrument_wire.json`` (optional keys)**
 
+- ``api_market_symbol.use_domain_symbol``: if true, REST/WS market ids keep the domain symbol
+  (``USDT_IRT``), instead of the compact form (``USDTIRT``).
+
+- ``api_market_symbol.separator``: join base and quote with this string (e.g. ``"_"`` → ``USDT_IRT``).
+
 - ``api_market_symbol.compact_suffix_replace``: ``{ "from": "IRT", "to": "TMN" }`` — if the
   normalized compact symbol (no underscore) ends with ``from`` (case-insensitive), that suffix is
   replaced by ``to`` for REST/WS market endpoints.
@@ -127,7 +132,7 @@ def build_instrument_wire(exchange: str, domain_symbol: str) -> InstrumentWirePr
     compact = normalize_symbol(domain_symbol)
     ovr = _load_wire_overrides(ex)
 
-    api_market_symbol = _apply_compact_suffix_replace(compact, ovr.get("api_market_symbol"))
+    api_market_symbol = _apply_api_market_symbol(domain_symbol, compact, ovr.get("api_market_symbol"))
 
     private_src = base.lower()
     private_dst = quote.lower()
@@ -154,6 +159,18 @@ def build_instrument_wire(exchange: str, domain_symbol: str) -> InstrumentWirePr
         private_dst_currency=private_dst,
         public_price_scale_from_api=public_price_scale,
     )
+
+
+def _apply_api_market_symbol(domain_symbol: str, compact: str, api_section: Any) -> str:
+    if not isinstance(api_section, dict):
+        return compact
+    if api_section.get("use_domain_symbol") is True:
+        return str(domain_symbol).replace("-", "_").strip()
+    sep = api_section.get("separator")
+    if isinstance(sep, str) and sep:
+        base, quote = split_symbol(domain_symbol)
+        return f"{base}{sep}{quote}"
+    return _apply_compact_suffix_replace(compact, api_section)
 
 
 def _apply_compact_suffix_replace(compact: str, api_section: Any) -> str:

@@ -83,6 +83,10 @@ def test_configmap_embeds_service_config_keys() -> None:
     for key in ("ingestor.json", "persistence.json", "worker.json"):
         assert f"{key}: |" in configmap
         assert "redis://redis:6379/0" in configmap
+    assert '"bitwana"' in configmap
+    secret_example = (K8S_DIR / "secret.example.yaml").read_text()
+    assert "BITWANA_API_TOKEN" in secret_example
+    assert "BITWANA_REFRESH_TOKEN" in secret_example
 
 
 def test_dockerfile_declares_python_runtime() -> None:

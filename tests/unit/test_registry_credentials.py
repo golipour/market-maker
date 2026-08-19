@@ -117,6 +117,13 @@ def test_merge_private_config_strips_inline_secrets_from_base() -> None:
     assert "api_token" not in merged
 
 
+def test_legacy_bitwana_env_ref_uses_refresh_token() -> None:
+    assert private_credentials_from_ref("BITWANA_API_TOKEN", exchange="bitwana") == {
+        "api_token_env": "BITWANA_API_TOKEN",
+        "api_secret_env": "BITWANA_REFRESH_TOKEN",
+    }
+
+
 def test_wallex_auth_spec() -> None:
     spec = exchange_auth_spec("wallex")
     assert spec.default_mode == "api_key"

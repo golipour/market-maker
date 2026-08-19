@@ -7,7 +7,9 @@ from mm.exchanges.instrument_wire import build_instrument_wire
 from mm.exchanges.shared.venue_limits_trade_stats import _limits_from_exchange_info
 from mm.integrations.trade_stats import get_exchange_info, get_lot_size, get_tick_size
 
-_TRADE_STATS_EXCHANGES = frozenset({"nobitex", "wallex", "bitpin", "kucoin", "binance", "tabdeal"})
+_TRADE_STATS_EXCHANGES = frozenset(
+    {"nobitex", "wallex", "bitpin", "kucoin", "binance", "tabdeal", "bitwana"}
+)
 
 
 def _quote_from_api(exchange: str, symbol: str, api_quote: float | None) -> float | None:
