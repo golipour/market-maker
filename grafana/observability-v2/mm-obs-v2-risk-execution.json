@@ -553,14 +553,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT substring(topic from '^private:state:([^:]+):errors$') AS exchange, ts\n  FROM mm_events\n  WHERE topic LIKE 'private:state:%:errors'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT exchange\nFROM (\n  SELECT exchange, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT exchange, updated_at AS latest_ts\n  FROM registry_exchanges\n  WHERE status = 'active'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND CAST(exchange AS text) <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": true,
         "label": "Exchange",
         "multi": true,
         "name": "exchange",
         "options": [],
-        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(ts) AS latest_ts\n  FROM (\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE exchange IS NOT NULL\n    AND exchange <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT gates.key AS exchange, e.ts\n  FROM mm_events e\n  CROSS JOIN LATERAL jsonb_each(\n    COALESCE(e.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)\n  ) AS gates(key, value)\n  WHERE e.event_type = 'ControllerDiagnostics'\n    AND gates.key IS NOT NULL\n    AND gates.key <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','exchange'] AS exchange, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  UNION ALL\n  SELECT COALESCE(\n      exchange,\n      payload->>'exchange',\n      substring(topic from '^private:state:([^:]+):snapshot$'),\n      substring(topic from '^ledger:snapshot:([^:]+)$')\n    ) AS exchange,\n    ts\n  FROM mm_events\n  WHERE event_type IN ('PrivateStateSnapshot', 'VenueLedgerSnapshot')\n  UNION ALL\n  SELECT substring(topic from '^private:state:([^:]+):errors$') AS exchange, ts\n  FROM mm_events\n  WHERE topic LIKE 'private:state:%:errors'\n  UNION ALL\n  SELECT exchange, ts\n  FROM mm_market_facts\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND exchange <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT exchange\nFROM (\n  SELECT exchange, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT exchange, updated_at AS latest_ts\n  FROM registry_exchanges\n  WHERE status = 'active'\n    AND exchange IS NOT NULL\n    AND exchange <> ''\n  ) sources\n  WHERE exchange IS NOT NULL AND CAST(exchange AS text) <> ''\n  GROUP BY exchange\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -575,14 +575,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT symbol\nFROM (\n  SELECT symbol, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT symbol, updated_at AS latest_ts\n  FROM registry_market_sources\n  WHERE status = 'active'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND CAST(symbol AS text) <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": true,
         "label": "Symbol",
         "multi": true,
         "name": "symbol",
         "options": [],
-        "query": "SELECT symbol\nFROM (\n  SELECT symbol, max(ts) AS latest_ts\n  FROM (\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE symbol IS NOT NULL\n    AND symbol <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'MarketEvent'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT payload #>> ARRAY['local_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT payload #>> ARRAY['global_market','symbol'] AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'JointStrategyFrame'\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  UNION ALL\n  SELECT payload->>'symbol' AS symbol, ts\n  FROM mm_events\n  WHERE event_type = 'VenueLedgerSnapshot'\n    AND payload->>'symbol' IS NOT NULL\n    AND payload->>'symbol' <> ''\n  UNION ALL\n  SELECT symbol, ts\n  FROM mm_market_facts\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND symbol <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT symbol\nFROM (\n  SELECT symbol, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT symbol, updated_at AS latest_ts\n  FROM registry_market_sources\n  WHERE status = 'active'\n    AND symbol IS NOT NULL\n    AND symbol <> ''\n  ) sources\n  WHERE symbol IS NOT NULL AND CAST(symbol AS text) <> ''\n  GROUP BY symbol\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -597,14 +597,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE actor_id IS NOT NULL\n    AND actor_id <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT actor_id, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE actor_id IS NOT NULL AND CAST(actor_id AS text) <> ''\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": true,
         "label": "Actor",
         "multi": true,
         "name": "actor_id",
         "options": [],
-        "query": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE actor_id IS NOT NULL\n    AND actor_id <> ''\n    AND event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT actor_id\nFROM (\n  SELECT actor_id, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT actor_id, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE actor_id IS NOT NULL AND CAST(actor_id AS text) <> ''\n  GROUP BY actor_id\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -619,14 +619,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT run_id\nFROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE run_id IS NOT NULL AND run_id <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT run_id\nFROM (\n  SELECT run_id, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_market_facts\n  WHERE run_id IS NOT NULL AND run_id <> ''\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY run_id\n  ) sources\n  WHERE run_id IS NOT NULL AND CAST(run_id AS text) <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": true,
         "label": "Run",
         "multi": true,
         "name": "run_id",
         "options": [],
-        "query": "SELECT run_id\nFROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE run_id IS NOT NULL AND run_id <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT run_id\nFROM (\n  SELECT run_id, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT run_id, max(ts) AS latest_ts\n  FROM mm_market_facts\n  WHERE run_id IS NOT NULL AND run_id <> ''\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY run_id\n  ) sources\n  WHERE run_id IS NOT NULL AND CAST(run_id AS text) <> ''\n  GROUP BY run_id\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -637,14 +637,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Diagnostics topic",
         "multi": false,
         "name": "diagnostics_topic",
         "options": [],
-        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -655,35 +655,40 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Target books topic",
         "multi": false,
         "name": "target_books_topic",
         "options": [],
-        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
       },
       {
-        "current": {},
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
         "datasource": {
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n    SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, ts AS latest_ts\n    FROM mm_events\n    WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n      AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n    UNION ALL\n    SELECT interval_ms::text AS interval_ms, ts AS latest_ts\n    FROM mm_market_facts\n    WHERE interval_ms IS NOT NULL\n  ) sources\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT interval_ms::text AS interval_ms, updated_at AS latest_ts\n  FROM registry_market_feeds\n  WHERE status = 'active'\n    AND interval_ms IS NOT NULL\n  ) sources\n  WHERE interval_ms IS NOT NULL AND CAST(interval_ms AS text) <> ''\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": "Interval ms",
         "multi": false,
         "name": "interval_ms",
         "options": [],
-        "query": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n    SELECT COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) AS interval_ms, ts AS latest_ts\n    FROM mm_events\n    WHERE COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) IS NOT NULL\n      AND COALESCE(NULLIF(payload->>'interval_ms', ''), substring(topic from ':([0-9]+)$')) <> ''\n    UNION ALL\n    SELECT interval_ms::text AS interval_ms, ts AS latest_ts\n    FROM mm_market_facts\n    WHERE interval_ms IS NOT NULL\n  ) sources\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT interval_ms\nFROM (\n  SELECT interval_ms, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT interval_ms::text AS interval_ms, updated_at AS latest_ts\n  FROM registry_market_feeds\n  WHERE status = 'active'\n    AND interval_ms IS NOT NULL\n  ) sources\n  WHERE interval_ms IS NOT NULL AND CAST(interval_ms AS text) <> ''\n  GROUP BY interval_ms\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
-        "type": "query"
+        "type": "query",
+        "allValue": ""
       }
     ]
   },

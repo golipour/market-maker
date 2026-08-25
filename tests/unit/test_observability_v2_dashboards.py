@@ -45,6 +45,11 @@ def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
     assert templating["exchange"]["current"] == all_current
     assert templating["symbol"]["current"] == all_current
     assert templating["actor_id"]["current"] == all_current
+    assert templating["interval_ms"]["current"] == all_current
+    assert templating["interval_ms"]["includeAll"] is True
+    assert templating["interval_ms"]["allValue"] == ""
+    assert "registry_market_feeds" in templating["interval_ms"]["query"]
+    assert "registry_exchanges" in templating["exchange"]["query"]
 
 
 def test_runtime_fill_rate_sql_keeps_private_fills_with_missing_symbol_column() -> None:
@@ -181,14 +186,17 @@ def test_zero_fill_metric_grids_use_market_maker_scope_not_wallet_symbols() -> N
         assert "event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')" in sql
         assert "CROSS JOIN unnest(ARRAY[${symbol:sqlstring}]" not in sql
 
-    templating = {item["name"]: item["query"] for item in dashboard["templating"]["list"]}
-    assert "execution_gates','venue_gates" in templating["exchange"]
-    assert "global_market','exchange" in templating["exchange"]
-    assert "event_type IN ('StrategyDecision', 'ControllerDiagnostics', 'JointTargetBook')" in templating["symbol"]
-    assert "global_market','symbol" in templating["symbol"]
-    assert "event_type = 'MarketEvent'" in templating["symbol"]
-    assert "ORDER BY latest_ts DESC" in templating["symbol"]
-    assert "private:state" not in templating["symbol"]
+    templating = {item["name"]: item for item in dashboard["templating"]["list"]}
+    assert "registry_exchanges" in templating["exchange"]["query"]
+    assert "FROM mm_events" not in templating["exchange"]["query"]
+    assert "FROM mm_market_facts" not in templating["exchange"]["query"]
+    assert "registry_market_sources" in templating["symbol"]["query"]
+    assert "event_type = 'MarketEvent'" not in templating["symbol"]["query"]
+    assert "ORDER BY latest_ts DESC" in templating["symbol"]["query"]
+    assert "private:state" not in templating["symbol"]["query"]
+    assert templating["interval_ms"]["includeAll"] is True
+    assert templating["interval_ms"]["allValue"] == ""
+    assert "registry_market_feeds" in templating["interval_ms"]["query"]
 
 
 def test_orderbook_depth_includes_execution_ladder_stems() -> None:

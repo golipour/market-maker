@@ -190,13 +190,21 @@ def _dashboard(
     }
 
 
-def _pg_query_var(name: str, label: str, query: str, *, multi: bool = False) -> dict[str, Any]:
-    return {
-        "current": {"selected": False, "text": "All", "value": "$__all"} if multi else {},
+def _pg_query_var(
+    name: str,
+    label: str,
+    query: str,
+    *,
+    multi: bool = False,
+    all_value: str | None = None,
+) -> dict[str, Any]:
+    include_all = bool(multi or all_value is not None)
+    variable: dict[str, Any] = {
+        "current": {"selected": False, "text": "All", "value": "$__all"} if include_all else {},
         "datasource": PG_DS,
         "definition": query,
         "hide": 0,
-        "includeAll": multi,
+        "includeAll": include_all,
         "label": label,
         "multi": multi,
         "name": name,
@@ -206,6 +214,9 @@ def _pg_query_var(name: str, label: str, query: str, *, multi: bool = False) -> 
         "sort": 0,
         "type": "query",
     }
+    if all_value is not None:
+        variable["allValue"] = all_value
+    return variable
 
 
 def _textbox_var(name: str, label: str, value: str) -> dict[str, Any]:
@@ -410,6 +421,7 @@ def _controller_diagnostics_templating() -> list[dict[str, Any]]:
             "interval_ms",
             "Interval ms",
             _interval_ms_query(),
+            all_value="",
         ),
     ]
 

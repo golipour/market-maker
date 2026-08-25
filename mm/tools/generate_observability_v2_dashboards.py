@@ -678,6 +678,7 @@ def _templating(*, hide: frozenset[str] | None = None) -> list[dict[str, Any]]:
             "interval_ms",
             "Interval ms",
             interval_ms_var_query(),
+            all_value="",
         ),
     ]
     if not hidden:
@@ -693,19 +694,21 @@ def _query_var(
     multi: bool = False,
     refresh: int = 1,
     default_all: bool = True,
+    all_value: str | None = None,
 ) -> dict[str, Any]:
+    include_all = bool(multi or all_value is not None)
     if multi and not default_all:
         current: dict[str, Any] = {"selected": False, "text": [], "value": []}
-    elif multi:
+    elif include_all and default_all:
         current = {"selected": False, "text": "All", "value": "$__all"}
     else:
         current = {}
-    return {
+    variable: dict[str, Any] = {
         "current": current,
         "datasource": PG_DS,
         "definition": query,
         "hide": 0,
-        "includeAll": multi,
+        "includeAll": include_all,
         "label": label,
         "multi": multi,
         "name": name,
@@ -715,6 +718,9 @@ def _query_var(
         "sort": 0,
         "type": "query",
     }
+    if all_value is not None:
+        variable["allValue"] = all_value
+    return variable
 
 
 def _target_stems_frame_query() -> str:
