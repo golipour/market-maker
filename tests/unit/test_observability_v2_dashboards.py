@@ -204,7 +204,7 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     depth_expected = {
-        "Orderbook depth": (0, 4, "MarketEvent", "m.exchange = ctx.exchange"),
+        "Orderbook depth": (0, 4, "event_type = 'MarketEvent'", "payload->'orderbook'->'bids'"),
         "Clean orderbook depth": (0, 12, "cleared_orderbook", "ctx.diag_payload AS payload"),
         "Action ladder depth": (0, 20, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
     }

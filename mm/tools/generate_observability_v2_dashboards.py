@@ -3682,7 +3682,10 @@ def orderbook_depth() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Per-**Exchange** orderbook and MPC ladder views for the selected diagnostics frame. "
+            "Per-**Exchange** orderbook and MPC ladder views. "
+            "**Orderbook depth** is the latest ingested `MarketEvent` book (no strategy required). "
+            "**Clean orderbook** and ladder/placement panels use the selected diagnostics frame, "
+            "so they stay empty until a strategy is running on that venue. "
             "Depth curves use `price - mid` on the x-axis. **Marginal ladder**, **After venue rounding**, "
             "and **Exchange-accepted placements** use uniform spread buckets (Spread max / Spread buckets) "
             "with bid/ask bars aligned across panels.",
@@ -4983,35 +4986,12 @@ LIMIT {limit}"""
 def _orderbook_depth_sql(kind: str, *, role: str | None = "local") -> str:
     if role is not None and role not in {"local", "global"}:
         raise ValueError(f"unknown orderbook depth role: {role}")
+    context_cte = _orderbook_context_cte(role)
     if kind == "raw":
-        raw_bid_price = _numeric_sql("m.payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
-        raw_ask_price = _numeric_sql("m.payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
-        raw_t_end_ms = _numeric_sql("m.payload->>'t_end_ms'", default="NULL")
-        selected = f"""selected AS (
-  SELECT COALESCE(
-           (
-             {raw_bid_price} +
-             {raw_ask_price}
-           ) / 2.0,
-           NULLIF(ctx.mid, 0.0),
-           0.0
-         ) AS mid,
-         ctx.spread_max,
-         m.payload
+        context_cte = _orderbook_market_context_cte()
+        selected = """selected AS (
+  SELECT ctx.mid, ctx.spread_max, ctx.payload
   FROM ctx
-  LEFT JOIN LATERAL (
-    SELECT m.payload, m.ts
-    FROM mm_events m
-    WHERE m.event_type = 'MarketEvent'
-      AND m.exchange = ctx.exchange
-      AND m.symbol = ctx.symbol
-      AND m.payload->>'t_end_ms' IS NOT NULL
-      AND ({raw_t_end_ms}) <= ctx.t_end_ms
-      AND $__timeFilter(m.ts)
-      AND {interval_ms_events_filter_sql(table_ref="m")}
-    ORDER BY ({raw_t_end_ms}) DESC, m.ts DESC
-    LIMIT 1
-  ) m ON TRUE
 )"""
         bid_levels = f"""bid_levels AS (
   SELECT {_numeric_sql("b->>'price'", default="NULL")} AS price,
@@ -5079,7 +5059,7 @@ def _orderbook_depth_sql(kind: str, *, role: str | None = "local") -> str:
 )"""
     else:
         raise ValueError(f"unknown orderbook depth kind: {kind}")
-    return f"""WITH {_orderbook_context_cte(role)},
+    return f"""WITH {context_cte},
 {selected},
 {bid_levels},
 {ask_levels},
@@ -5094,6 +5074,34 @@ SELECT 'ask'::text AS side,
        value
 FROM ask_step_plot
 ORDER BY side, spread"""
+
+
+def _orderbook_market_context_cte() -> str:
+    """Latest ingested MarketEvent book for the selected venue (no strategy diagnostics)."""
+
+    bid = _numeric_sql("e.payload #>> ARRAY['orderbook','bids','0','price']", default="NULL")
+    ask = _numeric_sql("e.payload #>> ARRAY['orderbook','asks','0','price']", default="NULL")
+    spread_max = _numeric_sql("'${spread_max}'", default="100.0")
+    return f"""ctx AS (
+  SELECT e.ts AS diag_ts,
+         e.payload,
+         e.exchange,
+         e.symbol,
+         COALESCE(e.actor_id, '') AS actor_id,
+         {_numeric_sql("e.payload->>'t_end_ms'")} AS t_end_ms,
+         COALESCE(({bid} + {ask}) / 2.0, 0.0) AS mid,
+         GREATEST({spread_max}, 1.0) AS spread_max
+  FROM mm_events e
+  WHERE e.event_type = 'MarketEvent'
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+    AND {interval_ms_events_filter_sql(table_ref="e")}
+    AND e.payload->>'t_end_ms' IS NOT NULL
+    AND e.payload #> ARRAY['orderbook','bids','0'] IS NOT NULL
+  ORDER BY e.ts DESC
+  LIMIT 1
+)"""
 
 
 def _orderbook_context_cte(role: str | None = "local") -> str:
