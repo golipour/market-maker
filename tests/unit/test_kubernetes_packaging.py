@@ -84,6 +84,7 @@ def test_configmap_embeds_service_config_keys() -> None:
         assert f"{key}: |" in configmap
         assert "redis://redis:6379/0" in configmap
     assert '"bitwana"' in configmap
+    assert '"bitwana-controller"' in configmap
     secret_example = (K8S_DIR / "secret.example.yaml").read_text()
     assert "BITWANA_API_TOKEN" in secret_example
     assert "BITWANA_REFRESH_TOKEN" in secret_example

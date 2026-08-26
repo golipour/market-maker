@@ -188,7 +188,7 @@ def load_persistence_service_config_from_registry(
 ) -> PersistenceServiceConfig:
     """Load persistence config, optionally sourcing ``feeds`` from the registry."""
 
-    from mm.registry.feeds import merge_registry_feeds_into_mapping
+    from mm.registry.feeds import merge_registry_actors_into_mapping, merge_registry_feeds_into_mapping
     from mm.registry.store import build_registry_store, registry_database_url
 
     payload = json.loads(Path(path).read_text())
@@ -200,6 +200,7 @@ def load_persistence_service_config_from_registry(
             raise ValueError("load_feeds_from_registry requires MM_DATABASE_URL")
         store = build_registry_store(database_url=url)
         payload = merge_registry_feeds_into_mapping(payload, store)
+        payload = merge_registry_actors_into_mapping(payload, store)
     return persistence_service_config_from_mapping(payload)
 
 

@@ -81,3 +81,30 @@ def merge_registry_feeds_into_mapping(
         for feed in feeds
     ]
     return merged
+
+
+def merge_registry_actors_into_mapping(
+    payload: dict,
+    store: RegistryStore | None,
+) -> dict:
+    """Union configured persistence actors with active registry strategy actor ids."""
+
+    if not payload.get("load_feeds_from_registry"):
+        return payload
+    if store is None:
+        raise ValueError("load_feeds_from_registry requires a registry store")
+    existing = payload.get("actors")
+    if isinstance(existing, str):
+        configured = [existing.strip()] if existing.strip() else []
+    elif isinstance(existing, list):
+        configured = [str(item).strip() for item in existing if str(item).strip()]
+    else:
+        configured = []
+    from_registry = [
+        str(row.actor_id).strip()
+        for row in store.list_strategies()
+        if row.status == "active" and str(row.actor_id).strip()
+    ]
+    merged = dict(payload)
+    merged["actors"] = list(dict.fromkeys([*configured, *from_registry]))
+    return merged
