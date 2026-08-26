@@ -99,8 +99,9 @@ def test_grafana_embed_urls_use_kiosk() -> None:
     dashboards = _grafana_dashboards("http://localhost:3000")
     market_data = next(d for d in dashboards if d["uid"] == "mm-obs-v2-market-data")
     assert "kiosk=1" in market_data["embed_url"]
-    assert "var-exchange=$__all" in market_data["embed_url"]
-    assert "var-symbol=$__all" in market_data["embed_url"]
+    assert "from=" not in market_data["embed_url"]
+    assert "var-exchange" not in market_data["embed_url"]
+    assert "var-symbol" not in market_data["embed_url"]
     assert _grafana_solo_panels("http://localhost:3000") == []
 
 

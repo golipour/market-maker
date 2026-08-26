@@ -5,7 +5,6 @@ import { AllocationsPage } from "./pages/Allocations";
 import { CommandsPage } from "./pages/Commands";
 import { ExchangesPage } from "./pages/Exchanges";
 import { MarketFeedsPage } from "./pages/MarketFeeds";
-import { ObservabilityPage } from "./pages/Observability";
 import { OverviewPage } from "./pages/Overview";
 import { PlatformSettingsPage } from "./pages/PlatformSettings";
 import { PresetsPage } from "./pages/Presets";
@@ -27,7 +26,7 @@ export default function App() {
           <Route path="workers" element={<WorkersPage />} />
           <Route path="settings" element={<PlatformSettingsPage />} />
           <Route path="commands" element={<CommandsPage />} />
-          <Route path="observability" element={<ObservabilityPage />} />
+          <Route path="observability" element={null} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

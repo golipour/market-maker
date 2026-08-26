@@ -354,9 +354,45 @@ table.data-table tbody tr:hover {
 }
 
 .grafana-panel--full iframe {
-  /* Fill viewport below page chrome (header, tabs, alerts, panel bar). */
-  height: calc(100vh - 13rem);
+  /* Fill viewport below page chrome (header, tabs, filters, panel bar). */
+  height: calc(100vh - 18rem);
   min-height: 36rem;
+}
+
+.grafana-panel[hidden] {
+  display: none;
+}
+
+.keep-alive-page {
+  display: none;
+}
+
+.observability-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.85rem;
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.observability-scope label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.observability-scope select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  min-width: 8.5rem;
 }
 
 .dashboard-tabs {

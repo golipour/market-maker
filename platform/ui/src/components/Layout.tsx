@@ -1,6 +1,7 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { getToken, setToken } from "../api/client";
+import { ObservabilityPage } from "../pages/Observability";
 
 const NAV = [
   { to: "/", label: "Overview" },
@@ -16,7 +17,16 @@ const NAV = [
 ];
 
 export function Layout() {
+  const { pathname } = useLocation();
+  const isObservability = pathname === "/observability";
+  const [cacheObservability, setCacheObservability] = useState(isObservability);
   const [token, setTokenState] = useState(getToken());
+
+  useEffect(() => {
+    if (isObservability) {
+      setCacheObservability(true);
+    }
+  }, [isObservability]);
 
   function saveToken(value: string) {
     setToken(value);
@@ -55,7 +65,12 @@ export function Layout() {
         </div>
       </aside>
       <main className="main">
-        <Outlet />
+        {cacheObservability ? (
+          <div className={isObservability ? undefined : "keep-alive-page"} aria-hidden={!isObservability}>
+            <ObservabilityPage />
+          </div>
+        ) : null}
+        {isObservability ? null : <Outlet />}
       </main>
     </div>
   );

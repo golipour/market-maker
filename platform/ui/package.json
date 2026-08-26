@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "npx --yes tsx scripts/test-preset-config.mts"
+    "test": "npx --yes tsx scripts/test-preset-config.mts && npx --yes tsx scripts/test-observability-grafana.mts"
   },
   "dependencies": {
     "react": "^18.3.1",
