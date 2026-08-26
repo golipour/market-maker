@@ -41,18 +41,22 @@ def interval_ms_events_filter_sql(*, table_ref: str = "") -> str:
         f"COALESCE(NULLIF({prefix}payload->>'interval_ms', ''), "
         f"substring({prefix}topic from ':([0-9]+)$'))"
     )
-    return (
-        f"(NULLIF('${{interval_ms}}', '') IS NULL OR "
-        f"{expr} = NULLIF('${{interval_ms}}', ''))"
-    )
+    return _interval_ms_match_sql(expr)
 
 
 def interval_ms_facts_filter_sql() -> str:
     """Match Grafana ``interval_ms`` variable against ``mm_market_facts`` rows."""
 
+    return _interval_ms_match_sql("interval_ms::text")
+
+
+def _interval_ms_match_sql(expr: str) -> str:
+    """Accept All, a single interval, or Grafana's comma-joined All expansion."""
+
     return (
-        "(NULLIF('${interval_ms}', '') IS NULL OR "
-        "interval_ms::text = NULLIF('${interval_ms}', ''))"
+        f"(NULLIF('${{interval_ms}}', '') IS NULL OR "
+        f"'${{interval_ms}}' IN ('$__all', 'All') OR "
+        f"{expr} = ANY(string_to_array(replace('${{interval_ms}}', ' ', ''), ',')))"
     )
 
 

@@ -1,6 +1,7 @@
 from mm.tools.grafana_dashboard_variables import (
     actor_id_var_query,
     exchange_var_query,
+    interval_ms_facts_filter_sql,
     interval_ms_var_query,
     run_id_var_query,
     symbol_var_query,
@@ -45,3 +46,10 @@ def test_actor_and_run_queries_avoid_full_event_scans() -> None:
     assert "mm_market_facts" in run_sql
     assert "INTERVAL '7 days'" in run_sql
     assert "FROM mm_events" not in run_sql
+
+
+def test_interval_ms_filter_accepts_grafana_all_join() -> None:
+    sql = interval_ms_facts_filter_sql()
+
+    assert "'${interval_ms}' IN ('$__all', 'All')" in sql
+    assert "string_to_array(replace('${interval_ms}', ' ', ''), ',')" in sql

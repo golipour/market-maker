@@ -42,6 +42,9 @@ UID_REMAP = {
     "prometheus-mm": "mimir",
     "loki-mm": "loki",
 }
+TYPE_REMAP = {
+    "postgres": "grafana-postgresql-datasource",
+}
 
 
 def _kubectl_json(*args: str) -> dict:
@@ -61,12 +64,28 @@ def _secret_data(namespace: str, name: str) -> dict[str, str]:
 def _remap_uids(value):
     if isinstance(value, dict):
         uid = value.get("uid")
+        typ = value.get("type")
         if isinstance(uid, str) and uid in UID_REMAP:
             value = {**value, "uid": UID_REMAP[uid]}
+        if isinstance(typ, str) and typ in TYPE_REMAP:
+            value = {**value, "type": TYPE_REMAP[typ]}
         return {key: _remap_uids(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_remap_uids(item) for item in value]
     return value
+
+
+def _grafana_admin() -> tuple[str, str]:
+    env_user = os.environ.get("GRAFANA_USER", "").strip()
+    env_password = os.environ.get("GRAFANA_PASSWORD", "").strip()
+    if env_user and env_password:
+        return env_user, env_password
+    data = _secret_data("observability", "grafana")
+    user = (data.get("admin-user") or "admin").strip()
+    password = (data.get("admin-password") or "").strip()
+    if not password:
+        raise SystemExit("grafana admin-password missing")
+    return user, password
 
 
 def _default_all_multi_vars(dashboard: dict) -> dict:
@@ -179,7 +198,7 @@ def _ensure_folder(client: GrafanaClient) -> str:
 def _upsert_postgres(client: GrafanaClient, *, user: str, password: str) -> None:
     body = {
         "name": "Market Maker Postgres",
-        "type": "postgres",
+        "type": "grafana-postgresql-datasource",
         "uid": "postgres-mm",
         "access": "proxy",
         "url": POSTGRES_HOST,
@@ -284,7 +303,7 @@ def _patch_grafana_postgres_datasource(*, user: str, password: str) -> bool:
         return False
     snippet = (
         "- name: Market Maker Postgres\n"
-        "  type: postgres\n"
+        "  type: grafana-postgresql-datasource\n"
         "  uid: postgres-mm\n"
         "  access: proxy\n"
         "  url: postgres.market-maker.svc.cluster.local:5432\n"
@@ -435,6 +454,54 @@ def _argocd_grafana_sync_policy() -> dict | None:
     return (app.get("spec") or {}).get("syncPolicy")
 
 
+def _ensure_argocd_ignore_grafana_datasources() -> None:
+    """Keep postgres-mm in Grafana's ConfigMap across grafana-staging auto-sync."""
+
+    app = _kubectl_json("-n", "argocd", "get", "application", "grafana-staging")
+    spec = app.get("spec") or {}
+    ignores = list(spec.get("ignoreDifferences") or [])
+    already = any(
+        row.get("kind") == "ConfigMap"
+        and row.get("name") == "grafana"
+        and "/data/datasources.yaml" in (row.get("jsonPointers") or [])
+        for row in ignores
+        if isinstance(row, dict)
+    )
+    if not already:
+        ignores.append(
+            {
+                "group": "",
+                "kind": "ConfigMap",
+                "name": "grafana",
+                "jsonPointers": ["/data/datasources.yaml"],
+            }
+        )
+        op = "add" if spec.get("ignoreDifferences") is None else "replace"
+        result = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                "argocd",
+                "patch",
+                "application",
+                "grafana-staging",
+                "--type",
+                "json",
+                "--patch",
+                json.dumps([{"op": op, "path": "/spec/ignoreDifferences", "value": ignores}]),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit(f"patch grafana-staging ignoreDifferences failed: {result.stderr.strip()}")
+        print("argocd ignores grafana datasources.yaml")
+    else:
+        print("argocd already ignores grafana datasources.yaml")
+
+
+
 def _set_argocd_grafana_sync_policy(policy: dict | None) -> None:
     patch = [{"op": "replace" if policy is not None else "remove", "path": "/spec/syncPolicy", "value": policy}]
     if policy is None:
@@ -498,8 +565,15 @@ def _provision_postgres_via_grafana_configmap(*, user: str, password: str) -> No
         time.sleep(3)
         print("grafana rollout complete")
     finally:
+        _ensure_argocd_ignore_grafana_datasources()
         if original is not None:
-            _set_argocd_grafana_sync_policy(original)
+            restored = dict(original)
+            opts = list(original.get("syncOptions") or [])
+            if not any(str(opt).startswith("RespectIgnoreDifferences=") for opt in opts):
+                opts.append("RespectIgnoreDifferences=true")
+                print("argocd RespectIgnoreDifferences=true")
+            restored["syncOptions"] = opts
+            _set_argocd_grafana_sync_policy(restored)
             print("restored argocd auto-sync for grafana-staging")
 
 
@@ -519,23 +593,23 @@ def main() -> int:
     if not pg_password:
         raise SystemExit("POSTGRES_PASSWORD missing")
 
-    api_user = os.environ.get("GRAFANA_USER", "").strip()
-    api_password = os.environ.get("GRAFANA_PASSWORD", "").strip()
     _provision_postgres_via_grafana_configmap(user=pg_user, password=pg_password)
-    if not api_user or not api_password:
-        print("grafana embedding enabled; set GRAFANA_USER and GRAFANA_PASSWORD to publish public dashboards")
-        return 0
 
+    api_user, api_password = _grafana_admin()
     client = GrafanaClient(GRAFANA_URL, api_user, api_password)
     _health(client)
     if not client.login():
-        raise SystemExit("grafana login failed with GRAFANA_USER/GRAFANA_PASSWORD")
-    print("grafana session login ok")
+        print("grafana session login failed; continuing with basic auth")
+    _upsert_postgres(client, user=pg_user, password=pg_password)
+    folder_uid = _ensure_folder(client)
+    _import_dashboards(client, folder_uid)
+    status, ds = client.get("/api/datasources/uid/postgres-mm")
+    ds_type = ds.get("type") if isinstance(ds, dict) else None
+    print(f"datasource postgres-mm http {status} type={ds_type}")
     tokens = _ensure_public_dashboards(client)
-    if not tokens:
-        raise SystemExit("no public dashboard tokens created")
-    _write_public_token_configmap(tokens)
-    print(f"published {len(tokens)} public dashboards")
+    if tokens:
+        _write_public_token_configmap(tokens)
+        print(f"published {len(tokens)} public dashboards")
     print("done")
     return 0
 

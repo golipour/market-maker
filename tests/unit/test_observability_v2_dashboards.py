@@ -77,14 +77,14 @@ def test_market_data_quality_uses_per_exchange_market_events() -> None:
     assert "COALESCE(symbol, payload->>'symbol') || ' sell_vwap'" in price_sql
     assert "COALESCE(symbol, payload->>'symbol') || ' trade_vwap'" in price_sql
     assert "NULLIF(payload->>'vwap', '0')" in price_sql
-    assert "interval_ms::text = NULLIF('${interval_ms}', '')" in price_sql
+    assert "string_to_array(replace('${interval_ms}', ' ', ''), ',')" in price_sql
     assert "price_series:sqlstring" in price_sql
 
     volume_sql = panels_by_title["Buy / sell volume by exchange"]["targets"][0]["rawSql"]
     assert "role_exchange" not in volume_sql
     assert "mm_market_facts" in volume_sql
     assert "exchange || ' ' || symbol || ' buy_volume'" in volume_sql
-    assert "interval_ms::text = NULLIF('${interval_ms}', '')" in volume_sql
+    assert "string_to_array(replace('${interval_ms}', ' ', ''), ',')" in volume_sql
     assert "volume_series:sqlstring" in volume_sql
 
     templating = {item["name"]: item for item in dashboard["templating"]["list"]}
