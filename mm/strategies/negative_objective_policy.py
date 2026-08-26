@@ -12,6 +12,7 @@ from mm.mpc.l_param import action_param_len, depth_logit_index, sigmoid_action_f
 from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction, SigmoidMixtureAction, State
 from mm.mpc.mpc_tensor_batched import VenueOptimizerParams, _quote_capacity_bounds_scalar
 from mm.mpc.optimizer_diagnostics import OptimizerRunDiagnostics
+from mm.mpc.optimizer_config_keys import CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX
 from mm.runtime.config import ControllerRuntimeConfig
 
 NegativeObjectiveActionMode = Literal["optimizer_action", "floor_action", "zero_action"]

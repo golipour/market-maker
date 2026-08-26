@@ -26,7 +26,13 @@ def test_bitwana_runtime_credentials_use_access_and_refresh_tokens():
     assert isinstance(auth, private_rest.BitwanaJwtAuth)
     assert auth.access_token == "access-token"
     assert auth.refresh_token == "refresh-token"
-    assert auth.authorization_header() == "Bearer access-token"
+    assert auth.authorization_header() == "access-token"
+
+
+def test_bitwana_authorization_header_is_raw_jwt() -> None:
+    auth = private_rest.BitwanaJwtAuth("access-token", "refresh-token")
+    assert auth.authorization_header() == "access-token"
+    assert private_rest.BitwanaJwtAuth("Bearer access-token").authorization_header() == "access-token"
 
 
 def test_bitwana_runtime_credentials_from_env(monkeypatch):
@@ -114,6 +120,8 @@ def test_bitwana_open_orders_unwraps_page_and_skips_closed(monkeypatch):
 
     def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
         calls.append(url)
+        assert headers is not None
+        assert headers.get("Authorization") == "access"
         return FakeResponse(
             {
                 "statusCode": 200,

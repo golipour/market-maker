@@ -73,11 +73,9 @@ class BitwanaJwtAuth:
 
     def authorization_header(self) -> str:
         token = str(self.access_token or "").strip()
-        if not token:
-            return ""
         if token.lower().startswith("bearer "):
-            return token
-        return f"Bearer {token}"
+            token = token[7:].strip()
+        return token
 
     def refresh(self) -> None:
         refresh = str(self.refresh_token or "").strip()
