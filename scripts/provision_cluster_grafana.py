@@ -210,6 +210,9 @@ def _upsert_postgres(client: GrafanaClient, *, user: str, password: str) -> None
             "sslmode": "disable",
             "postgresVersion": 1700,
             "timescaledb": False,
+            "maxOpenConns": 8,
+            "maxIdleConns": 2,
+            "connMaxLifetime": 300,
         },
     }
     status, existing = client.get("/api/datasources/uid/postgres-mm")

@@ -42,6 +42,7 @@ def _yaml_scalar(text: str, field: str) -> str | None:
         "persistence.yaml",
         "worker.yaml",
         "admin.yaml",
+        "retention-cronjob.yaml",
         "kustomization.yaml",
         "secret.example.yaml",
     ],
@@ -62,6 +63,7 @@ def test_kubernetes_manifests_define_core_workloads() -> None:
                 names.add(doc["metadata"]["name"])
     assert "Namespace" in kinds
     assert "Deployment" in kinds
+    assert "CronJob" in kinds
     assert "Service" in kinds
     assert "ConfigMap" in kinds
     assert "market-maker-ingestor" in names
@@ -69,6 +71,7 @@ def test_kubernetes_manifests_define_core_workloads() -> None:
     assert "market-maker-persistence" in names
     assert "market-maker-admin" in names
     assert "redis" in names
+    assert "market-maker-retention" in names
 
 
 def test_k8s_service_configs_are_valid_json() -> None:
@@ -88,6 +91,13 @@ def test_configmap_embeds_service_config_keys() -> None:
     secret_example = (K8S_DIR / "secret.example.yaml").read_text()
     assert "BITWANA_API_TOKEN" in secret_example
     assert "BITWANA_REFRESH_TOKEN" in secret_example
+    redis = (K8S_DIR / "redis.yaml").read_text()
+    assert "--maxmemory" in redis
+    assert "noeviction" in redis
+    assert '--save' in redis or "- --save" in redis
+    retention = (K8S_DIR / "retention-cronjob.yaml").read_text()
+    assert "mm.tools.apply_retention" in retention
+    assert "--events-days" in retention
 
 
 def test_dockerfile_declares_python_runtime() -> None:

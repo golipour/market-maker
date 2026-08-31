@@ -9,6 +9,9 @@ from mm.core.events import EventEnvelope, to_jsonable
 
 PersistenceSink = Literal["postgres", "parquet"]
 
+# Depth panels need a ladder, not the venue's full book (Bitwana depth_limit=200).
+ORDERBOOK_PERSIST_LEVELS = 40
+
 # Stages whose per-order price/qty rows are kept (slimmed) for Grafana depth/stem panels.
 _ACTION_PIPELINE_SLIM_ORDER_STAGES = frozenset(
     {
@@ -53,8 +56,28 @@ def compact_payload_for_persistence(event_type: str, payload: Any, *, sink: Pers
     return value
 
 
+def _trim_orderbook(orderbook: Any) -> tuple[Any, bool]:
+    if not isinstance(orderbook, dict):
+        return orderbook, False
+    bids = orderbook.get("bids")
+    asks = orderbook.get("asks")
+    bid_len = len(bids) if isinstance(bids, list) else 0
+    ask_len = len(asks) if isinstance(asks, list) else 0
+    if bid_len <= ORDERBOOK_PERSIST_LEVELS and ask_len <= ORDERBOOK_PERSIST_LEVELS:
+        return orderbook, False
+    out = dict(orderbook)
+    if bid_len > ORDERBOOK_PERSIST_LEVELS:
+        out["bids"] = list(bids[:ORDERBOOK_PERSIST_LEVELS])
+    if ask_len > ORDERBOOK_PERSIST_LEVELS:
+        out["asks"] = list(asks[:ORDERBOOK_PERSIST_LEVELS])
+    out["bids_compacted_count"] = bid_len
+    out["asks_compacted_count"] = ask_len
+    return out, True
+
+
 def _compact_market_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
+    changed = False
     trades = out.get("trades")
     if isinstance(trades, list) and trades:
         out["trade_count"] = len(trades)
@@ -66,22 +89,51 @@ def _compact_market_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
             out["last_trade_timestamp_ms"] = last_ts
         out["trades"] = []
         out["trades_compacted"] = True
-    return out
+        changed = True
+    orderbook, trimmed = _trim_orderbook(out.get("orderbook"))
+    if trimmed:
+        out["orderbook"] = orderbook
+        out["orderbook_compacted"] = True
+        out["orderbook_persist_levels"] = ORDERBOOK_PERSIST_LEVELS
+        changed = True
+    return out if changed else payload
 
 
 def _compact_joint_frame_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    ledger = payload.get("ledger")
-    if not isinstance(ledger, dict):
-        return payload
     out = dict(payload)
-    out["ledger"] = _ledger_summary(ledger)
-    out["ledger_compacted"] = True
-    out["ledger_ref"] = {
-        "topic": "ledger:snapshot",
-        "created_at_ms": ledger.get("created_at_ms"),
-        "t_end_ms": payload.get("t_end_ms"),
-    }
-    return out
+    changed = False
+    ledger = payload.get("ledger")
+    if isinstance(ledger, dict):
+        out["ledger"] = _ledger_summary(ledger)
+        out["ledger_compacted"] = True
+        out["ledger_ref"] = {
+            "topic": "ledger:snapshot",
+            "created_at_ms": ledger.get("created_at_ms"),
+            "t_end_ms": payload.get("t_end_ms"),
+        }
+        changed = True
+    for key in ("local_market", "global_market"):
+        nested = out.get(key)
+        if isinstance(nested, dict):
+            compacted_nested = _compact_market_event_payload(nested)
+            if compacted_nested is not nested:
+                out[key] = compacted_nested
+                changed = True
+    input_frame = out.get("input_frame")
+    if isinstance(input_frame, dict):
+        compacted_input = dict(input_frame)
+        input_changed = False
+        for key in ("local", "global"):
+            nested = compacted_input.get(key)
+            if isinstance(nested, dict):
+                compacted_nested = _compact_market_event_payload(nested)
+                if compacted_nested is not nested:
+                    compacted_input[key] = compacted_nested
+                    input_changed = True
+        if input_changed:
+            out["input_frame"] = compacted_input
+            changed = True
+    return out if changed else payload
 
 
 def _ledger_summary(ledger: dict[str, Any]) -> dict[str, Any]:
@@ -157,6 +209,10 @@ def _compact_controller_diagnostics_payload(payload: dict[str, Any]) -> dict[str
     out = dict(payload)
     out["action_pipeline"] = compacted_pipeline
     out["action_pipeline_compacted"] = True
+    for key in ("cleared_orderbook", "global_cleared_orderbook"):
+        book, trimmed = _trim_orderbook(out.get(key))
+        if trimmed:
+            out[key] = book
     return out
 
 

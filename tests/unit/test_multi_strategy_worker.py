@@ -92,6 +92,32 @@ async def test_build_worker_components_loads_registry_assignment(monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_build_worker_restores_last_control_pause_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
+    monkeypatch.setattr(
+        "mm.worker.worker.load_latest_runtime_control_state",
+        lambda _url: {
+            "type": "RuntimeControlState",
+            "actors": ["btc-maker-actor", "usdt-maker-actor"],
+            "paused_actors": ["btc-maker-actor"],
+        },
+    )
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
+    store = MemoryRegistryStore()
+    assignment_id, _ = _seed_worker_registry(store)
+
+    worker = await build_worker_components(
+        worker_config_from_mapping({"worker_id": "worker-1", "assignment_id": assignment_id}),
+        store=store,
+        bus=InMemoryBus(),
+    )
+
+    assert worker.control_plane is not None
+    assert worker.control_plane.state.paused_actors == {"btc-maker-actor"}
+    assert worker.control_plane.managed_actors == {"btc-maker-actor", "usdt-maker-actor"}
+
+
+@pytest.mark.asyncio
 async def test_worker_start_publishes_boot_paused_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
     monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
