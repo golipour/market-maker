@@ -28,10 +28,16 @@ class RuntimeControlPlane:
         bus: AbstractEventBus,
         state: RuntimeControlState | None = None,
         on_actor_start: Callable[[str], Awaitable[None]] | None = None,
+        managed_actors: set[str] | tuple[str, ...] | list[str] | None = None,
     ):
         self.bus = bus
         self.state = state or RuntimeControlState()
         self._on_actor_start = on_actor_start
+        self.managed_actors = {
+            str(item).strip()
+            for item in (managed_actors if managed_actors is not None else self.state.paused_actors)
+            if str(item).strip()
+        }
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
 
@@ -149,7 +155,9 @@ class RuntimeControlPlane:
     async def _publish_state(self, command: dict[str, Any], *, observe: bool = True) -> None:
         payload = {
             "type": "RuntimeControlState",
+            "command": command.get("command"),
             "command_id": command.get("command_id"),
+            "actors": sorted(self.managed_actors),
             "paused_actors": sorted(self.state.paused_actors),
             "allocation_breached_actors": sorted(self.state.allocation_breached_actors),
             "paused_venue_roles": sorted(self.state.paused_venue_roles),

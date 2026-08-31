@@ -248,14 +248,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT 'strategy:diagnostics:' || actor_id AS topic, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE topic IS NOT NULL AND CAST(topic AS text) <> ''\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Diagnostics topic",
         "multi": false,
         "name": "diagnostics_topic",
         "options": [],
-        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:diagnostics:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT 'strategy:diagnostics:' || actor_id AS topic, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE topic IS NOT NULL AND CAST(topic AS text) <> ''\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"
@@ -266,14 +266,14 @@
           "type": "postgres",
           "uid": "postgres-mm"
         },
-        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "definition": "SELECT topic\nFROM (\n  SELECT topic, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT 'strategy:target_books:' || actor_id AS topic, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE topic IS NOT NULL AND CAST(topic AS text) <> ''\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Target books topic",
         "multi": false,
         "name": "target_books_topic",
         "options": [],
-        "query": "SELECT topic\nFROM (\n  SELECT topic, max(ts) AS latest_ts\n  FROM mm_events\n  WHERE topic LIKE 'strategy:target_books:%'\n    AND ts > NOW() - INTERVAL '7 days'\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
+        "query": "SELECT topic\nFROM (\n  SELECT topic, max(latest_ts) AS latest_ts\n  FROM (\n  SELECT 'strategy:target_books:' || actor_id AS topic, updated_at AS latest_ts\n  FROM registry_strategies\n  WHERE status = 'active'\n    AND actor_id IS NOT NULL\n    AND actor_id <> ''\n  ) sources\n  WHERE topic IS NOT NULL AND CAST(topic AS text) <> ''\n  GROUP BY topic\n) ranked\nORDER BY latest_ts DESC",
         "refresh": 1,
         "sort": 0,
         "type": "query"

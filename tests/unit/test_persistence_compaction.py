@@ -85,6 +85,38 @@ def test_postgres_compaction_drops_market_trades_but_keeps_interval_features() -
     assert json_size_bytes(compacted.payload) < json_size_bytes(envelope.payload)
 
 
+def test_postgres_compaction_trims_deep_orderbook_ladders() -> None:
+    event = MarketEvent(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=1000,
+        t_end_ms=2000,
+        orderbook=RawOrderbook(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            timestamp_ms=2000,
+            bids=tuple(PriceLevel(100.0 - i, 1.0) for i in range(80)),
+            asks=tuple(PriceLevel(101.0 + i, 1.0) for i in range(80)),
+            is_snapshot=True,
+        ),
+        trades=(),
+        buy_volume=0.0,
+        sell_volume=0.0,
+        vwap=100.5,
+        imbalance=0.0,
+        microprice=100.5,
+    )
+    envelope = envelope_event("market:events:nobitex:BTC_IRT:1000", market_event_event(event))
+
+    compacted = compact_envelope_for_persistence(envelope, sink="postgres")
+
+    assert len(compacted.payload["orderbook"]["bids"]) == 40
+    assert len(compacted.payload["orderbook"]["asks"]) == 40
+    assert compacted.payload["orderbook_compacted"] is True
+    assert compacted.payload["orderbook"]["bids_compacted_count"] == 80
+
+
 def test_postgres_compaction_preserves_private_snapshot_balances_for_latest_state() -> None:
     envelope = envelope_event("private:state:nobitex:snapshot", _private_snapshot())
 

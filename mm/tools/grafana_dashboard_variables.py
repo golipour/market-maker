@@ -124,27 +124,29 @@ def interval_ms_var_query() -> str:
 
 
 def diagnostics_topic_var_query() -> str:
-    return f"""SELECT topic
-FROM (
-  SELECT topic, max(ts) AS latest_ts
-  FROM mm_events
-  WHERE topic LIKE 'strategy:diagnostics:%'
-    AND ts > {VARIABLE_LOOKBACK}
-  GROUP BY topic
-) ranked
-ORDER BY latest_ts DESC"""
+    return _ranked_values_sql(
+        "topic",
+        [
+            """SELECT 'strategy:diagnostics:' || actor_id AS topic, updated_at AS latest_ts
+  FROM registry_strategies
+  WHERE status = 'active'
+    AND actor_id IS NOT NULL
+    AND actor_id <> ''""",
+        ],
+    )
 
 
 def target_books_topic_var_query() -> str:
-    return f"""SELECT topic
-FROM (
-  SELECT topic, max(ts) AS latest_ts
-  FROM mm_events
-  WHERE topic LIKE 'strategy:target_books:%'
-    AND ts > {VARIABLE_LOOKBACK}
-  GROUP BY topic
-) ranked
-ORDER BY latest_ts DESC"""
+    return _ranked_values_sql(
+        "topic",
+        [
+            """SELECT 'strategy:target_books:' || actor_id AS topic, updated_at AS latest_ts
+  FROM registry_strategies
+  WHERE status = 'active'
+    AND actor_id IS NOT NULL
+    AND actor_id <> ''""",
+        ],
+    )
 
 
 def diagnostics_scope_filter_sql(*, table_ref: str = "e", include_time: bool = True) -> str:

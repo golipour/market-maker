@@ -117,13 +117,13 @@ def test_apply_postgres_retention_deletes_by_tier(monkeypatch) -> None:
     )
 
     conn = fake.connections[0]
-    delete_sql = [call["sql"] for call in conn.execute_calls if call["sql"].startswith("DELETE FROM")]
-    assert "DELETE FROM mm_events WHERE ts < %s" in delete_sql
-    assert "DELETE FROM mm_market_facts WHERE ts < %s" in delete_sql
-    assert "DELETE FROM admin_audit_log WHERE ts < %s" in delete_sql
+    delete_sql = [call["sql"] for call in conn.execute_calls if "DELETE FROM" in call["sql"]]
+    assert any("DELETE FROM mm_events WHERE ctid IN" in sql for sql in delete_sql)
+    assert any("DELETE FROM mm_market_facts WHERE ctid IN" in sql for sql in delete_sql)
+    assert any("DELETE FROM admin_audit_log WHERE ctid IN" in sql for sql in delete_sql)
     assert not any("mm_latest_state" in sql for sql in delete_sql)
     assert result.rows_affected == len(delete_sql)
-    assert conn.commit_count == 1
+    assert conn.commit_count >= 1
 
 
 def test_apply_postgres_retention_dry_run_counts_without_delete(monkeypatch) -> None:
@@ -161,7 +161,8 @@ def test_apply_retention_combines_all_tiers(tmp_path, monkeypatch) -> None:
     spool.mkdir()
     spool_file = spool / "failed.jsonl"
     spool_file.write_text("x\n", encoding="utf-8")
-    old = time.time() - (40 * 86_400)
+    now = datetime(2026, 6, 9, tzinfo=timezone.utc)
+    old = now.timestamp() - (40 * 86_400)
     os.utime(spool_file, (old, old))
 
     result = apply_retention(
@@ -169,7 +170,7 @@ def test_apply_retention_combines_all_tiers(tmp_path, monkeypatch) -> None:
         database_url="postgresql://example/db",
         parquet_root=parquet_root,
         spool_dir=spool,
-        now=datetime(2026, 6, 9, tzinfo=timezone.utc),
+        now=now,
     )
 
     assert result.postgres.rows_affected > 0

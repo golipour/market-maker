@@ -1800,7 +1800,11 @@ def _ts(timestamp_ms: int) -> datetime:
 
 
 def _is_latest_state(envelope: EventEnvelope) -> bool:
-    return envelope.topic.startswith(("execution:state:", "private:state:")) or envelope.event_type.endswith("Snapshot")
+    return (
+        envelope.topic.startswith(("execution:state:", "private:state:"))
+        or envelope.event_type.endswith("Snapshot")
+        or envelope.event_type == "RuntimeControlState"
+    )
 
 
 def _latest_key(envelope: EventEnvelope) -> str:

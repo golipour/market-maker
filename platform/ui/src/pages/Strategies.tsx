@@ -283,8 +283,8 @@ export function StrategiesPage() {
         <p>
           Bot instances, sizing ledger (physical account vs virtual capital pool), and linked
           presets. <strong>Stop</strong> pauses trading. <strong>Start</strong> reloads the strategy
-          config from the registry, then resumes. Workers boot paused — Start is required after a
-          worker restart.
+          config from the registry, then resumes. After a worker restart, the last Start/Stop
+          set is restored from Postgres. New actors still boot paused.
         </p>
         <EditModeNote mode="hybrid" />
       </header>

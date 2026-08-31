@@ -18,6 +18,7 @@ from mm.registry.store import RegistryStore, build_registry_store
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import BusRuntimeConfig, MarketMakerRuntimeConfig, _bus_from_mapping
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
+from mm.runtime.control_restore import boot_paused_actors, load_latest_runtime_control_state
 
 from mm.worker.account_pool import SharedAccountPool, build_shared_account_pool
 from mm.worker.strategy_slot import StrategySlot, build_strategy_slot
@@ -61,7 +62,12 @@ class WorkerComponents:
             await supervisor.start()
         if self.control_plane is not None:
             await self.control_plane.start()
-            await self.control_plane.publish_state(command="worker_boot_paused")
+            boot_command = (
+                "worker_boot_paused"
+                if self.control_plane.state.paused_actors == self.control_plane.managed_actors
+                else "worker_boot_restored"
+            )
+            await self.control_plane.publish_state(command=boot_command)
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._started = True
 
@@ -237,10 +243,15 @@ async def build_worker_components(
             return
         await supervisor.reload()
 
+    snapshot = load_latest_runtime_control_state(
+        config.resolved_registry_database_url() or None
+    )
+    paused_actors = boot_paused_actors(actor_ids, snapshot)
     control_plane = RuntimeControlPlane(
         bus=runtime_bus,
-        state=RuntimeControlState(paused_actors=set(actor_ids)),
+        state=RuntimeControlState(paused_actors=set(paused_actors)),
         on_actor_start=_on_actor_start,
+        managed_actors=actor_ids,
     )
     allocations = load_worker_virtual_allocations(
         registry,
@@ -317,7 +328,8 @@ async def build_worker_components(
             "bus_kind": bus_config.kind,
             "consumer_group": bus_config.consumer_group,
             "consumer_name": bus_config.consumer_name,
-            "boot_paused_actors": sorted(actor_ids),
+            "boot_paused_actors": sorted(paused_actors),
+            "boot_restored": bool(snapshot),
         },
     )
 

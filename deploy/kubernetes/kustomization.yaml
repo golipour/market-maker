@@ -11,6 +11,7 @@ resources:
   - worker.yaml
   - admin.yaml
   - seed-registry-job.yaml
+  - retention-cronjob.yaml
 # GitLab Container Registry path (must match $CI_REGISTRY_IMAGE).
 images:
   - name: market-maker

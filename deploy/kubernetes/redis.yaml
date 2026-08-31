@@ -23,16 +23,26 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          args:
+            - redis-server
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            - --maxmemory
+            - 768mb
+            - --maxmemory-policy
+            - noeviction
           ports:
             - containerPort: 6379
               name: redis
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
           readinessProbe:
             tcpSocket:
               port: redis

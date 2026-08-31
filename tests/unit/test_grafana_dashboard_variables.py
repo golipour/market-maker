@@ -48,6 +48,23 @@ def test_actor_and_run_queries_avoid_full_event_scans() -> None:
     assert "FROM mm_events" not in run_sql
 
 
+def test_diagnostics_and_target_book_topic_vars_use_registry() -> None:
+    from mm.tools.grafana_dashboard_variables import (
+        diagnostics_topic_var_query,
+        target_books_topic_var_query,
+    )
+
+    diagnostics_sql = diagnostics_topic_var_query()
+    target_sql = target_books_topic_var_query()
+
+    assert "registry_strategies" in diagnostics_sql
+    assert "strategy:diagnostics:" in diagnostics_sql
+    assert "FROM mm_events" not in diagnostics_sql
+    assert "registry_strategies" in target_sql
+    assert "strategy:target_books:" in target_sql
+    assert "FROM mm_events" not in target_sql
+
+
 def test_interval_ms_filter_accepts_grafana_all_join() -> None:
     sql = interval_ms_facts_filter_sql()
 

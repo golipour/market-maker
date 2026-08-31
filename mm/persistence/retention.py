@@ -24,6 +24,18 @@ POSTGRES_FACT_TABLES: tuple[str, ...] = (
 )
 POSTGRES_LATEST_STATE_TABLE = "mm_latest_state"
 POSTGRES_ADMIN_AUDIT_TABLE = "admin_audit_log"
+POSTGRES_DELETE_BATCH = 50_000
+POSTGRES_TS_INDEXES: tuple[tuple[str, str], ...] = (
+    ("mm_events", "mm_events_ts_idx"),
+    ("mm_market_facts", "mm_market_facts_ts_idx"),
+    ("mm_action_stage_facts", "mm_action_stage_facts_ts_idx"),
+    ("mm_execution_facts", "mm_execution_facts_ts_idx"),
+    ("mm_target_order_facts", "mm_target_order_facts_ts_idx"),
+    ("mm_model_score_facts", "mm_model_score_facts_ts_idx"),
+    ("mm_optimizer_facts", "mm_optimizer_facts_ts_idx"),
+    ("mm_optimizer_component_facts", "mm_optimizer_component_facts_ts_idx"),
+    ("admin_audit_log", "admin_audit_log_ts_idx"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +141,8 @@ def apply_retention(
     current = now or datetime.now(timezone.utc)
     postgres = PostgresRetentionResult()
     if database_url:
+        if not dry_run:
+            ensure_postgres_retention_indexes(database_url)
         postgres = apply_postgres_retention(
             database_url,
             policy,
@@ -186,11 +200,13 @@ def apply_postgres_retention(
 
     conn = psycopg2.connect(database_url)
     try:
+        conn.autocommit = False
         with conn.cursor() as cur:
             for tier, table, ts_column, retention_days in tiers:
                 cutoff = current - timedelta(days=int(retention_days))
                 rows = _postgres_delete_before(
                     cur,
+                    conn=conn,
                     table=table,
                     ts_column=ts_column,
                     cutoff=cutoff,
@@ -204,9 +220,7 @@ def apply_postgres_retention(
                         rows_affected=rows,
                     )
                 )
-        if not dry_run:
-            conn.commit()
-        else:
+        if dry_run:
             conn.rollback()
     finally:
         conn.close()
@@ -301,9 +315,28 @@ def apply_spool_retention(
     return SpoolRetentionResult(files_removed=files_removed, bytes_removed=bytes_removed)
 
 
+def ensure_postgres_retention_indexes(database_url: str) -> None:
+    """Create ts indexes concurrently so retention deletes do not seq-scan."""
+
+    import psycopg2
+
+    conn = psycopg2.connect(database_url)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            for table, index_name in POSTGRES_TS_INDEXES:
+                _assert_known_postgres_table(table)
+                cur.execute(
+                    f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} ON {table} (ts)"
+                )
+    finally:
+        conn.close()
+
+
 def _postgres_delete_before(
     cursor: Any,
     *,
+    conn: Any,
     table: str,
     ts_column: str,
     cutoff: datetime,
@@ -318,11 +351,20 @@ def _postgres_delete_before(
         )
         row = cursor.fetchone()
         return int(row[0] if row else 0)
-    cursor.execute(
-        f"DELETE FROM {table} WHERE {ts_column} < %s",
-        (cutoff,),
-    )
-    return int(cursor.rowcount or 0)
+    deleted = 0
+    while True:
+        cursor.execute(
+            f"DELETE FROM {table} WHERE ctid IN ("
+            f"SELECT ctid FROM {table} WHERE {ts_column} < %s LIMIT %s"
+            f")",
+            (cutoff, POSTGRES_DELETE_BATCH),
+        )
+        batch = int(cursor.rowcount or 0)
+        conn.commit()
+        deleted += batch
+        if batch < POSTGRES_DELETE_BATCH:
+            break
+    return deleted
 
 
 def _assert_known_postgres_table(table: str) -> None:
