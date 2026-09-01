@@ -25,6 +25,7 @@ FLEET_CORE_PERSISTENCE_TOPICS: tuple[str, ...] = (
     "risk:events",
     "admin:events",
     "portfolio:allocations",
+    "worker:capability",
 )
 
 
@@ -65,6 +66,8 @@ def actor_persistence_topics(actor_id: str) -> tuple[str, ...]:
     return (
         f"strategy:target_books:{actor}",
         f"strategy:diagnostics:{actor}",
+        f"strategy:heartbeat:{actor}",
+        f"strategy:errors:{actor}",
     )
 
 

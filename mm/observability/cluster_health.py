@@ -198,7 +198,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-token", default=os.environ.get("MM_ADMIN_TOKEN", ""))
     parser.add_argument("--database-url", default=os.environ.get("MM_DATABASE_URL", ""))
     parser.add_argument("--webhook-url", default=os.environ.get("MM_ALERT_WEBHOOK", ""))
-    parser.add_argument("--tick-seconds", type=int, default=DEFAULT_TICK_SECONDS)
+    parser.add_argument(
+        "--tick-seconds",
+        type=int,
+        default=int(os.environ.get("TICK_SECONDS", DEFAULT_TICK_SECONDS)),
+    )
     return parser
 
 
@@ -215,6 +219,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     store = build_postgres_store(database_url=args.database_url)
     alert_store = AlertStore(store)
+    alert_store.ensure_schema()
     admin = AdminClient(base_url=args.admin_url, token=args.admin_token)
     stop = asyncio.Event()
     try:

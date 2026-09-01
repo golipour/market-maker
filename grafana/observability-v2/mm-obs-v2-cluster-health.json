@@ -1,0 +1,76 @@
+{
+  "annotations": {"list": []},
+  "description": "Cluster health from mm_alerts. If Open alerts is non-empty the system is reporting itself unhealthy. The Strategies page Data column mirrors this.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "table",
+      "title": "Open alerts",
+      "id": 1,
+      "datasource": {"type": "postgres", "uid": "postgres-mm"},
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "refId": "open",
+          "datasource": {"type": "postgres", "uid": "postgres-mm"},
+          "rawSql": "SELECT to_timestamp(opened_at_ms / 1000.0) AS opened_at, severity, summary, fingerprint FROM mm_alerts WHERE resolved_at_ms IS NULL ORDER BY opened_at_ms DESC LIMIT 50",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cluster overall severity",
+      "id": 2,
+      "datasource": {"type": "postgres", "uid": "postgres-mm"},
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter"},
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "series",
+          "datasource": {"type": "postgres", "uid": "postgres-mm"},
+          "rawSql": "SELECT to_timestamp(opened_at_ms / 1000.0) AS time, CASE severity WHEN 'critical' THEN 2 WHEN 'degraded' THEN 1 ELSE 0 END AS severity FROM mm_alerts WHERE to_timestamp(opened_at_ms / 1000.0) BETWEEN $__timeFrom() AND $__timeTo() ORDER BY 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Recent alerts",
+      "id": 3,
+      "datasource": {"type": "postgres", "uid": "postgres-mm"},
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 12},
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "refId": "history",
+          "datasource": {"type": "postgres", "uid": "postgres-mm"},
+          "rawSql": "SELECT to_timestamp(opened_at_ms / 1000.0) AS opened_at, CASE WHEN resolved_at_ms IS NULL THEN NULL ELSE to_timestamp(resolved_at_ms / 1000.0) END AS resolved_at, severity, summary FROM mm_alerts WHERE to_timestamp(opened_at_ms / 1000.0) BETWEEN $__timeFrom() AND $__timeTo() ORDER BY opened_at_ms DESC LIMIT 200",
+          "format": "table"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["mm-obs-v2", "cluster-health"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "MM Observability v2 / 08 Cluster Health",
+  "uid": "mm-obs-v2-cluster-health",
+  "version": 1,
+  "weekStart": ""
+}

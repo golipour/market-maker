@@ -182,6 +182,7 @@ def _grafana_dashboards(
         ("Portfolio And PnL", "mm-obs-v2-portfolio-pnl"),
         ("Exchange Accounts", "mm-obs-v2-exchange-account"),
         ("Fill Spread PnL", "mm-obs-v2-fill-spread-pnl"),
+        ("Cluster Health", "mm-obs-v2-cluster-health"),
     ]
     dashboards = []
     for title, uid in rows:

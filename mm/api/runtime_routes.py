@@ -59,14 +59,22 @@ def create_runtime_router(
         _: str = Depends(require_auth),
         store: RegistryStore = Depends(_store),
     ) -> dict[str, Any]:
-        return build_runtime_overview(store, _cache(request), _health(request))
+        health = _health(request)
+        await health.refresh_actors(
+            tuple(row.actor_id for row in store.list_strategies() if row.actor_id)
+        )
+        return build_runtime_overview(store, _cache(request), health)
 
     @router.get("/data_health")
     async def data_health(
         request: Request,
         _: str = Depends(require_auth),
+        store: RegistryStore = Depends(_store),
     ) -> dict[str, Any]:
         health = _health(request)
+        await health.refresh_actors(
+            tuple(row.actor_id for row in store.list_strategies() if row.actor_id)
+        )
         return {
             "actors": {
                 actor_id: {

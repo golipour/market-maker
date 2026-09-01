@@ -128,23 +128,21 @@ class DataHealthCache:
     bus: AbstractEventBus
     default_interval_ms: int = 30_000
     actors: dict[str, ActorHealth] = field(default_factory=dict)
-    _heartbeat_task: asyncio.Task | None = field(default=None, repr=False)
-    _errors_task: asyncio.Task | None = field(default=None, repr=False)
+    _poll_task: asyncio.Task | None = field(default=None, repr=False)
+    _capability_task: asyncio.Task | None = field(default=None, repr=False)
     _capability: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     async def start(self) -> None:
-        self._heartbeat_task = asyncio.create_task(self._run_heartbeats())
-        self._errors_task = asyncio.create_task(self._run_errors())
-        self._capability_task = asyncio.create_task(self._run_capability())
         await self._hydrate()
+        self._poll_task = asyncio.create_task(self._run_poll())
+        self._capability_task = asyncio.create_task(self._run_capability())
 
     async def stop(self) -> None:
-        for task in (self._heartbeat_task, self._errors_task, self._capability_task):
+        for task in (self._poll_task, self._capability_task):
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-        self._heartbeat_task = None
-        self._errors_task = None
+        self._poll_task = None
         self._capability_task = None
 
     def _ensure_actor(self, actor_id: str) -> ActorHealth:
@@ -204,29 +202,19 @@ class DataHealthCache:
         latest = getattr(self.bus, "latest_event", None)
         if not callable(latest):
             return
-        for assignment_id, payload in list(self._capability.items()):
-            self._apply_capability(payload)
         try:
             event = await latest("worker:capability")
         except Exception:
-            return
+            event = None
         if isinstance(event, dict):
             self._apply_capability(event)
+        await self._refresh_from_latest()
 
-    async def _run_heartbeats(self) -> None:
-        # Subscribe to the per-actor heartbeat streams. The bus may not support
-        # glob subscriptions, so we discover actors through ``registry`` topics
-        # and ``latest_event`` for each known actor when possible.
+    async def _run_poll(self) -> None:
         try:
-            await self._stream_known_heartbeats()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            return
-
-    async def _run_errors(self) -> None:
-        try:
-            await self._stream_known_errors()
+            while True:
+                await self._refresh_from_latest()
+                await asyncio.sleep(5)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -242,31 +230,29 @@ class DataHealthCache:
         except Exception:
             return
 
-    async def _stream_known_heartbeats(self) -> None:
-        known = self._discover_actor_ids()
-        for actor_id in known:
-            topic = f"{HEARTBEAT_TOPIC_PREFIX}{actor_id}"
+    async def _refresh_from_latest(self) -> None:
+        latest = getattr(self.bus, "latest_event", None)
+        if not callable(latest):
+            return
+        for actor_id in self._discover_actor_ids():
             try:
-                async for event in self.bus.subscribe(topic):
-                    if isinstance(event, dict):
-                        self._apply_heartbeat(event)
-            except asyncio.CancelledError:
-                raise
+                event = await latest(f"{HEARTBEAT_TOPIC_PREFIX}{actor_id}")
             except Exception:
-                continue
+                event = None
+            if isinstance(event, dict):
+                self._apply_heartbeat(event)
+            try:
+                event = await latest(f"{ERRORS_TOPIC_PREFIX}{actor_id}")
+            except Exception:
+                event = None
+            if isinstance(event, dict):
+                self._apply_error(event)
 
-    async def _stream_known_errors(self) -> None:
-        known = self._discover_actor_ids()
-        for actor_id in known:
-            topic = f"{ERRORS_TOPIC_PREFIX}{actor_id}"
-            try:
-                async for event in self.bus.subscribe(topic):
-                    if isinstance(event, dict):
-                        self._apply_error(event)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                continue
+    async def refresh_actors(self, actor_ids: tuple[str, ...] | list[str]) -> None:
+        for actor_id in actor_ids:
+            if actor_id:
+                self._ensure_actor(actor_id)
+        await self._refresh_from_latest()
 
     def _discover_actor_ids(self) -> tuple[str, ...]:
         ids = set(self.actors.keys())

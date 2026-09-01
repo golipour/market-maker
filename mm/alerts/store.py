@@ -65,44 +65,46 @@ class AlertStore:
 
     def ensure_schema(self) -> None:
         with self._store.connection() as conn:  # type: ignore[attr-defined]
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS mm_alerts (
-                    id BIGSERIAL PRIMARY KEY,
-                    severity TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    fingerprint TEXT NOT NULL,
-                    opened_at_ms BIGINT NOT NULL,
-                    resolved_at_ms BIGINT
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mm_alerts (
+                        id BIGSERIAL PRIMARY KEY,
+                        severity TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        fingerprint TEXT NOT NULL,
+                        opened_at_ms BIGINT NOT NULL,
+                        resolved_at_ms BIGINT
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS mm_alerts_open_idx ON mm_alerts (resolved_at_ms, severity)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS mm_alerts_fingerprint_idx ON mm_alerts (fingerprint)"
-            )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS mm_alerts_open_idx ON mm_alerts (resolved_at_ms, severity)"
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS mm_alerts_fingerprint_idx ON mm_alerts (fingerprint)"
+                )
             conn.commit()
 
     def insert(self, alert: ClusterAlert) -> int:
         with self._store.connection() as conn:  # type: ignore[attr-defined]
-            cursor = conn.execute(
-                """
-                INSERT INTO mm_alerts (severity, summary, detail, fingerprint, opened_at_ms)
-                VALUES (%s, %s, %s::jsonb, %s, %s)
-                RETURNING id
-                """,
-                (
-                    alert.severity,
-                    alert.summary,
-                    json.dumps(alert.detail, default=str),
-                    alert.fingerprint(),
-                    alert.opened_at_ms,
-                ),
-            )
-            row = cursor.fetchone()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO mm_alerts (severity, summary, detail, fingerprint, opened_at_ms)
+                    VALUES (%s, %s, %s::jsonb, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        alert.severity,
+                        alert.summary,
+                        json.dumps(alert.detail, default=str),
+                        alert.fingerprint(),
+                        alert.opened_at_ms,
+                    ),
+                )
+                row = cursor.fetchone()
             conn.commit()
         return int(row[0]) if row else 0
 
@@ -117,8 +119,9 @@ class AlertStore:
                 query += " AND severity = %s"
                 params = (severity,)
             query += " ORDER BY opened_at_ms DESC LIMIT 1"
-            cursor = conn.execute(query, params)
-            row = cursor.fetchone()
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                row = cursor.fetchone()
         if row is None:
             return None
         return _row_to_alert(row)
@@ -128,38 +131,40 @@ class AlertStore:
         if threshold < 0:
             return 0
         with self._store.connection() as conn:  # type: ignore[attr-defined]
-            cursor = conn.execute(
-                """
-                UPDATE mm_alerts
-                SET resolved_at_ms = %s
-                WHERE resolved_at_ms IS NULL
-                  AND (
-                    CASE severity
-                      WHEN 'critical' THEN 2
-                      WHEN 'degraded' THEN 1
-                      ELSE 0
-                    END
-                  ) <= %s
-                RETURNING id
-                """,
-                (int(time.time() * 1000), threshold),
-            )
-            rows = cursor.fetchall()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE mm_alerts
+                    SET resolved_at_ms = %s
+                    WHERE resolved_at_ms IS NULL
+                      AND (
+                        CASE severity
+                          WHEN 'critical' THEN 2
+                          WHEN 'degraded' THEN 1
+                          ELSE 0
+                        END
+                      ) <= %s
+                    RETURNING id
+                    """,
+                    (int(time.time() * 1000), threshold),
+                )
+                rows = cursor.fetchall()
             conn.commit()
         return len(rows)
 
     def history(self, *, limit: int = 50) -> list[ClusterAlert]:
         with self._store.connection() as conn:  # type: ignore[attr-defined]
-            cursor = conn.execute(
-                """
-                SELECT id, severity, summary, detail, fingerprint, opened_at_ms
-                FROM mm_alerts
-                ORDER BY opened_at_ms DESC
-                LIMIT %s
-                """,
-                (int(limit),),
-            )
-            rows = cursor.fetchall()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, severity, summary, detail, fingerprint, opened_at_ms
+                    FROM mm_alerts
+                    ORDER BY opened_at_ms DESC
+                    LIMIT %s
+                    """,
+                    (int(limit),),
+                )
+                rows = cursor.fetchall()
         return [_row_to_alert(row) for row in rows]
 
 
