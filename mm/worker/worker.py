@@ -20,7 +20,7 @@ from mm.runtime.config import BusRuntimeConfig, MarketMakerRuntimeConfig, _bus_f
 from mm.runtime.control import RuntimeControlPlane, RuntimeControlState
 from mm.runtime.control_restore import boot_paused_actors, load_latest_runtime_control_state
 
-from mm.worker.account_pool import SharedAccountPool, build_shared_account_pool
+from mm.worker.account_pool import SharedAccountPool, build_shared_account_pool, summarise_capability
 from mm.worker.strategy_slot import StrategySlot, build_strategy_slot
 from mm.worker.supervisor import StrategyBackoffConfig, StrategySupervisor
 from mm.worker.wallet_resolve import load_worker_virtual_allocations
@@ -235,6 +235,32 @@ async def build_worker_components(
         for item in strategies
         if item.config.controller is not None and item.config.controller.actor_id
     }
+    expected_actors = tuple(sorted(actor_ids))
+    expected_accounts = tuple(dict.fromkeys(item.account_id for item in strategies))
+    strategy_to_account = {
+        item.config.controller.actor_id: item.account_id
+        for item in strategies
+        if item.config.controller is not None and item.config.controller.actor_id
+    }
+    capability_payload = summarise_capability(
+        worker_id=config.worker_id,
+        assignment_id=assignment.assignment_id,
+        pool=account_pool,
+        expected_actors=expected_actors,
+        expected_accounts=expected_accounts,
+        strategy_to_account=strategy_to_account,
+    )
+    try:
+        await runtime_bus.publish("worker:capability", capability_payload)
+    except Exception as exc:  # pragma: no cover - publication is best-effort
+        log_event(
+            "worker_capability_publish_failed",
+            {
+                "worker_id": config.worker_id,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
     supervisors_by_actor: dict[str, StrategySupervisor] = {}
 
     async def _on_actor_start(actor_id: str) -> None:

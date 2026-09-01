@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from mm.api.platform_routes import create_platform_router
 from mm.api.registry_routes import create_registry_router
 from mm.api.runtime_routes import create_runtime_router
-from mm.api.runtime_state import RuntimeControlCache
+from mm.api.runtime_state import DataHealthCache, RuntimeControlCache
 from mm.bus.base import AbstractEventBus
 from mm.bus.factory import build_event_bus
 from mm.registry.audit import record_admin_audit
@@ -50,9 +50,13 @@ def create_admin_app(
         cache = RuntimeControlCache(bus=app.state.bus)
         await cache.start()
         app.state.runtime_control = cache
+        health = DataHealthCache(bus=app.state.bus)
+        await health.start()
+        app.state.data_health = health
         try:
             yield
         finally:
+            await health.stop()
             await cache.stop()
 
     app = FastAPI(title="market-maker-admin", lifespan=lifespan)

@@ -1,0 +1,100 @@
+{
+  "annotations": {"list": []},
+  "description": "MM Observability v2 / Cluster Health — surfaces the per-actor data health and the cluster monitor's alert log. If 'Open alerts' is non-empty the system is telling you it is unhealthy; the Strategies page mirrors this in the Data column.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "table",
+      "title": "Open alerts",
+      "id": 1,
+      "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "auto"}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "severity"},
+           "properties": [
+             {"id": "mappings", "value": [
+               {"type": "value", "options": {"critical": {"text": "CRITICAL", "color": "red", "index": 0}}},
+               {"type": "value", "options": {"degraded": {"text": "degraded", "color": "orange", "index": 1}}},
+               {"type": "value", "options": {"ok": {"text": "ok", "color": "green", "index": 2}}}
+             ]}
+           ]}
+        ]
+      },
+      "options": {"showHeader": true, "sortBy": [{"displayName": "opened_at_ms", "desc": true}]},
+      "targets": [
+        {
+          "refId": "open",
+          "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+          "rawSql": "SELECT opened_at_ms, severity, summary, fingerprint FROM mm_alerts WHERE resolved_at_ms IS NULL ORDER BY opened_at_ms DESC LIMIT 50",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cluster overall severity (last 24h)",
+      "id": 2,
+      "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"drawStyle": "line", "lineInterpolation": "stepAfter"},
+          "unit": "short"
+        }
+      },
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "refId": "series",
+          "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+          "rawSql": "SELECT to_timestamp(opened_at_ms / 1000) AS time, CASE severity WHEN 'critical' THEN 2 WHEN 'degraded' THEN 1 ELSE 0 END AS severity FROM mm_alerts WHERE opened_at_ms >= $__timeFrom()::bigint * 1000 ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Recent alerts",
+      "id": 3,
+      "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 12},
+      "fieldConfig": {"defaults": {"custom": {"align": "auto"}}},
+      "options": {"showHeader": true, "sortBy": [{"displayName": "opened_at_ms", "desc": true}]},
+      "targets": [
+        {
+          "refId": "history",
+          "datasource": {"type": "postgres", "uid": "${PG_DS}"},
+          "rawSql": "SELECT opened_at_ms, COALESCE(resolved_at_ms, 0) AS resolved_at_ms, severity, summary FROM mm_alerts WHERE opened_at_ms >= $__timeFrom()::bigint * 1000 ORDER BY opened_at_ms DESC LIMIT 200",
+          "format": "table"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["mm-obs-v2", "cluster-health"],
+  "templating": {
+    "list": [
+      {
+        "name": "PG_DS",
+        "type": "datasource",
+        "query": "postgres",
+        "current": {"text": "postgres-mm", "value": "postgres-mm"},
+        "hide": 0
+      }
+    ]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "MM Observability v2 / 08 Cluster Health",
+  "uid": "mm-obs-v2-cluster-health",
+  "version": 1,
+  "weekStart": ""
+}

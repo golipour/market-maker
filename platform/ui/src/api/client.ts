@@ -311,6 +311,18 @@ export interface CommandResult {
 
 export type WorkerLiveStatus = "alive" | "stale" | "offline";
 
+export type DataStatus = "fresh" | "stale" | "lost" | "unknown" | "unattached";
+
+export interface DataHealthBlock {
+  data_status: DataStatus;
+  last_heartbeat_ms: number;
+  last_heartbeat_age_ms: number | null;
+  interval_ms: number;
+  capability_status: string;
+  tradeable: boolean;
+  last_error: { kind: string; message: string; frame_id: string; ts_ms: number } | null;
+}
+
 export type TradingStatus =
   | "running"
   | "paused"
@@ -349,6 +361,8 @@ export interface RuntimeOverviewStrategy {
   worker_id: string | null;
   worker_live: WorkerLiveStatus | null;
   trading_status: TradingStatus;
+  data_status?: DataStatus;
+  data_health?: DataHealthBlock | null;
 }
 
 export interface RuntimeOverview {

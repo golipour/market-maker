@@ -625,6 +625,18 @@ class ControllerRuntimeConfig:
         actor = self.actor_id.strip() or "mpc-controller"
         return f"strategy:target_books:{actor}"
 
+    @property
+    def frame_interval_ms(self) -> int:
+        """Default frame interval advertised to heartbeat observers.
+
+        Falls back to ``30_000`` so a stale or partial controller config does
+        not produce ``fresh`` heartbeats forever.
+        """
+        parent = getattr(self, "_parent_runtime", None)
+        if parent is not None:
+            return int(getattr(parent, "interval_ms", 30_000) or 30_000)
+        return 30_000
+
 
 @dataclass(frozen=True, slots=True)
 class MarketMakerRuntimeConfig:

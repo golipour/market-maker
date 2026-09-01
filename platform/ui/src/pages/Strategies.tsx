@@ -20,6 +20,9 @@ import { cloneConfig, serializeOverrides, type JsonObject } from "../lib/presetC
 import {
   canStartTrading,
   canStopTrading,
+  dataHealthTooltip,
+  dataStatusClass,
+  dataStatusLabel,
   runtimeByStrategyId,
   tradingStatusClass,
   tradingStatusLabel,
@@ -501,6 +504,7 @@ export function StrategiesPage() {
                 <th>Sizing</th>
                 <th>Registry</th>
                 <th>Trading</th>
+                <th>Data</th>
                 <th />
               </tr>
             </thead>
@@ -530,6 +534,18 @@ export function StrategiesPage() {
                     {trading ? (
                       <span className={`status-badge ${tradingStatusClass(trading)}`}>
                         {tradingStatusLabel(trading)}
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--text-muted)" }}>—</span>
+                    )}
+                  </td>
+                  <td>
+                    {live?.data_status ? (
+                      <span
+                        className={`status-badge ${dataStatusClass(live.data_status)}`}
+                        title={dataHealthTooltip(live.data_health ?? null)}
+                      >
+                        {dataStatusLabel(live.data_status)}
                       </span>
                     ) : (
                       <span style={{ color: "var(--text-muted)" }}>—</span>
@@ -621,6 +637,14 @@ export function StrategiesPage() {
                   {trading ? (
                     <span className={`status-badge ${tradingStatusClass(trading)}`}>
                       {tradingStatusLabel(trading)}
+                    </span>
+                  ) : null}
+                  {live?.data_status ? (
+                    <span
+                      className={`status-badge ${dataStatusClass(live.data_status)}`}
+                      title={dataHealthTooltip(live.data_health ?? null)}
+                    >
+                      {dataStatusLabel(live.data_status)}
                     </span>
                   ) : null}
                   <button

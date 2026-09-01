@@ -1,4 +1,11 @@
-import type { RuntimeOverviewStrategy, RuntimeOverviewWorker, TradingStatus, WorkerLiveStatus } from "../api/client";
+import type {
+  DataHealthBlock,
+  DataStatus,
+  RuntimeOverviewStrategy,
+  RuntimeOverviewWorker,
+  TradingStatus,
+  WorkerLiveStatus,
+} from "../api/client";
 
 export function workerLiveLabel(live: WorkerLiveStatus): string {
   switch (live) {
@@ -90,4 +97,52 @@ export function canStartTrading(status: TradingStatus | undefined): boolean {
 
 export function canStopTrading(status: TradingStatus | undefined): boolean {
   return status === "running";
+}
+
+export function dataStatusLabel(status: DataStatus | undefined): string {
+  switch (status) {
+    case "fresh":
+      return "Data fresh";
+    case "stale":
+      return "Data stale";
+    case "lost":
+      return "Data lost";
+    case "unattached":
+      return "Unattached";
+    case "unknown":
+    default:
+      return "Data unknown";
+  }
+}
+
+export function dataStatusClass(status: DataStatus | undefined): string {
+  switch (status) {
+    case "fresh":
+      return "status-up";
+    case "stale":
+      return "status-warning";
+    case "lost":
+    case "unattached":
+      return "status-down";
+    case "unknown":
+    default:
+      return "status-muted";
+  }
+}
+
+export function dataHealthTooltip(health: DataHealthBlock | null | undefined): string {
+  if (!health) return "No heartbeat or capability data yet";
+  const age = health.last_heartbeat_age_ms;
+  const ageLabel = age == null ? "no heartbeat seen" : `${(age / 1000).toFixed(1)}s old`;
+  const lines = [
+    `Status: ${health.data_status}`,
+    `Last heartbeat: ${ageLabel}`,
+    `Interval: ${(health.interval_ms / 1000).toFixed(1)}s`,
+    `Capability: ${health.capability_status || "unknown"}`,
+    `Tradeable: ${health.tradeable ? "yes" : "no"}`,
+  ];
+  if (health.last_error) {
+    lines.push(`Last error: ${health.last_error.kind} — ${health.last_error.message}`);
+  }
+  return lines.join("\n");
 }

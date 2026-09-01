@@ -33,6 +33,7 @@ from mm.core.models.ledger import JointLedgerSnapshot
 from mm.core.models.strategy import StrategyDecision, StrategyInputFrame
 from mm.diagnostics.publisher import DiagnosticsPublisher
 from mm.observability import log_event
+from mm.observability.heartbeat import HeartbeatPublisher, StrategyErrorPublisher
 from mm.risk.net_delta import NetDeltaRiskEngine, target_book_result_to_risk_result
 from mm.portfolio.wallet import StrategyWallet, joint_ledger_with_virtual_local
 from mm.runtime.config import (
@@ -83,6 +84,8 @@ class StrategyRunner:
     max_global_market_age_ms: int = 0
     _engine: MpcStrategyEngine = field(init=False, repr=False)
     _diagnostics: DiagnosticsPublisher = field(init=False, repr=False)
+    _heartbeat: HeartbeatPublisher = field(init=False, repr=False)
+    _error_publisher: StrategyErrorPublisher = field(init=False, repr=False)
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _decide_task: asyncio.Task | None = field(default=None, init=False, repr=False)
@@ -99,6 +102,16 @@ class StrategyRunner:
         self._diagnostics = DiagnosticsPublisher(
             self.bus,
             topic=self.config.normalized_diagnostics_topic,
+        )
+        interval_ms = int(self.config.frame_interval_ms)
+        self._heartbeat = HeartbeatPublisher(
+            bus=self.bus,
+            actor_id=self.config.actor_id,
+            interval_ms=interval_ms,
+        )
+        self._error_publisher = StrategyErrorPublisher(
+            bus=self.bus,
+            actor_id=self.config.actor_id,
         )
 
     async def start(self) -> None:
@@ -529,6 +542,14 @@ class StrategyRunner:
         finally:
             ctx.timing.latency_ms = (time.monotonic_ns() - t0) / 1_000_000
             await self._publish_diagnostics(ctx)
+            await self._heartbeat.publish(
+                frame_id=frame.frame_id,
+                frame_step=self._frame_step,
+                decided=ctx.decision is not None,
+                decision_latency_ms=(
+                    ctx.timing.stage_timings_ms.get("decide") if ctx.timing is not None else None
+                ),
+            )
 
     async def _decide_with_timeout(
         self,
@@ -651,6 +672,13 @@ class StrategyRunner:
         reason: str,
         message: str,
     ) -> None:
+        if self.bus is not None:
+            await self._error_publisher.publish(
+                kind=reason,
+                message=message,
+                frame_id=frame.frame_id,
+                frame_step=self._frame_step,
+            )
         await self._publish(
             self.config.normalized_decisions_topic,
             {
@@ -672,6 +700,14 @@ class StrategyRunner:
         frame: StrategyInputFrame,
         exc: BaseException,
     ) -> None:
+        if self.bus is not None:
+            await self._error_publisher.publish(
+                kind="controller_error",
+                message=f"{type(exc).__name__}: {exc}",
+                frame_id=frame.frame_id,
+                frame_step=self._frame_step,
+                exc=exc,
+            )
         await self._publish(
             self.config.normalized_decisions_topic,
             {

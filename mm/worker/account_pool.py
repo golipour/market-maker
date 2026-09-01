@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 from mm.application.execution_service import OrderManager
 from mm.application.reconciliation_service import ExecutionStateReconciler, PrivateStateReconciler
@@ -20,6 +22,23 @@ from mm.execution.order_attribution import OrderAttributionRegistry, load_attrib
 from mm.execution.reconcile import ReconcileConfig
 
 
+CredentialStatus = Literal["resolved", "missing", "auth_failed", "skipped"]
+
+
+@dataclass(slots=True)
+class AccountAttachmentResult:
+    """Per-account outcome of attaching a strategy to the shared pool."""
+
+    account_id: str
+    exchange: str
+    status: CredentialStatus
+    auth_mode: str
+    credential_kind: str
+    private_attached: bool
+    execution_attached: bool
+    error: str = ""
+
+
 @dataclass(slots=True)
 class SharedAccountPool:
     """Account-scoped private state and execution resources shared across strategies."""
@@ -30,6 +49,7 @@ class SharedAccountPool:
     private_state_selections: dict[str, PrivateStateAdapterSelection] = field(default_factory=dict)
     order_command_selections: dict[str, OrderCommandAdapterSelection] = field(default_factory=dict)
     order_attribution: dict[str, OrderAttributionRegistry] = field(default_factory=dict)
+    attachment_results: dict[str, AccountAttachmentResult] = field(default_factory=dict)
 
     def attribution_for(self, exchange: str) -> OrderAttributionRegistry:
         key = exchange.lower().strip()
@@ -76,38 +96,73 @@ def extend_shared_account_pool(
     account_id: str,
     bus: AbstractEventBus,
     options: RuntimeBuildOptions,
-) -> None:
-    """Attach account resources for one strategy config when not already present."""
+) -> AccountAttachmentResult:
+    """Attach account resources for one strategy config when not already present.
+
+    Returns an :class:`AccountAttachmentResult` describing the outcome so the
+    worker can publish a ``WorkerCapability`` event. Callers must not silently
+    skip on missing credentials — the result is the only thing the admin API
+    uses to decide whether an actor has the resources it needs to trade.
+    """
+
+    exchange = config.local.normalized_exchange()
 
     if not options.enable_private_state:
-        return
+        result = AccountAttachmentResult(
+            account_id=account_id,
+            exchange=exchange,
+            status="skipped",
+            auth_mode="",
+            credential_kind="",
+            private_attached=False,
+            execution_attached=False,
+            error="private_state_disabled",
+        )
+        pool.attachment_results[account_id] = result
+        return result
     if account_id in pool.private_reconcilers:
-        return
+        return pool.attachment_results[account_id]
 
     private_reconciler: PrivateStateReconciler | None = None
     execution_reconciler: ExecutionStateReconciler | None = None
+    credential_status: CredentialStatus = "missing"
+    auth_mode = ""
+    credential_kind = ""
+    error_message = ""
+    last_exchange = exchange
 
     for source in config.sources:
+        last_exchange = source.normalized_exchange()
         private_config = config.private_config_for(source.role)
         if private_config is None:
+            credential_status = "skipped"
+            error_message = "no_private_config"
             continue
         api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
         if not api_credentials:
+            credential_status = "missing"
+            error_message = "no_resolved_credentials"
             continue
         auth_mode = private_config.resolved_auth_mode(source.normalized_exchange())
-        cred_kind = type(api_credentials).__name__ if not isinstance(api_credentials, str) else "token"
+        credential_kind = type(api_credentials).__name__ if not isinstance(api_credentials, str) else "token"
+        credential_status = "resolved"
         print(
             f"[account-pool] {account_id} {source.normalized_exchange()} "
-            f"private auth_mode={auth_mode} credential={cred_kind}",
+            f"private auth_mode={auth_mode} credential={credential_kind}",
             flush=True,
         )
-        private_selection = select_private_state_adapter(
-            source.normalized_exchange(),
-            source.symbol,
-            mode=private_config.mode,
-            api_token=api_credentials,
-            poll_interval_ms=private_config.poll_interval_ms,
-        )
+        try:
+            private_selection = select_private_state_adapter(
+                source.normalized_exchange(),
+                source.symbol,
+                mode=private_config.mode,
+                api_token=api_credentials,
+                poll_interval_ms=private_config.poll_interval_ms,
+            )
+        except Exception as exc:
+            credential_status = "auth_failed"
+            error_message = f"{type(exc).__name__}: {exc}"
+            continue
         pool.private_state_selections[account_id] = private_selection
         attribution_registry = pool.attribution_for(source.normalized_exchange())
         private_selection.adapter.attribution_registry = attribution_registry
@@ -125,12 +180,18 @@ def extend_shared_account_pool(
         placement_max_concurrency = 8
         if config.controller is not None:
             placement_max_concurrency = config.controller.placement_max_concurrency
-        order_selection = select_order_command_adapter(
-            source.normalized_exchange(),
-            source.symbol,
-            api_token=api_credentials,
-            placement_max_concurrency=placement_max_concurrency,
-        )
+        try:
+            order_selection = select_order_command_adapter(
+                source.normalized_exchange(),
+                source.symbol,
+                api_token=api_credentials,
+                placement_max_concurrency=placement_max_concurrency,
+            )
+        except Exception as exc:
+            credential_status = "auth_failed"
+            error_message = f"order_adapter_init: {type(exc).__name__}: {exc}"
+            private_reconciler = None
+            break
         pool.order_command_selections[account_id] = order_selection
         manager = pool.order_managers.get(source.normalized_exchange())
         if manager is None:
@@ -150,10 +211,23 @@ def extend_shared_account_pool(
         )
         break
 
-    if private_reconciler is not None:
+    if private_reconciler is not None and credential_status == "resolved":
         pool.private_reconcilers[account_id] = private_reconciler
     if execution_reconciler is not None:
         pool.execution_reconcilers[account_id] = execution_reconciler
+
+    result = AccountAttachmentResult(
+        account_id=account_id,
+        exchange=last_exchange,
+        status=credential_status,
+        auth_mode=auth_mode,
+        credential_kind=credential_kind,
+        private_attached=private_reconciler is not None,
+        execution_attached=execution_reconciler is not None,
+        error=error_message,
+    )
+    pool.attachment_results[account_id] = result
+    return result
 
 
 def build_shared_account_pool(
@@ -173,6 +247,64 @@ def build_shared_account_pool(
             options=options,
         )
     return pool
+
+
+def summarise_capability(
+    *,
+    worker_id: str,
+    assignment_id: str,
+    pool: SharedAccountPool,
+    expected_actors: tuple[str, ...],
+    expected_accounts: tuple[str, ...],
+    strategy_to_account: dict[str, str],
+) -> dict:
+    """Build a ``WorkerCapability`` payload from current pool state.
+
+    The admin API persists this and the cluster health monitor uses it to
+    detect missing or misconfigured actors before they become silent stalls.
+    """
+
+    attachments = [
+        {
+            "account_id": r.account_id,
+            "exchange": r.exchange,
+            "status": r.status,
+            "auth_mode": r.auth_mode,
+            "credential_kind": r.credential_kind,
+            "private_attached": r.private_attached,
+            "execution_attached": r.execution_attached,
+            "error": r.error,
+        }
+        for r in pool.attachment_results.values()
+    ]
+    account_status = {r.account_id: r.status for r in pool.attachment_results.values()}
+
+    actor_capability: list[dict] = []
+    for actor_id in expected_actors:
+        account_id = strategy_to_account.get(actor_id, "")
+        status = account_status.get(account_id, "missing")
+        actor_capability.append(
+            {
+                "actor_id": actor_id,
+                "account_id": account_id,
+                "status": status,
+                "tradeable": status == "resolved",
+            }
+        )
+
+    return {
+        "type": "WorkerCapability",
+        "payload_schema": "mm.worker_capability",
+        "payload_version": 1,
+        "worker_id": worker_id,
+        "assignment_id": assignment_id,
+        "expected_actors": list(expected_actors),
+        "expected_accounts": list(expected_accounts),
+        "shared_exchanges": list(pool.order_managers.keys()),
+        "attachments": attachments,
+        "actors": actor_capability,
+        "ts_ms": int(time.time() * 1000),
+    }
 
 
 def _execution_reconcile_config(config: MarketMakerRuntimeConfig) -> ReconcileConfig:

@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: market-maker-cluster-health
+  namespace: market-maker
+data:
+  MM_ADMIN_URL: "http://market-maker-admin:8080"
+  MM_ALERT_WEBHOOK: ""
+  TICK_SECONDS: "30"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-maker-cluster-health
+  namespace: market-maker
+  labels:
+    app: market-maker-cluster-health
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: market-maker-cluster-health
+  template:
+    metadata:
+      labels:
+        app: market-maker-cluster-health
+    spec:
+      containers:
+        - name: monitor
+          image: ghcr.io/teanab/market-maker/cluster-health:latest
+          imagePullPolicy: Always
+          env:
+            - name: MM_ADMIN_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-cluster-health
+                  key: MM_ADMIN_URL
+            - name: MM_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: market-maker-admin
+                  key: token
+            - name: MM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-mm
+                  key: database-url
+            - name: MM_ALERT_WEBHOOK
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-cluster-health
+                  key: MM_ALERT_WEBHOOK
+                  optional: true
+            - name: TICK_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-cluster-health
+                  key: TICK_SECONDS
+            - name: LOG_LEVEL
+              value: "INFO"
+          args:
+            - "--admin-url=$(MM_ADMIN_URL)"
+            - "--admin-token=$(MM_ADMIN_TOKEN)"
+            - "--database-url=$(MM_DATABASE_URL)"
+            - "--tick-seconds=$(TICK_SECONDS)"
+            - "--webhook-url=$(MM_ALERT_WEBHOOK)"
+          readinessProbe:
+            exec:
+              command: ["true"]
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"

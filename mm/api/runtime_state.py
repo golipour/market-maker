@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from mm.bus.base import AbstractEventBus
+from mm.observability.heartbeat import (
+    ERRORS_TOPIC_PREFIX,
+    HEARTBEAT_TOPIC_PREFIX,
+    classify_data_status,
+)
 from mm.registry.models import StrategyRecord, WorkerAssignmentRecord
 from mm.registry.store import RegistryStore
 
@@ -23,6 +28,7 @@ TradingStatus = Literal[
     "unassigned",
     "registry_inactive",
 ]
+DataStatus = Literal["fresh", "stale", "lost", "unknown", "unattached"]
 
 
 @dataclass(slots=True)
@@ -105,6 +111,191 @@ class RuntimeControlCache:
             raise
 
 
+@dataclass(slots=True)
+class ActorHealth:
+    actor_id: str
+    data_status: DataStatus = "unknown"
+    last_heartbeat_ms: int = 0
+    last_heartbeat_age_ms: int | None = None
+    interval_ms: int = 30_000
+    capability_status: str = ""
+    tradeable: bool = True
+    last_error: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class DataHealthCache:
+    bus: AbstractEventBus
+    default_interval_ms: int = 30_000
+    actors: dict[str, ActorHealth] = field(default_factory=dict)
+    _heartbeat_task: asyncio.Task | None = field(default=None, repr=False)
+    _errors_task: asyncio.Task | None = field(default=None, repr=False)
+    _capability: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    async def start(self) -> None:
+        self._heartbeat_task = asyncio.create_task(self._run_heartbeats())
+        self._errors_task = asyncio.create_task(self._run_errors())
+        self._capability_task = asyncio.create_task(self._run_capability())
+        await self._hydrate()
+
+    async def stop(self) -> None:
+        for task in (self._heartbeat_task, self._errors_task, self._capability_task):
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self._heartbeat_task = None
+        self._errors_task = None
+        self._capability_task = None
+
+    def _ensure_actor(self, actor_id: str) -> ActorHealth:
+        health = self.actors.get(actor_id)
+        if health is None:
+            health = ActorHealth(actor_id=actor_id, interval_ms=self.default_interval_ms)
+            self.actors[actor_id] = health
+        return health
+
+    def _apply_heartbeat(self, event: dict[str, Any]) -> None:
+        actor_id = str(event.get("actor_id") or "").strip()
+        if not actor_id:
+            return
+        ts = int(event.get("ts_ms") or 0)
+        if ts <= 0:
+            return
+        health = self._ensure_actor(actor_id)
+        try:
+            interval_ms = int(event.get("interval_ms") or 0) or self.default_interval_ms
+        except (TypeError, ValueError):
+            interval_ms = self.default_interval_ms
+        health.interval_ms = interval_ms
+        health.last_heartbeat_ms = ts
+        health.last_heartbeat_age_ms = max(0, int(time.time() * 1000) - ts)
+        health.data_status = classify_data_status(
+            age_ms=health.last_heartbeat_age_ms,
+            interval_ms=health.interval_ms,
+        )
+
+    def _apply_error(self, event: dict[str, Any]) -> None:
+        actor_id = str(event.get("actor_id") or "").strip()
+        if not actor_id:
+            return
+        health = self._ensure_actor(actor_id)
+        health.last_error = {
+            "kind": str(event.get("kind") or ""),
+            "message": str(event.get("message") or ""),
+            "frame_id": str(event.get("frame_id") or ""),
+            "ts_ms": int(event.get("ts_ms") or 0),
+        }
+
+    def _apply_capability(self, event: dict[str, Any]) -> None:
+        assignment_id = str(event.get("assignment_id") or "").strip()
+        if assignment_id:
+            self._capability[assignment_id] = event
+        for actor in event.get("actors") or ():
+            if not isinstance(actor, dict):
+                continue
+            actor_id = str(actor.get("actor_id") or "").strip()
+            if not actor_id:
+                continue
+            health = self._ensure_actor(actor_id)
+            health.capability_status = str(actor.get("status") or "")
+            health.tradeable = bool(actor.get("tradeable"))
+
+    async def _hydrate(self) -> None:
+        latest = getattr(self.bus, "latest_event", None)
+        if not callable(latest):
+            return
+        for assignment_id, payload in list(self._capability.items()):
+            self._apply_capability(payload)
+        try:
+            event = await latest("worker:capability")
+        except Exception:
+            return
+        if isinstance(event, dict):
+            self._apply_capability(event)
+
+    async def _run_heartbeats(self) -> None:
+        # Subscribe to the per-actor heartbeat streams. The bus may not support
+        # glob subscriptions, so we discover actors through ``registry`` topics
+        # and ``latest_event`` for each known actor when possible.
+        try:
+            await self._stream_known_heartbeats()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+    async def _run_errors(self) -> None:
+        try:
+            await self._stream_known_errors()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+    async def _run_capability(self) -> None:
+        try:
+            async for event in self.bus.subscribe("worker:capability"):
+                if isinstance(event, dict):
+                    self._apply_capability(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+    async def _stream_known_heartbeats(self) -> None:
+        known = self._discover_actor_ids()
+        for actor_id in known:
+            topic = f"{HEARTBEAT_TOPIC_PREFIX}{actor_id}"
+            try:
+                async for event in self.bus.subscribe(topic):
+                    if isinstance(event, dict):
+                        self._apply_heartbeat(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
+
+    async def _stream_known_errors(self) -> None:
+        known = self._discover_actor_ids()
+        for actor_id in known:
+            topic = f"{ERRORS_TOPIC_PREFIX}{actor_id}"
+            try:
+                async for event in self.bus.subscribe(topic):
+                    if isinstance(event, dict):
+                        self._apply_error(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
+
+    def _discover_actor_ids(self) -> tuple[str, ...]:
+        ids = set(self.actors.keys())
+        for payload in self._capability.values():
+            for actor in payload.get("actors") or ():
+                if isinstance(actor, dict) and actor.get("actor_id"):
+                    ids.add(str(actor["actor_id"]))
+        return tuple(sorted(ids))
+
+    def register_actor(self, actor_id: str) -> None:
+        self._ensure_actor(actor_id)
+
+    def status_for(self, actor_id: str, *, now_ms: int | None = None) -> ActorHealth:
+        health = self._ensure_actor(actor_id)
+        now = int(now_ms if now_ms is not None else time.time() * 1000)
+        if health.last_heartbeat_ms > 0:
+            health.last_heartbeat_age_ms = max(0, now - health.last_heartbeat_ms)
+            health.data_status = classify_data_status(
+                age_ms=health.last_heartbeat_age_ms,
+                interval_ms=health.interval_ms,
+            )
+        elif not health.tradeable:
+            health.data_status = "unattached"
+        return health
+
+    def capability_for_assignment(self, assignment_id: str) -> dict[str, Any] | None:
+        return self._capability.get(assignment_id)
+
+
 def worker_live_status(
     assignment: WorkerAssignmentRecord,
     *,
@@ -154,6 +345,7 @@ def strategy_trading_status(
 def build_runtime_overview(
     store: RegistryStore,
     control: RuntimeControlCache,
+    health: DataHealthCache | None = None,
 ) -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     strategies = store.list_strategies()
@@ -163,6 +355,11 @@ def build_runtime_overview(
     workers_payload: list[dict[str, Any]] = []
     for assignment in assignments:
         live, remaining_s = worker_live_status(assignment, now_ms=now_ms)
+        cap = (
+            health.capability_for_assignment(assignment.assignment_id)
+            if health is not None
+            else None
+        )
         workers_payload.append(
             {
                 "assignment_id": assignment.assignment_id,
@@ -173,6 +370,7 @@ def build_runtime_overview(
                 "lease_remaining_s": remaining_s,
                 "heartbeat_at": _iso(assignment.heartbeat_at),
                 "lease_expires_at": _iso(assignment.lease_expires_at),
+                "capability": cap,
             }
         )
         for strategy_id in assignment.strategy_ids:
@@ -190,6 +388,18 @@ def build_runtime_overview(
             control=control.snapshot,
             worker_live=worker_live,
         )
+        actor_health = None
+        if health is not None and strategy.actor_id:
+            actor = health.status_for(strategy.actor_id, now_ms=now_ms)
+            actor_health = {
+                "data_status": actor.data_status,
+                "last_heartbeat_ms": actor.last_heartbeat_ms,
+                "last_heartbeat_age_ms": actor.last_heartbeat_age_ms,
+                "interval_ms": actor.interval_ms,
+                "capability_status": actor.capability_status,
+                "tradeable": actor.tradeable,
+                "last_error": actor.last_error,
+            }
         strategies_payload.append(
             {
                 "strategy_id": strategy.strategy_id,
@@ -198,6 +408,8 @@ def build_runtime_overview(
                 "worker_id": worker_id,
                 "worker_live": worker_live,
                 "trading_status": trading,
+                "data_status": (actor_health or {}).get("data_status", "unknown"),
+                "data_health": actor_health,
             }
         )
 
