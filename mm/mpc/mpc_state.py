@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from mm.mpc_utils import expit as _expit
+from mm.mpc_utils import softplus as _softplus
+
 
 @dataclass(frozen=True)
 class OrderbookRelative:
@@ -29,9 +32,7 @@ class Action:
 
 
 def _sigmoid_stable(z: float) -> float:
-    if z >= 0:
-        return 1.0 / (1.0 + math.exp(-z))
-    return math.exp(z) / (1.0 + math.exp(z))
+    return _expit(z)
 
 
 @dataclass(frozen=True)
@@ -104,11 +105,7 @@ class SigmoidMixtureAction:
 
         def _pos(v: float) -> float:
             v = float(v)
-            if v >= 20:
-                return v + eps
-            if v <= -20:
-                return eps
-            return math.log(1.0 + math.exp(v)) + eps
+            return _softplus(v) + eps
 
         bid_L, bid_k, bid_x0 = [], [], []
         for i in range(n_components):

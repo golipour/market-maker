@@ -6,6 +6,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from mm.mpc_utils import (
+    expit as _expit,
+    log_clamped as _log_clamped,
+    logaddexp as _logaddexp,
+    log_normal_pdf as _log_normal_pdf,
+    log_student_t_pdf as _log_student_t_pdf,
+)
 from mm.diagnostics.models import ModelScore
 from mm.mpc.market_order_flow_torch import (
     HurdleOrderFlow,
@@ -142,7 +149,7 @@ def score_market_flow(
     prob_buy = _flow_side_prob(v_buy, params_before, side="buy", kind=flow_kind)
     prob_sell = _flow_side_prob(v_sell, params_before, side="sell", kind=flow_kind)
     prob = max(_MIN_PROB, float(prob_buy) * float(prob_sell))
-    ll, nll = _nll_from_log_prob(math.log(prob))
+    ll, nll = _nll_from_log_prob(_log_clamped(prob))
     return ScoreResult(
         log_likelihood=ll,
         nll=nll,
@@ -227,7 +234,7 @@ def _mixture_market_probability(gate_beta: Any, total_flow: float) -> float:
     if not math.isfinite(score):
         return 0.5
     # Match TorchConditionalMechanicalMixturePriceModel._market_probability_np.
-    return min(0.999, max(0.001, float(1.0 / (1.0 + math.exp(-score)))))
+    return min(0.999, max(0.001, _expit(score)))
 
 
 def score_conditional_mechanical_mid_delta(
@@ -298,18 +305,17 @@ def score_conditional_mechanical_mid_delta(
 
     market_err = float(delta_mid) - market_mean
     refresh_err = float(delta_mid) - refresh_mean
-    market_ll = math.log(max(_MIN_PROB, q_market)) + _normal_logpdf_var(
+    market_ll = _log_clamped(max(_MIN_PROB, q_market)) + _normal_logpdf_var(
         market_err, market_sigma * market_sigma, sigma_min=sigma_min
     )
-    refresh_ll = math.log(max(_MIN_PROB, q_refresh)) + _student_t_logpdf_var(
+    refresh_ll = _log_clamped(max(_MIN_PROB, q_refresh)) + _student_t_logpdf_var(
         refresh_err,
         refresh_sigma * refresh_sigma,
         student_df=student_df,
         sigma_min=sigma_min,
     )
     # log(q N + (1-q) T) via log-sum-exp
-    m = max(market_ll, refresh_ll)
-    ll = m + math.log(math.exp(market_ll - m) + math.exp(refresh_ll - m))
+    ll = _logaddexp(market_ll, refresh_ll)
     nll = -ll
 
     # Mixture mean / variance for a standardized residual diagnostic.

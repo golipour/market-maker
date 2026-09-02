@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -89,6 +91,8 @@ class StrategyRunner:
     _frame_step: int = field(default=0, init=False, repr=False)
     _task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _decide_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+    _decide_pool: concurrent.futures.ThreadPoolExecutor = field(init=False, repr=False)
+    _decide_cancel_event: threading.Event = field(init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _last_local_exchange: str = field(default="", init=False, repr=False)
 
@@ -113,6 +117,15 @@ class StrategyRunner:
             bus=self.bus,
             actor_id=self.config.actor_id,
         )
+        # Dedicated single-worker thread pool for the optimizer call so a
+        # wedged decide cannot starve other to_thread callers (the
+        # 2026-09-01 Bitwana failure mode). The cancel event is checked
+        # cooperatively by the optimizer's Adam loop, so a timeout
+        # actually stops the work instead of leaking it into the pool.
+        self._decide_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"mm-decide-{self.config.actor_id}"
+        )
+        self._decide_cancel_event = threading.Event()
 
     async def start(self) -> None:
         self._stopped.clear()
@@ -120,10 +133,14 @@ class StrategyRunner:
 
     async def stop(self) -> None:
         self._stopped.set()
+        self._decide_cancel_event.set()
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
+        pool = getattr(self, "_decide_pool", None)
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     async def _run(self) -> None:
         try:
@@ -568,20 +585,46 @@ class StrategyRunner:
                 )
             self._decide_task = None
 
-        task = asyncio.create_task(asyncio.to_thread(self._engine.decide, frame, frame_step=frame_step))
-        self._decide_task = task
+        # Reset the cancel event and wire it into the optimizer backend so
+        # a timeout can interrupt the Adam loop cooperatively. The pool
+        # is dedicated (max_workers=1) so a wedged call cannot saturate
+        # the default executor.
+        self._decide_cancel_event.clear()
+        backend = getattr(self._engine, "_optimizer_backend", None)
+        if backend is not None and hasattr(backend, "set_cancel_event"):
+            backend.set_cancel_event(self._decide_cancel_event)
+
+        loop = asyncio.get_running_loop()
+        try:
+            future = self._decide_pool.submit(
+                self._engine.decide, frame, frame_step=frame_step
+            )
+        except RuntimeError as exc:
+            raise OptimizerDecisionInProgress(
+                "OptimizerDecisionInProgress: decide pool is shut down"
+            ) from exc
+        self._decide_task = asyncio.ensure_future(
+            asyncio.wrap_future(future, loop=loop)
+        )
         timed_out = False
         try:
-            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_ms / 1000.0)
+            return await asyncio.wait_for(
+                asyncio.shield(self._decide_task),
+                timeout=timeout_ms / 1000.0,
+            )
         except asyncio.TimeoutError as exc:
             timed_out = True
-            task.add_done_callback(self._on_decide_task_done)
+            # Signal the optimizer to stop gracefully. The Adam loop
+            # checks the event at the top of every epoch and returns the
+            # best-so-far result, so the pool worker is freed.
+            self._decide_cancel_event.set()
+            self._decide_task.add_done_callback(self._on_decide_task_done)
             raise OptimizerDecisionTimeout(
                 f"OptimizerDecisionTimeout: exceeded {timeout_ms}ms decision_timeout_ms; "
                 "holding current orders"
             ) from exc
         finally:
-            if not timed_out and self._decide_task is task:
+            if not timed_out:
                 self._decide_task = None
 
     def _on_decide_task_done(self, task: asyncio.Task) -> None:

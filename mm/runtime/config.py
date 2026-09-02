@@ -1553,6 +1553,18 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
                 raise ValueError(
                     f"unknown controller.optimizer.{venue} keys: {', '.join(unknown_keys)}"
                 )
+    # Reject configurations where the optimizer compute would not fit
+    # the decision budget. Without this guard the system enters a regime
+    # where the timeout is the expected path and ``asyncio.to_thread``
+    # leaks work into the thread pool, which is exactly the failure
+    # mode that stopped Bitwana and Nobitex on 2026-09-01. See
+    # ``mm.mpc.optimizer_sizing`` for the cost model.
+    try:
+        from mm.mpc.optimizer_sizing import assert_optimizer_fits_budget
+
+        assert_optimizer_fits_budget(payload)
+    except ImportError:  # pragma: no cover - validator module is always present
+        pass
     return ControllerRuntimeConfig(
         enabled=bool(payload.get("enabled", False)),
         actor_id=str(payload.get("actor_id", "mpc-controller")),

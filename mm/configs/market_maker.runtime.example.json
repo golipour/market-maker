@@ -183,7 +183,8 @@
         "_comment_negative_objective_action": "When CE is weak: optimizer_action=keep optimizer output (default), floor_action=per-side min depth, zero_action=pull quotes when CE < -negative_objective_zero_threshold.",
         "negative_objective_action": "optimizer_action",
         "negative_objective_zero_threshold": 0.0,
-        "decision_timeout_ms": 3000,
+        "_comment_decision_timeout_ms": "decision_timeout_ms must accommodate the optimizer's inner-step cost (n_samples * horizon * adam_epochs * per_step_cost_ms @ safety_factor 0.7). The shipped preset uses 10 s with 20 Adam epochs on a single CPU thread; the validator in mm.mpc.optimizer_sizing rejects any config where this would not fit. Either raise this value or lower n_samples/horizon/adam_epochs.",
+        "decision_timeout_ms": 10000,
         "placement_timeout_ms": 7000,
         "placement_max_concurrency": 32,
         "decisions_topic": "strategy:decisions",
@@ -267,7 +268,7 @@
           },
           "fixed_mc_samples": true,
           "horizon": 2,
-          "adam_epochs": 40,
+          "adam_epochs": 20,
           "adam_lr": 1e0,
           "device": "cpu",
           "objective_normalize": {

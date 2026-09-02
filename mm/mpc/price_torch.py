@@ -12,6 +12,13 @@ import numpy as np
 
 from mm.mpc.torch_device import resolve_torch_device
 from mm.mpc.step import Step
+from mm.mpc_utils import exp_clamped as _exp_clamped
+from mm.mpc_utils import expit as _expit
+from mm.mpc_utils import log_clamped as _log_clamped
+from mm.mpc_utils import log_normal_pdf as _log_normal_pdf
+from mm.mpc_utils import log_student_t_pdf as _log_student_t_pdf
+from mm.mpc_utils import logaddexp as _logaddexp
+from mm.mpc_utils import logsumexp_pair as _logsumexp_pair
 
 if TYPE_CHECKING:
     pass
@@ -534,8 +541,8 @@ class TorchConditionalMechanicalMixturePriceModel:
         gate_x = np.array([1.0, gate_log_flow], dtype=np.float64)
         q_market = self._market_probability_np(gate_log_flow)
         q_refresh = 1.0 - q_market
-        market_log = math.log(q_market)
-        refresh_log = math.log(q_refresh)
+        market_log = _log_clamped(q_market)
+        refresh_log = _log_clamped(q_refresh)
         market_err: dict[str, float] = {}
         refresh_err: dict[str, float] = {}
         for name in self._component_names:
@@ -546,8 +553,8 @@ class TorchConditionalMechanicalMixturePriceModel:
             refresh_err[name] = obs_components[name] - refresh_mean
             market_log += self._normal_logpdf(market_err[name], self._market_var[name])
             refresh_log += self._student_t_logpdf(refresh_err[name], self._refresh_var[name])
-        log_norm = self._logaddexp(market_log, refresh_log)
-        market_resp = math.exp(market_log - log_norm)
+        log_norm = _logaddexp(market_log, refresh_log)
+        market_resp = _exp_clamped(market_log - log_norm)
         refresh_resp = 1.0 - market_resp
 
         self._gate_beta = self._gate_beta + self._alpha * (market_resp - q_market) * gate_x
@@ -752,7 +759,7 @@ class TorchConditionalMechanicalMixturePriceModel:
         x = np.array([1.0, float(log_flow) if math.isfinite(float(log_flow)) else 0.0], dtype=np.float64)
         gate_beta = np.nan_to_num(self._gate_beta, nan=0.0, posinf=20.0, neginf=-20.0)
         score = float(x @ gate_beta)
-        return min(0.999, max(0.001, float(1.0 / (1.0 + math.exp(-score)))))
+        return min(0.999, max(0.001, _expit(score)))
 
     def _market_probability_torch(self, total_flow: Any, *, dtype: Any, device: Any) -> Any:
         import torch

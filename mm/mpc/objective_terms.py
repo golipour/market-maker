@@ -701,23 +701,47 @@ def update_ce_ewma_scale(
 
 _LAMBDA_INIT_FLOOR = 1e-300
 
+# Default cap on the log-space dual state. ``exp(THETA_MAX) ~ 1.4e13`` which is
+# already absurdly large as a Lagrange multiplier; the cap is the only thing
+# that keeps the dual state from running away on long-lived thin books.
+VIABILITY_THETA_MAX = 30.0
+VIABILITY_THETA_MIN = math.log(_LAMBDA_INIT_FLOOR)
+
 
 def viability_theta_from_lambda_init(lambda_init: float) -> float:
-    """Map configured ``lambda_init`` to log-space dual state ``θ`` with ``λ = exp(θ)``."""
+    """Map configured ``lambda_init`` to log-space dual state ``θ`` with ``λ = exp(θ)``.
 
-    return math.log(max(0.0, float(lambda_init), _LAMBDA_INIT_FLOOR))
+    Returns ``-inf`` for non-positive ``lambda_init`` so the resulting
+    multiplier is exactly zero. The dual state is finite for any finite
+    positive input.
+    """
+
+    val = float(lambda_init)
+    if val <= 0.0 or not math.isfinite(val):
+        return -math.inf
+    return math.log(max(val, _LAMBDA_INIT_FLOOR))
 
 
 def viability_lambda_from_theta(viability_theta: float) -> float:
-    """Positive Lagrange multiplier from log-space dual state."""
+    """Positive Lagrange multiplier from log-space dual state.
+
+    Numerically safe: never raises. Returns ``0.0`` for ``-inf``,
+    non-positive, or non-finite ``theta``.
+    """
 
     theta = float(viability_theta)
-    if not math.isfinite(theta):
+    if not math.isfinite(theta) or theta <= 0.0:
         return 0.0
+    # Re-derive the clamp threshold to avoid the math.log call on the floor.
     if theta <= math.log(_LAMBDA_INIT_FLOOR):
         return 0.0
-    lam = math.exp(theta)
-    return lam if math.isfinite(lam) and lam > 0.0 else 0.0
+    try:
+        lam = math.exp(theta)
+    except OverflowError:
+        return 0.0
+    if not math.isfinite(lam) or lam <= 0.0:
+        return 0.0
+    return lam
 
 
 def _viability_shortfall_raw_from_components(
@@ -852,12 +876,27 @@ def update_viability_theta(
     *,
     params: ViabilityParams | None,
     min_availability_key: str = "viability_min_availability",
+    theta_min: float = VIABILITY_THETA_MIN,
+    theta_max: float = VIABILITY_THETA_MAX,
+    decay_rate: float = 0.0,
 ) -> float:
     """
     Log-space dual ascent: θ <- θ + η (A* - E[A_min]); λ = exp(θ).
 
     Uses the signed availability gap (not one-sided shortfall) so λ can decrease
     when availability is above target. No reset, leakage, or ε in the dual update.
+
+    The result is clamped to ``[theta_min, theta_max]`` (defaulting to the
+    module-level ``VIABILITY_THETA_MIN``/``VIABILITY_THETA_MAX``) so a
+    sustained positive gap cannot push ``theta`` past the point where
+    ``math.exp(theta)`` overflows. The clamp is the structural fix for
+    the 2026-09-01 Bitwana ``OverflowError``.
+
+    ``decay_rate`` (default ``0.0``) implements a leaky reset: each call
+    multiplies the prior state by ``1 - decay_rate`` before the additive
+    update, so a stalled dual state bleeds back toward zero. The clamp
+    is applied after the decay so the state can never escape the safe
+    region.
     """
 
     if params is None:
@@ -867,10 +906,38 @@ def update_viability_theta(
         params=params,
         min_availability_key=min_availability_key,
     )
-    if gap is None:
+    if gap is None and decay_rate <= 0.0:
         return float(viability_theta)
     eta = float(params.lambda_learning_rate)
-    return float(viability_theta) + eta * gap
+    theta_pre = float(viability_theta)
+    if decay_rate > 0.0:
+        theta_pre = theta_pre * (1.0 - decay_rate)
+    new_theta = theta_pre + eta * (gap if gap is not None else 0.0)
+    if new_theta > theta_max:
+        return float(theta_max)
+    if new_theta < theta_min:
+        return float(theta_min)
+    return new_theta
+
+
+def reset_viability_theta(
+    *,
+    current_theta: float,
+    reset_fraction: float = 0.5,
+) -> float:
+    """Apply a partial reset to the viability dual state.
+
+    Returns ``current_theta * (1 - reset_fraction)``. Used to bleed
+    the dual state when a long-lived thin book resumes without an
+    obvious availability signal; the default ``reset_fraction=0.5``
+    cuts the state in half.
+    """
+
+    if not 0.0 <= reset_fraction <= 1.0:
+        raise ValueError(
+            f"reset_fraction must be in [0, 1], got {reset_fraction!r}"
+        )
+    return float(current_theta) * (1.0 - float(reset_fraction))
 
 
 def validity_book_shortfall(

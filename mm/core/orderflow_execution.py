@@ -16,6 +16,7 @@ from mm.integrations.trade_stats import Orderbook
 
 from mm.mpc.step import Step
 from mm.core.orderflow_state import Action, OrderbookRelative, State, ob_to_ob_rel
+from mm.mpc_utils import expit as _expit
 
 
 # -----------------------------------------------------------------------------
@@ -52,7 +53,7 @@ def depth_from_sigmoid_params(params: dict[str, list[float]], delta: float) -> f
     n = min(len(L_list), len(k_list), len(x0_list))
     total = 0.0
     for i in range(n):
-        total += L_list[i] / (1.0 + np.exp(-k_list[i] * (delta - x0_list[i])))
+        total += L_list[i] * _expit(k_list[i] * (delta - x0_list[i]))
     return total
 
 

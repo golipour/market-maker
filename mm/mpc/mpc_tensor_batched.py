@@ -941,6 +941,12 @@ class MonteCarloMPCTensorBatched:
             if global_viability is not None
             else viability_theta_from_lambda_init(0.0)
         )
+        # Cooperative cancellation: ``StrategyRunner`` installs a
+        # ``threading.Event`` via ``set_cancel_event``; the Adam loop
+        # checks ``is_set()`` at the top of every epoch and returns the
+        # best-so-far result so the pool worker is freed on timeout.
+        self._cancel_event: Any = None
+        self._cancel_requested: bool = False
 
         if bounds is None:
             logit_bound = (-30.0, 30.0)
@@ -1218,6 +1224,14 @@ class MonteCarloMPCTensorBatched:
         adaptive_warm_resolved = not needs_adaptive_probe
 
         for epoch in range(self.adam_epochs):
+            # Cooperative cancellation: ``StrategyRunner`` installs a
+            # ``threading.Event`` so a timed-out decide can break out of
+            # the Adam loop without killing the worker thread. The
+            # best-so-far result is returned so the actor can keep its
+            # most recent action rather than throwing away work.
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                self._cancel_requested = True
+                break
             if self.verbose:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
@@ -1672,6 +1686,7 @@ class MonteCarloMPCTensorBatched:
                 self._viability_theta_local,
                 best_metrics.components,
                 params=self.local_optimizer.viability,
+                decay_rate=1e-4,
             )
             for metrics in (initial_metrics, final_metrics, best_metrics):
                 if metrics is not None:
@@ -1747,3 +1762,18 @@ class MonteCarloMPCTensorBatched:
         self._last_action = None
         self._x_torch = None
         self._optimizer = None
+
+    def set_cancel_event(self, event: Any) -> None:
+        """Install a ``threading.Event`` consulted by the Adam loop.
+
+        ``StrategyRunner._decide_with_timeout`` calls this before
+        submitting ``decide`` to its dedicated thread pool, so a
+        timed-out decide can break out of the loop without leaking the
+        worker thread. The flag is reset on every call so a follow-up
+        decide starts with a clean slate.
+        """
+        self._cancel_event = event
+        self._cancel_requested = False
+
+    def was_cancelled(self) -> bool:
+        return bool(self._cancel_requested)
