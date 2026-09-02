@@ -15,6 +15,7 @@ This folder describes the **event-bus runtime** in `mm/`: how market data become
 | [Observability & operations](observability.md) | Metrics, logs, traces, Postgres/Parquet, Grafana |
 | [Configuration](configuration.md) | Runtime JSON, environment variables, topics |
 | **[Local development](local-development.md)** | **Decomposed stack, Docker Compose, admin API, platform UI, run modes** |
+| **[Algorithm & architecture walkthrough](algorithm/README.md)** | **End-to-end, code-derived walkthrough: from a `MarketEvent` on the wire to a published order, with all the math** |
 | [Price and orderflow models](price-and-orderflow-models.md) | Detailed stochastic model inventory, data, parameter learning, runtime updates, optimizer usage |
 | [Architecture diagnostics review](architecture-diagnostics-review.md) | Architecture review, data flow, improvement roadmap, diagnostics and observability suggestions |
 | [Codebase upgrade plan](codebase-upgrade-plan.md) | Phased cleanup plan for diagnostics, optimizer refactors, risk config, hedging, and Grafana dashboards |
