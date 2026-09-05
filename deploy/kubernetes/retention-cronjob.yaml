@@ -1,5 +1,14 @@
 # Daily Postgres retention. Indexes are created CONCURRENTLY on first run.
-# Events 7d / facts 30d is enough for Grafana; raw orderbook JSON is the bulk of mm_events.
+#
+# Retention windows are sourced from the runtime configmap (see
+# market-maker-config), with a single source of truth in the JSON under
+# ``persistence.retention``. The CLI flags are kept as overrides for
+# emergency drills (e.g. ``--events-days 1``); if you set them, the cron
+# will use those values instead of the configmap.
+#
+# The canary row ``mm_events.event_id = '_retention_canary'`` is refreshed
+# on every successful run; cluster_health surfaces the age on /metrics and
+# the admin overview so a stuck retention job is visible.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -32,22 +41,28 @@ spec:
             - name: retention
               image: market-maker:latest
               imagePullPolicy: Always
+              # Auto-loads /config/runtime.json when present, so retention
+              # windows come from the configmap. To override on a one-off run,
+              # pass --events-days / --facts-days / --admin-audit-days here.
               command:
                 - python3
                 - -m
                 - mm.tools.apply_retention
-                - --events-days
-                - "7"
-                - --facts-days
-                - "30"
-                - --admin-audit-days
-                - "365"
               env:
                 - name: MM_ENV
                   value: prod
+                - name: MM_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: market-maker-secrets
+                      key: MM_DATABASE_URL
               envFrom:
                 - secretRef:
                     name: market-maker-secrets
+              volumeMounts:
+                - name: runtime-config
+                  mountPath: /config
+                  readOnly: true
               resources:
                 requests:
                   cpu: 50m
@@ -55,3 +70,7 @@ spec:
                 limits:
                   cpu: 500m
                   memory: 512Mi
+          volumes:
+            - name: runtime-config
+              configMap:
+                name: market-maker-config

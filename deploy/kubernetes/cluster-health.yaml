@@ -11,6 +11,8 @@ data:
   MM_ADMIN_URL: "http://market-maker-admin:8080"
   MM_ALERT_WEBHOOK: ""
   TICK_SECONDS: "30"
+  MM_METRICS_PORT: "8004"
+  MM_BUS_REDIS_URL: "redis://redis:6379/0"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,6 +44,15 @@ spec:
             - python3
             - -m
             - mm.observability.cluster_health
+          ports:
+            - containerPort: 8004
+              name: metrics
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 15
           env:
             - name: MM_ENV
               value: prod
@@ -60,6 +71,16 @@ spec:
                 configMapKeyRef:
                   name: market-maker-cluster-health
                   key: TICK_SECONDS
+            - name: MM_METRICS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-cluster-health
+                  key: MM_METRICS_PORT
+            - name: MM_BUS_REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: market-maker-cluster-health
+                  key: MM_BUS_REDIS_URL
             - name: LOG_LEVEL
               value: INFO
           envFrom:

@@ -1,0 +1,63 @@
+# Periodic Redis-stream trim and bus canary.
+#
+# Defensive backup to the per-XADD ``MAXLEN ~`` cap and the LRU eviction in
+# redis.yaml. Runs every 5 minutes; trims every stream under the configured
+# prefix to ``--max-len``, and writes a fresh canary so a silent bus failure
+# shows up on the next admin overview.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: market-maker-bus-trim
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/name: market-maker-bus-trim
+    app.kubernetes.io/component: persistence
+    app.kubernetes.io/part-of: market-maker
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: market-maker-bus-trim
+            app.kubernetes.io/component: persistence
+            app.kubernetes.io/part-of: market-maker
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: gitlab-registry
+          containers:
+            - name: bus-trim
+              image: market-maker:latest
+              imagePullPolicy: Always
+              command:
+                - python3
+                - -m
+                - mm.tools.bus_trim
+                - --redis-url
+                - redis://redis:6379/0
+                - --stream-prefix
+                - mm
+                - --max-len
+                - "5000"
+              env:
+                - name: MM_ENV
+                  value: prod
+                - name: MM_BUS_REDIS_URL
+                  value: redis://redis:6379/0
+              envFrom:
+                - secretRef:
+                    name: market-maker-secrets
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi

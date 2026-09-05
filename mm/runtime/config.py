@@ -277,6 +277,7 @@ class BusRuntimeConfig:
     consumer_group: str = "mm-runtime"
     consumer_name: str = "runtime"
     max_stream_length: int | None = 100_000
+    envelope_size_max_bytes: int | None = 64 * 1024
     read_block_ms: int = 1_000
     max_connections: int = 500
     max_queue_size: int = 1024
@@ -293,6 +294,11 @@ class BusRuntimeConfig:
             raise ValueError("bus.max_stream_length must be positive or null")
         if self.max_connections < 1:
             raise ValueError("bus.max_connections must be positive")
+        if (
+            self.envelope_size_max_bytes is not None
+            and int(self.envelope_size_max_bytes) <= 0
+        ):
+            raise ValueError("bus.envelope_size_max_bytes must be positive or null")
 
 
 @dataclass(frozen=True, slots=True)
@@ -854,6 +860,7 @@ class MarketMakerRuntimeConfig:
                 "consumer_group": self.bus.consumer_group,
                 "consumer_name": self.bus.consumer_name,
                 "max_stream_length": self.bus.max_stream_length,
+                "envelope_size_max_bytes": self.bus.envelope_size_max_bytes,
                 "max_queue_size": self.bus.max_queue_size,
                 "backpressure_policy": self.bus.backpressure_policy,
             },
@@ -1359,6 +1366,7 @@ def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
     if not isinstance(payload, dict):
         return BusRuntimeConfig()
     max_stream_length = payload.get("max_stream_length", 100_000)
+    envelope_size_max_bytes = payload.get("envelope_size_max_bytes", 64 * 1024)
     return BusRuntimeConfig(
         kind=str(payload.get("kind", "memory")),  # type: ignore[arg-type]
         redis_url=str(payload.get("redis_url", "redis://localhost:6379/0")),
@@ -1366,6 +1374,9 @@ def _bus_from_mapping(payload: Any) -> BusRuntimeConfig:
         consumer_group=str(payload.get("consumer_group", "mm-runtime")),
         consumer_name=str(payload.get("consumer_name", "runtime")),
         max_stream_length=int(max_stream_length) if max_stream_length is not None else None,
+        envelope_size_max_bytes=(
+            int(envelope_size_max_bytes) if envelope_size_max_bytes is not None else None
+        ),
         read_block_ms=int(payload.get("read_block_ms", 1000)),
         max_connections=int(payload.get("max_connections", 500)),
         max_queue_size=int(payload.get("max_queue_size", 1024)),

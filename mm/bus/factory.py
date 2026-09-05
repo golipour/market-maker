@@ -17,6 +17,7 @@ def build_event_bus(config: BusRuntimeConfig, *, run_id: str = "") -> AbstractEv
             config.redis_url,
             stream_prefix=config.stream_prefix,
             maxlen=config.max_stream_length,
+            envelope_size_max_bytes=config.envelope_size_max_bytes,
             read_block_ms=config.read_block_ms,
             run_id=run_id,
             max_queue_size=config.max_queue_size,

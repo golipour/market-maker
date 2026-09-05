@@ -23,7 +23,13 @@ from mm.core.payload_schema import (
     private_state_snapshot_event,
 )
 from mm.core.models.private import Balance, PrivateStateSnapshot
+from mm.observability import counter_inc, gauge
 from mm.observability.event_payloads import observe_envelope, observe_runtime_event
+from mm.observability.schema import (
+    MM_BUS_ENVELOPE_BYTES,
+    MM_BUS_ENVELOPE_DROPPED_TOTAL,
+    MM_BUS_EVENTS_DROPPED_TOTAL,
+)
 
 
 class RedisStreamsBus(AbstractEventBus):
@@ -40,6 +46,7 @@ class RedisStreamsBus(AbstractEventBus):
         *,
         stream_prefix: str = "mm",
         maxlen: int | None = 100_000,
+        envelope_size_max_bytes: int | None = 64 * 1024,
         read_block_ms: int = 1_000,
         run_id: str = "",
         max_queue_size: int = 1024,
@@ -49,6 +56,9 @@ class RedisStreamsBus(AbstractEventBus):
         self.url = url
         self.stream_prefix = stream_prefix.strip(":") or "mm"
         self.maxlen = maxlen
+        self.envelope_size_max_bytes = (
+            int(envelope_size_max_bytes) if envelope_size_max_bytes else None
+        )
         self.read_block_ms = max(1, int(read_block_ms))
         self.run_id = run_id
         self._max_queue_size = int(max_queue_size)
@@ -80,12 +90,36 @@ class RedisStreamsBus(AbstractEventBus):
             return
         envelope = envelope_event(topic, stream_event, run_id=self.run_id, source=self._source)
         observe_envelope(envelope, stage="redis_stream")
+        encoded = encode_envelope(envelope)
+        encoded_size = len(encoded.encode("utf-8") if isinstance(encoded, str) else encoded)
+        gauge(MM_BUS_ENVELOPE_BYTES, float(encoded_size), labels={"topic": topic})
+        if (
+            self.envelope_size_max_bytes is not None
+            and self.envelope_size_max_bytes > 0
+            and encoded_size > self.envelope_size_max_bytes
+        ):
+            counter_inc(
+                MM_BUS_ENVELOPE_DROPPED_TOTAL,
+                labels={"topic": topic, "reason": "size_cap"},
+            )
+            counter_inc(
+                MM_BUS_EVENTS_DROPPED_TOTAL,
+                labels={"topic": topic, "reason": "size_cap"},
+            )
+            self._log_stream_error(
+                "redis_stream_envelope_dropped",
+                topic,
+                ValueError(
+                    f"envelope size {encoded_size} > cap {self.envelope_size_max_bytes}"
+                ),
+            )
+            return
         kwargs: dict[str, Any] = {}
         if self.maxlen is not None and self.maxlen > 0:
             kwargs = {"maxlen": int(self.maxlen), "approximate": True}
         try:
             r = await self._client()
-            await r.xadd(self._stream(topic), {"data": encode_envelope(envelope)}, **kwargs)
+            await r.xadd(self._stream(topic), {"data": encoded}, **kwargs)
         except Exception as exc:
             if _is_redis_connection_error(exc):
                 await self._reset_client()

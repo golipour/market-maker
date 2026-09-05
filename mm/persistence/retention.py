@@ -135,11 +135,13 @@ def apply_retention(
     spool_dir: str | Path = "persistence_spool/postgres",
     now: datetime | None = None,
     dry_run: bool = False,
+    write_canary: bool = True,
 ) -> RetentionResult:
     """Apply configured retention tiers to available persistence stores."""
 
     current = now or datetime.now(timezone.utc)
     postgres = PostgresRetentionResult()
+    canary_age_ms = 0
     if database_url:
         if not dry_run:
             ensure_postgres_retention_indexes(database_url)
@@ -149,6 +151,23 @@ def apply_retention(
             now=current,
             dry_run=dry_run,
         )
+        if write_canary and not dry_run:
+            try:
+                canary_age_ms = write_postgres_canary(database_url, now=current)
+            except Exception as exc:  # noqa: BLE001
+                # A canary failure is not fatal; surface it via the result.
+                postgres = PostgresRetentionResult(
+                    tables=postgres.tables,
+                )
+                try:
+                    from mm.observability.logs import log_event
+
+                    log_event(
+                        "retention_canary_failed",
+                        {"error": type(exc).__name__, "message": str(exc)},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
     parquet = ParquetRetentionResult()
     if parquet_root is not None:
         parquet = apply_parquet_retention(
@@ -163,12 +182,19 @@ def apply_retention(
         now=current,
         dry_run=dry_run,
     )
-    return RetentionResult(
+    result = RetentionResult(
         postgres=postgres,
         parquet=parquet,
         spool=spool,
         dry_run=dry_run,
     )
+    # Stash canary age on the result for the CLI to print; ignore if dataclass
+    # is frozen (it is — use object.__setattr__ via __dict__ if needed).
+    try:
+        object.__setattr__(result, "postgres_canary_age_ms", canary_age_ms)
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 def apply_postgres_retention(
@@ -177,6 +203,7 @@ def apply_postgres_retention(
     *,
     now: datetime | None = None,
     dry_run: bool = False,
+    vacuum: bool = True,
 ) -> PostgresRetentionResult:
     import psycopg2
 
@@ -220,11 +247,45 @@ def apply_postgres_retention(
                         rows_affected=rows,
                     )
                 )
+            if vacuum and not dry_run and any(
+                r.tier == "events" for r in results
+            ):
+                # Without VACUUM ANALYZE, the next insert churns the heap and
+                # future retention deletes look slow. Cheap when run once a day.
+                started = time.monotonic()
+                cur.execute(f"VACUUM ANALYZE {POSTGRES_EVENTS_TABLE}")
+                conn.commit()
+                duration_ms = (time.monotonic() - started) * 1000.0
+                _emit_retention_metric("vacuum_duration_ms", duration_ms, {"table": POSTGRES_EVENTS_TABLE})
         if dry_run:
             conn.rollback()
     finally:
         conn.close()
+    _emit_retention_metric(
+        "rows_deleted",
+        float(sum(r.rows_affected for r in results)),
+        {"store": "postgres"},
+    )
     return PostgresRetentionResult(tables=tuple(results))
+
+
+def _emit_retention_metric(name: str, value: float, labels: dict[str, str]) -> None:
+    """Best-effort metrics emission. Never raise — retention must not fail on a missing metric."""
+    try:
+        from mm.observability import counter_inc, gauge
+        from mm.observability.schema import (
+            MM_RETENTION_BYTES_DELETED_TOTAL,
+            MM_RETENTION_ROWS_DELETED_TOTAL,
+            MM_RETENTION_VACUUM_DURATION_MS,
+        )
+        if name == "rows_deleted":
+            counter_inc(MM_RETENTION_ROWS_DELETED_TOTAL, inc=value, labels=labels)
+        elif name == "vacuum_duration_ms":
+            gauge(MM_RETENTION_VACUUM_DURATION_MS, value, labels=labels)
+        elif name == "bytes_deleted":
+            counter_inc(MM_RETENTION_BYTES_DELETED_TOTAL, inc=value, labels=labels)
+    except Exception:  # noqa: BLE001
+        return
 
 
 def apply_parquet_retention(
@@ -268,6 +329,16 @@ def apply_parquet_retention(
         files_removed += partition_files
         bytes_removed += partition_bytes
 
+    _emit_retention_metric(
+        "rows_deleted",
+        float(partitions_removed),
+        {"store": "parquet"},
+    )
+    _emit_retention_metric(
+        "bytes_deleted",
+        float(bytes_removed),
+        {"store": "parquet"},
+    )
     return ParquetRetentionResult(
         partitions_removed=partitions_removed,
         files_removed=files_removed,
@@ -312,6 +383,16 @@ def apply_spool_retention(
         if in_archive:
             _remove_empty_parents(path.parent, stop=root)
 
+    _emit_retention_metric(
+        "rows_deleted",
+        float(files_removed),
+        {"store": "spool"},
+    )
+    _emit_retention_metric(
+        "bytes_deleted",
+        float(bytes_removed),
+        {"store": "spool"},
+    )
     return SpoolRetentionResult(files_removed=files_removed, bytes_removed=bytes_removed)
 
 
@@ -331,6 +412,68 @@ def ensure_postgres_retention_indexes(database_url: str) -> None:
                 )
     finally:
         conn.close()
+
+
+def write_postgres_canary(database_url: str, *, now: datetime | None = None) -> int:
+    """Write a canary row to ``mm_events`` and return the previous canary's age in ms.
+
+    The canary is a single row keyed by ``event_id = '_retention_canary'``,
+    refreshed on every run. If the row is more than 2× the cron interval old,
+    a downstream alert (cluster_health) should fire. Returns 0 on first run.
+    """
+
+    import psycopg2
+
+    current = now or datetime.now(timezone.utc)
+    conn = psycopg2.connect(database_url)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mm_events (
+                    event_id, schema, version, run_id, source, topic, event_type,
+                    timestamp_ms, ts, payload, envelope
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (event_id) DO UPDATE SET
+                    timestamp_ms = EXCLUDED.timestamp_ms,
+                    ts = EXCLUDED.ts,
+                    payload = EXCLUDED.payload,
+                    envelope = EXCLUDED.envelope
+                RETURNING ts
+                """,
+                (
+                    "_retention_canary",
+                    "retention.canary",
+                    1,
+                    "retention",
+                    "apply_retention",
+                    "_retention",
+                    "_retention_canary",
+                    int(current.timestamp() * 1000),
+                    current,
+                    "{}",
+                    "{}",
+                ),
+            )
+            cur.execute(
+                "SELECT ts FROM mm_events WHERE event_id = %s",
+                ("_retention_canary",),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return 0
+            age_ms = int((current - row[0]).total_seconds() * 1000.0)
+    finally:
+        conn.close()
+    try:
+        from mm.observability import gauge
+        from mm.observability.schema import MM_RETENTION_CANARY_AGE_MS
+        gauge(MM_RETENTION_CANARY_AGE_MS, float(age_ms), labels={"store": "postgres"})
+    except Exception:  # noqa: BLE001
+        pass
+    return age_ms
 
 
 def _postgres_delete_before(

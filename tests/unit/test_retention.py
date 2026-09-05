@@ -181,3 +181,75 @@ def test_apply_retention_combines_all_tiers(tmp_path, monkeypatch) -> None:
 def test_retention_policy_rejects_non_positive_days() -> None:
     with pytest.raises(ValueError, match="events_days"):
         RetentionPolicy(events_days=0)
+
+
+def test_apply_postgres_retention_runs_vacuum_after_events_delete(monkeypatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    apply_postgres_retention(
+        "postgresql://example/db",
+        RetentionPolicy(events_days=7, facts_days=None, latest_state_days=None, admin_audit_days=None),
+        now=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    conn = fake.connections[0]
+    sqls = [call["sql"] for call in conn.execute_calls]
+    assert any("VACUUM ANALYZE mm_events" in s for s in sqls)
+
+
+def test_apply_postgres_retention_skips_vacuum_on_dry_run(monkeypatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    apply_postgres_retention(
+        "postgresql://example/db",
+        RetentionPolicy(events_days=7, facts_days=None, latest_state_days=None, admin_audit_days=None),
+        dry_run=True,
+    )
+    conn = fake.connections[0]
+    sqls = [call["sql"] for call in conn.execute_calls]
+    assert not any("VACUUM" in s for s in sqls)
+
+
+def test_write_postgres_canary_writes_a_canary_row(monkeypatch) -> None:
+    from mm.persistence.retention import write_postgres_canary
+
+    fake = _install_fake_psycopg2(monkeypatch)
+    # The fake fetchone returns (0,) by default; we want the canary query to
+    # return the current time so the function can compute an age.
+    fake.connections[0].fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+    age_ms = write_postgres_canary(
+        "postgresql://example/db",
+        now=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    conn = fake.connections[0]
+    sqls = [call["sql"] for call in conn.execute_calls]
+    assert any("INSERT INTO mm_events" in s and "ON CONFLICT" in s for s in sqls)
+    assert any("event_id = %s" in s for s in sqls)
+    assert age_ms == 0
+
+
+def test_apply_retention_reflects_canary_age_in_result(monkeypatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    fake.connections[0].fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+    result = apply_retention(
+        RetentionPolicy(events_days=7, facts_days=None, latest_state_days=None, admin_audit_days=None),
+        database_url="postgresql://example/db",
+        now=datetime(2026, 6, 9, tzinfo=timezone.utc),
+    )
+    assert getattr(result, "postgres_canary_age_ms", None) is not None
+
+
+def test_bus_config_rejects_non_positive_envelope_size() -> None:
+    from mm.runtime.config import BusRuntimeConfig
+
+    with pytest.raises(ValueError, match="envelope_size_max_bytes"):
+        BusRuntimeConfig(kind="redis_streams", envelope_size_max_bytes=0)
+
+
+def test_bus_config_accepts_envelope_size_override() -> None:
+    from mm.runtime.config import _bus_from_mapping
+
+    config = _bus_from_mapping(
+        {
+            "kind": "redis_streams",
+            "envelope_size_max_bytes": 4096,
+        }
+    )
+    assert config.envelope_size_max_bytes == 4096

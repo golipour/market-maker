@@ -123,6 +123,55 @@ async def test_redis_streams_bus_records_stream_envelope_size() -> None:
 
 
 @pytest.mark.asyncio
+async def test_redis_streams_bus_drops_oversize_envelope() -> None:
+    writes = []
+
+    class FakeRedis:
+        async def xadd(self, stream, fields, **kwargs):
+            writes.append((stream, fields, kwargs))
+
+        async def aclose(self):
+            pass
+
+    # 64 byte cap so we can stay below by accident only.
+    bus = RedisStreamsBus(stream_prefix="test", envelope_size_max_bytes=64)
+    bus._redis = FakeRedis()
+    event = {"type": "Oversize", "payload": "x" * 2048}
+
+    await bus.publish("unit:oversize:redis", event)
+
+    # Nothing should be written to the stream.
+    assert writes == []
+    text = REGISTRY.render()
+    assert 'mm_bus_envelope_dropped_total{reason="size_cap",topic="unit:oversize:redis"}' in text
+    assert 'mm_bus_events_dropped_total{reason="size_cap",topic="unit:oversize:redis"}' in text
+    await bus.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_streams_bus_allows_envelope_under_cap() -> None:
+    writes = []
+
+    class FakeRedis:
+        async def xadd(self, stream, fields, **kwargs):
+            writes.append((stream, fields, kwargs))
+
+        async def aclose(self):
+            pass
+
+    bus = RedisStreamsBus(stream_prefix="test", envelope_size_max_bytes=64 * 1024)
+    bus._redis = FakeRedis()
+    event = {"type": "Small", "payload": "x" * 16}
+
+    await bus.publish("unit:small:redis", event)
+
+    assert len(writes) == 1
+    text = REGISTRY.render()
+    assert 'mm_bus_envelope_dropped_total{reason="size_cap"' not in text
+    await bus.close()
+
+
+@pytest.mark.asyncio
 async def test_redis_streams_bus_compacts_dict_private_snapshot_payload() -> None:
     writes = []
 

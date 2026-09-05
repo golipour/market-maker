@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spool-archive-days", type=int, default=None)
     parser.add_argument("--spool-failed-days", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-canary", action="store_true", help="Do not refresh the Postgres retention canary row.")
     args = parser.parse_args(argv)
 
     policy = _resolve_policy(args)
@@ -41,6 +42,32 @@ def main(argv: list[str] | None = None) -> int:
         database_url = runtime.persistence.resolved_database_url()
         if parquet_root is None:
             parquet_root = runtime.persistence.resolved_parquet_root()
+    elif not args.config:
+        # Auto-load the in-cluster configmap if the file is mounted and no
+        # explicit overrides were given. Lets the cron job be config-driven.
+        candidate = Path("/config/runtime.json")
+        if candidate.is_file():
+            try:
+                runtime = load_runtime_config(str(candidate))
+                if database_url is None:
+                    database_url = runtime.persistence.resolved_database_url()
+                if parquet_root is None:
+                    parquet_root = runtime.persistence.resolved_parquet_root()
+                if not any(
+                    getattr(args, name) is not None
+                    for name in (
+                        "events_days",
+                        "facts_days",
+                        "latest_state_days",
+                        "admin_audit_days",
+                        "parquet_days",
+                        "spool_archive_days",
+                        "spool_failed_days",
+                    )
+                ):
+                    policy = runtime.persistence.retention
+            except Exception:
+                pass
 
     if database_url is None and parquet_root is None and not Path(args.spool_dir).expanduser().exists():
         parser.error("provide --database-url, --parquet-root, and/or an existing --spool-dir")
@@ -51,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         parquet_root=parquet_root,
         spool_dir=args.spool_dir,
         dry_run=bool(args.dry_run),
+        write_canary=not bool(args.skip_canary),
     )
     print(json.dumps(_result_to_dict(result), sort_keys=True))
     return 0
@@ -78,8 +106,10 @@ def _resolve_policy(args: argparse.Namespace) -> RetentionPolicy:
 
 
 def _result_to_dict(result: RetentionResult) -> dict[str, Any]:
+    canary_age_ms = getattr(result, "postgres_canary_age_ms", 0)
     return {
         "dry_run": result.dry_run,
+        "postgres_canary_age_ms": int(canary_age_ms),
         "postgres": {
             "rows_affected": result.postgres.rows_affected,
             "tables": [

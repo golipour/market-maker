@@ -360,6 +360,7 @@
     "consumer_group": "mm-runtime",
     "consumer_name": "runtime",
     "max_stream_length": 100000,
+    "envelope_size_max_bytes": 65536,
     "read_block_ms": 1000
   },
   "persistence": {

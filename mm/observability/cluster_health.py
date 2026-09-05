@@ -34,6 +34,7 @@ log = logging.getLogger("mm.cluster_health")
 DEFAULT_TICK_SECONDS = 30
 ADMIN_REQUEST_TIMEOUT = 8
 DEFAULT_WEBHOOK_TIMEOUT = 5
+RETENTION_MAX_AGE_MS = 7 * 24 * 3600 * 1000  # one week — flag if canary is older
 
 
 @dataclass(slots=True)
@@ -61,6 +62,80 @@ class AdminClient:
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
             log.warning("webhook_post_failed", extra={"error": str(exc)})
             return False
+
+
+def _read_postgres_canary_age(database_url: str) -> int | None:
+    try:
+        import psycopg2
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        conn = psycopg2.connect(database_url)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXTRACT(EPOCH FROM (NOW() - ts)) * 1000 FROM mm_events "
+                "WHERE event_id = %s",
+                ("_retention_canary",),
+            )
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0])
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_redis_canary_age(redis_url: str) -> int | None:
+    try:
+        import redis
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        client = redis.Redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=3.0)
+        rows = client.xrevrange("mm._retention.canary", count=1)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            client.close()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+    if not rows:
+        return None
+    last_id = rows[0][0]
+    try:
+        last_ms = int(str(last_id).split("-", 1)[0])
+    except Exception:  # noqa: BLE001
+        return None
+    return int(time.time() * 1000) - last_ms
+
+
+def _publish_retention_gauges(*, database_url: str, redis_url: str) -> None:
+    try:
+        from mm.observability import gauge
+        from mm.observability.schema import MM_RETENTION_CANARY_AGE_MS
+    except Exception:  # noqa: BLE001
+        return
+    pg_age = _read_postgres_canary_age(database_url) if database_url else None
+    redis_age = _read_redis_canary_age(redis_url) if redis_url else None
+    gauge(
+        MM_RETENTION_CANARY_AGE_MS,
+        float(pg_age) if pg_age is not None else -1.0,
+        labels={"store": "postgres"},
+    )
+    gauge(
+        MM_RETENTION_CANARY_AGE_MS,
+        float(redis_age) if redis_age is not None else -1.0,
+        labels={"store": "redis"},
+    )
 
 
 def _state_for(strategy: dict[str, Any]) -> dict[str, Any]:
@@ -155,6 +230,8 @@ async def run_monitor(
     tick_seconds: int = DEFAULT_TICK_SECONDS,
     webhook_url: str | None = None,
     stop_event: asyncio.Event | None = None,
+    database_url: str = "",
+    redis_url: str = "",
 ) -> None:
     stop_event = stop_event or asyncio.Event()
     while not stop_event.is_set():
@@ -165,6 +242,11 @@ async def run_monitor(
             log.exception("monitor_fetch_failed", extra={"error": str(exc)})
             await asyncio.wait_for(stop_event.wait(), timeout=tick_seconds)
             continue
+
+        try:
+            _publish_retention_gauges(database_url=database_url, redis_url=redis_url)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("retention_gauges_failed", extra={"error": str(exc)})
 
         alert = _build_alert(state)
         if alert is None:
@@ -197,11 +279,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-url", default=os.environ.get("MM_ADMIN_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--admin-token", default=os.environ.get("MM_ADMIN_TOKEN", ""))
     parser.add_argument("--database-url", default=os.environ.get("MM_DATABASE_URL", ""))
+    parser.add_argument("--redis-url", default=os.environ.get("MM_BUS_REDIS_URL", ""))
     parser.add_argument("--webhook-url", default=os.environ.get("MM_ALERT_WEBHOOK", ""))
     parser.add_argument(
         "--tick-seconds",
         type=int,
         default=int(os.environ.get("TICK_SECONDS", DEFAULT_TICK_SECONDS)),
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        default=int(os.environ.get("MM_METRICS_PORT", "8004")),
     )
     return parser
 
@@ -215,6 +303,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not args.database_url:
         log.error("database_url_required")
         return 2
+    # Start an in-process metrics server so the retention canary gauges are
+    # scrapeable for Prometheus. Long-running Deployment only.
+    if os.environ.get("MM_METRICS_PORT") is None and args.metrics_port:
+        os.environ["MM_METRICS_PORT"] = str(args.metrics_port)
+    try:
+        from mm.observability.registry import start_server
+
+        start_server(port=int(os.environ.get("MM_METRICS_PORT", args.metrics_port)))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("metrics_server_start_failed", extra={"error": str(exc)})
+
     from mm.persistence.alerts import build_postgres_store
 
     store = build_postgres_store(database_url=args.database_url)
@@ -230,6 +329,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                 tick_seconds=args.tick_seconds,
                 webhook_url=args.webhook_url or None,
                 stop_event=stop,
+                database_url=args.database_url,
+                redis_url=args.redis_url,
             )
         )
     except KeyboardInterrupt:

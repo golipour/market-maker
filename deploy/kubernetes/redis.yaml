@@ -30,19 +30,19 @@ spec:
             - --appendonly
             - "no"
             - --maxmemory
-            - 768mb
+            - 1536mb
             - --maxmemory-policy
-            - noeviction
+            - allkeys-lru
           ports:
             - containerPort: 6379
               name: redis
           resources:
             requests:
               cpu: 50m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 1Gi
+              memory: 2Gi
           readinessProbe:
             tcpSocket:
               port: redis
