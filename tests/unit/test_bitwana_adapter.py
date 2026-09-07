@@ -157,3 +157,72 @@ def test_bitwana_open_orders_unwraps_page_and_skips_closed(monkeypatch):
     assert [row["id"] for row in rows] == [1]
     assert rows[0]["remainingAmount"] == 1.5
     assert rows[0]["price"] == 100
+
+
+class _FakeResponse:
+    def __init__(self, payload, status_code=200):
+        self.status_code = status_code
+        self.ok = 200 <= int(status_code) < 400
+        self._payload = payload
+        self.content = b"{}" if payload is not None else b""
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
+def test_bitwana_unwrap_accepts_accepted_cancel_status() -> None:
+    assert private_rest._unwrap({"statusCode": 202, "content": None}) is None
+    assert private_rest._unwrap({"statusCode": "202", "content": {"id": 9}}) == {"id": 9}
+    assert private_rest._unwrap({"statusCode": 204, "content": {}}) == {}
+
+
+def test_bitwana_unwrap_still_rejects_error_status() -> None:
+    with pytest.raises(RuntimeError, match="Bitwana HTTP 400"):
+        private_rest._unwrap({"statusCode": 400, "content": None, "message": "bad"})
+
+
+def test_bitwana_cancel_treats_202_body_as_success(monkeypatch) -> None:
+    def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
+        assert method == "PUT"
+        assert url.endswith("/api/1/orders/cancel/974646013")
+        return _FakeResponse({"statusCode": 202, "message": "bitwana error", "content": None})
+
+    monkeypatch.setattr(private_rest.requests, "request", fake_request)
+    auth = private_rest.BitwanaJwtAuth("access", "refresh")
+    result = private_rest.cancel_order("974646013", auth)
+    assert result["success"] is True
+    assert result["id"] == 974646013
+
+
+@pytest.mark.asyncio
+async def test_bitwana_adapter_cancel_does_not_fail_on_202(monkeypatch) -> None:
+    def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
+        return _FakeResponse({"statusCode": 202, "content": None})
+
+    monkeypatch.setattr(private_rest.requests, "request", fake_request)
+    adapter = BitwanaRestOrderCommandAdapter(
+        "USDT_IRT",
+        api_token=private_rest.BitwanaJwtAuth("access", "refresh"),
+    )
+    await adapter.cancel_orders(["974646013", "974646016"])
+
+
+def test_bitwana_cancel_treats_missing_order_as_success(monkeypatch) -> None:
+    class NotFound:
+        status_code = 404
+        ok = False
+        content = b"{}"
+        text = "missing"
+
+        def json(self):
+            return {"statusCode": 404, "message": "not found"}
+
+    def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
+        return NotFound()
+
+    monkeypatch.setattr(private_rest.requests, "request", fake_request)
+    auth = private_rest.BitwanaJwtAuth("access", "refresh")
+    result = private_rest.cancel_order(974646017, auth)
+    assert result["success"] is True
+    assert result["already_gone"] is True

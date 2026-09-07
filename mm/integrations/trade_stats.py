@@ -1063,7 +1063,11 @@ class BitwanaAdapter:
         payload = r.json()
         if isinstance(payload, dict) and "content" in payload:
             code = payload.get("statusCode")
-            if code not in (None, 200, 201):
+            try:
+                parsed = None if code is None or code == "" else int(code)
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed is not None and parsed not in (200, 201, 202, 204):
                 raise ValueError(payload.get("message") or f"bitwana HTTP {code}")
             return payload.get("content")
         return payload

@@ -7,6 +7,7 @@ from mm.core.models.execution import Fill
 from mm.core.payload_schema import private_state_snapshot_from_payload
 from mm.core.models.private import OpenOrder, OrderUpdate
 from mm.execution.order_manager import OrderManager
+from mm.observability import log_event
 
 
 class ExecutionStateReconciler:
@@ -38,11 +39,23 @@ class ExecutionStateReconciler:
 
     async def _listen_snapshot(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:snapshot"):
-            if isinstance(event, dict):
+            if not isinstance(event, dict):
+                continue
+            try:
                 snapshot = self.manager.apply_private_snapshot(
                     private_state_snapshot_from_payload(event)
                 )
-                await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
+            except Exception as exc:
+                log_event(
+                    "execution_snapshot_apply_failed",
+                    {
+                        "exchange": self.exchange,
+                        "error": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+                continue
+            await self.bus.publish(f"execution:state:{self.exchange}", snapshot.as_payload())
 
     async def _listen_open_orders(self) -> None:
         async for event in self.bus.subscribe(f"private:state:{self.exchange}:open_orders"):

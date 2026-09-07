@@ -14,6 +14,11 @@ from mm.exchanges.instrument_wire import build_instrument_wire, merge_wallet_bal
 
 BASE_URL = os.environ.get("BITWANA_API_BASE_URL", "https://bit.yshm.ir").rstrip("/")
 
+# Bitwana wraps REST results as ``{statusCode, content}``. Cancel (and some
+# async writes) return 202 Accepted; treating that as an error aborts replace
+# syncs so new quotes never reach the book.
+_SUCCESS_STATUS_CODES = {200, 201, 202, 204}
+
 
 def api_symbol(symbol: str) -> str:
     return build_instrument_wire("bitwana", symbol).api_market_symbol
@@ -26,16 +31,35 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _status_code(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _unwrap(payload: Any) -> Any:
     if not isinstance(payload, dict):
         return payload
     if "content" in payload:
-        code = payload.get("statusCode")
-        if code not in (None, 200, 201):
+        code = _status_code(payload.get("statusCode"))
+        if code is not None and code not in _SUCCESS_STATUS_CODES:
             message = payload.get("message") or payload.get("descCode") or "bitwana error"
             raise RuntimeError(f"Bitwana HTTP {code}: {message}")
         return payload.get("content")
     return payload
+
+
+def _is_already_gone_cancel_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "http 404" in text
+        or "not found" in text
+        or "already cancel" in text
+        or "already_cancel" in text
+    )
 
 
 def _as_rows(payload: Any) -> list[Any]:
@@ -324,6 +348,8 @@ def cancel_order(order_id: str | int, api_token: Any) -> dict[str, Any]:
     try:
         content = _request("PUT", f"/api/1/orders/cancel/{oid}", auth)
     except Exception as exc:
+        if _is_already_gone_cancel_error(exc):
+            return {"success": True, "id": oid, "already_gone": True, "message": str(exc)}
         return {"status": "failed", "message": str(exc)}
     if isinstance(content, dict):
         return {"success": True, **content}
