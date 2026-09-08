@@ -70,6 +70,14 @@ class StrategyInputFrameAssembler:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        if self.bus is not None:
+            for queue in (
+                self.local_queue,
+                self.global_queue,
+                self.local_private_queue,
+                self.global_private_queue,
+            ):
+                await self.bus.unsubscribe_queue(queue)
 
     async def next_frame(self) -> StrategyInputFrame:
         local = _require_market_event(await self.local_queue.get())

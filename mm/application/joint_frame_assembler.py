@@ -89,6 +89,15 @@ class JointStrategyFrameAssembler:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.input_assembler.stop()
+        if self.bus is not None:
+            inner = self.input_assembler
+            for queue in (
+                inner.local_queue,
+                inner.global_queue,
+                inner.local_private_queue,
+                inner.global_private_queue,
+            ):
+                await self.bus.unsubscribe_queue(queue)
 
     async def next_joint_frame(self) -> JointStrategyFrame:
         input_frame = await self.input_assembler.next_frame()

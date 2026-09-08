@@ -176,9 +176,13 @@ async def test_worker_physical_ledger_skips_virtual_wallet(monkeypatch: pytest.M
         store=store,
         bus=InMemoryBus(),
     )
-    btc_slot = next(slot for slot in worker.slots if slot.strategy_id == "btc-maker")
-    assert btc_slot.strategy_runner is not None
-    assert btc_slot.strategy_runner.strategy_wallet_provider is None
+    supervisor = next(item for item in worker.supervisors if item.slot.strategy_id == "btc-maker")
+    btc_slot = supervisor._rebuild_slot()
+    try:
+        assert btc_slot.strategy_runner is not None
+        assert btc_slot.strategy_runner.strategy_wallet_provider is None
+    finally:
+        await btc_slot.stop()
 
 
 @pytest.mark.asyncio

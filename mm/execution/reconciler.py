@@ -96,16 +96,24 @@ class ExecutionStateReconciler:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
+        finally:
+            for queue in queues:
+                await self.bus.unsubscribe_queue(queue)
 
     async def _listen_cancel_actor(self) -> None:
         queue = self.bus.subscribe_queue(f"execution:cancel_actor:{self.exchange}")
-        while True:
-            event = await queue.get()
-            if not isinstance(event, dict):
-                continue
-            actor_id = event.get("actor_id")
-            if not actor_id:
-                continue
-            cancel_actor = getattr(self.manager, "cancel_actor_orders", None)
-            if cancel_actor is not None:
-                await cancel_actor(str(actor_id), reason=str(event.get("reason", "")))
+        try:
+            while True:
+                event = await queue.get()
+                if not isinstance(event, dict):
+                    continue
+                actor_id = event.get("actor_id")
+                if not actor_id:
+                    continue
+                cancel_actor = getattr(self.manager, "cancel_actor_orders", None)
+                if cancel_actor is not None:
+                    await cancel_actor(str(actor_id), reason=str(event.get("reason", "")))
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await self.bus.unsubscribe_queue(queue)

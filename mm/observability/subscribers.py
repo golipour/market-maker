@@ -51,6 +51,8 @@ class RuntimeObservabilitySubscriber:
                 self.observe(topic, event)
         except asyncio.CancelledError:
             raise
+        finally:
+            await self.bus.unsubscribe_queue(queue)
 
     def observe(self, topic: str, event: Any) -> None:
         if isinstance(event, RawOrderbook):

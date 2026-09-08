@@ -31,6 +31,16 @@ class AbstractEventBus(ABC):
         asyncio.create_task(_forward())
         return queue
 
+    async def unsubscribe_queue(self, queue: asyncio.Queue[Any] | None) -> None:
+        """Remove a queue registered by ``subscribe_queue``.
+
+        ``subscribe()`` already unregisters in ``finally``. Queue subscribers
+        must call this on stop or the queue stays in the fan-out list and can
+        stall every publisher under ``block`` backpressure.
+        """
+
+        return None
+
     async def close(self) -> None:
         """Release bus resources. In-memory implementations may no-op."""
 

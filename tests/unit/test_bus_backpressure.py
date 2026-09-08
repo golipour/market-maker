@@ -75,3 +75,30 @@ async def test_drop_newest_increments_dropped_metric() -> None:
     await bus.publish("topic:a", {"n": 2})
 
     assert MM_BUS_EVENTS_DROPPED_TOTAL in REGISTRY.render()
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_queue_removes_subscriber() -> None:
+    bus = InMemoryBus(max_queue_size=1, backpressure_policy="block")
+    queue = bus.subscribe_queue("topic:a")
+
+    await bus.unsubscribe_queue(queue)
+    await bus.publish("topic:a", {"n": 1})
+
+    assert queue.empty()
+    assert bus._subscribers.get("topic:a") in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_full_subscriber_does_not_block_other_subscribers() -> None:
+    bus = InMemoryBus(max_queue_size=1, backpressure_policy="block")
+    stalled = bus.subscribe_queue("topic:a")
+    live = bus.subscribe_queue("topic:a")
+
+    await bus.publish("topic:a", {"n": 1})
+    assert stalled.qsize() == 1
+    assert live.get_nowait() == {"n": 1}
+
+    await asyncio.wait_for(bus.publish("topic:a", {"n": 2}), timeout=1.0)
+    assert live.get_nowait() == {"n": 2}
+    assert stalled.get_nowait() == {"n": 2}

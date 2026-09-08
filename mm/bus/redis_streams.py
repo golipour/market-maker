@@ -13,8 +13,7 @@ from mm.bus.delivery import (
     BusBackpressurePolicy,
     TrackedSubscriberQueue,
     create_subscriber_queue,
-    deliver_to_subscriber,
-    record_subscriber_queue_metrics,
+    deliver_to_subscribers,
 )
 from mm.core.events import decode_envelope, encode_envelope, envelope_event
 from mm.core.payload_schema import (
@@ -75,16 +74,12 @@ class RedisStreamsBus(AbstractEventBus):
 
     async def publish(self, topic: str, event: Any) -> None:
         observe_runtime_event(topic, event, stage="bus_publish")
-        subscribers = list(self._subscribers.get(topic, ()))
-        for queue in subscribers:
-            await deliver_to_subscriber(
-                queue,
-                event,
-                max_queue_size=self._max_queue_size,
-                policy=self._backpressure_policy,
-            )
-        if subscribers:
-            record_subscriber_queue_metrics(subscribers)
+        await deliver_to_subscribers(
+            list(self._subscribers.get(topic, ())),
+            event,
+            max_queue_size=self._max_queue_size,
+            policy=self._backpressure_policy,
+        )
         stream_event = _compact_stream_event(topic, event)
         if stream_event is None:
             return
@@ -250,7 +245,19 @@ class RedisStreamsBus(AbstractEventBus):
         self._remote_tasks_by_topic[topic] = task
         self._track_forward_task(task)
 
-    async def _remove_subscriber(self, topic: str, queue: TrackedSubscriberQueue) -> None:
+    async def unsubscribe_queue(self, queue: asyncio.Queue[Any] | None) -> None:
+        if queue is None:
+            return
+        topic = getattr(queue, "topic", None)
+        if topic:
+            await self._remove_subscriber(str(topic), queue)
+            return
+        for topic_name, subscribers in list(self._subscribers.items()):
+            if queue in subscribers:
+                await self._remove_subscriber(topic_name, queue)
+                return
+
+    async def _remove_subscriber(self, topic: str, queue: asyncio.Queue[Any]) -> None:
         subscribers = self._subscribers.get(topic)
         if subscribers and queue in subscribers:
             subscribers.remove(queue)
@@ -269,16 +276,12 @@ class RedisStreamsBus(AbstractEventBus):
                     if getattr(envelope, "source", "") == self._source:
                         continue
                     event = _parse_remote_stream_payload(topic, envelope.payload)
-                    subscribers = list(self._subscribers.get(topic, ()))
-                    for queue in subscribers:
-                        await deliver_to_subscriber(
-                            queue,
-                            event,
-                            max_queue_size=self._max_queue_size,
-                            policy=self._backpressure_policy,
-                        )
-                    if subscribers:
-                        record_subscriber_queue_metrics(subscribers)
+                    await deliver_to_subscribers(
+                        list(self._subscribers.get(topic, ())),
+                        event,
+                        max_queue_size=self._max_queue_size,
+                        policy=self._backpressure_policy,
+                    )
                 if not self._closed:
                     await asyncio.sleep(max(0.1, self.read_block_ms / 1000.0))
             except asyncio.CancelledError:

@@ -109,6 +109,37 @@ async def deliver_to_subscriber(
     return "dropped_newest"
 
 
+async def deliver_to_subscribers(
+    queues: list[TrackedSubscriberQueue],
+    event: Any,
+    *,
+    max_queue_size: int,
+    policy: BusBackpressurePolicy,
+) -> None:
+    """Fan out one event without letting a full subscriber stall the others.
+
+    A single ``block`` subscriber still waits for capacity. With two or more
+    subscribers, a full queue is treated as ``drop_oldest`` so a leaked or
+    stalled consumer cannot freeze the topic for live consumers.
+    """
+
+    if not queues:
+        return
+    isolate_full = policy == "block" and len(queues) > 1
+    limit = int(max_queue_size)
+    for queue in queues:
+        queue_policy = policy
+        if isolate_full and limit > 0 and queue.qsize() >= limit:
+            queue_policy = "drop_oldest"
+        await deliver_to_subscriber(
+            queue,
+            event,
+            max_queue_size=max_queue_size,
+            policy=queue_policy,
+        )
+    record_subscriber_queue_metrics(queues)
+
+
 def record_subscriber_queue_metrics(queues: list[TrackedSubscriberQueue]) -> None:
     now_ms = int(time.time() * 1000)
     metrics = _metrics()

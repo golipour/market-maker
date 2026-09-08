@@ -141,6 +141,8 @@ class StrategyRunner:
         pool = getattr(self, "_decide_pool", None)
         if pool is not None:
             pool.shutdown(wait=True, cancel_futures=True)
+        if self.bus is not None:
+            await self.bus.unsubscribe_queue(self.frame_queue)
 
     async def _run(self) -> None:
         try:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from mm.bus.memory import InMemoryBus
@@ -7,6 +9,7 @@ from mm.registry.memory import MemoryRegistryStore
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig
 from mm.worker.account_pool import build_shared_account_pool, validate_worker_account_exchange_mapping
+from mm.worker.supervisor import StrategyBackoffConfig, StrategySupervisor
 from mm.worker.worker import build_worker_components, load_worker_strategies
 from mm.worker.worker_config import worker_config_from_mapping
 
@@ -284,3 +287,105 @@ def test_registry_get_active_worker_assignment() -> None:
     store.upsert_worker_assignment(worker_id="worker-1", strategy_ids=["btc-maker"])
     assignment = store.get_active_worker_assignment("worker-1")
     assert assignment.worker_id == "worker-1"
+
+
+class _FakeSlot:
+    def __init__(self, strategy_id: str) -> None:
+        self.strategy_id = strategy_id
+        self.account_id = "account"
+        self.starts = 0
+        self.stops = 0
+        self.started = asyncio.Event()
+
+    async def start(self) -> None:
+        self.starts += 1
+        self.started.set()
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+    def monitor_tasks(self) -> list[object]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_supervisor_stops_previous_slot_when_rebuilding() -> None:
+    first = _FakeSlot("placeholder")
+    rebuilt = _FakeSlot("live")
+    rebuilds: list[_FakeSlot] = []
+
+    def rebuild() -> _FakeSlot:
+        rebuilds.append(rebuilt)
+        return rebuilt
+
+    supervisor = StrategySupervisor(
+        slot=first,
+        backoff=StrategyBackoffConfig(initial_s=0.01, max_s=0.01),
+        rebuild_slot=rebuild,
+    )
+    await supervisor.start()
+    try:
+        await asyncio.wait_for(rebuilt.started.wait(), timeout=1.0)
+        assert rebuilds == [rebuilt]
+        assert first.stops >= 1
+        assert first.starts == 0
+        assert supervisor.slot is rebuilt
+    finally:
+        await supervisor.stop()
+
+
+def _subscriber_count(bus: InMemoryBus, topic: str) -> int:
+    return len(bus._subscribers.get(topic, ()))
+
+
+@pytest.mark.asyncio
+async def test_worker_start_does_not_leak_orphan_subscribers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mm.worker.worker.load_mm_env", lambda: False)
+    monkeypatch.setenv("NOBITEX_API_TOKEN", "test-token")
+    store = MemoryRegistryStore()
+    assignment_id, _ = _seed_worker_registry(store)
+    bus = InMemoryBus()
+    worker = await build_worker_components(
+        worker_config_from_mapping({"worker_id": "worker-1", "assignment_id": assignment_id}),
+        store=store,
+        bus=bus,
+    )
+    slot = next(item for item in worker.slots if item.strategy_id == "btc-maker")
+    market_topic = slot.config.local.market_event_topic(slot.config.interval_ms)
+    joint_topic = slot.config.joint_frame_topic
+    assert _subscriber_count(bus, market_topic) == 0
+    assert _subscriber_count(bus, joint_topic) == 0
+
+    await worker.start()
+    try:
+        live = next(
+            item for item in worker.supervisors if item.slot.strategy_id == "btc-maker"
+        )
+        await asyncio.sleep(0.05)
+        assert live.slot.frame_assembler is not None
+        assert _subscriber_count(bus, market_topic) == 1
+        assert _subscriber_count(bus, joint_topic) == 1
+
+        original_rebuild = live._rebuild_slot
+        rebuilds = 0
+
+        def counting_rebuild():
+            nonlocal rebuilds
+            rebuilds += 1
+            return original_rebuild()
+
+        live._rebuild_slot = counting_rebuild
+        await worker.control_plane.apply(
+            {
+                "command": "resume",
+                "actor_id": "btc-maker-actor",
+                "command_id": "test-resume-no-leak",
+            }
+        )
+        assert rebuilds >= 1
+        assert _subscriber_count(bus, market_topic) == 1
+        assert _subscriber_count(bus, joint_topic) == 1
+    finally:
+        await worker.stop()

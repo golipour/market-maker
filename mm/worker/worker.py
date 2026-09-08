@@ -313,32 +313,30 @@ async def build_worker_components(
             ledger_source=strategy.ledger_source,
         )
 
-    slots = tuple(
-        build_strategy_slot(
+    slots_list: list[StrategySlot] = []
+    supervisors_list: list[StrategySupervisor] = []
+    for item in strategies:
+        # Subscribe only when the supervisor builds the live slot. A fully
+        # wired constructor slot would stay registered after the first rebuild
+        # and stall every publisher once its queue filled.
+        placeholder = StrategySlot(
             strategy_id=item.strategy_id,
             account_id=item.account_id,
             config=item.config,
-            bus=runtime_bus,
-            account_pool=account_pool,
-            control_plane=control_plane,
-            virtual_ledger_service=virtual_ledger_service,
-            ledger_source=item.ledger_source,
         )
-        for item in strategies
-    )
-    supervisors_list: list[StrategySupervisor] = []
-    for item, slot in zip(strategies, slots, strict=True):
         supervisor = StrategySupervisor(
-            slot=slot,
+            slot=placeholder,
             backoff=StrategyBackoffConfig(
                 initial_s=config.backoff.initial_s,
                 max_s=config.backoff.max_s,
             ),
             rebuild_slot=lambda strategy_id=item.strategy_id: _rebuild_slot(strategy_id),
         )
+        slots_list.append(placeholder)
         supervisors_list.append(supervisor)
         if item.config.controller is not None and item.config.controller.actor_id:
             supervisors_by_actor[item.config.controller.actor_id] = supervisor
+    slots = tuple(slots_list)
     supervisors = tuple(supervisors_list)
 
     log_event(

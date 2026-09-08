@@ -70,7 +70,10 @@ class StrategySupervisor:
         try:
             while not self._stopped.is_set():
                 if self._rebuild_slot is not None:
+                    previous = self.slot
                     self.slot = self._rebuild_slot()
+                    if previous is not self.slot:
+                        await previous.stop()
                 try:
                     await self.slot.start()
                     self._delay_s = self.backoff.initial_s
