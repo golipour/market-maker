@@ -46,7 +46,7 @@ RUN apt-get update \
         libpq5 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin marketmaker \
-    && mkdir -p /config /data/parquet /var/log/mm
+    && mkdir -p /config /data/parquet /data/attribution /var/log/mm
 
 COPY --from=python-deps /opt/venv /opt/venv
 COPY mm/ mm/
@@ -54,7 +54,7 @@ COPY --from=ui /ui/dist platform/ui/dist
 
 RUN set -eux; \
     /opt/venv/bin/python -c "import torch; print('torch OK', torch.__version__)"; \
-    chown -R marketmaker:marketmaker /config /data/parquet /var/log/mm /app/platform
+    chown -R marketmaker:marketmaker /config /data /var/log/mm /app/platform
 
 USER marketmaker
 

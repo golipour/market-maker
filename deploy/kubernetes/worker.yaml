@@ -44,6 +44,8 @@ spec:
               value: worker-1
             - name: MM_METRICS_LABEL_WORKER_ID
               value: "1"
+            - name: MM_ORDER_ATTRIBUTION_CACHE_DIR
+              value: /data/attribution
           envFrom:
             - secretRef:
                 name: market-maker-secrets
@@ -51,6 +53,8 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
+            - name: attribution-cache
+              mountPath: /data/attribution
           resources:
             requests:
               cpu: 250m
@@ -74,6 +78,8 @@ spec:
         - name: config
           configMap:
             name: market-maker-config
+        - name: attribution-cache
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

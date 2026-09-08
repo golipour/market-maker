@@ -20,7 +20,21 @@ def _norm_actor(actor_id: str) -> str:
 
 
 def _attribution_cache_dir() -> Path:
-    return Path(os.environ.get("MM_ORDER_ATTRIBUTION_CACHE_DIR", "data/attribution"))
+    """Directory for the on-disk attribution cache.
+
+    The runtime image runs as ``marketmaker`` with cwd ``/app``, which is not
+    writable. The image owns ``/data``; relative ``data/attribution`` would
+    try to create ``/app/data`` and fail with EACCES.
+    """
+
+    configured = os.environ.get("MM_ORDER_ATTRIBUTION_CACHE_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    image_dir = Path("/data/attribution")
+    parent = image_dir.parent
+    if parent.is_dir() and os.access(parent, os.W_OK):
+        return image_dir
+    return Path("data/attribution")
 
 
 def _attribution_cache_path(exchange: str) -> Path:
@@ -78,7 +92,8 @@ class OrderAttributionRegistry:
             if text:
                 self._by_client_order_id[f"{ex}:{text}"] = actor
         if self._persist_exchange and self._persist_exchange == ex:
-            save_attribution_registry(ex, self)
+            if not save_attribution_registry(ex, self):
+                self._persist_exchange = None
 
     def resolve_actor_id(
         self,
@@ -174,11 +189,32 @@ def load_attribution_registry(exchange: str) -> OrderAttributionRegistry:
     return registry
 
 
-def save_attribution_registry(exchange: str, registry: OrderAttributionRegistry) -> None:
+def save_attribution_registry(exchange: str, registry: OrderAttributionRegistry) -> bool:
+    """Persist attribution mappings. Returns False if the cache cannot be written.
+
+    This cache is restart convenience only. A disk error must not fail a live
+    place/cancel that the exchange already accepted.
+    """
+
     path = _attribution_cache_path(exchange)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "by_exchange_order_id": dict(registry._by_exchange_order_id),
         "by_client_order_id": dict(registry._by_client_order_id),
     }
-    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        from mm.observability import log_event
+
+        log_event(
+            "order_attribution_cache_write_failed",
+            {
+                "exchange": _norm_exchange(exchange),
+                "path": str(path),
+                "error": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
+        return False
+    return True

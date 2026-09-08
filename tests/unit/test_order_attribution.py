@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from mm.core.models.execution import Fill
 from mm.execution.order_attribution import (
     OrderAttributionRegistry,
+    _attribution_cache_dir,
+    load_attribution_registry,
     wire_client_order_id_for_exchange,
 )
 from mm.exchanges.nobitex.private_rest import nobitex_wire_client_order_id
@@ -64,6 +69,37 @@ def test_wire_client_order_id_for_exchange_uses_registration_hook() -> None:
         == nobitex_wire_client_order_id("mpc-controller:buy:0")
     )
     assert wire_client_order_id_for_exchange("wallex", "actor:buy:0") == "actor:buy:0"
+
+
+def test_attribution_cache_write_failure_does_not_raise(monkeypatch, tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setenv("MM_ORDER_ATTRIBUTION_CACHE_DIR", str(blocker))
+    registry = load_attribution_registry("bitwana")
+    registry.register("bitwana", "974646013", "bitwana-controller")
+
+    assert registry.resolve_actor_id("bitwana", exchange_order_id="974646013") == "bitwana-controller"
+    assert registry._persist_exchange is None
+
+
+def test_attribution_cache_round_trip(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MM_ORDER_ATTRIBUTION_CACHE_DIR", str(tmp_path / "attribution"))
+    registry = load_attribution_registry("bitwana")
+    registry.register("bitwana", "1", "bitwana-controller", client_order_id="bitwana-controller:buy:0")
+
+    restored = load_attribution_registry("bitwana")
+    assert restored.resolve_actor_id("bitwana", exchange_order_id="1") == "bitwana-controller"
+
+
+def test_attribution_cache_dir_prefers_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("MM_ORDER_ATTRIBUTION_CACHE_DIR", str(tmp_path / "custom"))
+    assert _attribution_cache_dir() == tmp_path / "custom"
+
+
+def test_attribution_cache_dir_falls_back_when_data_root_not_writable(monkeypatch) -> None:
+    monkeypatch.delenv("MM_ORDER_ATTRIBUTION_CACHE_DIR", raising=False)
+    monkeypatch.setattr(os, "access", lambda path, mode: False)
+    assert _attribution_cache_dir() == Path("data/attribution")
 
 
 def test_enrich_fill_preserves_existing_actor_id() -> None:
