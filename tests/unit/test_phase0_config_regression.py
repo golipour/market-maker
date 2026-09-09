@@ -101,7 +101,7 @@ def test_example_runtime_config_loads() -> None:
     assert config.persistence.topics == ()
     assert config.resolved_persistence_topics == ()
     assert "market:events:bitpin:PUMP_IRT:10000" in config.effective_persistence_topics
-    assert "strategy:joint:frames:bitpin:PUMP_IRT:10000" in config.effective_persistence_topics
+    assert "strategy:joint:frames:bitpin:PUMP_IRT:10000" not in config.effective_persistence_topics
     assert "execution:errors" in config.effective_persistence_topics
     assert "private:state:bitpin:errors" in config.effective_persistence_topics
     local_optimizer = (config.controller.optimizer or {}).get("local", {})

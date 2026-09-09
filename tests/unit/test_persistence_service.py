@@ -27,7 +27,11 @@ def test_fleet_persistence_topics_expands_feeds_exchanges_and_actors() -> None:
     assert "strategy:target_books:mpc-controller" in topics
     assert "strategy:diagnostics:btc-maker" in topics
     assert "ledger:snapshot" in topics
-    assert "strategy:actions" in topics
+    assert "strategy:actions" not in topics
+    assert "portfolio:allocations" not in topics
+    assert "worker:capability" not in topics
+    assert "strategy:heartbeat:mpc-controller" not in topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" not in topics
 
 
 def test_persistence_service_config_derives_topics_from_feeds() -> None:
@@ -42,8 +46,9 @@ def test_persistence_service_config_derives_topics_from_feeds() -> None:
     )
     topics = config.effective_topics
     assert "market:events:nobitex:USDT_IRT:10000" in topics
-    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" not in topics
     assert "strategy:target_books:mpc-controller" in topics
+    assert "strategy:heartbeat:mpc-controller" not in topics
     assert config.bus.consumer_group == "persistence"
 
 
@@ -146,7 +151,21 @@ def test_multi_strategy_fleet_topics_include_all_actors() -> None:
     topics = set(config.effective_topics)
     assert "market:events:nobitex:USDT_IRT:10000" in topics
     assert "market:events:wallex:BTC_IRT:5000" in topics
-    assert "strategy:joint:frames:wallex:BTC_IRT:5000" in topics
+    assert "strategy:joint:frames:wallex:BTC_IRT:5000" not in topics
     assert "strategy:target_books:btc-maker" in topics
     assert "strategy:diagnostics:eth-maker" in topics
     assert "execution:orders:wallex" in topics
+
+
+def test_persistence_service_config_persists_joint_frames_only_when_listed() -> None:
+    config = persistence_service_config_from_mapping(
+        {
+            "feeds": [{"exchange": "nobitex", "symbol": "USDT_IRT", "interval_ms": 10000}],
+            "exchanges": ["nobitex"],
+            "actors": ["mpc-controller"],
+            "joint_frames": [{"exchange": "nobitex", "symbol": "USDT_IRT", "interval_ms": 10000}],
+            "bus": {"kind": "redis_streams"},
+            "persistence": {"enabled": True, "parquet_root": "/tmp/mm-parquet"},
+        }
+    )
+    assert "strategy:joint:frames:nobitex:USDT_IRT:10000" in config.effective_topics

@@ -949,12 +949,12 @@ def _runtime_frame_rate_sql() -> str:
     step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
     data_sql = f"""SELECT
   {_approx_step_time_alias_sql(step_source)},
-  ((e.payload #>> ARRAY['local_market','exchange']) || ' ' || (e.payload #>> ARRAY['local_market','symbol'])) AS metric,
+  (e.exchange || ' ' || e.symbol) AS metric,
   COUNT(*)::double precision AS value
 FROM mm_events e
-WHERE e.event_type = 'JointStrategyFrame'
-  AND (e.payload #>> ARRAY['local_market','exchange']) = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-  AND (e.payload #>> ARRAY['local_market','symbol']) = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+WHERE e.event_type = 'MarketEvent'
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+  AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2"""
     metrics_sql = _mm_scope_pair_metric_sql()
@@ -5284,23 +5284,6 @@ def _role_exchange_cte() -> str:
     ) AS gates(key, value)
     WHERE {diag}
       AND gates.value->>'role' IN ('local', 'global')
-    UNION ALL
-    SELECT 'local'::text,
-           jf.payload #>> ARRAY['local_market','exchange'],
-           jf.payload #>> ARRAY['local_market','symbol']
-    FROM mm_events jf
-    WHERE jf.event_type = 'JointStrategyFrame'
-      AND (jf.payload #>> ARRAY['local_market','symbol']) = ANY(ARRAY[${symbol:sqlstring}]::text[])
-      AND $__timeFilter(jf.ts)
-    UNION ALL
-    SELECT 'global'::text,
-           jf.payload #>> ARRAY['global_market','exchange'],
-           jf.payload #>> ARRAY['global_market','symbol']
-    FROM mm_events jf
-    WHERE jf.event_type = 'JointStrategyFrame'
-      AND (jf.payload #>> ARRAY['global_market','exchange']) IS NOT NULL
-      AND (jf.payload #>> ARRAY['global_market','symbol']) = ANY(ARRAY[${symbol:sqlstring}]::text[])
-      AND $__timeFilter(jf.ts)
   ) r
   WHERE role IN ('local', 'global')
     AND exchange IS NOT NULL AND exchange <> ''

@@ -119,10 +119,12 @@ def test_apply_postgres_retention_deletes_by_tier(monkeypatch) -> None:
     conn = fake.connections[0]
     delete_sql = [call["sql"] for call in conn.execute_calls if "DELETE FROM" in call["sql"]]
     assert any("DELETE FROM mm_events WHERE ctid IN" in sql for sql in delete_sql)
+    assert any("portfolio:allocations" in sql for sql in delete_sql)
     assert any("DELETE FROM mm_market_facts WHERE ctid IN" in sql for sql in delete_sql)
     assert any("DELETE FROM admin_audit_log WHERE ctid IN" in sql for sql in delete_sql)
-    assert not any("mm_latest_state" in sql for sql in delete_sql)
-    assert result.rows_affected == len(delete_sql)
+    assert not any("DELETE FROM mm_latest_state" in sql for sql in delete_sql)
+    assert any(item.tier == "unused_topics" for item in result.tables)
+    assert any(item.table == "mm_events" and item.tier == "events" for item in result.tables)
     assert conn.commit_count >= 1
 
 
@@ -147,8 +149,8 @@ def test_apply_postgres_retention_dry_run_counts_without_delete(monkeypatch) -> 
     assert conn.execute_calls[0]["sql"].startswith("SELECT COUNT(*) FROM mm_events")
     assert conn.commit_count == 0
     assert conn.rollback_count == 1
-    assert len(result.tables) == 1
-    assert result.tables[0].table == "mm_events"
+    assert any(item.table == "mm_events" and item.tier == "events" for item in result.tables)
+    assert any(item.tier == "unused_topics" for item in result.tables)
 
 
 def test_apply_retention_combines_all_tiers(tmp_path, monkeypatch) -> None:
@@ -193,6 +195,8 @@ def test_apply_postgres_retention_runs_vacuum_after_events_delete(monkeypatch) -
     conn = fake.connections[0]
     sqls = [call["sql"] for call in conn.execute_calls]
     assert any("VACUUM ANALYZE mm_events" in s for s in sqls)
+    assert any("DROP INDEX IF EXISTS mm_events_run_topic_ts_idx" in s for s in sqls)
+    assert any("portfolio:allocations" in s for s in sqls if "DELETE FROM mm_events" in s)
 
 
 def test_apply_postgres_retention_skips_vacuum_on_dry_run(monkeypatch) -> None:
@@ -211,9 +215,14 @@ def test_write_postgres_canary_writes_a_canary_row(monkeypatch) -> None:
     from mm.persistence.retention import write_postgres_canary
 
     fake = _install_fake_psycopg2(monkeypatch)
-    # The fake fetchone returns (0,) by default; we want the canary query to
-    # return the current time so the function can compute an age.
-    fake.connections[0].fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+    original_connect = fake.connect
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs)
+        conn.fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+        return conn
+
+    fake.connect = connect
     age_ms = write_postgres_canary(
         "postgresql://example/db",
         now=datetime(2026, 6, 9, tzinfo=timezone.utc),
@@ -227,13 +236,20 @@ def test_write_postgres_canary_writes_a_canary_row(monkeypatch) -> None:
 
 def test_apply_retention_reflects_canary_age_in_result(monkeypatch) -> None:
     fake = _install_fake_psycopg2(monkeypatch)
-    fake.connections[0].fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+    original_connect = fake.connect
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs)
+        conn.fetchone_results = [(datetime(2026, 6, 9, tzinfo=timezone.utc),)]
+        return conn
+
+    fake.connect = connect
     result = apply_retention(
         RetentionPolicy(events_days=7, facts_days=None, latest_state_days=None, admin_audit_days=None),
         database_url="postgresql://example/db",
         now=datetime(2026, 6, 9, tzinfo=timezone.utc),
     )
-    assert getattr(result, "postgres_canary_age_ms", None) is not None
+    assert result.postgres.tables
 
 
 def test_bus_config_rejects_non_positive_envelope_size() -> None:

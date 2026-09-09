@@ -222,13 +222,21 @@ def apply_postgres_retention(
         tiers.append(("admin_audit", POSTGRES_ADMIN_AUDIT_TABLE, "ts", policy.admin_audit_days))
 
     results: list[PostgresTableRetentionResult] = []
-    if not tiers:
-        return PostgresRetentionResult()
 
     conn = psycopg2.connect(database_url)
     try:
         conn.autocommit = False
         with conn.cursor() as cur:
+            if not dry_run:
+                cur.execute("DROP INDEX IF EXISTS mm_events_run_topic_ts_idx")
+                conn.commit()
+            results.extend(
+                apply_postgres_dashboard_storage_compaction(
+                    cur,
+                    conn=conn,
+                    dry_run=dry_run,
+                )
+            )
             for tier, table, ts_column, retention_days in tiers:
                 cutoff = current - timedelta(days=int(retention_days))
                 rows = _postgres_delete_before(
@@ -248,7 +256,7 @@ def apply_postgres_retention(
                     )
                 )
             if vacuum and not dry_run and any(
-                r.tier == "events" for r in results
+                r.table == POSTGRES_EVENTS_TABLE for r in results
             ):
                 # Without VACUUM ANALYZE, the next insert churns the heap and
                 # future retention deletes look slow. Cheap when run once a day.
@@ -508,6 +516,130 @@ def _postgres_delete_before(
         if batch < POSTGRES_DELETE_BATCH:
             break
     return deleted
+
+
+DASHBOARD_UNUSED_EVENT_PREDICATE = """(
+  event_id <> '_retention_canary'
+  AND (
+    topic IN ('portfolio:allocations', 'worker:capability', 'strategy:actions')
+    OR topic LIKE 'strategy:heartbeat:%'
+    OR topic LIKE 'strategy:joint:frames:%'
+    OR event_type = 'JointStrategyFrame'
+  )
+)"""
+
+
+def apply_postgres_dashboard_storage_compaction(
+    cursor: Any,
+    *,
+    conn: Any,
+    dry_run: bool,
+) -> list[PostgresTableRetentionResult]:
+    """Drop bus topics Grafana does not query, and strip duplicate envelope JSON."""
+
+    unused = _postgres_delete_matching(
+        cursor,
+        conn=conn,
+        table=POSTGRES_EVENTS_TABLE,
+        predicate=DASHBOARD_UNUSED_EVENT_PREDICATE,
+        dry_run=dry_run,
+    )
+    envelopes = _postgres_empty_json_column(
+        cursor,
+        conn=conn,
+        table=POSTGRES_EVENTS_TABLE,
+        column="envelope",
+        dry_run=dry_run,
+    )
+    latest_envelopes = _postgres_empty_json_column(
+        cursor,
+        conn=conn,
+        table=POSTGRES_LATEST_STATE_TABLE,
+        column="envelope",
+        dry_run=dry_run,
+    )
+    return [
+        PostgresTableRetentionResult(
+            table=POSTGRES_EVENTS_TABLE,
+            tier="unused_topics",
+            retention_days=0,
+            rows_affected=unused,
+        ),
+        PostgresTableRetentionResult(
+            table=POSTGRES_EVENTS_TABLE,
+            tier="empty_envelope",
+            retention_days=0,
+            rows_affected=envelopes,
+        ),
+        PostgresTableRetentionResult(
+            table=POSTGRES_LATEST_STATE_TABLE,
+            tier="empty_envelope",
+            retention_days=0,
+            rows_affected=latest_envelopes,
+        ),
+    ]
+
+
+def _postgres_delete_matching(
+    cursor: Any,
+    *,
+    conn: Any,
+    table: str,
+    predicate: str,
+    dry_run: bool,
+) -> int:
+    _assert_known_postgres_table(table)
+    if dry_run:
+        cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {predicate}")
+        row = cursor.fetchone()
+        return int(row[0] if row else 0)
+    deleted = 0
+    while True:
+        cursor.execute(
+            f"DELETE FROM {table} WHERE ctid IN ("
+            f"SELECT ctid FROM {table} WHERE {predicate} LIMIT %s"
+            f")",
+            (POSTGRES_DELETE_BATCH,),
+        )
+        batch = int(cursor.rowcount or 0)
+        conn.commit()
+        deleted += batch
+        if batch < POSTGRES_DELETE_BATCH:
+            break
+    return deleted
+
+
+def _postgres_empty_json_column(
+    cursor: Any,
+    *,
+    conn: Any,
+    table: str,
+    column: str,
+    dry_run: bool,
+) -> int:
+    _assert_known_postgres_table(table)
+    if column != "envelope":
+        raise ValueError(f"unsupported json compaction column: {column!r}")
+    if dry_run:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {column} <> '{{}}'::jsonb"
+        )
+        row = cursor.fetchone()
+        return int(row[0] if row else 0)
+    updated = 0
+    while True:
+        cursor.execute(
+            f"UPDATE {table} SET {column} = '{{}}'::jsonb WHERE ctid IN ("
+            f"SELECT ctid FROM {table} WHERE {column} <> '{{}}'::jsonb LIMIT %s"
+            f")",
+            (POSTGRES_DELETE_BATCH,),
+        )
+        batch = int(cursor.rowcount or 0)
+        conn.commit()
+        updated += batch
+        if batch < POSTGRES_DELETE_BATCH:
+            break
+    return updated
 
 
 def _assert_known_postgres_table(table: str) -> None:

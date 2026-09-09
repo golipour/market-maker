@@ -369,7 +369,7 @@ def test_persistence_topics_default_when_unset() -> None:
     assert config.resolved_persistence_topics == ()
     assert "market:events:nobitex:USDT_IRT:2500" in config.effective_persistence_topics
     assert "market:events:wallex:USDT_IRT:2500" in config.effective_persistence_topics
-    assert "strategy:joint:frames:nobitex:USDT_IRT:2500" in config.effective_persistence_topics
+    assert "strategy:joint:frames:nobitex:USDT_IRT:2500" not in config.effective_persistence_topics
     assert "strategy:diagnostics:mpc-controller" in config.effective_persistence_topics
     assert "strategy:target_books:mpc-controller" in config.effective_persistence_topics
     assert "execution:errors" in config.effective_persistence_topics

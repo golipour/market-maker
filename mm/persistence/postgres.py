@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS mm_events (
     payload JSONB NOT NULL,
     envelope JSONB NOT NULL
 );
-CREATE INDEX IF NOT EXISTS mm_events_run_topic_ts_idx ON mm_events (run_id, topic, ts DESC);
+DROP INDEX IF EXISTS mm_events_run_topic_ts_idx;
 CREATE INDEX IF NOT EXISTS mm_events_exchange_symbol_ts_idx ON mm_events (exchange, symbol, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_events_topic_type_ts_idx ON mm_events (topic, event_type, ts DESC);
 CREATE INDEX IF NOT EXISTS mm_events_actor_ts_idx ON mm_events (actor_id, ts DESC) WHERE actor_id IS NOT NULL;
@@ -672,7 +672,7 @@ class PostgresEventWriter:
                             envelope.run_id,
                             _ts(envelope.timestamp_ms),
                             psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
-                            psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
+                            psycopg2.extras.Json({}, dumps=_strict_json_dumps),
                         )
                         for envelope in batch
                         if _is_latest_state(envelope)
@@ -878,7 +878,7 @@ def _event_row(envelope: EventEnvelope) -> tuple[Any, ...]:
         envelope.timestamp_ms,
         _ts(envelope.timestamp_ms),
         psycopg2.extras.Json(to_jsonable(envelope.payload), dumps=_strict_json_dumps),
-        psycopg2.extras.Json(envelope.as_dict(), dumps=_strict_json_dumps),
+        psycopg2.extras.Json({}, dumps=_strict_json_dumps),
     )
 
 

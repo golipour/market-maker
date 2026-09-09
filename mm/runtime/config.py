@@ -771,9 +771,7 @@ class MarketMakerRuntimeConfig:
         local_exchange = self.local.normalized_exchange()
         topics = [
             self.local.market_event_topic(self.interval_ms),
-            self.joint_frame_topic,
             "ledger:snapshot",
-            self.controller.normalized_action_topic if self.controller is not None else "strategy:actions",
             "execution:errors",
             f"execution:orders:{local_exchange}",
             f"execution:state:{local_exchange}",

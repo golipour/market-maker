@@ -125,6 +125,13 @@ def test_postgres_writer_materializes_market_facts(monkeypatch: pytest.MonkeyPat
     assert row[25] == 1
     assert row[26] is True
 
+    events_call = next(
+        call
+        for call in conn.execute_values_calls
+        if "INSERT INTO mm_events" in call["sql"]
+    )
+    assert events_call["rows"][0][-1].value == {}
+
 
 def test_postgres_writer_materializes_action_stage_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install_fake_psycopg2(monkeypatch)
@@ -477,9 +484,37 @@ def test_postgres_writer_materializes_fill_execution_fact(monkeypatch: pytest.Mo
     assert row[16] == "buy"
     assert row[17] == 100.0
     assert row[18] == 0.25
-    assert row[20] == 0.25
-    assert row[21] == 0.01
-    assert row[23] == "filled"
+
+
+def test_postgres_writer_materializes_fill_dict_without_type_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_psycopg2(monkeypatch)
+    writer = PostgresEventWriter(
+        bus=InMemoryBus(),
+        topics=(),
+        database_url="postgresql://example/db",
+    )
+    envelope = envelope_event(
+        "private:state:nobitex:fills",
+        {
+            "exchange_order_id": "ex-1",
+            "actor_id": "actor-1",
+            "exchange": "nobitex",
+            "symbol": "BTC_IRT",
+            "side": "sell",
+            "price": 101.0,
+            "qty": 0.5,
+            "fee": 0.02,
+            "timestamp_ms": 2_600,
+        },
+    )
+
+    writer._write_batch([envelope])
+
+    row = _single_execution_fact_row(fake)
+    assert envelope.event_type == "Fill"
+    assert row[4] == "Fill"
+    assert row[16] == "sell"
+    assert row[18] == 0.5
 
 
 def test_postgres_writer_materializes_execution_snapshot_facts(monkeypatch: pytest.MonkeyPatch) -> None:

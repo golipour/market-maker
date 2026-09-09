@@ -6,7 +6,7 @@ SCHEMA_OVERVIEW = """# Market maker Postgres schema
 
 | Table | Purpose |
 |-------|---------|
-| `mm_events` | Raw event envelopes (topic, event_type, JSONB payload) |
+| `mm_events` | Dashboard event log (topic, event_type, JSONB payload; envelope column is unused) |
 | `mm_market_facts` | Denormalized market intervals: mid, spread, vwap, volumes |
 | `mm_action_stage_facts` | Strategy action pipeline stages (proposed/approved/rejected orders) |
 | `mm_execution_facts` | Order placement lifecycle (place/cancel/reconcile outcomes) |

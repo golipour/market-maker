@@ -838,6 +838,15 @@ def test_execution_errors_dashboard_surfaces_adapter_and_validation_failures() -
     assert "PlaceOrdersFailed" in logs_expr
 
 
+def test_runtime_overview_frames_step_counts_market_events() -> None:
+    dashboard = runtime_overview()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+    sql = panels_by_title["Frames / step"]["targets"][0]["rawSql"]
+
+    assert "event_type = 'MarketEvent'" in sql
+    assert "JointStrategyFrame" not in sql
+
+
 def test_runtime_overview_uses_per_step_counts_not_per_second_rates() -> None:
     dashboard = runtime_overview()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}

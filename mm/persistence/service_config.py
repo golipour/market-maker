@@ -17,21 +17,20 @@ from mm.runtime.config import (
 from mm.runtime.ingestor_config import IngestorFeedConfig, _feed_from_mapping, _feed_market_defaults
 
 
+# Topics Grafana actually reads from ``mm_events``. Allocations, heartbeats,
+# worker capability, and action bus copies are Prometheus / live-bus only.
 FLEET_CORE_PERSISTENCE_TOPICS: tuple[str, ...] = (
     "ledger:snapshot",
     "strategy:decisions",
-    "strategy:actions",
     "execution:errors",
     "risk:events",
     "admin:events",
-    "portfolio:allocations",
-    "worker:capability",
 )
 
 
 @dataclass(frozen=True, slots=True)
 class JointFrameSubscription:
-    """One joint strategy frame stream to persist for replay lineage."""
+    """Optional joint strategy frame stream. Not subscribed unless listed in config."""
 
     exchange: str
     symbol: str
@@ -66,7 +65,6 @@ def actor_persistence_topics(actor_id: str) -> tuple[str, ...]:
     return (
         f"strategy:target_books:{actor}",
         f"strategy:diagnostics:{actor}",
-        f"strategy:heartbeat:{actor}",
         f"strategy:errors:{actor}",
     )
 
@@ -83,15 +81,7 @@ def fleet_persistence_topics(
     topics: list[str] = list(FLEET_CORE_PERSISTENCE_TOPICS)
     for feed in feeds:
         topics.append(feed.market_event_topic())
-    resolved_joint_frames = joint_frames or tuple(
-        JointFrameSubscription(
-            feed.normalized_exchange(),
-            feed.symbol,
-            feed.interval_ms,
-        )
-        for feed in feeds
-    )
-    for joint_frame in resolved_joint_frames:
+    for joint_frame in joint_frames:
         topics.append(joint_frame.topic())
     resolved_exchanges = exchanges or tuple(
         dict.fromkeys(feed.normalized_exchange() for feed in feeds)

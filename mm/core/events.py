@@ -151,10 +151,30 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
+_FILL_PAYLOAD_KEYS = frozenset(
+    {
+        "exchange_order_id",
+        "actor_id",
+        "exchange",
+        "symbol",
+        "side",
+        "price",
+        "qty",
+        "fee",
+        "timestamp_ms",
+    }
+)
+
+
 def _event_type(event: Any, payload: Any) -> str:
     if isinstance(payload, dict) and payload.get("type"):
         return str(payload["type"])
-    return type(event).__name__
+    name = type(event).__name__
+    if name != "dict":
+        return name
+    if isinstance(payload, dict) and _FILL_PAYLOAD_KEYS.issubset(payload):
+        return "Fill"
+    return name
 
 
 def _pick(payload: Any, *keys: str) -> str | None:
