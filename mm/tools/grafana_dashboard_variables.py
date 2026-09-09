@@ -149,16 +149,88 @@ def target_books_topic_var_query() -> str:
     )
 
 
+def grafana_text_array_sql(var_name: str) -> str:
+    """Grafana multi-value text array, e.g. ``ARRAY['bitwana']::text[]``."""
+
+    return f"ARRAY[${{{var_name}:sqlstring}}]::text[]"
+
+
+def topic_equals_any_formatted_sql(
+    *,
+    column: str,
+    prefix: str,
+    var_name: str,
+    suffix: str = "",
+) -> str:
+    """Equality list of topics built from a Grafana variable.
+
+    ``topic LIKE 'private:state:%:fills'`` cannot use ``(topic, event_type, ts)``.
+    ``topic = ANY (SELECT 'private:state:' || id || ':fills' FROM unnest(...))`` can.
+    """
+
+    suffix_sql = f" || '{suffix}'" if suffix else ""
+    return (
+        f"{column} = ANY (SELECT '{prefix}' || id{suffix_sql} "
+        f"FROM unnest({grafana_text_array_sql(var_name)}) AS id)"
+    )
+
+
+def diagnostics_topic_sql(*, table_ref: str = "e") -> str:
+    prefix = f"{table_ref}." if table_ref else ""
+    return topic_equals_any_formatted_sql(
+        column=f"{prefix}topic",
+        prefix="strategy:diagnostics:",
+        var_name="actor_id",
+    )
+
+
+def target_books_topic_sql(*, table_ref: str = "e") -> str:
+    prefix = f"{table_ref}." if table_ref else ""
+    return topic_equals_any_formatted_sql(
+        column=f"{prefix}topic",
+        prefix="strategy:target_books:",
+        var_name="actor_id",
+    )
+
+
+def private_state_topic_sql(kind: str, *, table_ref: str = "e") -> str:
+    prefix = f"{table_ref}." if table_ref else ""
+    return topic_equals_any_formatted_sql(
+        column=f"{prefix}topic",
+        prefix="private:state:",
+        var_name="exchange",
+        suffix=f":{kind}",
+    )
+
+
+def execution_state_topic_sql(*, table_ref: str = "e") -> str:
+    prefix = f"{table_ref}." if table_ref else ""
+    return topic_equals_any_formatted_sql(
+        column=f"{prefix}topic",
+        prefix="execution:state:",
+        var_name="exchange",
+    )
+
+
+def ledger_snapshot_topic_sql(*, table_ref: str = "e") -> str:
+    prefix = f"{table_ref}." if table_ref else ""
+    return topic_equals_any_formatted_sql(
+        column=f"{prefix}topic",
+        prefix="ledger:snapshot:",
+        var_name="exchange",
+    )
+
+
 def diagnostics_scope_filter_sql(*, table_ref: str = "e", include_time: bool = True) -> str:
     """Scope ControllerDiagnostics rows by exchange/symbol/actor (not a single topic)."""
 
     prefix = f"{table_ref}." if table_ref else ""
     clauses = [
-        f"{prefix}topic LIKE 'strategy:diagnostics:%'",
+        diagnostics_topic_sql(table_ref=table_ref),
         f"{prefix}event_type = 'ControllerDiagnostics'",
-        f"{prefix}exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])",
-        f"{prefix}symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])",
-        f"{prefix}actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])",
+        f"{prefix}exchange = ANY({grafana_text_array_sql('exchange')})",
+        f"{prefix}symbol = ANY({grafana_text_array_sql('symbol')})",
+        f"{prefix}actor_id = ANY({grafana_text_array_sql('actor_id')})",
     ]
     if include_time:
         clauses.append(f"$__timeFilter({prefix}ts)")
@@ -170,14 +242,14 @@ def target_books_scope_filter_sql(*, table_ref: str = "e", include_time: bool = 
 
     prefix = f"{table_ref}." if table_ref else ""
     clauses = [
-        f"{prefix}topic LIKE 'strategy:target_books:%'",
+        target_books_topic_sql(table_ref=table_ref),
         f"{prefix}event_type = 'JointTargetBook'",
-        f"{prefix}exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])",
-        f"{prefix}symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])",
+        f"{prefix}exchange = ANY({grafana_text_array_sql('exchange')})",
+        f"{prefix}symbol = ANY({grafana_text_array_sql('symbol')})",
         (
             f"COALESCE(NULLIF({prefix}actor_id, ''), "
             f"substring({prefix}topic from '^strategy:target_books:(.+)$')) "
-            f"= ANY(ARRAY[${{actor_id:sqlstring}}]::text[])"
+            f"= ANY({grafana_text_array_sql('actor_id')})"
         ),
     ]
     if include_time:

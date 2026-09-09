@@ -55,8 +55,8 @@ def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
 def test_runtime_fill_rate_sql_keeps_private_fills_with_missing_symbol_column() -> None:
     sql = _runtime_fill_rate_sql("count")
 
-    assert "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$')" in sql
-    assert "e.topic LIKE 'private:state:%:fills'" in sql
+    assert "'private:state:' || id || ':fills'" in sql
+    assert "e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])" in sql
     assert "COALESCE(e.symbol, e.payload->>'symbol')" in sql
     assert "COALESCE(e.symbol, e.payload->>'symbol') IN (${symbol:sqlstring})" not in sql
 
@@ -564,18 +564,18 @@ def test_exchange_account_dashboard_uses_physical_snapshot_sources() -> None:
 
     balances_sql = panels_by_title["Latest account balances"]["targets"][0]["rawSql"]
     assert "PrivateStateSnapshot" in balances_sql
-    assert "private:state:%:snapshot" in balances_sql
+    assert "'private:state:' || id || ':snapshot'" in balances_sql
     assert "$__timeFilter(e.ts)" not in balances_sql
 
     age_sql = panels_by_title["Private snapshot age"]["targets"][0]["rawSql"]
     assert "$__timeFilter(e.ts)" not in age_sql
 
     errors_sql = panels_by_title["Recent private poll errors"]["targets"][0]["rawSql"]
-    assert "private:state:%:errors" in errors_sql
+    assert "'private:state:' || id || ':errors'" in errors_sql
     assert "401" not in errors_sql
 
     step_sql = panels_by_title["Private poll errors / step"]["targets"][0]["rawSql"]
-    assert "private:state:%:errors" in step_sql
+    assert "'private:state:' || id || ':errors'" in step_sql
     assert "$__timeFilter(e.ts)" in step_sql
 
     venue_sql = panels_by_title["Latest venue ledger"]["targets"][0]["rawSql"]
@@ -592,7 +592,7 @@ def test_exchange_account_dashboard_uses_physical_snapshot_sources() -> None:
     assert "$__timeFilter(e.ts)" in inventory_sql
 
 
-def test_diagnostics_and_target_book_filters_use_topic_patterns() -> None:
+def test_diagnostics_and_target_book_filters_use_topic_equality() -> None:
     combined_sql = "\n".join(
         target["rawSql"]
         for dashboard in dashboards()
@@ -602,8 +602,13 @@ def test_diagnostics_and_target_book_filters_use_topic_patterns() -> None:
     )
     assert "e.topic = '${diagnostics_topic}'" not in combined_sql
     assert "topic = '${target_books_topic}'" not in combined_sql
-    assert "e.topic LIKE 'strategy:diagnostics:%'" in combined_sql
-    assert "e.topic LIKE 'strategy:target_books:%'" in combined_sql
+    assert "e.topic LIKE 'strategy:diagnostics:%'" not in combined_sql
+    assert "e.topic LIKE 'strategy:target_books:%'" not in combined_sql
+    assert "LIKE 'private:state:%" not in combined_sql
+    assert "LIKE 'execution:state:%" not in combined_sql
+    assert "e.topic = ANY (SELECT 'strategy:diagnostics:' || id" in combined_sql
+    assert "e.topic = ANY (SELECT 'strategy:target_books:' || id" in combined_sql
+    assert "e.topic = ANY (SELECT 'private:state:' || id || ':fills'" in combined_sql
 
 
 def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
@@ -791,7 +796,7 @@ def test_risk_execution_exposes_order_flow_charts() -> None:
     assert "CancelOrdersAccepted" in canceled_sql
     assert "OrderValidationRejected" in rejected_sql
     assert "PlaceOrdersFailed" in rejected_sql
-    assert "private:state:%:fills" in fills_sql
+    assert "'private:state:' || id || ':fills'" in fills_sql
     assert "has orders" in venue_gate_sql
     assert "can sync" in venue_gate_sql
     assert "live" in venue_gate_sql
@@ -941,7 +946,7 @@ def test_runtime_live_order_panels_use_latest_snapshot_semantics() -> None:
     assert "latest_execution" in latest_sql
     assert "latest_private" in latest_sql
     assert "COUNT(open_order.key)" in latest_sql
-    assert "private:state:%:fills" in fills_sql
+    assert "'private:state:' || id || ':fills'" in fills_sql
     assert "ORDER BY e.ts DESC" in fills_sql
 
 
@@ -977,13 +982,15 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         }
         sql = panel["targets"][0]["rawSql"]
         assert "$__timeFilter(e.ts)" in sql
-        assert "private:state:%:fills" in sql
+        assert "'private:state:' || id || ':fills'" in sql
         assert "role_exchanges" in sql
-        assert "COALESCE(e.exchange, e.payload->>'exchange'" in sql
-        assert "COALESCE(e.symbol, e.payload->>'symbol', '')" in sql
+        assert "e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])" in sql
+        assert "e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])" in sql
         assert "SUM(price * qty) FILTER" in sql
         assert "e.payload->>'fee'" in sql
         assert "interval_mark" in sql
+        assert "LEFT JOIN interval_mark ON TRUE" in sql
+        assert "FROM latest_diagnostics d" in sql
 
     total_bid_volume_sql = panels_by_title["Total filled bid volume"]["targets"][0]["rawSql"]
     assert "COALESCE(bid_qty, 0.0) AS value" in total_bid_volume_sql

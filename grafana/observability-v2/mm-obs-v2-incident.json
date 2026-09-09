@@ -53,7 +53,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE e.topic LIKE 'strategy:diagnostics:%'\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts) ORDER BY e.ts DESC LIMIT 1",
+          "rawSql": "SELECT e.ts, e.topic, e.event_type, e.payload FROM mm_events e WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts) ORDER BY e.ts DESC LIMIT 1",
           "refId": "A"
         }
       ],
@@ -137,7 +137,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE topic LIKE 'strategy:target_books:%'\n  AND event_type = 'JointTargetBook'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND COALESCE(NULLIF(actor_id, ''), substring(topic from '^strategy:target_books:(.+)$')) = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
+          "rawSql": "SELECT ts, topic, event_type, payload FROM mm_events WHERE topic = ANY (SELECT 'strategy:target_books:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND event_type = 'JointTargetBook'\n  AND exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND COALESCE(NULLIF(actor_id, ''), substring(topic from '^strategy:target_books:(.+)$')) = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(ts) ORDER BY ts DESC LIMIT 1",
           "refId": "A"
         }
       ],

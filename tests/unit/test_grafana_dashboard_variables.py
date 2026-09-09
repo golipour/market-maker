@@ -70,3 +70,21 @@ def test_interval_ms_filter_accepts_grafana_all_join() -> None:
 
     assert "'${interval_ms}' IN ('$__all', 'All')" in sql
     assert "string_to_array(replace('${interval_ms}', ' ', ''), ',')" in sql
+
+
+def test_diagnostics_scope_filter_uses_topic_equality() -> None:
+    from mm.tools.grafana_dashboard_variables import (
+        diagnostics_scope_filter_sql,
+        private_state_topic_sql,
+        target_books_scope_filter_sql,
+    )
+
+    diagnostics_sql = diagnostics_scope_filter_sql()
+    target_sql = target_books_scope_filter_sql()
+    fills_sql = private_state_topic_sql("fills")
+
+    assert "LIKE 'strategy:diagnostics:%'" not in diagnostics_sql
+    assert "e.topic = ANY (SELECT 'strategy:diagnostics:' || id" in diagnostics_sql
+    assert "LIKE 'strategy:target_books:%'" not in target_sql
+    assert "e.topic = ANY (SELECT 'strategy:target_books:' || id" in target_sql
+    assert fills_sql.startswith("e.topic = ANY (SELECT 'private:state:' || id || ':fills'")

@@ -17,9 +17,12 @@ from mm.tools.grafana_dashboard_variables import (
     diagnostics_scope_filter_sql,
     diagnostics_topic_var_query,
     exchange_var_query,
+    execution_state_topic_sql,
     interval_ms_events_filter_sql,
     interval_ms_facts_filter_sql,
     interval_ms_var_query,
+    ledger_snapshot_topic_sql,
+    private_state_topic_sql,
     run_id_var_query,
     symbol_var_query,
     target_books_scope_filter_sql,
@@ -1092,8 +1095,8 @@ def _runtime_fill_rate_sql(measure: str) -> str:
   ({exchange} || ' ' || COALESCE({symbol}, 'unknown') || ' ' || {side}) AS metric,
   SUM({value}) AS value
 FROM mm_events e
-WHERE e.topic LIKE 'private:state:%:fills'
-  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+WHERE {private_state_topic_sql("fills")}
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND $__timeFilter(e.ts)
 GROUP BY 1, 2"""
     metrics_sql = f"""  SELECT scope.exchange || ' ' || scope.symbol || ' ' || side.side AS metric
@@ -1117,7 +1120,7 @@ snapshots AS (
     COALESCE(e.exchange, 'unknown') AS exchange,
     e.payload
   FROM mm_events e
-  WHERE e.topic LIKE 'execution:state:%'
+  WHERE {execution_state_topic_sql()}
     AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND $__timeFilter(e.ts)
 ),
@@ -1173,15 +1176,15 @@ ORDER BY 1"""
 
 
 def _runtime_latest_order_counts_sql() -> str:
-    return """WITH latest_execution AS (
+    return f"""WITH latest_execution AS (
   SELECT DISTINCT ON (e.exchange)
     'execution state'::text AS source,
     e.ts,
     e.exchange,
     e.payload
   FROM mm_events e
-  WHERE e.topic LIKE 'execution:state:%'
-    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
+  WHERE {execution_state_topic_sql()}
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND $__timeFilter(e.ts)
   ORDER BY e.exchange, e.ts DESC
 ),
@@ -1192,8 +1195,8 @@ latest_private AS (
     COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') AS exchange,
     e.payload
   FROM mm_events e
-  WHERE e.topic LIKE 'private:state:%:snapshot'
-    AND COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${exchange:sqlstring}]::text[])
+  WHERE {private_state_topic_sql("snapshot")}
+    AND COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$'), 'unknown') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND $__timeFilter(e.ts)
   ORDER BY COALESCE(e.exchange, substring(e.topic from '^private:state:([^:]+):snapshot$')), e.ts DESC
 ),
@@ -1210,11 +1213,11 @@ SELECT
 FROM latest l
 LEFT JOIN LATERAL jsonb_each(
   CASE l.source
-    WHEN 'execution state' THEN COALESCE(l.payload->'live_orders', '{}'::jsonb)
-    ELSE COALESCE(l.payload->'open_orders', '{}'::jsonb)
+    WHEN 'execution state' THEN COALESCE(l.payload->'live_orders', '{{}}'::jsonb)
+    ELSE COALESCE(l.payload->'open_orders', '{{}}'::jsonb)
   END
 ) AS open_order(key, value)
-  ON COALESCE(open_order.value #>> ARRAY['order','symbol'], '') = ANY(ARRAY[${symbol:sqlstring}]::text[])
+  ON COALESCE(open_order.value #>> ARRAY['order','symbol'], '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
 GROUP BY l.source, l.ts, l.exchange
 ORDER BY l.exchange, l.source"""
 
@@ -1235,8 +1238,8 @@ def _runtime_recent_fills_sql(limit: int = 50) -> str:
   e.payload->>'timestamp_ms' AS fill_timestamp_ms,
   e.payload
 FROM mm_events e
-WHERE e.topic LIKE 'private:state:%:fills'
-  AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+WHERE {private_state_topic_sql("fills")}
+  AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
   AND $__timeFilter(e.ts)
 ORDER BY e.ts DESC
 LIMIT {limit}"""
@@ -2113,9 +2116,9 @@ FROM (
          'fill events'::text AS metric,
          COUNT(*)::double precision AS value
   FROM mm_events e
-  WHERE e.topic LIKE 'private:state:%:fills'
-    AND COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown') = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-    AND COALESCE(e.symbol, e.payload->>'symbol', '') = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  WHERE {private_state_topic_sql("fills")}
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
     AND $__timeFilter(e.ts)
   GROUP BY 1, 2
 ) flow
@@ -2540,7 +2543,7 @@ canceled AS (
     SELECT open_order.value
     FROM mm_events s
     CROSS JOIN LATERAL jsonb_each(COALESCE(s.payload->'live_orders', '{{}}'::jsonb)) AS open_order(key, value)
-    WHERE s.topic LIKE 'execution:state:%'
+    WHERE {execution_state_topic_sql(table_ref="s")}
       AND s.exchange = c.exchange
       AND s.ts <= c.ts
       AND open_order.key = c.order_id
@@ -2598,7 +2601,7 @@ previous_state AS (
   JOIN LATERAL (
     SELECT s.ts, s.exchange, s.payload
     FROM mm_events s
-    WHERE s.topic LIKE 'execution:state:%'
+    WHERE {execution_state_topic_sql(table_ref="s")}
       AND s.exchange = c.exchange
       AND s.ts <= c.ts
       AND $__timeFilter(s.ts)
@@ -4421,7 +4424,7 @@ def _exchange_account_venue_symbol_expr() -> str:
 def _exchange_account_private_scope_filter() -> str:
     exchange = _exchange_account_private_exchange_expr()
     return f"""e.event_type = 'PrivateStateSnapshot'
-  AND e.topic LIKE 'private:state:%:snapshot'
+  AND {private_state_topic_sql("snapshot")}
   AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])"""
 
 
@@ -4432,7 +4435,7 @@ def _exchange_account_private_time_filter() -> str:
 
 def _exchange_account_private_errors_scope_filter() -> str:
     exchange = _exchange_account_private_errors_exchange_expr()
-    return f"""e.topic LIKE 'private:state:%:errors'
+    return f"""{private_state_topic_sql("errors")}
   AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])"""
 
 
@@ -4445,7 +4448,7 @@ def _exchange_account_venue_scope_filter() -> str:
     exchange = _exchange_account_venue_exchange_expr()
     symbol = _exchange_account_venue_symbol_expr()
     return f"""(
-    (e.event_type = 'VenueLedgerSnapshot' AND e.topic LIKE 'ledger:snapshot:%')
+    (e.event_type = 'VenueLedgerSnapshot' AND {ledger_snapshot_topic_sql()})
     OR (e.event_type = 'JointLedgerSnapshot' AND e.topic = 'ledger:snapshot')
   )
   AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
@@ -6366,11 +6369,13 @@ WHERE exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])
 ORDER BY 1"""
 
 
-def _fill_interval_mark_price_sql() -> str:
-    local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
-    global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
-    reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
-    mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+def _fill_interval_mark_price_sql(payload_expr: str = "e.payload") -> str:
+    local_sell_vwap = _numeric_sql(f"{payload_expr} #>> ARRAY['state','local_sell_vwap']", default="NULL")
+    global_sell_vwap = _numeric_sql(f"{payload_expr} #>> ARRAY['state','global_sell_vwap']", default="NULL")
+    reference_price = _numeric_sql(
+        f"{payload_expr} #>> ARRAY['optimizer','config','reference_price']", default="NULL"
+    )
+    mid = _numeric_sql(f"{payload_expr} #>> ARRAY['state','mid']", default="NULL")
     return f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
 
 
@@ -6397,8 +6402,6 @@ END""",
     }
     if stat not in stat_exprs:
         raise ValueError(f"unknown fill interval stat: {stat}")
-    exchange = "COALESCE(e.exchange, e.payload->>'exchange', substring(e.topic from '^private:state:([^:]+):fills$'), 'unknown')"
-    symbol = "COALESCE(e.symbol, e.payload->>'symbol', '')"
     side = _side_sql("e.payload->>'side'")
     qty = _numeric_sql("e.payload->>'qty'")
     price = _numeric_sql("e.payload->>'price'", default="NULL")
@@ -6406,12 +6409,12 @@ END""",
     role_filter = ""
     if role is not None:
         role_filter = f"""
-    AND {exchange} IN (
+    AND e.exchange IN (
       SELECT role_exchange
       FROM role_exchanges
       WHERE role = '{role}'
     )"""
-    mark_price_expr = _fill_interval_mark_price_sql()
+    mark_price_expr = _fill_interval_mark_price_sql("d.payload")
     return f"""WITH latest_diagnostics AS (
   SELECT e.payload, e.exchange
   FROM mm_events e
@@ -6421,10 +6424,7 @@ END""",
 ),
 interval_mark AS (
   SELECT {mark_price_expr} AS mark_price
-  FROM mm_events e
-  WHERE {_diagnostics_filter()}
-  ORDER BY e.ts DESC
-  LIMIT 1
+  FROM latest_diagnostics d
 ),
 role_exchanges AS (
   SELECT gates.key AS role_exchange,
@@ -6444,10 +6444,9 @@ fills AS (
     {price} AS price,
     {fee} AS fee
   FROM mm_events e
-  LEFT JOIN role_exchanges r ON r.role_exchange = {exchange}
-  WHERE e.topic LIKE 'private:state:%:fills'
-    AND {exchange} = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
-    AND {symbol} = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+  WHERE {private_state_topic_sql("fills")}
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
     {role_filter}
     AND $__timeFilter(e.ts)
 ),
@@ -6465,7 +6464,7 @@ agg AS (
 SELECT ($__timeTo())::timestamptz AS "time",
        {stat_exprs[stat]} AS value
 FROM agg
-CROSS JOIN interval_mark"""
+LEFT JOIN interval_mark ON TRUE"""
 
 
 def _venue_gates_sql() -> str:
