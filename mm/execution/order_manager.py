@@ -42,6 +42,14 @@ from mm.exchanges.shared.provider_adapter import now_ms
 
 TERMINAL_ORDER_STATUSES = {"done", "filled", "closed", "canceled", "cancelled", "rejected"}
 
+# Full private snapshots are authoritative for resting orders. A place accepted by
+# the router may take one poll to appear; absence on a snapshot whose timestamp is
+# still <= accepted_ms is ignored (in-flight poll started before the place).
+# After that, require this many consecutive post-accept snapshots that omit the
+# order before releasing the hold — same truth source as cancels (snapshot says
+# it is not resting), without clearing on a single laggy listing.
+PENDING_PLACE_ABSENCE_CONFIRMATIONS = 2
+
 
 @dataclass(frozen=True, slots=True)
 class PendingOrderChange:
@@ -120,6 +128,7 @@ class OrderManager(AbstractOrderManager):
         self._live_orders: dict[str, OpenOrder] = {}
         self._pending_places: dict[str, PendingOrderChange] = {}
         self._pending_cancels: dict[str, PendingOrderChange] = {}
+        self._pending_place_absent_snapshots: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -302,7 +311,7 @@ class OrderManager(AbstractOrderManager):
             for order_id, order in snapshot.open_orders.items()
             if order.order.exchange.lower().strip() == self.exchange
         }
-        self._reconcile_pending_with_confirmed()
+        self._reconcile_pending_with_confirmed(snapshot_timestamp_ms=snapshot.timestamp_ms)
         self._sync_attribution_registry()
         return self.snapshot(timestamp_ms=snapshot.timestamp_ms)
 
@@ -311,10 +320,12 @@ class OrderManager(AbstractOrderManager):
         if status in TERMINAL_ORDER_STATUSES or open_order.remaining_qty <= 0:
             self._live_orders.pop(open_order.exchange_order_id, None)
             self._pending_places.pop(open_order.exchange_order_id, None)
+            self._pending_place_absent_snapshots.pop(open_order.exchange_order_id, None)
             self._pending_cancels.pop(open_order.exchange_order_id, None)
         else:
             self._live_orders[open_order.exchange_order_id] = open_order
             self._pending_places.pop(open_order.exchange_order_id, None)
+            self._pending_place_absent_snapshots.pop(open_order.exchange_order_id, None)
             self._sync_attribution_registry(open_order=open_order)
         return self.snapshot(timestamp_ms=open_order.timestamp_ms)
 
@@ -323,6 +334,7 @@ class OrderManager(AbstractOrderManager):
         if status in TERMINAL_ORDER_STATUSES or update.remaining_qty <= 0:
             self._live_orders.pop(update.exchange_order_id, None)
             self._pending_places.pop(update.exchange_order_id, None)
+            self._pending_place_absent_snapshots.pop(update.exchange_order_id, None)
             self._pending_cancels.pop(update.exchange_order_id, None)
             return self.snapshot(timestamp_ms=update.timestamp_ms)
         current = self._live_orders.get(update.exchange_order_id)
@@ -349,6 +361,7 @@ class OrderManager(AbstractOrderManager):
                     timestamp_ms=update.timestamp_ms,
                 )
                 self._pending_places.pop(update.exchange_order_id, None)
+                self._pending_place_absent_snapshots.pop(update.exchange_order_id, None)
         return self.snapshot(timestamp_ms=update.timestamp_ms)
 
     def apply_fill(self, fill: Fill) -> ExecutionSnapshot:
@@ -370,6 +383,7 @@ class OrderManager(AbstractOrderManager):
         else:
             pending = self._pending_places.pop(fill.exchange_order_id, None)
             if pending is not None:
+                self._pending_place_absent_snapshots.pop(fill.exchange_order_id, None)
                 self._pending_cancels.pop(fill.exchange_order_id, None)
         return self.snapshot(timestamp_ms=fill.timestamp_ms)
 
@@ -482,6 +496,7 @@ class OrderManager(AbstractOrderManager):
                 order=order,
                 accepted_ms=timestamp_ms,
             )
+            self._pending_place_absent_snapshots.pop(order_id, None)
             if self._attribution_registry is not None:
                 self._attribution_registry.register(
                     self.exchange,
@@ -655,13 +670,47 @@ class OrderManager(AbstractOrderManager):
             return 0
         return max(0, int(timestamp_ms) - min(int(ts) for ts in accepted))
 
-    def _reconcile_pending_with_confirmed(self) -> None:
+    def _reconcile_pending_with_confirmed(self, *, snapshot_timestamp_ms: int | None = None) -> None:
+        """Align pending router accepts with authoritative private state.
+
+        Places confirm when they appear in the live book, or when consecutive
+        full snapshots taken after acceptance omit them (filled / canceled /
+        never resting). Cancels confirm when the live book no longer lists them.
+        """
+
+        released_absent: list[str] = []
         for order_id in list(self._pending_places):
             if order_id in self._live_orders:
                 self._pending_places.pop(order_id, None)
+                self._pending_place_absent_snapshots.pop(order_id, None)
+                continue
+            pending = self._pending_places[order_id]
+            if snapshot_timestamp_ms is None or int(snapshot_timestamp_ms) <= int(pending.accepted_ms):
+                continue
+            misses = int(self._pending_place_absent_snapshots.get(order_id, 0)) + 1
+            if misses < PENDING_PLACE_ABSENCE_CONFIRMATIONS:
+                self._pending_place_absent_snapshots[order_id] = misses
+                continue
+            self._pending_places.pop(order_id, None)
+            self._pending_place_absent_snapshots.pop(order_id, None)
+            released_absent.append(order_id)
         for order_id in list(self._pending_cancels):
             if order_id not in self._live_orders:
                 self._pending_cancels.pop(order_id, None)
+        if released_absent:
+            from mm.observability import log_event
+
+            log_event(
+                "execution_pending_place_released",
+                {
+                    "exchange": self.exchange,
+                    "reason": "private_snapshot_absent",
+                    "confirmations": PENDING_PLACE_ABSENCE_CONFIRMATIONS,
+                    "order_ids": released_absent,
+                    "snapshot_timestamp_ms": snapshot_timestamp_ms,
+                    "pending_place_count": len(self._pending_places),
+                },
+            )
 
     @staticmethod
     def _target_order_to_order(order) -> Order:

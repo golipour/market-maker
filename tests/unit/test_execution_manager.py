@@ -15,7 +15,7 @@ from mm.core.payload_schema import (
     EXECUTION_SNAPSHOT_SCHEMA,
     EXECUTION_SNAPSHOT_VERSION,
 )
-from mm.execution.order_manager import OrderManager
+from mm.execution.order_manager import OrderManager, PendingOrderChange
 from mm.execution.reconciler import ExecutionStateReconciler
 
 
@@ -255,3 +255,149 @@ async def test_cancel_actor_orders_ignores_unattributed_open_orders() -> None:
     )
     assert set(canceled.live_orders) == {"external"}
     assert canceled.pending_cancel_count == 0
+
+
+def _empty_snapshot(exchange: str, timestamp_ms: int) -> PrivateStateSnapshot:
+    return PrivateStateSnapshot(exchange, timestamp_ms, balances={}, open_orders={})
+
+
+def test_pending_place_survives_snapshot_started_before_accept() -> None:
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 2000)
+    manager._pending_places["ex-1"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ex-1",
+        actor_id="actor-1",
+        accepted_ms=1500,
+        order=Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5),
+    )
+
+    # In-flight poll started before accept must not release the hold.
+    first = manager.apply_private_snapshot(_empty_snapshot("nobitex", 1400))
+    assert first.pending_place_count == 1
+    assert "ex-1" in first.pending_places
+
+
+def test_pending_place_needs_two_post_accept_absences_to_release() -> None:
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 5000)
+    manager._pending_places["ex-1"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ex-1",
+        actor_id="actor-1",
+        accepted_ms=1500,
+        order=Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5),
+    )
+
+    first = manager.apply_private_snapshot(_empty_snapshot("nobitex", 2000))
+    assert first.pending_place_count == 1
+
+    second = manager.apply_private_snapshot(_empty_snapshot("nobitex", 3000))
+    assert second.pending_place_count == 0
+    assert second.live_order_count == 0
+
+
+def test_pending_place_presence_clears_without_waiting_for_absence() -> None:
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 5000)
+    order = Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1")
+    manager._pending_places["ex-1"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ex-1",
+        actor_id="actor-1",
+        accepted_ms=1500,
+        order=order,
+    )
+
+    confirmed = manager.apply_private_snapshot(
+        PrivateStateSnapshot(
+            "nobitex",
+            2000,
+            balances={},
+            open_orders={
+                "ex-1": OpenOrder(
+                    exchange_order_id="ex-1",
+                    actor_id="actor-1",
+                    order=order,
+                    remaining_qty=0.5,
+                    filled_qty=0.0,
+                    status="open",
+                    timestamp_ms=2000,
+                )
+            },
+        )
+    )
+    assert confirmed.pending_place_count == 0
+    assert confirmed.live_order_count == 1
+
+
+def test_pending_place_miss_counter_resets_when_order_appears() -> None:
+    manager = OrderManager("nobitex", FakeOrderCommandAdapter(), clock_ms=lambda: 5000)
+    order = Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5)
+    manager._pending_places["ex-1"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ex-1",
+        actor_id="actor-1",
+        accepted_ms=1500,
+        order=order,
+    )
+
+    manager.apply_private_snapshot(_empty_snapshot("nobitex", 2000))
+    assert manager.snapshot().pending_place_count == 1
+
+    manager.apply_private_snapshot(
+        PrivateStateSnapshot(
+            "nobitex",
+            2500,
+            balances={},
+            open_orders={
+                "ex-1": OpenOrder(
+                    exchange_order_id="ex-1",
+                    actor_id="actor-1",
+                    order=order,
+                    remaining_qty=0.5,
+                    filled_qty=0.0,
+                    status="open",
+                    timestamp_ms=2500,
+                )
+            },
+        )
+    )
+    assert manager.snapshot().pending_place_count == 0
+
+    # If it somehow becomes pending again and one miss accrues, a later empty
+    # snapshot alone must not clear until the confirmation threshold.
+    manager._pending_places["ex-2"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ex-2",
+        actor_id="actor-1",
+        accepted_ms=2600,
+        order=order,
+    )
+    manager.apply_private_snapshot(_empty_snapshot("nobitex", 2700))
+    assert manager.snapshot().pending_place_count == 1
+
+
+@pytest.mark.asyncio
+async def test_released_pending_place_allows_new_sync() -> None:
+    commands = FakeOrderCommandAdapter()
+    manager = OrderManager("nobitex", commands, clock_ms=lambda: 5000)
+    manager._pending_places["ghost"] = PendingOrderChange(
+        operation="place",
+        exchange_order_id="ghost",
+        actor_id="actor-1",
+        accepted_ms=1000,
+        order=Order("nobitex", "BTC_IRT", "buy", 99.0, 0.1),
+    )
+    manager.apply_private_snapshot(_empty_snapshot("nobitex", 2000))
+    manager.apply_private_snapshot(_empty_snapshot("nobitex", 3000))
+    assert manager.snapshot().pending_place_count == 0
+
+    await manager.sync(
+        [
+            Action(
+                actor_id="actor-1",
+                orders=(Order("nobitex", "BTC_IRT", "buy", 100.0, 0.5, client_order_id="bid-1"),),
+            )
+        ]
+    )
+    assert len(commands.placed) == 1
+    assert manager.snapshot().pending_place_count == 1
+
