@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -208,6 +209,8 @@ class DecisionContext:
     ledger_source: str = "physical"
     frame_sync_status: dict[str, Any] | None = None
     now_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    # Carried across frames by StrategyRunner; updated when a positive mark is resolved.
+    last_portfolio_mark: float | None = None
 
     decision: StrategyDecision | None = None
     controller_error: str | None = None
@@ -271,6 +274,14 @@ class DecisionContext:
 
     def to_diagnostics(self) -> ControllerDiagnostics:
         decision = self.decision
+        # Build state before assembling warnings so mark-carry warnings are included.
+        state = self._state_diagnostics(decision)
+        models = self._model_scores(decision)
+        optimizer = self._optimizer_diagnostics(decision)
+        action_pipeline = self._action_pipeline(decision)
+        risk = self._risk_diagnostics()
+        execution_gates = self.execution_state.as_diagnostics()
+
         warnings: list[str] = []
         if self.controller_error:
             warnings.append(self.controller_error)
@@ -303,13 +314,6 @@ class DecisionContext:
                 else _frame_sync_status_from_input(self.frame)
             ),
         )
-
-        state = self._state_diagnostics(decision)
-        models = self._model_scores(decision)
-        optimizer = self._optimizer_diagnostics(decision)
-        action_pipeline = self._action_pipeline(decision)
-        risk = self._risk_diagnostics()
-        execution_gates = self.execution_state.as_diagnostics()
 
         return ControllerDiagnostics(
             actor_id=self.config.actor_id,
@@ -358,6 +362,13 @@ class DecisionContext:
                 self.clean_frame.local.orderbook,
                 target_depth=abs(float(local_inventory)),
             )
+            # Own-order clearing (or a transient empty clean book) can wipe mid
+            # while the raw venue book still has a usable mark.
+            if mid is None:
+                mid, local_buy_vwap, local_sell_vwap = _book_vwap_diagnostics(
+                    self.frame.local.orderbook,
+                    target_depth=abs(float(local_inventory)),
+                )
             global_inventory, _global_cash_for_depth = self._global_inventory_cash()
             global_buy_vwap = None
             global_sell_vwap = None
@@ -366,12 +377,32 @@ class DecisionContext:
                     self.clean_frame.global_.orderbook,
                     target_depth=abs(float(global_inventory)),
                 )
+                if global_buy_vwap is None and global_sell_vwap is None and self.frame.global_ is not None:
+                    _global_mid, global_buy_vwap, global_sell_vwap = _book_vwap_diagnostics(
+                        self.frame.global_.orderbook,
+                        target_depth=abs(float(global_inventory)),
+                    )
         global_inventory, global_cash = self._global_inventory_cash()
         local_mark = local_sell_vwap if local_inventory >= 0.0 else local_buy_vwap
-        local_wealth = portfolio_wealth(local_cash, local_inventory, local_mark or mid or 0.0)
+        ledger_ref = float(self.ledger.reference_price) if self.ledger is not None else None
+        live_mark = _positive_mark(
+            local_mark,
+            mid,
+            float(self.frame.local.microprice),
+            ledger_ref,
+        )
+        mark = _positive_mark(live_mark, self.last_portfolio_mark)
+        if mark is not None:
+            if live_mark is None and self.last_portfolio_mark is not None:
+                self.record_warning("portfolio_mark_carried_forward")
+            self.last_portfolio_mark = mark
+        # Never silently mark inventory at 0 when a prior mark exists; cold start
+        # with no mark still falls back to 0 (wealth ~= cash).
+        local_wealth = portfolio_wealth(local_cash, local_inventory, mark if mark is not None else 0.0)
         global_wealth: float | None = None
-        if global_sell_vwap is not None:
-            global_wealth = portfolio_wealth(global_cash, global_inventory, global_sell_vwap)
+        global_mark = _positive_mark(global_sell_vwap, live_mark, self.last_portfolio_mark)
+        if global_mark is not None:
+            global_wealth = portfolio_wealth(global_cash, global_inventory, global_mark)
         return StateDiagnostics(
             mid=mid,
             local_inventory=local_inventory,
@@ -560,6 +591,21 @@ def _book_vwap_diagnostics(orderbook: Any, *, target_depth: float) -> tuple[floa
         return mid, float(buy_vwap), float(sell_vwap)
     except (ValueError, TypeError, AttributeError):
         return None, None, None
+
+
+def _positive_mark(*candidates: float | None) -> float | None:
+    """Return the first finite price strictly greater than zero."""
+
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(price) and price > 0.0:
+            return price
+    return None
 
 
 def _order_stage_summary_from_dicts(orders: tuple[dict[str, Any], ...]) -> dict[str, Any]:

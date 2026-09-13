@@ -439,3 +439,74 @@ def test_decision_context_clears_own_orders_from_diagnostics_orderbook() -> None
     )
     payload = ctx.to_diagnostics().as_payload()
     assert payload["cleared_orderbook"]["bids"] == [{"price": 100.0, "qty": 3.0}]
+
+
+def _empty_book_event(*, microprice: float = 0.0) -> MarketEvent:
+    book = RawOrderbook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        timestamp_ms=2_000,
+        bids=(),
+        asks=(),
+        is_snapshot=True,
+    )
+    return MarketEvent(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        interval_ms=1000,
+        t_start_ms=1000,
+        t_end_ms=2000,
+        orderbook=book,
+        trades=(),
+        buy_volume=0.0,
+        sell_volume=0.0,
+        vwap=0.0,
+        imbalance=0.0,
+        microprice=microprice,
+    )
+
+
+def test_empty_book_wealth_uses_carried_mark_not_zero() -> None:
+    from mm.core.models.execution import TradingState
+
+    frame = StrategyInputFrame(local=_empty_book_event(), created_at_ms=1_000)
+    trading_state = TradingState(actor_id="test-runner", cash=782_000_000.0, inventory=991.0)
+    last_mark = 233_000.0
+    ctx = DecisionContext(
+        config=_minimal_config(),
+        frame=frame,
+        clean_frame=frame,
+        trading_state=trading_state,
+        frame_step=1,
+        last_portfolio_mark=last_mark,
+    )
+    diag = ctx.to_diagnostics()
+
+    assert diag.state.mid is None
+    assert diag.state.local_wealth == pytest.approx(782_000_000.0 + 991.0 * last_mark)
+    assert "portfolio_mark_carried_forward" in diag.warnings
+    assert ctx.last_portfolio_mark == pytest.approx(last_mark)
+
+
+def test_empty_clean_book_falls_back_to_raw_book_mark() -> None:
+    from mm.core.models.execution import TradingState
+
+    raw = _market_event()
+    empty = _empty_book_event(microprice=0.0)
+    frame = StrategyInputFrame(local=raw, created_at_ms=1_000)
+    clean_frame = StrategyInputFrame(local=empty, created_at_ms=1_000)
+    trading_state = TradingState(actor_id="test-runner", cash=100.0, inventory=2.0)
+    ctx = DecisionContext(
+        config=_minimal_config(),
+        frame=frame,
+        clean_frame=clean_frame,
+        trading_state=trading_state,
+        frame_step=1,
+    )
+    diag = ctx.to_diagnostics()
+
+    assert diag.state.mid == pytest.approx(100.5)
+    assert diag.state.local_sell_vwap is not None
+    assert diag.state.local_wealth == pytest.approx(100.0 + 2.0 * float(diag.state.local_sell_vwap))
+    assert "portfolio_mark_carried_forward" not in diag.warnings
+    assert ctx.last_portfolio_mark == pytest.approx(float(diag.state.local_sell_vwap))

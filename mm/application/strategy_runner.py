@@ -95,6 +95,7 @@ class StrategyRunner:
     _decide_cancel_event: threading.Event = field(init=False, repr=False)
     _stopped: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _last_local_exchange: str = field(default="", init=False, repr=False)
+    _last_portfolio_mark: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._engine = MpcStrategyEngine(
@@ -286,6 +287,7 @@ class StrategyRunner:
             physical_ledger=physical_ledger,
             ledger_source=joint_frame.ledger_source,
             frame_sync_status=joint_frame.sync_status.as_payload(),
+            last_portfolio_mark=self._last_portfolio_mark,
         )
         ctx.record_stage_latency("clean", _elapsed_ms(clean_started))
         approved: list[Action] = []
@@ -796,7 +798,10 @@ class StrategyRunner:
         )
 
     async def _publish_diagnostics(self, ctx: DecisionContext) -> None:
-        await self._diagnostics.publish(ctx.to_diagnostics())
+        diagnostics = ctx.to_diagnostics()
+        if ctx.last_portfolio_mark is not None:
+            self._last_portfolio_mark = float(ctx.last_portfolio_mark)
+        await self._diagnostics.publish(diagnostics)
 
     async def _publish(self, topic: str, event: Any) -> None:
         if self.bus is not None:

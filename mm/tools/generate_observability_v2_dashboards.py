@@ -6106,28 +6106,37 @@ def _portfolio_wallet_or_state_total(role: str, leg: str) -> str:
     return f"COALESCE({_numeric_sql(wallet_path, default='NULL')}, {_numeric_sql(state_path)})"
 
 
+def _coalesce_positive_sql(*exprs: str) -> str:
+    """Prefer the first strictly positive mark; never fall through to literal 0."""
+
+    parts = ", ".join(f"NULLIF({expr}, 0.0)" for expr in exprs)
+    return f"COALESCE({parts})"
+
+
 def _portfolio_total_value_sql() -> str:
     local_cash = _portfolio_wallet_or_state_total("local", "cash")
     global_cash = _portfolio_wallet_or_state_total("global", "cash")
     local_inventory = _portfolio_wallet_or_state_total("local", "inventory")
     global_inventory = _portfolio_wallet_or_state_total("global", "inventory")
+    local_wealth = _numeric_sql("e.payload #>> ARRAY['state','local_wealth']", default="NULL")
+    global_wealth = _numeric_sql("e.payload #>> ARRAY['state','global_wealth']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     local_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','local_sell_vwap']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    mark = _coalesce_positive_sql(reference_price, global_sell_vwap, local_sell_vwap, mid)
+    reported_wealth = f"({local_wealth} + COALESCE({global_wealth}, 0.0))"
+    recomputed_wealth = (
+        f"(local_cash + global_cash + (local_inventory + global_inventory) * COALESCE(reference_vwap, 0.0))"
+    )
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
          {local_cash} AS local_cash,
          {global_cash} AS global_cash,
          {local_inventory} AS local_inventory,
          {global_inventory} AS global_inventory,
-         COALESCE(
-           {reference_price},
-           {global_sell_vwap},
-           {local_sell_vwap},
-           {mid},
-           0.0
-         ) AS reference_vwap
+         {mark} AS reference_vwap,
+         {reported_wealth} AS reported_wealth
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 )
@@ -6136,11 +6145,15 @@ SELECT "time", 'total_cash' AS metric,
 FROM state_rows
 UNION ALL
 SELECT "time", 'total_inventory_value',
-       ((local_inventory + global_inventory) * reference_vwap) AS value
+       CASE
+         WHEN reference_vwap IS NOT NULL THEN (local_inventory + global_inventory) * reference_vwap
+         WHEN reported_wealth IS NOT NULL THEN reported_wealth - local_cash - global_cash
+         ELSE NULL
+       END AS value
 FROM state_rows
 UNION ALL
 SELECT "time", 'total_wealth',
-       (local_cash + global_cash + (local_inventory + global_inventory) * reference_vwap) AS value
+       COALESCE(reported_wealth, {recomputed_wealth}) AS value
 FROM state_rows
 ORDER BY 1"""
 
@@ -6154,17 +6167,13 @@ def _portfolio_venue_value_sql(role: str) -> str:
     role_sell_vwap = _numeric_sql(f"e.payload #>> ARRAY['state','{role}_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    mark = _coalesce_positive_sql(role_sell_vwap, reference_price, mid)
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
          {cash} AS cash,
          {inventory} AS inventory,
          {wealth} AS reported_wealth,
-         COALESCE(
-           {role_sell_vwap},
-           {reference_price},
-           {mid},
-           0.0
-         ) AS mark_price
+         {mark} AS mark_price
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 )
@@ -6173,11 +6182,15 @@ SELECT "time", '{role}_cash' AS metric,
 FROM state_rows
 UNION ALL
 SELECT "time", '{role}_inventory_value',
-       (inventory * mark_price) AS value
+       CASE
+         WHEN mark_price IS NOT NULL THEN inventory * mark_price
+         WHEN reported_wealth IS NOT NULL THEN reported_wealth - cash
+         ELSE NULL
+       END AS value
 FROM state_rows
 UNION ALL
 SELECT "time", '{role}_wealth',
-       COALESCE(reported_wealth, cash + inventory * mark_price) AS value
+       COALESCE(reported_wealth, cash + inventory * COALESCE(mark_price, 0.0)) AS value
 FROM state_rows
 ORDER BY 1"""
 
@@ -6193,15 +6206,19 @@ def _portfolio_interval_delta_sql(metric: str | None = None) -> str:
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
-    mark_price = f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
+    local_wealth = _numeric_sql("e.payload #>> ARRAY['state','local_wealth']", default="NULL")
+    global_wealth = _numeric_sql("e.payload #>> ARRAY['state','global_wealth']", default="NULL")
+    mark_price = _coalesce_positive_sql(reference_price, global_sell_vwap, local_sell_vwap, mid)
     cash = f"({local_cash} + {global_cash})"
     inventory = f"({local_inventory} + {global_inventory})"
+    reported_wealth = f"({local_wealth} + COALESCE({global_wealth}, 0.0))"
+    wealth = f"COALESCE({reported_wealth}, ({cash}) + ({inventory}) * COALESCE({mark_price}, 0.0))"
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
          {cash} AS cash,
          {inventory} AS inventory,
          {mark_price} AS mark_price,
-         ({cash}) + ({inventory}) * ({mark_price}) AS wealth
+         {wealth} AS wealth
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 ),
@@ -6265,15 +6282,18 @@ def _portfolio_cumulative_pnl_component_sql(component: str) -> str:
     global_sell_vwap = _numeric_sql("e.payload #>> ARRAY['state','global_sell_vwap']", default="NULL")
     reference_price = _numeric_sql("e.payload #>> ARRAY['optimizer','config','reference_price']", default="NULL")
     mid = _numeric_sql("e.payload #>> ARRAY['state','mid']", default="NULL")
+    local_mark = _coalesce_positive_sql(local_sell_vwap, reference_price, mid)
+    global_mark = _coalesce_positive_sql(global_sell_vwap, reference_price, local_sell_vwap, mid)
+    total_mark = _coalesce_positive_sql(reference_price, global_sell_vwap, local_sell_vwap, mid)
     return f"""WITH state_rows AS (
   SELECT e.ts AS "time",
          {local_cash} AS local_cash,
          {global_cash} AS global_cash,
          {local_inventory} AS local_inventory,
          {global_inventory} AS global_inventory,
-         COALESCE({local_sell_vwap}, {reference_price}, {mid}, 0.0) AS local_mark_price,
-         COALESCE({global_sell_vwap}, {reference_price}, {local_sell_vwap}, {mid}, 0.0) AS global_mark_price,
-         COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0) AS total_mark_price
+         {local_mark} AS local_mark_price,
+         {global_mark} AS global_mark_price,
+         {total_mark} AS total_mark_price
   FROM mm_events e
   WHERE {_diagnostics_filter()}
 ),
@@ -6359,7 +6379,7 @@ def _fill_interval_mark_price_sql(payload_expr: str = "e.payload") -> str:
         f"{payload_expr} #>> ARRAY['optimizer','config','reference_price']", default="NULL"
     )
     mid = _numeric_sql(f"{payload_expr} #>> ARRAY['state','mid']", default="NULL")
-    return f"COALESCE({reference_price}, {global_sell_vwap}, {local_sell_vwap}, {mid}, 0.0)"
+    return _coalesce_positive_sql(reference_price, global_sell_vwap, local_sell_vwap, mid)
 
 
 def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:

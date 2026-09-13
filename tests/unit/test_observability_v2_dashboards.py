@@ -1066,3 +1066,13 @@ def test_frame_readiness_legends_include_readiness_field() -> None:
     assert readiness_targets
     for target in readiness_targets:
         assert target["legendFormat"] == "{{field}} {{exchange}} {{symbol}}"
+
+
+def test_portfolio_total_value_sql_prefers_reported_wealth_over_zero_mark() -> None:
+    from mm.tools.generate_observability_v2_dashboards import _portfolio_total_value_sql
+
+    sql = _portfolio_total_value_sql()
+    assert "NULLIF(" in sql
+    assert "reported_wealth" in sql
+    assert "COALESCE(reported_wealth," in sql
+    assert ", 0.0)" not in sql.split("AS reference_vwap")[0] or "NULLIF" in sql
