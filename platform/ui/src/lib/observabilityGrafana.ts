@@ -6,7 +6,9 @@ export const TIME_RANGES = [
   { value: "now-15m", label: "Last 15m" },
   { value: "now-1h", label: "Last 1h" },
   { value: "now-6h", label: "Last 6h" },
+  { value: "now-12h", label: "Last 12h" },
   { value: "now-24h", label: "Last 24h" },
+  { value: "now-2d", label: "Last 2d" },
   { value: "now-7d", label: "Last 7d" },
 ] as const;
 
