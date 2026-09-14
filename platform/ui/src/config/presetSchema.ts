@@ -80,6 +80,15 @@ function venueOptimizerFields(prefix: "local" | "global"): FieldDef[] {
       type: "number",
       defaultValue: 1.0,
       step: "0.01",
+      help: "Decoder total base qty floor at the outer spread (per side).",
+    },
+    {
+      path: `${base}.cumulative_qty_cap_at_spread_max`,
+      label: "Qty cap at spread max",
+      type: "number",
+      step: "0.01",
+      min: 0,
+      help: "Hard cap on total base qty per side at the outer spread. Leave empty for no cap (wallet only). Units: base asset (e.g. USDT), not IRT.",
     },
     {
       path: `${base}.validity.min_score`,
