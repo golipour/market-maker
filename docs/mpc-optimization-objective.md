@@ -2,6 +2,8 @@
 
 This document describes the implemented MPC controller: business intent, **mathematical problem formalization (§2)**, mechanism, data flow, configuration surface, diagnostics, and known gaps. It is written for external expert review. It records what the code does and what is uncertain; it does not prescribe tuning values or a preferred redesign.
 
+The compact equation-level statement of \(J\), the quadratic viability deficit, and the linear dual is [`mpc-mathematical-formulation.md`](mpc-mathematical-formulation.md).
+
 Related implementation references:
 
 - `mm.strategies.mpc_engine.MpcStrategyEngine`

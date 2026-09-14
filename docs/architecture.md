@@ -96,6 +96,7 @@ See `mm.core.topics.RuntimeTopics`.
 
 ## Related documents
 
+- [MPC mathematical formulation](mpc-mathematical-formulation.md)
 - [Data flow](data-flow.md)
 - [Runtime mechanisms](mechanisms.md)
 - [Controller & execution](controller-and-execution.md)
