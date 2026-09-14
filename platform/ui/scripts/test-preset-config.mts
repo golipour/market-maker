@@ -88,6 +88,24 @@ function testDefaultsFillMissing() {
   assert.equal(getAt(withDefaults, "controller.optimizer.kind"), "monte_carlo_mpc_tensor_batched");
 }
 
+function testViabilityDualFieldsAreOnBothVenues() {
+  const withDefaults = applySchemaDefaults({});
+  for (const prefix of ["local", "global"] as const) {
+    const base = `controller.optimizer.${prefix}.viability`;
+    for (const key of [
+      "lambda_max",
+      "dual_ewma_decay",
+      "shortfall_tolerance",
+      "lambda_learning_rate",
+    ]) {
+      const path = `${base}.${key}`;
+      assert.ok(FIELD_BY_PATH.has(path), `missing ${path}`);
+    }
+    assert.equal(getAt(withDefaults, `${base}.lambda_max`), 100);
+    assert.equal(getAt(withDefaults, `${base}.dual_ewma_decay`), 0.9);
+  }
+}
+
 const tests = [
   testStripHelperKeys,
   testMergePreservesUnknown,
@@ -95,6 +113,7 @@ const tests = [
   testDeleteAtPrunes,
   testKindVisibility,
   testDefaultsFillMissing,
+  testViabilityDualFieldsAreOnBothVenues,
 ];
 
 let failed = 0;

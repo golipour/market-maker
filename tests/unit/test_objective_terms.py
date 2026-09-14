@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import pytest
 import torch
 
@@ -17,13 +15,12 @@ from mm.mpc.objective_terms import (
     book_quality_score,
     combine_validity_term,
     combine_viability_term,
-    soft_availability_margin,
+    wallet_quadratic_deficit,
     update_ce_ewma_scale,
-    update_viability_theta,
+    update_viability_lambda,
     validity_book_shortfall,
-    viability_lambda_from_theta,
+    viability_lambda_from_init,
     viability_path_shortfall,
-    viability_theta_from_lambda_init,
     stamp_learned_viability_dual,
     stamp_viability_dual_diagnostics,
     viability_lambda_applied_from_components,
@@ -38,6 +35,8 @@ def _viability_params(**overrides: float) -> ViabilityParams:
         "shortfall_tolerance": 0.05,
         "lambda_init": 0.0,
         "lambda_learning_rate": 0.02,
+        "lambda_max": 100.0,
+        "dual_ewma_decay": 0.0,
     }
     defaults.update(overrides)
     return ViabilityParams(**defaults)
@@ -55,40 +54,75 @@ def test_viability_from_mapping_rejects_legacy_keys() -> None:
         ViabilityParams.from_mapping({"min_free_quote": 1.0, "margin_buffer": 0.1})
 
 
-def test_soft_availability_is_high_when_total_balances_exceed_viable_floor() -> None:
+def test_quadratic_deficit_is_zero_when_total_balances_exceed_viable_floor() -> None:
     params = _viability_params()
-    availability, parts = soft_availability_margin(
+    deficit, parts = wallet_quadratic_deficit(
         torch.tensor([10.0, 2.0]),
         cash=torch.tensor([2000.0, 500.0]),
         mid_price=torch.tensor([100.0, 100.0]),
         params=params,
     )
-    assert float(availability[0]) > 0.9
-    assert float(availability[1]) > float(availability[0]) * 0.5
+    assert float(deficit[0]) == pytest.approx(0.0)
+    assert float(deficit[1]) == pytest.approx(0.0)
     assert float(parts["viability_bid_margin"][0]) == pytest.approx(1900.0)
     assert float(parts["viability_ask_margin"][0]) == pytest.approx(900.0)
 
 
-def test_soft_availability_goes_to_zero_when_one_side_lacks_total_base() -> None:
+def test_quadratic_deficit_penalizes_missing_total_base() -> None:
     params = _viability_params()
-    availability, _ = soft_availability_margin(
+    deficit, parts = wallet_quadratic_deficit(
         torch.tensor([0.0]),
         cash=torch.tensor([1000.0]),
         mid_price=torch.tensor([100.0]),
         params=params,
     )
-    assert float(availability[0]) < 0.01
+    assert float(deficit[0]) == pytest.approx(1.0)
+    assert float(parts["viability_ask_deficit"][0]) == pytest.approx(1.0)
+    assert float(parts["viability_bid_deficit"][0]) == pytest.approx(0.0)
 
 
-def test_soft_availability_penalizes_insufficient_total_quote() -> None:
+def test_quadratic_deficit_penalizes_insufficient_total_quote() -> None:
     params = _viability_params()
-    availability, _ = soft_availability_margin(
+    deficit, parts = wallet_quadratic_deficit(
         torch.tensor([10.0]),
         cash=torch.tensor([50.0]),
         mid_price=torch.tensor([100.0]),
         params=params,
     )
-    assert float(availability[0]) < 0.01
+    assert float(parts["viability_bid_deficit"][0]) == pytest.approx(0.5)
+    assert float(deficit[0]) == pytest.approx(0.25)
+
+
+def test_quadratic_deficit_has_zero_gradient_above_floor() -> None:
+    params = _viability_params()
+    cash = torch.tensor(200.0, dtype=torch.float64, requires_grad=True)
+    deficit, _ = wallet_quadratic_deficit(
+        torch.tensor(2.0, dtype=torch.float64),
+        cash=cash,
+        mid_price=torch.tensor(100.0, dtype=torch.float64),
+        params=params,
+    )
+    deficit.backward()
+    assert cash.grad is not None
+    assert float(cash.grad) == pytest.approx(0.0)
+
+
+def test_quadratic_deficit_gradient_grows_deeper_below_floor() -> None:
+    params = _viability_params()
+    mid = torch.tensor(100.0, dtype=torch.float64)
+    inv = torch.tensor(2.0, dtype=torch.float64)
+
+    cash_shallow = torch.tensor(90.0, dtype=torch.float64, requires_grad=True)
+    d_shallow, _ = wallet_quadratic_deficit(inv, cash=cash_shallow, mid_price=mid, params=params)
+    d_shallow.backward()
+    g_shallow = float(cash_shallow.grad)
+
+    cash_deep = torch.tensor(10.0, dtype=torch.float64, requires_grad=True)
+    d_deep, _ = wallet_quadratic_deficit(inv, cash=cash_deep, mid_price=mid, params=params)
+    d_deep.backward()
+    g_deep = float(cash_deep.grad)
+
+    assert g_deep < g_shallow < 0.0
 
 
 def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
@@ -202,34 +236,51 @@ def test_update_ce_ewma_scale_tracks_magnitude() -> None:
     assert scale == pytest.approx(0.9 * 0.001 + 0.1 * 0.002)
 
 
-def test_viability_theta_from_lambda_init_maps_zero_to_log_floor() -> None:
-    theta = viability_theta_from_lambda_init(0.0)
-    assert viability_lambda_from_theta(theta) == pytest.approx(0.0)
+def test_viability_lambda_from_init_clips_to_zero_and_max() -> None:
+    assert viability_lambda_from_init(0.0) == pytest.approx(0.0)
+    assert viability_lambda_from_init(-1.0) == pytest.approx(0.0)
+    assert viability_lambda_from_init(2.0, lambda_max=100.0) == pytest.approx(2.0)
+    assert viability_lambda_from_init(1e9, lambda_max=100.0) == pytest.approx(100.0)
 
 
-def test_update_viability_theta_increases_when_below_target() -> None:
-    params = _viability_params(lambda_learning_rate=0.5)
-    theta = update_viability_theta(
+def test_update_viability_lambda_increases_when_shortfall_exceeds_tolerance() -> None:
+    params = _viability_params(lambda_learning_rate=0.5, shortfall_tolerance=0.05)
+    lam, ewma = update_viability_lambda(
         0.0,
-        {"viability_min_availability": 0.7},
+        {"viability_shortfall": 0.25},
         params=params,
+        ewma=None,
     )
-    assert theta == pytest.approx(0.5 * (0.99 - 0.7))
+    assert ewma == pytest.approx(0.25)
+    assert lam == pytest.approx(0.5 * (0.25 - 0.05))
 
 
-def test_update_viability_theta_decreases_when_above_target() -> None:
-    params = _viability_params(lambda_learning_rate=0.02)
-    theta = update_viability_theta(
+def test_update_viability_lambda_decreases_when_shortfall_is_below_tolerance() -> None:
+    params = _viability_params(lambda_learning_rate=0.5, shortfall_tolerance=0.05)
+    lam, ewma = update_viability_lambda(
         1.0,
-        {"viability_min_availability": 0.95},
+        {"viability_shortfall": 0.0},
         params=params,
+        ewma=0.0,
     )
-    assert theta == pytest.approx(1.0 + 0.02 * (0.99 - 0.95))
+    assert ewma == pytest.approx(0.0)
+    assert lam == pytest.approx(1.0 + 0.5 * (0.0 - 0.05))
 
 
-def test_viability_lambda_from_theta_is_exponential() -> None:
-    theta = math.log(2.0)
-    assert viability_lambda_from_theta(theta) == pytest.approx(2.0)
+def test_update_viability_lambda_uses_ewma_not_raw_shortfall() -> None:
+    params = _viability_params(
+        lambda_learning_rate=1.0,
+        shortfall_tolerance=0.0,
+        dual_ewma_decay=0.9,
+    )
+    lam, ewma = update_viability_lambda(
+        0.0,
+        {"viability_shortfall": 1.0},
+        params=params,
+        ewma=0.0,
+    )
+    assert ewma == pytest.approx(0.1)
+    assert lam == pytest.approx(0.1)
 
 
 def test_combine_viability_term_with_lambda_init_zero_applies_no_penalty() -> None:
@@ -238,7 +289,7 @@ def test_combine_viability_term_with_lambda_init_zero_applies_no_penalty() -> No
     objective, components = combine_viability_term(
         torch.tensor(0.5, dtype=torch.float64),
         {},
-        viability_theta=viability_theta_from_lambda_init(0.0),
+        viability_lambda=viability_lambda_from_init(0.0),
         viability_params=params,
         viability_shortfall=shortfall,
         viability_components={"viability_shortfall": shortfall},
@@ -250,11 +301,10 @@ def test_combine_viability_term_with_lambda_init_zero_applies_no_penalty() -> No
 def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
     base = torch.tensor(0.5, dtype=torch.float64)
     shortfall = torch.tensor(0.2, dtype=torch.float64)
-    theta = math.log(2.0)
     objective, components = combine_viability_term(
         base,
         {"risk_adjusted_return": base},
-        viability_theta=theta,
+        viability_lambda=2.0,
         viability_shortfall=shortfall,
         viability_components={"viability_shortfall": shortfall},
     )
@@ -262,15 +312,15 @@ def test_combine_viability_term_subtracts_lambda_times_shortfall() -> None:
     assert float(components["viability_penalty"]) == pytest.approx(-0.4)
     assert float(components["viability_penalty_raw"]) == pytest.approx(0.2)
     assert float(components["viability_lambda"]) == pytest.approx(2.0)
-    assert float(components["viability_lambda_theta"]) == pytest.approx(theta)
+    assert float(components["viability_lambda_theta"]) == pytest.approx(2.0)
 
 
 def test_stamp_learned_viability_dual_records_post_update_state() -> None:
     components: dict[str, float] = {}
     stamp_learned_viability_dual(
         components,
-        local_theta=math.log(3.0),
-        global_theta=math.log(2.0),
+        local_lambda=3.0,
+        global_lambda=2.0,
     )
     assert components["viability_lambda_learned"] == pytest.approx(3.0)
     assert components["global_viability_lambda_learned"] == pytest.approx(2.0)
@@ -281,17 +331,15 @@ def test_stamp_viability_dual_diagnostics_sets_applied_and_learned() -> None:
         "viability_penalty": -0.4,
         "viability_penalty_raw": 0.2,
     }
-    theta_applied = math.log(2.0)
-    theta_learned = math.log(3.0)
     stamp_viability_dual_diagnostics(
         components,
-        local_theta_applied=theta_applied,
-        local_theta_learned=theta_learned,
-        global_theta_applied=math.log(1.5),
-        global_theta_learned=math.log(2.5),
+        local_lambda_applied=2.0,
+        local_lambda_learned=3.0,
+        global_lambda_applied=1.5,
+        global_lambda_learned=2.5,
     )
     assert components["viability_lambda"] == pytest.approx(2.0)
-    assert components["viability_lambda_theta"] == pytest.approx(theta_applied)
+    assert components["viability_lambda_theta"] == pytest.approx(2.0)
     assert components["viability_lambda_learned"] == pytest.approx(3.0)
     assert components["global_viability_lambda"] == pytest.approx(1.5)
     assert components["global_viability_lambda_learned"] == pytest.approx(2.5)
@@ -305,7 +353,7 @@ def test_viability_lambda_applied_from_penalty_ratio_when_lambda_key_zero() -> N
     }
     lam = viability_lambda_applied_from_components(
         components,
-        theta_applied=viability_theta_from_lambda_init(0.0),
+        lambda_applied=0.0,
     )
     assert lam == pytest.approx(0.2)
 
@@ -313,6 +361,21 @@ def test_viability_lambda_applied_from_penalty_ratio_when_lambda_key_zero() -> N
 def test_viability_from_mapping_rejects_removed_dual_keys() -> None:
     with pytest.raises(ValueError, match="removed viability keys"):
         ViabilityParams.from_mapping({"lambda_leakage": 0.01})
+
+
+def test_viability_from_mapping_accepts_linear_dual_keys() -> None:
+    params = ViabilityParams.from_mapping(
+        {
+            "min_viable_quote": 100.0,
+            "lambda_max": 50.0,
+            "dual_ewma_decay": 0.8,
+            "lambda_init": 200.0,
+        }
+    )
+    assert params is not None
+    assert params.lambda_max == pytest.approx(50.0)
+    assert params.dual_ewma_decay == pytest.approx(0.8)
+    assert params.lambda_init == pytest.approx(50.0)
 
 
 def test_validity_from_mapping_rejects_w_book() -> None:

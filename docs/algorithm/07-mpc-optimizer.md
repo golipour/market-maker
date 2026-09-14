@@ -85,13 +85,12 @@ the optimizer *minimizes* `-J`.
 Validity and viability are described in detail in [10-risk.md](10-risk.md). In
 short:
 
-- `validity_penalty = λ_v · max(0, τ − book_quality_score)²`
-- `viability_penalty = λ_θ · E[max(0, target − availability)²]`
+- `validity_penalty = μ · max(0, B_min − book_quality_score)`
+- `viability_penalty = λ · E[d_bid² + d_ask²]` (next-step quadratic deficit)
 
-The optimizer multiplies both by a per-venue weight (set in
-`VenueOptimizerParams.validity` / `.viability`) and adds them to the terminal
-objective. The `viability` dual variable `θ` is updated externally (in
-`update_viability_theta`) using a projected subgradient step.
+The optimizer adds both to the terminal objective. The `viability` dual
+variable `λ` is updated externally in `update_viability_lambda` using a
+bounded linear step on an EWMA of the deficit.
 
 ## 7.7 Cancellation and timeout
 

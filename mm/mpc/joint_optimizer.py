@@ -24,9 +24,8 @@ from mm.mpc.objective_terms import (
     combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
-    update_viability_theta,
+    update_viability_lambda,
     stamp_viability_dual_diagnostics,
-    viability_theta_from_lambda_init,
     viability_path_shortfall,
 )
 from mm.mpc.warm_start import (
@@ -868,7 +867,7 @@ def optimize_joint_with_diagnostics(
                 J, components = combine_viability_term(
                     J,
                     components,
-                    viability_theta=mpc._viability_theta_local,
+                    viability_lambda=mpc._viability_lambda_local,
                     viability_params=local_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
@@ -883,7 +882,7 @@ def optimize_joint_with_diagnostics(
                 J, components = combine_viability_term(
                     J,
                     components,
-                    viability_theta=mpc._viability_theta_global,
+                    viability_lambda=mpc._viability_lambda_global,
                     viability_params=global_opt.viability,
                     viability_shortfall=shortfall,
                     viability_components=viability_components,
@@ -1059,27 +1058,43 @@ def optimize_joint_with_diagnostics(
             best_metrics.components,
             normalize=mpc.objective_normalize,
         )
-        theta_applied_local = mpc._viability_theta_local
-        theta_applied_global = mpc._viability_theta_global
-        mpc._viability_theta_local = update_viability_theta(
-            mpc._viability_theta_local,
-            best_metrics.components,
-            params=local_opt.viability,
+        lambda_applied_local = mpc._viability_lambda_local
+        lambda_applied_global = mpc._viability_lambda_global
+        mpc._viability_lambda_local, mpc._viability_shortfall_ewma_local = (
+            update_viability_lambda(
+                mpc._viability_lambda_local,
+                best_metrics.components,
+                params=local_opt.viability,
+                ewma=mpc._viability_shortfall_ewma_local,
+            )
         )
-        mpc._viability_theta_global = update_viability_theta(
-            mpc._viability_theta_global,
-            best_metrics.components,
-            params=global_opt.viability,
-            min_availability_key="global_viability_min_availability",
+        mpc._viability_lambda_global, mpc._viability_shortfall_ewma_global = (
+            update_viability_lambda(
+                mpc._viability_lambda_global,
+                best_metrics.components,
+                params=global_opt.viability,
+                ewma=mpc._viability_shortfall_ewma_global,
+                shortfall_key="global_viability_penalty_raw",
+                ewma_key="global_viability_shortfall_ewma",
+                gap_key="global_viability_dual_gap",
+            )
         )
         for metrics in (initial_metrics, final_metrics, best_metrics):
             if metrics is not None:
+                for key in (
+                    "viability_shortfall_ewma",
+                    "viability_dual_gap",
+                    "global_viability_shortfall_ewma",
+                    "global_viability_dual_gap",
+                ):
+                    if key in best_metrics.components:
+                        metrics.components[key] = best_metrics.components[key]
                 stamp_viability_dual_diagnostics(
                     metrics.components,
-                    local_theta_applied=theta_applied_local,
-                    local_theta_learned=mpc._viability_theta_local,
-                    global_theta_applied=theta_applied_global,
-                    global_theta_learned=mpc._viability_theta_global,
+                    local_lambda_applied=lambda_applied_local,
+                    local_lambda_learned=mpc._viability_lambda_local,
+                    global_lambda_applied=lambda_applied_global,
+                    global_lambda_learned=mpc._viability_lambda_global,
                 )
 
     diagnostics = OptimizerRunDiagnostics(

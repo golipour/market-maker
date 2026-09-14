@@ -5529,13 +5529,21 @@ WHERE {_diagnostics_filter()}
       'viability_bid_margin',
       'viability_ask_margin',
       'viability_base_notional',
+      'viability_bid_deficit',
+      'viability_ask_deficit',
+      'viability_shortfall_ewma',
+      'viability_dual_gap',
       'global_viability_penalty_raw',
       'global_viability_shortfall',
       'global_viability_min_availability',
       'global_viability_step_availability',
       'global_viability_bid_margin',
       'global_viability_ask_margin',
-      'global_viability_base_notional'
+      'global_viability_base_notional',
+      'global_viability_bid_deficit',
+      'global_viability_ask_deficit',
+      'global_viability_shortfall_ewma',
+      'global_viability_dual_gap'
     )
   )
 ORDER BY 1"""
@@ -5605,6 +5613,8 @@ def _optimizer_viability_config_sql() -> str:
             "shortfall_tolerance",
             "lambda_init",
             "lambda_learning_rate",
+            "lambda_max",
+            "dual_ewma_decay",
         )
     )
     return f"""SELECT e.ts AS "time",

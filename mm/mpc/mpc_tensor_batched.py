@@ -39,10 +39,10 @@ from mm.mpc.objective_terms import (
     combine_validity_term,
     combine_viability_term,
     update_ce_ewma_scale,
-    update_viability_theta,
+    update_viability_lambda,
     stamp_viability_dual_diagnostics,
     viability_path_shortfall,
-    viability_theta_from_lambda_init,
+    viability_lambda_from_init,
 )
 from mm.mpc.warm_start import (
     WarmStartParams,
@@ -125,7 +125,8 @@ class VenueOptimizerParams:
             raise ValueError(
                 "optimizer venue keys w_inv and inventory_zone were removed; "
                 "use viability {min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate}"
+                "shortfall_tolerance, lambda_init, lambda_learning_rate, "
+                "lambda_max, dual_ewma_decay}"
             )
         if "w_book" in data:
             raise ValueError(
@@ -931,16 +932,24 @@ class MonteCarloMPCTensorBatched:
         self._ce_ewma_scale = 0.0
         local_viability = self.local_optimizer.viability
         global_viability = self.global_optimizer.viability
-        self._viability_theta_local = (
-            viability_theta_from_lambda_init(local_viability.lambda_init)
+        self._viability_lambda_local = (
+            viability_lambda_from_init(
+                local_viability.lambda_init,
+                lambda_max=local_viability.lambda_max,
+            )
             if local_viability is not None
-            else viability_theta_from_lambda_init(0.0)
+            else 0.0
         )
-        self._viability_theta_global = (
-            viability_theta_from_lambda_init(global_viability.lambda_init)
+        self._viability_lambda_global = (
+            viability_lambda_from_init(
+                global_viability.lambda_init,
+                lambda_max=global_viability.lambda_max,
+            )
             if global_viability is not None
-            else viability_theta_from_lambda_init(0.0)
+            else 0.0
         )
+        self._viability_shortfall_ewma_local: float | None = None
+        self._viability_shortfall_ewma_global: float | None = None
         # Cooperative cancellation: ``StrategyRunner`` installs a
         # ``threading.Event`` via ``set_cancel_event``; the Adam loop
         # checks ``is_set()`` at the top of every epoch and returns the
@@ -1528,7 +1537,7 @@ class MonteCarloMPCTensorBatched:
                     J, components = combine_viability_term(
                         J,
                         components,
-                        viability_theta=self._viability_theta_local,
+                        viability_lambda=self._viability_lambda_local,
                         viability_params=venue_opt.viability,
                         viability_shortfall=shortfall,
                         viability_components=viability_components,
@@ -1681,19 +1690,24 @@ class MonteCarloMPCTensorBatched:
                 best_metrics.components,
                 normalize=self.objective_normalize,
             )
-            theta_applied_local = self._viability_theta_local
-            self._viability_theta_local = update_viability_theta(
-                self._viability_theta_local,
-                best_metrics.components,
-                params=self.local_optimizer.viability,
-                decay_rate=1e-4,
+            lambda_applied_local = self._viability_lambda_local
+            self._viability_lambda_local, self._viability_shortfall_ewma_local = (
+                update_viability_lambda(
+                    self._viability_lambda_local,
+                    best_metrics.components,
+                    params=self.local_optimizer.viability,
+                    ewma=self._viability_shortfall_ewma_local,
+                )
             )
             for metrics in (initial_metrics, final_metrics, best_metrics):
                 if metrics is not None:
+                    for key in ("viability_shortfall_ewma", "viability_dual_gap"):
+                        if key in best_metrics.components:
+                            metrics.components[key] = best_metrics.components[key]
                     stamp_viability_dual_diagnostics(
                         metrics.components,
-                        local_theta_applied=theta_applied_local,
-                        local_theta_learned=self._viability_theta_local,
+                        local_lambda_applied=lambda_applied_local,
+                        local_lambda_learned=self._viability_lambda_local,
                     )
         diagnostics = OptimizerRunDiagnostics(
             config={

@@ -1073,13 +1073,12 @@ the optimizer *minimizes* `-J`.
 Validity and viability are described in detail in [10-risk.md](10-risk.md). In
 short:
 
-- `validity_penalty = λ_v · max(0, τ − book_quality_score)²`
-- `viability_penalty = λ_θ · E[max(0, target − availability)²]`
+- `validity_penalty = μ · max(0, B_min − book_quality_score)`
+- `viability_penalty = λ · E[d_bid² + d_ask²]` (next-step quadratic deficit)
 
-The optimizer multiplies both by a per-venue weight (set in
-`VenueOptimizerParams.validity` / `.viability`) and adds them to the terminal
-objective. The `viability` dual variable `θ` is updated externally (in
-`update_viability_theta`) using a projected subgradient step.
+The optimizer adds both to the terminal objective. The `viability` dual
+variable `λ` is updated externally in `update_viability_lambda` using a
+bounded linear step on an EWMA of the deficit.
 
 ## 7.7 Cancellation and timeout
 
@@ -1250,22 +1249,19 @@ def book_quality_score(action, ob_rel, params):
 
 ## 8.7 Viability: `viability_path_shortfall` and `combine_viability_term`
 
-`soft_availability_margin` computes a smooth two-sided availability score from
-the wallet's free margin on each side:
+`wallet_quadratic_deficit` measures a two-sided squared-hinge reserve
+deficit on **total** balances. It is zero above `q_min` and steepens as a
+side falls further below the floor:
 
 ```
-a = min(soft_margin_base, soft_margin_quote / mid)   # base units
+d_bid = relu(q_min - cash) / q_min
+d_ask = relu(q_min - inventory * mid) / q_min
+S     = d_bid² + d_ask²
 ```
 
-The MPC's terminal cash and inventory are checked against this:
-
-```
-via = λ_θ · E_path[ max(0, target − a_t)² ]
-```
-
-`update_viability_theta` performs a projected subgradient step on `θ` (the
-Lagrange multiplier) using the realized availability shortfall from the
-previous step.
+The MPC applies `−λ · E[S_1]` (next-step only). `update_viability_lambda`
+then steps a bounded linear multiplier from an EWMA of `S`, so a noisy
+Monte Carlo batch cannot explode `λ`.
 
 ---
 
@@ -1513,19 +1509,16 @@ threshold, the runner drops the book and logs `reason="low_book_quality"`.
 
 ## 10.6 Viability backstop
 
-The viability dual variable `θ` is updated *after* every decision by
-`update_viability_theta`. The function computes the realized availability
-shortfall:
+The viability dual variable `λ` is updated *after* every decision by
+`update_viability_lambda`. The function EWMA-filters the realized
+quadratic deficit and steps a bounded linear multiplier:
 
-```120:160:mm/mpc/objective_terms.py
-def update_viability_theta(theta, params, realized_availability, target):
-    shortfall = max(0.0, target - realized_availability)
-    new_theta = max(0.0, theta + params.viability_step * (shortfall - params.shortfall_tolerance))
-    return new_theta
+```text
+S̄ ← α S̄ + (1−α) S
+λ ← clip(λ + η (S̄ − ε), 0, λ_max)
 ```
 
-The `theta` value is included in the `OptimizerConfig` passed to the next
-decision, so the optimizer uses the updated multiplier immediately.
+The updated `λ` is kept on the MPC instance and used in the next decision.
 
 ## 10.7 `validate_target_book_with_result`
 

@@ -101,19 +101,16 @@ def book_quality_score(action, ob_rel, params):
 
 ## 8.7 Viability: `viability_path_shortfall` and `combine_viability_term`
 
-`soft_availability_margin` computes a smooth two-sided availability score from
-the wallet's free margin on each side:
+`wallet_quadratic_deficit` measures a two-sided squared-hinge reserve
+deficit on **total** balances. It is zero above `q_min` and steepens as a
+side falls further below the floor:
 
 ```
-a = min(soft_margin_base, soft_margin_quote / mid)   # base units
+d_bid = relu(q_min - cash) / q_min
+d_ask = relu(q_min - inventory * mid) / q_min
+S     = d_bid² + d_ask²
 ```
 
-The MPC's terminal cash and inventory are checked against this:
-
-```
-via = λ_θ · E_path[ max(0, target − a_t)² ]
-```
-
-`update_viability_theta` performs a projected subgradient step on `θ` (the
-Lagrange multiplier) using the realized availability shortfall from the
-previous step.
+The MPC applies `−λ · E[S_1]` (next-step only). `update_viability_lambda`
+then steps a bounded linear multiplier from an EWMA of `S`, so a noisy
+Monte Carlo batch cannot explode `λ`.

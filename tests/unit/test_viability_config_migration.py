@@ -25,6 +25,8 @@ def test_migrate_inventory_zone_to_viability() -> None:
     assert "inventory_zone" not in local
     assert local["viability"]["min_viable_quote"] == 50_000.0
     assert local["viability"]["lambda_init"] == 0.0
+    assert local["viability"]["lambda_max"] == 100.0
+    assert local["viability"]["dual_ewma_decay"] == 0.9
 
 
 def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:

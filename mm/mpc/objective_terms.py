@@ -34,7 +34,12 @@ def _torch():
 
 @dataclass(frozen=True, slots=True)
 class ViabilityParams:
-    """Availability shortfall on total wallet balances (docs/viability_term.md)."""
+    """Two-sided wallet-reserve constraint on total balances.
+
+    Penalty term is ``-λ · S`` with squared hinge deficits (zero above
+    ``min_viable_quote``). Dual ``λ`` is a bounded linear multiplier updated
+    from an EWMA of ``S``, not ``exp(θ)``.
+    """
 
     min_viable_quote: float = 50_000.0
     margin_buffer: float = 5_000.0
@@ -42,6 +47,8 @@ class ViabilityParams:
     shortfall_tolerance: float = 0.05
     lambda_init: float = 0.0
     lambda_learning_rate: float = 0.02
+    lambda_max: float = 100.0
+    dual_ewma_decay: float = 0.9
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -72,7 +79,8 @@ class ViabilityParams:
             raise ValueError(
                 "removed viability keys; use "
                 "{min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate}: "
+                "shortfall_tolerance, lambda_init, lambda_learning_rate, "
+                "lambda_max, dual_ewma_decay}: "
                 + ", ".join(removed)
             )
         availability_target = float(payload.get("availability_target", 0.99))
@@ -84,13 +92,22 @@ class ViabilityParams:
         lambda_learning_rate = float(payload.get("lambda_learning_rate", 0.02))
         if lambda_learning_rate <= 0.0:
             raise ValueError("viability.lambda_learning_rate must be > 0")
+        lambda_max = float(payload.get("lambda_max", 100.0))
+        if lambda_max <= 0.0:
+            raise ValueError("viability.lambda_max must be > 0")
+        dual_ewma_decay = float(payload.get("dual_ewma_decay", 0.9))
+        if not (0.0 <= dual_ewma_decay < 1.0):
+            raise ValueError("viability.dual_ewma_decay must be in [0, 1)")
+        lambda_init = max(0.0, float(payload.get("lambda_init", 0.0)))
         return cls(
             min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
             margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
             availability_target=availability_target,
             shortfall_tolerance=shortfall_tolerance,
-            lambda_init=max(0.0, float(payload.get("lambda_init", 0.0))),
+            lambda_init=min(lambda_init, lambda_max),
             lambda_learning_rate=lambda_learning_rate,
+            lambda_max=lambda_max,
+            dual_ewma_decay=dual_ewma_decay,
         )
 
     def as_mapping(self) -> dict[str, float]:
@@ -101,6 +118,8 @@ class ViabilityParams:
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
+            "lambda_max": self.lambda_max,
+            "dual_ewma_decay": self.dual_ewma_decay,
         }
 
 
@@ -351,6 +370,49 @@ class BookQualityParams:
         return out
 
 
+def wallet_quadratic_deficit(
+    inventory: Any,
+    *,
+    cash: Any,
+    mid_price: Any,
+    params: ViabilityParams,
+) -> tuple[Any, dict[str, Any]]:
+    """Squared-hinge two-sided reserve deficit from total wallet balances.
+
+    ``cash`` is total quote ``q_t`` (free + locked); ``inventory`` is total
+    base ``b_t``. Both deficits are in quote-currency units of ``q_min``:
+
+        d_bid = [q_min - q_t]_+ / q_min
+        d_ask = [q_min - b_t p_t]_+ / q_min
+        S     = d_bid² + d_ask²
+
+    ``S`` is zero above the reserve on both sides (no inventory headwind)
+    and steepens as a side falls further below ``q_min``.
+    """
+
+    torch = _torch()
+    q_min = max(1e-12, float(params.min_viable_quote))
+    mid_safe = torch.clamp(mid_price, min=1e-12)
+    quote_total = torch.clamp(cash, min=0.0)
+    base_total = torch.clamp(inventory, min=0.0)
+    base_notional = base_total * mid_safe
+    m_bid = quote_total - q_min
+    m_ask = base_notional - q_min
+    d_bid = torch.clamp(-m_bid, min=0.0) / q_min
+    d_ask = torch.clamp(-m_ask, min=0.0) / q_min
+    deficit = d_bid * d_bid + d_ask * d_ask
+    health = 1.0 / (1.0 + deficit)
+    return deficit, {
+        "viability_bid_margin": m_bid,
+        "viability_ask_margin": m_ask,
+        "viability_base_notional": base_notional,
+        "viability_bid_deficit": d_bid,
+        "viability_ask_deficit": d_ask,
+        "viability_step_deficit": deficit,
+        "viability_step_availability": health,
+    }
+
+
 def soft_availability_margin(
     inventory: Any,
     *,
@@ -358,35 +420,15 @@ def soft_availability_margin(
     mid_price: Any,
     params: ViabilityParams,
 ) -> tuple[Any, dict[str, Any]]:
-    """
-    Smooth two-sided quoting availability in [0, 1] from total wallet margins.
+    """Backward-compatible alias: returns diagnostic health ``1 / (1 + S)``."""
 
-    ``cash`` is total quote balance q_t (free + locked); ``inventory`` is total
-    base balance b_t. ``min_viable_quote`` is q_min. Both margins are in quote
-    currency for a shared ``margin_buffer``:
-
-    m_bid = q_t - q_min; m_ask = b_t * p_t - q_min;
-    a_side = sigmoid(m_side / margin_buffer); A = a_bid * a_ask.
-    """
-
-    torch = _torch()
-    q_min = max(1e-12, float(params.min_viable_quote))
-    delta = max(1e-9, float(params.margin_buffer))
-    mid_safe = torch.clamp(mid_price, min=1e-12)
-    quote_total = torch.clamp(cash, min=0.0)
-    base_total = torch.clamp(inventory, min=0.0)
-    base_notional = base_total * mid_safe
-    m_bid = quote_total - q_min
-    m_ask = base_notional - q_min
-    a_bid = torch.sigmoid(m_bid / delta)
-    a_ask = torch.sigmoid(m_ask / delta)
-    availability = a_bid * a_ask
-    return availability, {
-        "viability_bid_margin": m_bid,
-        "viability_ask_margin": m_ask,
-        "viability_base_notional": base_notional,
-        "viability_step_availability": availability,
-    }
+    deficit, parts = wallet_quadratic_deficit(
+        inventory,
+        cash=cash,
+        mid_price=mid_price,
+        params=params,
+    )
+    return parts["viability_step_availability"], parts
 
 
 def viability_path_shortfall(
@@ -396,45 +438,39 @@ def viability_path_shortfall(
     mid_path: Any,
     params: ViabilityParams | None,
 ) -> tuple[Any, dict[str, Any]]:
-    """
-    Expected availability shortfall over Monte Carlo paths.
+    """Expected next-step quadratic reserve deficit over Monte Carlo paths.
 
-    ``inventory_path``, ``cash_path``, and ``mid_path`` must be aligned snapshots
-    of simulated **total** wallet balances (free + locked) along each rollout path.
-
-    Per path: use availability after the first simulated step only (index 1, post h=0
-    orderflow/fill). S = max(0, A* - A_1); return mean(S).
-
-    Index 0 is the pre-action wallet and is excluded. Terminal horizon availability
-    is not used — viability targets the immediate next wallet state, not optimistic
-    recovery at the end of the rollout.
+    Paths are simulated **total** wallet balances. Index 0 is the pre-action
+    wallet and is excluded; shortfall uses column 1 (first post-fill step).
+    Terminal-horizon recovery does not mask an immediate post-fill hole.
     """
 
     torch = _torch()
     if params is None:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    step_avail, step_parts = soft_availability_margin(
+    step_deficit, step_parts = wallet_quadratic_deficit(
         inventory_path,
         cash=cash_path,
         mid_price=mid_path,
         params=params,
     )
-    if step_avail.shape[1] <= 1:
+    if step_deficit.shape[1] <= 1:
         zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
         return zero, {}
-    path_next_avail = step_avail[:, 1]
-    shortfall_per_path = torch.clamp(
-        float(params.availability_target) - path_next_avail,
-        min=0.0,
-    )
-    shortfall_mean = shortfall_per_path.mean()
+    path_next = step_deficit[:, 1]
+    path_next_health = step_parts["viability_step_availability"][:, 1]
+    shortfall_mean = path_next.mean()
     components = {
         "viability_shortfall": shortfall_mean,
-        "viability_min_availability": path_next_avail.mean(),
-        "viability_step_availability": path_next_avail.mean(),
+        "viability_min_availability": path_next_health.mean(),
+        "viability_step_availability": path_next_health.mean(),
         "viability_bid_margin": step_parts["viability_bid_margin"][:, 1].mean(),
         "viability_ask_margin": step_parts["viability_ask_margin"][:, 1].mean(),
+        "viability_base_notional": step_parts["viability_base_notional"][:, 1].mean(),
+        "viability_bid_deficit": step_parts["viability_bid_deficit"][:, 1].mean(),
+        "viability_ask_deficit": step_parts["viability_ask_deficit"][:, 1].mean(),
+        "viability_step_deficit": path_next.mean(),
     }
     return shortfall_mean, components
 
@@ -699,49 +735,19 @@ def update_ce_ewma_scale(
     return decay * float(ce_ewma_scale) + (1.0 - decay) * magnitude
 
 
-_LAMBDA_INIT_FLOOR = 1e-300
-
-# Default cap on the log-space dual state. ``exp(THETA_MAX) ~ 1.4e13`` which is
-# already absurdly large as a Lagrange multiplier; the cap is the only thing
-# that keeps the dual state from running away on long-lived thin books.
-VIABILITY_THETA_MAX = 30.0
-VIABILITY_THETA_MIN = math.log(_LAMBDA_INIT_FLOOR)
-
-
-def viability_theta_from_lambda_init(lambda_init: float) -> float:
-    """Map configured ``lambda_init`` to log-space dual state ``θ`` with ``λ = exp(θ)``.
-
-    Returns ``-inf`` for non-positive ``lambda_init`` so the resulting
-    multiplier is exactly zero. The dual state is finite for any finite
-    positive input.
-    """
-
-    val = float(lambda_init)
-    if val <= 0.0 or not math.isfinite(val):
-        return -math.inf
-    return math.log(max(val, _LAMBDA_INIT_FLOOR))
-
-
-def viability_lambda_from_theta(viability_theta: float) -> float:
-    """Positive Lagrange multiplier from log-space dual state.
-
-    Numerically safe: never raises. Returns ``0.0`` for ``-inf``,
-    non-positive, or non-finite ``theta``.
-    """
-
-    theta = float(viability_theta)
-    if not math.isfinite(theta) or theta <= 0.0:
+def _clip_lambda(value: float, lambda_max: float) -> float:
+    if not math.isfinite(value) or value <= 0.0:
         return 0.0
-    # Re-derive the clamp threshold to avoid the math.log call on the floor.
-    if theta <= math.log(_LAMBDA_INIT_FLOOR):
-        return 0.0
-    try:
-        lam = math.exp(theta)
-    except OverflowError:
-        return 0.0
-    if not math.isfinite(lam) or lam <= 0.0:
-        return 0.0
-    return lam
+    cap = max(0.0, float(lambda_max))
+    if value > cap:
+        return cap
+    return float(value)
+
+
+def viability_lambda_from_init(lambda_init: float, *, lambda_max: float = 100.0) -> float:
+    """Configured starting multiplier, clipped to ``[0, lambda_max]``."""
+
+    return _clip_lambda(float(lambda_init), lambda_max)
 
 
 def _viability_shortfall_raw_from_components(
@@ -762,14 +768,12 @@ def _viability_shortfall_raw_from_components(
 def viability_lambda_applied_from_components(
     components: dict[str, Any],
     *,
-    theta_applied: float,
+    lambda_applied: float,
     component_prefix: str = "",
 ) -> float:
-    """
-    λ used in this decision's viability penalty.
+    """λ used in this decision's viability penalty.
 
-  Prefer ``|penalty| / shortfall`` when both are present so diagnostics match ``J``
-  even if closure-side keys were missing or stale.
+    Prefer ``|penalty| / shortfall`` when both are present so diagnostics match ``J``.
     """
 
     shortfall = _viability_shortfall_raw_from_components(
@@ -781,69 +785,54 @@ def viability_lambda_applied_from_components(
         implied = abs(penalty) / abs(shortfall)
         if math.isfinite(implied) and implied >= 0.0:
             return implied
-    return viability_lambda_from_theta(theta_applied)
+    return max(0.0, float(lambda_applied)) if math.isfinite(float(lambda_applied)) else 0.0
 
 
 def stamp_viability_dual_diagnostics(
     components: dict[str, Any],
     *,
-    local_theta_applied: float,
-    local_theta_learned: float,
-    global_theta_applied: float | None = None,
-    global_theta_learned: float | None = None,
+    local_lambda_applied: float,
+    local_lambda_learned: float,
+    global_lambda_applied: float | None = None,
+    global_lambda_learned: float | None = None,
 ) -> None:
-    """
-    Stamp viability dual state on optimizer objective components.
+    """Stamp linear dual state on optimizer objective components.
 
-    - ``viability_lambda`` / ``viability_lambda_theta``: multiplier used in this decision.
-    - ``viability_lambda_learned`` / ``viability_lambda_theta_learned``: state for next decision.
+    ``viability_lambda_theta`` is kept as an alias of the applied λ so older
+    dashboards still receive a multiplier (it is no longer log-space θ).
     """
 
     components["viability_lambda"] = viability_lambda_applied_from_components(
         components,
-        theta_applied=local_theta_applied,
+        lambda_applied=local_lambda_applied,
     )
-    components["viability_lambda_theta"] = float(local_theta_applied)
-    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta_learned)
-    components["viability_lambda_theta_learned"] = float(local_theta_learned)
-    if global_theta_applied is not None and global_theta_learned is not None:
+    components["viability_lambda_theta"] = float(local_lambda_applied)
+    components["viability_lambda_learned"] = float(local_lambda_learned)
+    components["viability_lambda_theta_learned"] = float(local_lambda_learned)
+    if global_lambda_applied is not None and global_lambda_learned is not None:
         components["global_viability_lambda"] = viability_lambda_applied_from_components(
             components,
-            theta_applied=global_theta_applied,
+            lambda_applied=global_lambda_applied,
             component_prefix="global_",
         )
-        components["global_viability_lambda_theta"] = float(global_theta_applied)
-        components["global_viability_lambda_learned"] = viability_lambda_from_theta(
-            global_theta_learned
-        )
-        components["global_viability_lambda_theta_learned"] = float(global_theta_learned)
+        components["global_viability_lambda_theta"] = float(global_lambda_applied)
+        components["global_viability_lambda_learned"] = float(global_lambda_learned)
+        components["global_viability_lambda_theta_learned"] = float(global_lambda_learned)
 
 
 def stamp_learned_viability_dual(
     components: dict[str, Any],
     *,
-    local_theta: float,
-    global_theta: float | None = None,
+    local_lambda: float,
+    global_lambda: float | None = None,
 ) -> None:
     """Deprecated: only stamps learned keys. Use ``stamp_viability_dual_diagnostics``."""
 
-    components["viability_lambda_learned"] = viability_lambda_from_theta(local_theta)
-    components["viability_lambda_theta_learned"] = float(local_theta)
-    if global_theta is not None:
-        components["global_viability_lambda_learned"] = viability_lambda_from_theta(global_theta)
-        components["global_viability_lambda_theta_learned"] = float(global_theta)
-
-
-def _viability_shortfall_from_components(
-    components: dict[str, Any],
-    *,
-    shortfall_key: str = "viability_shortfall",
-    shortfall_raw_key: str = "viability_penalty_raw",
-) -> Any | None:
-    raw = components.get(shortfall_key)
-    if raw is None:
-        raw = components.get(shortfall_raw_key)
-    return raw
+    components["viability_lambda_learned"] = float(local_lambda)
+    components["viability_lambda_theta_learned"] = float(local_lambda)
+    if global_lambda is not None:
+        components["global_viability_lambda_learned"] = float(global_lambda)
+        components["global_viability_lambda_theta_learned"] = float(global_lambda)
 
 
 def _float_component(raw: Any) -> float | None:
@@ -858,86 +847,62 @@ def _float_component(raw: Any) -> float | None:
     return value
 
 
-def _signed_availability_gap(
-    components: dict[str, Any],
-    *,
-    params: ViabilityParams,
-    min_availability_key: str,
-) -> float | None:
-    a_min = _float_component(components.get(min_availability_key))
-    if a_min is None:
-        return None
-    return float(params.availability_target) - a_min
-
-
-def update_viability_theta(
-    viability_theta: float,
+def update_viability_lambda(
+    viability_lambda: float,
     components: dict[str, Any],
     *,
     params: ViabilityParams | None,
-    min_availability_key: str = "viability_min_availability",
-    theta_min: float = VIABILITY_THETA_MIN,
-    theta_max: float = VIABILITY_THETA_MAX,
-    decay_rate: float = 0.0,
-) -> float:
-    """
-    Log-space dual ascent: θ <- θ + η (A* - E[A_min]); λ = exp(θ).
+    ewma: float | None = None,
+    shortfall_key: str = "viability_shortfall",
+    ewma_key: str = "viability_shortfall_ewma",
+    gap_key: str = "viability_dual_gap",
+) -> tuple[float, float]:
+    """Linear dual ascent on EWMA shortfall: λ ← clip(λ + η (S̄ − ε), 0, λ_max).
 
-    Uses the signed availability gap (not one-sided shortfall) so λ can decrease
-    when availability is above target. No reset, leakage, or ε in the dual update.
-
-    The result is clamped to ``[theta_min, theta_max]`` (defaulting to the
-    module-level ``VIABILITY_THETA_MIN``/``VIABILITY_THETA_MAX``) so a
-    sustained positive gap cannot push ``theta`` past the point where
-    ``math.exp(theta)`` overflows. The clamp is the structural fix for
-    the 2026-09-01 Bitwana ``OverflowError``.
-
-    ``decay_rate`` (default ``0.0``) implements a leaky reset: each call
-    multiplies the prior state by ``1 - decay_rate`` before the additive
-    update, so a stalled dual state bleeds back toward zero. The clamp
-    is applied after the decay so the state can never escape the safe
-    region.
+    ``S`` is the quadratic deficit from the inner solve (fixed during Adam).
+    ``ε`` is ``shortfall_tolerance``. The EWMA decouples Monte Carlo noise
+    from the trading-frame dual step. Returns ``(new_lambda, new_ewma)``.
     """
 
+    current = float(viability_lambda)
+    if not math.isfinite(current) or current < 0.0:
+        current = 0.0
     if params is None:
-        return float(viability_theta)
-    gap = _signed_availability_gap(
-        components,
-        params=params,
-        min_availability_key=min_availability_key,
-    )
-    if gap is None and decay_rate <= 0.0:
-        return float(viability_theta)
-    eta = float(params.lambda_learning_rate)
-    theta_pre = float(viability_theta)
-    if decay_rate > 0.0:
-        theta_pre = theta_pre * (1.0 - decay_rate)
-    new_theta = theta_pre + eta * (gap if gap is not None else 0.0)
-    if new_theta > theta_max:
-        return float(theta_max)
-    if new_theta < theta_min:
-        return float(theta_min)
-    return new_theta
+        return current, (float(ewma) if ewma is not None and math.isfinite(float(ewma)) else 0.0)
+    shortfall = _float_component(components.get(shortfall_key))
+    if shortfall is None:
+        shortfall = _float_component(components.get("viability_penalty_raw"))
+    if shortfall is None:
+        prior = float(ewma) if ewma is not None and math.isfinite(float(ewma)) else 0.0
+        return current, prior
+    decay = float(params.dual_ewma_decay)
+    if ewma is None or not math.isfinite(float(ewma)):
+        new_ewma = float(shortfall)
+    else:
+        new_ewma = decay * float(ewma) + (1.0 - decay) * float(shortfall)
+    gap = new_ewma - float(params.shortfall_tolerance)
+    cap = float(params.lambda_max)
+    new_lambda = _clip_lambda(current + float(params.lambda_learning_rate) * gap, cap)
+    components[ewma_key] = new_ewma
+    components[gap_key] = gap
+    return new_lambda, new_ewma
 
 
-def reset_viability_theta(
+def reset_viability_lambda(
     *,
-    current_theta: float,
+    current_lambda: float,
     reset_fraction: float = 0.5,
 ) -> float:
-    """Apply a partial reset to the viability dual state.
-
-    Returns ``current_theta * (1 - reset_fraction)``. Used to bleed
-    the dual state when a long-lived thin book resumes without an
-    obvious availability signal; the default ``reset_fraction=0.5``
-    cuts the state in half.
-    """
+    """Partial reset of the linear dual state: ``λ * (1 - reset_fraction)``."""
 
     if not 0.0 <= reset_fraction <= 1.0:
         raise ValueError(
             f"reset_fraction must be in [0, 1], got {reset_fraction!r}"
         )
-    return float(current_theta) * (1.0 - float(reset_fraction))
+    value = float(current_lambda) * (1.0 - float(reset_fraction))
+    if not math.isfinite(value) or value < 0.0:
+        return 0.0
+    return value
 
 
 def validity_book_shortfall(
@@ -1002,25 +967,26 @@ def combine_viability_term(
     base_objective: Any,
     components: dict[str, Any],
     *,
-    viability_theta: float,
+    viability_lambda: float,
     viability_params: ViabilityParams | None = None,
     viability_shortfall: Any | None = None,
     viability_components: dict[str, Any] | None = None,
     viability_term: str = "viability_penalty",
     component_prefix: str = "",
 ) -> tuple[Any, dict[str, Any]]:
-    """Subtract adaptive Lagrange penalty: -exp(theta) * expected availability shortfall."""
+    """Subtract adaptive Lagrange penalty: -λ · expected quadratic deficit."""
 
     out = dict(components)
     objective = base_objective
     if viability_shortfall is None:
         return objective, out
-    lam = viability_lambda_from_theta(viability_theta)
+    cap = float(viability_params.lambda_max) if viability_params is not None else 100.0
+    lam = _clip_lambda(float(viability_lambda), cap)
     weighted = -lam * viability_shortfall
     objective = objective + weighted
     out[viability_term] = weighted
     out[f"{component_prefix}viability_lambda"] = lam
-    out[f"{component_prefix}viability_lambda_theta"] = float(viability_theta)
+    out[f"{component_prefix}viability_lambda_theta"] = lam
     for key, value in (viability_components or {}).items():
         if key == "viability_shortfall":
             out[f"{viability_term}_raw"] = value

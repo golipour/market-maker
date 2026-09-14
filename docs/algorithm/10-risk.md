@@ -104,19 +104,16 @@ threshold, the runner drops the book and logs `reason="low_book_quality"`.
 
 ## 10.6 Viability backstop
 
-The viability dual variable `θ` is updated *after* every decision by
-`update_viability_theta`. The function computes the realized availability
-shortfall:
+The viability dual variable `λ` is updated *after* every decision by
+`update_viability_lambda`. The function EWMA-filters the realized
+quadratic deficit and steps a bounded linear multiplier:
 
-```120:160:mm/mpc/objective_terms.py
-def update_viability_theta(theta, params, realized_availability, target):
-    shortfall = max(0.0, target - realized_availability)
-    new_theta = max(0.0, theta + params.viability_step * (shortfall - params.shortfall_tolerance))
-    return new_theta
+```text
+S̄ ← α S̄ + (1−α) S
+λ ← clip(λ + η (S̄ − ε), 0, λ_max)
 ```
 
-The `theta` value is included in the `OptimizerConfig` passed to the next
-decision, so the optimizer uses the updated multiplier immediately.
+The updated `λ` is kept on the MPC instance and used in the next decision.
 
 ## 10.7 `validate_target_book_with_result`
 

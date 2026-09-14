@@ -141,6 +141,8 @@ def _canonical_viability_defaults() -> dict[str, float]:
         "shortfall_tolerance": float(viability.get("shortfall_tolerance", 0.05)),
         "lambda_init": float(viability.get("lambda_init", 0.0)),
         "lambda_learning_rate": float(viability.get("lambda_learning_rate", 0.02)),
+        "lambda_max": float(viability.get("lambda_max", 100.0)),
+        "dual_ewma_decay": float(viability.get("dual_ewma_decay", 0.9)),
     }
 
 
@@ -189,6 +191,10 @@ def _migrate_viability_min_viable_quote_semantics(payload: dict[str, Any]) -> bo
     if "margin_buffer" not in viability:
         viability["margin_buffer"] = defaults["margin_buffer"]
         changed = True
+    for key in ("lambda_max", "dual_ewma_decay"):
+        if key not in viability:
+            viability[key] = defaults[key]
+            changed = True
     changed = _strip_removed_viability_keys(viability) or changed
     if float(viability.get("availability_target", defaults["availability_target"])) < 0.95:
         viability["availability_target"] = defaults["availability_target"]
