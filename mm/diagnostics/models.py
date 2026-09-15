@@ -14,18 +14,90 @@ from mm.core.payload_schema import (
 )
 
 
-def orderbook_snapshot_payload(book: RawOrderbook | None) -> dict[str, Any]:
-    """JSON-friendly local orderbook levels for diagnostics and Grafana."""
+# Envelope safety cap after the spread window. Generous enough for Grafana depth
+# charts, small enough to stay under the Redis 64KB diagnostics limit.
+DIAGNOSTICS_ORDERBOOK_LEVELS_CAP = 80
+DIAGNOSTICS_ORDERBOOK_LEVELS_CAP_MAX = 100
+
+
+def diagnostics_orderbook_level_cap(*, grid_levels: int | None = None) -> int:
+    """Count backstop for diagnostics books, independent of venue tick density."""
+
+    if grid_levels is None:
+        return DIAGNOSTICS_ORDERBOOK_LEVELS_CAP
+    return min(
+        DIAGNOSTICS_ORDERBOOK_LEVELS_CAP_MAX,
+        max(DIAGNOSTICS_ORDERBOOK_LEVELS_CAP, 2 * int(grid_levels)),
+    )
+
+
+def orderbook_snapshot_payload(
+    book: RawOrderbook | None,
+    *,
+    mid: float | None = None,
+    spread_max: float | None = None,
+    max_levels: int = DIAGNOSTICS_ORDERBOOK_LEVELS_CAP,
+) -> dict[str, Any]:
+    """Return the near-market ladder the controller actually consumes.
+
+    Primary bound is ``|price - mid| <= spread_max`` (same window as MPC
+    ``ob_rel``). A count cap is applied only after that window, so a dense
+    tick book cannot blow the diagnostics envelope.
+    """
 
     if book is None:
         return {"bids": [], "asks": []}
-    return {
+    if max_levels <= 0:
+        raise ValueError("max_levels must be positive")
+    raw_bids = list(book.bids)
+    raw_asks = list(book.asks)
+    window_mid = float(mid) if mid is not None and mid > 0 else None
+    window_spread = float(spread_max) if spread_max is not None and spread_max > 0 else None
+    if window_mid is not None and window_spread is not None:
+        window_bids = [
+            level
+            for level in raw_bids
+            if level.qty > 0 and 0.0 <= (window_mid - float(level.price)) <= window_spread
+        ]
+        window_asks = [
+            level
+            for level in raw_asks
+            if level.qty > 0 and 0.0 <= (float(level.price) - window_mid) <= window_spread
+        ]
+    else:
+        window_bids = [level for level in raw_bids if level.qty > 0]
+        window_asks = [level for level in raw_asks if level.qty > 0]
+    kept_bids = window_bids[:max_levels]
+    kept_asks = window_asks[:max_levels]
+    payload: dict[str, Any] = {
         "exchange": book.exchange,
         "symbol": book.symbol,
         "timestamp_ms": book.timestamp_ms,
-        "bids": [{"price": float(level.price), "qty": float(level.qty)} for level in book.bids],
-        "asks": [{"price": float(level.price), "qty": float(level.qty)} for level in book.asks],
+        "bids": [{"price": float(level.price), "qty": float(level.qty)} for level in kept_bids],
+        "asks": [{"price": float(level.price), "qty": float(level.qty)} for level in kept_asks],
     }
+    if window_mid is not None:
+        payload["mid"] = window_mid
+    if window_spread is not None:
+        payload["spread_max"] = window_spread
+    dropped = (
+        len(kept_bids) < len(raw_bids)
+        or len(kept_asks) < len(raw_asks)
+        or len(window_bids) > max_levels
+        or len(window_asks) > max_levels
+    )
+    if dropped:
+        payload.update(
+            {
+                "bids_count": len(raw_bids),
+                "asks_count": len(raw_asks),
+                "bids_in_window": len(window_bids),
+                "asks_in_window": len(window_asks),
+                "levels_limit": max_levels,
+                "truncated": True,
+            }
+        )
+    return payload
 
 
 @dataclass(frozen=True, slots=True)

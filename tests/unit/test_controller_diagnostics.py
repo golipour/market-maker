@@ -17,7 +17,12 @@ from mm.core.payload_schema import (
     CONTROLLER_DIAGNOSTICS_VERSION,
     assert_payload_schema,
 )
-from mm.diagnostics.models import CONTROLLER_DIAGNOSTICS_TYPE, ControllerDiagnostics
+from mm.diagnostics.models import (
+    CONTROLLER_DIAGNOSTICS_TYPE,
+    ControllerDiagnostics,
+    diagnostics_orderbook_level_cap,
+    orderbook_snapshot_payload,
+)
 from mm.execution.memory import RecordingOrderManager
 from mm.risk.engine import PassThroughRiskEngine
 from mm.runtime.config import (
@@ -25,6 +30,7 @@ from mm.runtime.config import (
     MarketDataSourceConfig,
     MarketMakerRuntimeConfig,
     ObservabilityRuntimeConfig,
+    OrderbookGridConfig,
     RiskRuntimeConfig,
 )
 from mm.runtime.engine import _build_observability_daemons, _default_persistence_topics
@@ -68,6 +74,59 @@ def _minimal_config(*, actor_id: str = "test-runner") -> ControllerRuntimeConfig
             "global": {"cumulative_qty_floor_at_spread_max": 1.0, "cumulative_qty_cap_at_spread_max": 10.0},
         },
     )
+
+
+def test_orderbook_snapshot_keeps_controller_spread_window() -> None:
+    book = RawOrderbook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        timestamp_ms=2_000,
+        bids=tuple(PriceLevel(100.0 - i, 1.0) for i in range(50)),
+        asks=tuple(PriceLevel(101.0 + i, 1.0) for i in range(50)),
+        is_snapshot=True,
+    )
+
+    payload = orderbook_snapshot_payload(book, mid=100.5, spread_max=10.0)
+
+    assert payload["bids"][0] == {"price": 100.0, "qty": 1.0}
+    assert payload["asks"][0] == {"price": 101.0, "qty": 1.0}
+    assert payload["bids"][-1]["price"] == pytest.approx(91.0)
+    assert payload["asks"][-1]["price"] == pytest.approx(110.0)
+    assert all(100.5 - row["price"] <= 10.0 for row in payload["bids"])
+    assert all(row["price"] - 100.5 <= 10.0 for row in payload["asks"])
+    assert payload["spread_max"] == 10.0
+    assert payload["mid"] == 100.5
+    assert payload["bids_count"] == 50
+    assert payload["asks_count"] == 50
+    assert payload["truncated"] is True
+    assert payload["bids_in_window"] == len(payload["bids"])
+    assert payload["asks_in_window"] == len(payload["asks"])
+
+
+def test_orderbook_snapshot_caps_dense_window() -> None:
+    book = RawOrderbook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        timestamp_ms=2_000,
+        bids=tuple(PriceLevel(100.0 - (i * 0.1), 1.0) for i in range(200)),
+        asks=tuple(PriceLevel(101.0 + (i * 0.1), 1.0) for i in range(200)),
+        is_snapshot=True,
+    )
+
+    payload = orderbook_snapshot_payload(book, mid=100.5, spread_max=50.0, max_levels=80)
+
+    assert len(payload["bids"]) == 80
+    assert len(payload["asks"]) == 80
+    assert payload["bids_in_window"] > 80
+    assert payload["levels_limit"] == 80
+    assert payload["truncated"] is True
+    assert payload["bids"][0]["price"] == pytest.approx(100.0)
+
+
+def test_diagnostics_orderbook_level_cap_stays_in_envelope_band() -> None:
+    assert diagnostics_orderbook_level_cap() == 80
+    assert diagnostics_orderbook_level_cap(grid_levels=10) == 80
+    assert diagnostics_orderbook_level_cap(grid_levels=60) == 100
 
 
 def test_controller_diagnostics_payload_has_stable_shape() -> None:
@@ -313,6 +372,75 @@ def test_decision_context_maps_frame_fields() -> None:
     assert diag.cleared_orderbook["asks"] == [{"price": 101.0, "qty": 4.0}]
     assert diag.global_cleared_orderbook["bids"] == [{"price": 99.0, "qty": 7.0}]
     assert diag.global_cleared_orderbook["asks"] == [{"price": 102.0, "qty": 6.0}]
+    assert diag.cleared_orderbook["spread_max"] == pytest.approx(100.0)
+    assert diag.cleared_orderbook["mid"] == pytest.approx(100.5)
+
+
+def test_decision_context_clips_diagnostics_book_to_grid_spread_max() -> None:
+    local_book = RawOrderbook(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        timestamp_ms=2_000,
+        bids=(
+            PriceLevel(100.0, 5.0),
+            PriceLevel(90.0, 8.0),
+            PriceLevel(50.0, 20.0),
+        ),
+        asks=(
+            PriceLevel(101.0, 4.0),
+            PriceLevel(110.0, 9.0),
+            PriceLevel(150.0, 30.0),
+        ),
+        is_snapshot=True,
+    )
+    frame = StrategyInputFrame(
+        local=MarketEvent(
+            exchange="nobitex",
+            symbol="BTC_IRT",
+            interval_ms=1000,
+            t_start_ms=1000,
+            t_end_ms=2000,
+            orderbook=local_book,
+            trades=(),
+            buy_volume=1.0,
+            sell_volume=2.0,
+            vwap=0.0,
+            imbalance=0.0,
+            microprice=100.5,
+        ),
+        created_at_ms=1_000,
+    )
+    runtime = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+    )
+    from mm.application.trading_context import trading_state_from_frame
+
+    ctx = DecisionContext(
+        config=ControllerRuntimeConfig(
+            enabled=True,
+            actor_id="test-runner",
+            dry_run=True,
+            orderbook_grid=OrderbookGridConfig(spread_max=15.0, spread_step=1.0),
+        ),
+        frame=frame,
+        clean_frame=frame,
+        trading_state=trading_state_from_frame(
+            frame,
+            runtime.binding,
+            actor_id="test-runner",
+            open_orders={},
+        ),
+        frame_step=1,
+        now_ms=2_500,
+    )
+    payload = ctx.to_diagnostics().as_payload()["cleared_orderbook"]
+
+    assert [row["price"] for row in payload["bids"]] == [100.0, 90.0]
+    assert [row["price"] for row in payload["asks"]] == [101.0, 110.0]
+    assert payload["spread_max"] == pytest.approx(15.0)
+    assert payload["truncated"] is True
+    assert payload["bids_count"] == 3
+    assert payload["asks_count"] == 3
 
 
 def test_sync_status_marks_stale_global_market_not_ready() -> None:

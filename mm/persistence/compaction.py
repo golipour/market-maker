@@ -10,6 +10,8 @@ from mm.core.events import EventEnvelope, to_jsonable
 PersistenceSink = Literal["postgres", "parquet"]
 
 # Depth panels need a ladder, not the venue's full book (Bitwana depth_limit=200).
+# MarketEvent books are count-trimmed here. ControllerDiagnostics books are already
+# clipped to the controller spread window at publish time.
 ORDERBOOK_PERSIST_LEVELS = 40
 
 # Stages whose per-order price/qty rows are kept (slimmed) for Grafana depth/stem panels.
@@ -58,6 +60,9 @@ def compact_payload_for_persistence(event_type: str, payload: Any, *, sink: Pers
 
 def _trim_orderbook(orderbook: Any) -> tuple[Any, bool]:
     if not isinstance(orderbook, dict):
+        return orderbook, False
+    # Diagnostics books are already clipped to the controller spread window.
+    if orderbook.get("spread_max") is not None:
         return orderbook, False
     bids = orderbook.get("bids")
     asks = orderbook.get("asks")

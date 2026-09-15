@@ -270,3 +270,41 @@ def test_compaction_summarizes_controller_diagnostics_action_pipeline_orders() -
     assert rules["rejections_compacted_count"] == 4
     assert rules["rejections_sample"][0]["reason"] == "rules_min_notional"
     assert json_size_bytes(compacted.payload) < json_size_bytes(envelope.payload)
+
+
+def test_compaction_does_not_recount_clip_spread_windowed_diagnostics_books() -> None:
+    levels = [{"price": 100.0 - i, "qty": 1.0} for i in range(60)]
+    payload = {
+        "type": "ControllerDiagnostics",
+        "actor_id": "mpc-controller",
+        "exchange": "nobitex",
+        "symbol": "BTC_IRT",
+        "t_end_ms": 2000,
+        "created_at_ms": 2000,
+        "cleared_orderbook": {
+            "bids": levels,
+            "asks": [{"price": 101.0 + i, "qty": 1.0} for i in range(60)],
+            "mid": 100.5,
+            "spread_max": 200.0,
+        },
+        "action_pipeline": {
+            "target_book": {
+                "orders": [
+                    {
+                        "exchange": "nobitex",
+                        "symbol": "BTC_IRT",
+                        "side": "buy",
+                        "price": 100.0,
+                        "qty": 0.5,
+                    }
+                ]
+            }
+        },
+    }
+    envelope = envelope_event("strategy:diagnostics:mpc-controller", payload)
+
+    compacted = compact_envelope_for_persistence(envelope, sink="postgres")
+
+    assert len(compacted.payload["cleared_orderbook"]["bids"]) == 60
+    assert compacted.payload["cleared_orderbook"]["spread_max"] == 200.0
+    assert "bids_compacted_count" not in compacted.payload["cleared_orderbook"]

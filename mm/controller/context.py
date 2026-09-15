@@ -22,6 +22,7 @@ from mm.diagnostics.models import (
     PhysicalStateDiagnostics,
     RiskDiagnostics,
     StateDiagnostics,
+    diagnostics_orderbook_level_cap,
     orderbook_snapshot_payload,
 )
 from mm.execution.plan import (
@@ -334,9 +335,12 @@ class DecisionContext:
             risk=risk,
             execution_gates=execution_gates,
             warnings=tuple(warnings),
-            cleared_orderbook=orderbook_snapshot_payload(self.clean_frame.local.orderbook),
+            cleared_orderbook=self._orderbook_snapshot(
+                self.clean_frame.local.orderbook,
+                mid=state.mid,
+            ),
             global_cleared_orderbook=(
-                orderbook_snapshot_payload(self.clean_frame.global_.orderbook)
+                self._orderbook_snapshot(self.clean_frame.global_.orderbook)
                 if self.clean_frame.global_ is not None
                 else {}
             ),
@@ -420,6 +424,21 @@ class DecisionContext:
             local_wealth=local_wealth,
             global_wealth=global_wealth,
             ledger_source=self.ledger_source,
+        )
+
+    def _orderbook_snapshot(self, book: Any, *, mid: float | None = None) -> dict[str, Any]:
+        grid = self.config.orderbook_grid
+        book_mid = mid
+        if book_mid is None:
+            try:
+                book_mid = mid_from_orderbook(book)
+            except ValueError:
+                book_mid = None
+        return orderbook_snapshot_payload(
+            book,
+            mid=book_mid,
+            spread_max=float(grid.spread_max),
+            max_levels=diagnostics_orderbook_level_cap(grid_levels=grid.levels),
         )
 
     def _physical_state_diagnostics(self) -> PhysicalStateDiagnostics | None:
