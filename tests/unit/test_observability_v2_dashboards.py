@@ -40,6 +40,7 @@ def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
     all_current = {"selected": False, "text": "All", "value": "$__all"}
 
     assert dashboard["time"] == {"from": "now-15m", "to": "now"}
+    assert dashboard["refresh"] == "60s"
     # Empty multi-var currents interpolate to ARRAY[] / exchange=~"" and blank every panel,
     # including Grafana kiosk embeds that cannot auto-pick the first query option.
     assert templating["exchange"]["current"] == all_current
@@ -406,6 +407,9 @@ def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
     assert "student_df" in local_config_sql
     assert "metric !~" in local_all_sql
     assert "reference_vwap_vol" in local_all_sql
+    local_flow_sql = panels_by_title["Local market-flow params"]["targets"][0]["rawSql"]
+    assert r"\.p_(buy|sell)$" in local_flow_sql
+    assert r"\.p_(buy|sell)$" in local_all_sql
 
 
 def test_action_pipeline_exposes_order_flow_charts() -> None:

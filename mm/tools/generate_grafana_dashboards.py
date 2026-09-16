@@ -175,7 +175,7 @@ def _dashboard(
         "links": [],
         "liveNow": True,
         "panels": panels,
-        "refresh": "10s",
+        "refresh": "60s",
         "schemaVersion": 39,
         "style": "dark",
         "tags": tags,

@@ -3770,7 +3770,7 @@
       "description": "Marginal order qty per uniform spread bucket from mid. Adjust Spread max / Spread buckets variables to widen or refine bars."
     }
   ],
-  "refresh": "10s",
+  "refresh": "60s",
   "schemaVersion": 39,
   "style": "dark",
   "tags": [

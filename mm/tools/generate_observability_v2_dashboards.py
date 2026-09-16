@@ -37,6 +37,7 @@ PG_DS = {"type": "postgres", "uid": "postgres-mm"}
 LOKI_DS = {"type": "loki", "uid": "loki-mm"}
 DEFAULT_DASHBOARD_TIME_FROM = "now-15m"
 DEFAULT_DASHBOARD_TIME_TO = "now"
+DEFAULT_DASHBOARD_REFRESH = "60s"
 
 
 def _target(
@@ -638,7 +639,7 @@ def _dashboard(
         "links": [],
         "liveNow": True,
         "panels": panels,
-        "refresh": "10s",
+        "refresh": DEFAULT_DASHBOARD_REFRESH,
         "schemaVersion": 39,
         "style": "dark",
         "tags": ["market-maker", "observability-v2", *tags],
@@ -1754,6 +1755,10 @@ ORDER BY 1, 2"""
 
 
 _PRICE_SCALE_CONFIG_PARAM_REGEX = r"\.(reference_vwap_vol|shape_alpha|student_df|active_in_mpc)$"
+_HURDLE_P_ALIAS_PARAM_REGEX = r"\.p_(buy|sell)$"
+_ALL_PARAMS_EXCLUDE_REGEX = (
+    f"{_PRICE_SCALE_CONFIG_PARAM_REGEX}|{_HURDLE_P_ALIAS_PARAM_REGEX}"
+)
 
 
 def _latest_strategy_model_params_sql() -> str:
@@ -3864,8 +3869,8 @@ def model_parameters() -> dict[str, Any]:
         "### Market-flow models\n\n"
         "Market-flow params live under `local_market_flow_model.params` and "
         "`global_market_flow_model.params`. For hurdle/lognormal-style models, read "
-        "`p_*`/gate parameters as event probability controls, `mu_*` as log-size means, "
-        "and `sigma_*` as log-size uncertainty."
+        "`p0_*` as P(volume=0), `mu_*` as log-size means, "
+        "and `sigma_*` as log-size uncertainty. Do not plot `p_buy`/`p_sell`; those were aliases of `p0_*`."
     )
     panels = [
         _text(
@@ -4004,7 +4009,11 @@ def model_parameters() -> dict[str, Any]:
             "Local market-flow params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="local", model_type="market_flow"),
+            _strategy_model_params_sql(
+                scope="local",
+                model_type="market_flow",
+                exclude_regex=_HURDLE_P_ALIAS_PARAM_REGEX,
+            ),
             x=0,
             y=57,
             w=12,
@@ -4016,7 +4025,11 @@ def model_parameters() -> dict[str, Any]:
             "Global market-flow params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="global", model_type="market_flow"),
+            _strategy_model_params_sql(
+                scope="global",
+                model_type="market_flow",
+                exclude_regex=_HURDLE_P_ALIAS_PARAM_REGEX,
+            ),
             x=12,
             y=57,
             w=12,
@@ -4061,7 +4074,7 @@ def model_parameters() -> dict[str, Any]:
             "All local params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="local", exclude_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX),
+            _strategy_model_params_sql(scope="local", exclude_regex=_ALL_PARAMS_EXCLUDE_REGEX),
             x=0,
             y=73,
             w=12,
@@ -4073,7 +4086,7 @@ def model_parameters() -> dict[str, Any]:
             "All global params",
             "timeseries",
             PG_DS,
-            _strategy_model_params_sql(scope="global", exclude_regex=_PRICE_SCALE_CONFIG_PARAM_REGEX),
+            _strategy_model_params_sql(scope="global", exclude_regex=_ALL_PARAMS_EXCLUDE_REGEX),
             x=12,
             y=73,
             w=12,

@@ -234,6 +234,9 @@ def test_global_vwap_delta_nll_deterministic() -> None:
 def test_torch_model_score_before_update_differs_from_after() -> None:
     flow = TorchHurdleLogNormalModel(decay=0.5, init_p0=0.5, init_mu=1.0, init_sigma=0.5)
     params_before = dict(flow.get_params())
+    assert "p0_buy" in params_before
+    assert "p_buy" not in params_before
+    assert "p_sell" not in params_before
     before_nll = score_market_flow(
         buy_volume=10.0,
         sell_volume=0.0,

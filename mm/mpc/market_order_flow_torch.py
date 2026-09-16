@@ -42,8 +42,8 @@ class HurdleOrderFlow:
     Sample V+ and V- from a hurdle log-normal or from a discrete Gamma model.
 
     Params from estimator.get_params():
-      - Log-normal: p_buy, mu_buy, sigma_buy; p_sell, mu_sell, sigma_sell.
-      - Weibull: wb_k_buy, wb_lambda_buy; optional p0_* / p_* for hurdle (Bernoulli @ 0 then round(Weibull)).
+      - Log-normal: p0_buy, mu_buy, sigma_buy; p0_sell, mu_sell, sigma_sell.
+      - Weibull: wb_k_buy, wb_lambda_buy; optional p0_* for hurdle (Bernoulli @ 0 then round(Weibull)).
       - Gamma: shape_buy, scale_buy; shape_sell, scale_sell (no hurdle; X = round(Gamma)).
     """
 
@@ -758,8 +758,6 @@ class TorchHurdleGammaModel:
             "scale_buy": self._scale_buy,
             "shape_sell": self._shape_sell,
             "scale_sell": self._scale_sell,
-            "p_buy": self._p0_buy,
-            "p_sell": self._p0_sell,
         }
 
     def sample(
@@ -806,7 +804,7 @@ class TorchHurdleWeibullModel:
     """
     Market order flow: hurdle Weibull. P(0)=p0; if >0 then Weibull(k, λ) (continuous, like TorchWeibullModel.sample).
     EWMA on zeros for p0 and on positive counts for (k, λ) per side.
-    get_params() returns p0_*, wb_k_*, wb_lambda_* plus p_buy/p_sell aliases.
+    get_params() returns p0_*, wb_k_*, wb_lambda_*.
     """
 
     def __init__(
@@ -918,8 +916,6 @@ class TorchHurdleWeibullModel:
             "wb_lambda_buy": self._lambda_buy,
             "wb_k_sell": self._k_sell,
             "wb_lambda_sell": self._lambda_sell,
-            "p_buy": self._p0_buy,
-            "p_sell": self._p0_sell,
         }
 
     def sample(
@@ -1070,8 +1066,6 @@ class TorchHurdleLogNormalModel:
             "sigma_buy": self._sigma_buy,
             "mu_sell": self._mu_sell,
             "sigma_sell": self._sigma_sell,
-            "p_buy": self._p0_buy,
-            "p_sell": self._p0_sell,
         }
 
     def sample(
@@ -1222,8 +1216,6 @@ class TorchHurdleLogStudentTModel:
             "mu_sell": self._mu_sell,
             "sigma_sell": self._sigma_sell,
             "logt_df": self._df,
-            "p_buy": self._p0_buy,
-            "p_sell": self._p0_sell,
         }
 
     def sample(
@@ -1404,8 +1396,6 @@ class TorchHurdleGeneralizedParetoModel:
             "beta_sell": self._beta_sell,
             "u_buy": self._u_buy,
             "u_sell": self._u_sell,
-            "p_buy": self._p0_buy,
-            "p_sell": self._p0_sell,
         }
 
     def sample(

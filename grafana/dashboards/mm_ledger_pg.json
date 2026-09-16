@@ -401,7 +401,7 @@
       "type": "timeseries"
     }
   ],
-  "refresh": "10s",
+  "refresh": "60s",
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
