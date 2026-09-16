@@ -6,7 +6,9 @@ the controller approximates, the scalar Lagrangian \(J\) that Adam actually
 maximizes, and the outer dual update on the viability multiplier \(\lambda\).
 
 Implementation detail, diagnostics, and config commentary live in
-[`mpc-optimization-objective.md`](mpc-optimization-objective.md). Source of
+[`mpc-optimization-objective.md`](mpc-optimization-objective.md). The
+stochastic flow and price models sampled inside \(\Phi\) are stated in
+[`mpc-price-and-flow-models.md`](mpc-price-and-flow-models.md). Source of
 truth for the formulas below is the code, not older research notes.
 
 Primary references:

@@ -13,7 +13,7 @@ they can be opened in the editor.
 | 03 | [Frame assembly](03-frame-assembly.md) | `StrategyInputFrame` and `JointStrategyFrame`. |
 | 04 | [Strategy runner](04-strategy-runner.md) | The per-decision loop, cancellation, gates. |
 | 05 | [MPC state & action](05-mpc-state.md) | `State`, `SigmoidMixtureAction`, L-param decoding. |
-| 06 | [Stochastic models](06-mpc-models.md) | Price and order-flow models. |
+| 06 | [Stochastic models](06-mpc-models.md) | Price and order-flow models. Compact math of the **currently wired** models: [`../mpc-price-and-flow-models.md`](../mpc-price-and-flow-models.md). |
 | 07 | [The optimizer](07-mpc-optimizer.md) | Monte Carlo, Adam, warm-start, cancellation. |
 | 08 | [Reward & objective](08-objective.md) | PnL decomposition, validity, viability. |
 | 09 | [Target book](09-target-book.md) | Sigmoid → ladder → `JointTargetBook`. |
