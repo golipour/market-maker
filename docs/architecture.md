@@ -97,6 +97,8 @@ See `mm.core.topics.RuntimeTopics`.
 ## Related documents
 
 - [MPC mathematical formulation](mpc-mathematical-formulation.md)
+- [MPC spread grid and depth](mpc-spread-grid-and-depth.md)
+- [MPC price and flow models](mpc-price-and-flow-models.md)
 - [Data flow](data-flow.md)
 - [Runtime mechanisms](mechanisms.md)
 - [Controller & execution](controller-and-execution.md)

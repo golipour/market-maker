@@ -3,7 +3,9 @@
 This document is the compact mathematical statement of the **models the live MPC
 actually samples from** during rollout. It is the counterpart of
 [`mpc-mathematical-formulation.md`](mpc-mathematical-formulation.md) for the
-stochastic inputs $\varepsilon$ of the rollout operator $\Phi$.
+stochastic inputs $\varepsilon$ of the rollout operator $\Phi$. How those
+volumes consume the relative-spread book (soft fill, queue share) is stated
+in [`mpc-spread-grid-and-depth.md`](mpc-spread-grid-and-depth.md).
 
 Source of truth is the current implementation, not research notes or unused
 kinds. The runtime example and controller builder wire:

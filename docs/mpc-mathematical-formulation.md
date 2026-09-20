@@ -8,7 +8,9 @@ maximizes, and the outer dual update on the viability multiplier $\lambda$.
 Implementation detail, diagnostics, and config commentary live in
 [`mpc-optimization-objective.md`](mpc-optimization-objective.md). The
 stochastic flow and price models sampled inside $\Phi$ are stated in
-[`mpc-price-and-flow-models.md`](mpc-price-and-flow-models.md). Source of
+[`mpc-price-and-flow-models.md`](mpc-price-and-flow-models.md). The shared
+relative spread grid, soft-fill depth, and ladder discretization are stated
+in [`mpc-spread-grid-and-depth.md`](mpc-spread-grid-and-depth.md). Source of
 truth for the formulas below is the code, not older research notes.
 
 Primary references:
@@ -122,7 +124,9 @@ Capacity floors at decode are zero: one-sided quoting is feasible. Optional
 `book_quality.hard_structure` further constrains first-touch centers.
 
 The spread grid is $\{\,j\Delta : j=1,\ldots,\lceil S_{\max}/\Delta\rceil\,\}$
-with $S_{\max}=$ `spread_max`, $\Delta=$ `spread_step`.
+with $S_{\max}=$ `spread_max`, $\Delta=$ `spread_step`. Full geometry,
+public-book bucketing, soft fill, and execution ladder: see
+[`mpc-spread-grid-and-depth.md`](mpc-spread-grid-and-depth.md).
 
 ### 2.4 Hard feasible set $\mathcal{U}(\xi_t)$
 
