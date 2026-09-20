@@ -243,6 +243,8 @@ class ControllerDiagnostics:
     global_cleared_orderbook: dict[str, Any] = field(default_factory=dict)
     ledger_source: str = "physical"
     physical_state: PhysicalStateDiagnostics | None = None
+    orderbook_grid: dict[str, Any] = field(default_factory=dict)
+    execution_grid: dict[str, Any] = field(default_factory=dict)
 
     def as_payload(self) -> dict[str, Any]:
         return controller_diagnostics_event(self)

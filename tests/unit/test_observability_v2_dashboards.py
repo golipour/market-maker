@@ -205,9 +205,9 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     depth_expected = {
-        "Orderbook depth": (0, 4, "event_type = 'MarketEvent'", "payload->'orderbook'->'bids'"),
-        "Clean orderbook depth": (0, 12, "cleared_orderbook", "ctx.diag_payload AS payload"),
-        "Action ladder depth": (0, 20, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
+        "Orderbook depth": (0, 9, "event_type = 'MarketEvent'", "payload->'orderbook'->'bids'"),
+        "Clean orderbook depth": (0, 17, "cleared_orderbook", "ctx.diag_payload AS payload"),
+        "Action ladder depth": (0, 25, "ARRAY['action_pipeline', 'ladder', 'orders']", "exchange:sqlstring"),
     }
     for title, (x, y, expected_sql, role_sql) in depth_expected.items():
         panel = panels_by_title[title]
@@ -222,14 +222,21 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
             assert "jsonb_typeof" in sql
             assert "orders_sample" in sql
 
+    grid_panel = panels_by_title["MPC orderbook_grid vs execution_grid"]
+    assert grid_panel["type"] == "table"
+    assert grid_panel["gridPos"]["y"] == 4
+    grid_sql = grid_panel["targets"][0]["rawSql"]
+    assert "orderbook_grid" in grid_sql
+    assert "execution_grid" in grid_sql
+
     assert "Ladder grid vs orders" not in panels_by_title
     assert "Local orderbook depth" not in panels_by_title
     assert "Global marginal ladder" not in panels_by_title
 
     expected = {
-        "Marginal ladder": (0, 28, "ladder"),
-        "After venue rounding": (0, 38, "rules_valid"),
-        "Exchange-accepted placements": (12, 38, "router_accepted"),
+        "Marginal ladder": (0, 33, "ladder"),
+        "After venue rounding": (0, 43, "rules_valid"),
+        "Exchange-accepted placements": (12, 43, "router_accepted"),
     }
     for title, (x, y, stage) in expected.items():
         panel = panels_by_title[title]
@@ -247,6 +254,8 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
         assert "jsonb_typeof" in sql
         assert "ELSE '[]'::jsonb" in sql
+        assert "actual_points AS" in sql
+        assert "ladder_binning" in sql
         assert "bucket_grid AS" in sql
         assert "generate_series" in sql
         assert "'axis range' AS series" not in sql
@@ -257,6 +266,7 @@ def test_orderbook_depth_includes_execution_ladder_stems() -> None:
     assert vars_by_name["target_frame_mode"]["current"]["value"] == "latest"
     assert vars_by_name["target_frame_event_id"]["label"] == "Target frame"
     assert vars_by_name["spread_buckets"]["label"] == "Spread buckets"
+    assert vars_by_name["ladder_binning"]["current"]["value"] == "actual"
 
 
 def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None:
@@ -675,19 +685,22 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     dashboard = target_order_stems()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
+    assert "MPC orderbook_grid vs execution_grid" in panels_by_title
+    assert panels_by_title["MPC orderbook_grid vs execution_grid"]["gridPos"]["y"] == 4
+
     stages = [
-        ("01 Strategy raw ladder", 3, "ladder", "orders", None),
-        ("02 Strategy cap -> target orderbook", 10, "capped", "orders", None),
-        ("03 Risk-approved target", 17, "risk_approved_target", "orders", None),
-        ("04 Planner new place orders", 24, "planned_place", "orders", None),
-        ("05 Venue rules valid after rounding", 31, "rules_valid", "orders", None),
-        ("06 Exchange accepted placed orders", 38, "router_accepted", "orders", None),
-        ("07 Planner kept live orders", 45, "kept", "orders", None),
-        ("08 Planner cancel orders", 52, "planned_cancel", "orders", None),
-        ("09 Removed by local risk / collateral", 59, "risk_approved_target", "rejections", None),
-        ("10 Removed by venue adapter: invalid price/qty", 66, "rules_valid", "rejections", "rules_invalid_price_or_qty"),
-        ("11 Removed by venue adapter: min qty", 73, "rules_valid", "rejections", "rules_min_qty"),
-        ("12 Removed by venue adapter: min notional", 80, "rules_valid", "rejections", "rules_min_notional"),
+        ("01 Strategy raw ladder", 9, "ladder", "orders", None),
+        ("02 Strategy cap -> target orderbook", 16, "capped", "orders", None),
+        ("03 Risk-approved target", 23, "risk_approved_target", "orders", None),
+        ("04 Planner new place orders", 30, "planned_place", "orders", None),
+        ("05 Venue rules valid after rounding", 37, "rules_valid", "orders", None),
+        ("06 Exchange accepted placed orders", 44, "router_accepted", "orders", None),
+        ("07 Planner kept live orders", 51, "kept", "orders", None),
+        ("08 Planner cancel orders", 58, "planned_cancel", "orders", None),
+        ("09 Removed by local risk / collateral", 65, "risk_approved_target", "rejections", None),
+        ("10 Removed by venue adapter: invalid price/qty", 72, "rules_valid", "rejections", "rules_invalid_price_or_qty"),
+        ("11 Removed by venue adapter: min qty", 79, "rules_valid", "rejections", "rules_min_qty"),
+        ("12 Removed by venue adapter: min notional", 86, "rules_valid", "rejections", "rules_min_notional"),
     ]
     stem_titles: list[str] = []
     stage_by_title: dict[str, tuple[str, str, str | None, str]] = {}
@@ -734,6 +747,8 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
     assert spread_var["label"] == "Spread max"
     bucket_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "spread_buckets")
     assert bucket_var["label"] == "Spread buckets"
+    binning_var = next(var for var in dashboard["templating"]["list"] if var["name"] == "ladder_binning")
+    assert binning_var["current"]["value"] == "actual"
 
     for title in stem_titles:
         stage, field, reason, role = stage_by_title[title]
@@ -748,6 +763,8 @@ def test_target_order_stems_dashboard_aligns_price_qty_stage_charts() -> None:
         assert "ControllerDiagnostics" in sql
         assert "'${target_frame_mode}' = 'latest'" in sql
         assert "OR e.event_id = ${target_frame_event_id:sqlstring}" in sql
+        assert "actual_points AS" in sql
+        assert "ladder_binning" in sql
         assert "bucket_grid AS" in sql
         assert "generate_series" in sql
         assert "spread_max" in sql

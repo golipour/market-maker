@@ -2990,6 +2990,16 @@ orders AS (
   WHERE {side} IN ('bid', 'ask')
     AND {price} IS NOT NULL{reason_filter}{role_filter}{grid_price_filter}
 ),
+actual_points AS (
+  SELECT o.series,
+         (o.price - s.mid) AS spread,
+         SUM(o.value) AS value
+  FROM orders o
+  CROSS JOIN selected s
+  WHERE o.value > 0
+    AND ABS(o.price - s.mid) <= s.spread_max
+  GROUP BY 1, 2
+),
 order_buckets AS (
   SELECT o.series,
          CASE
@@ -3029,7 +3039,7 @@ all_buckets AS (
   SELECT 'ask'::text AS side_key, (g.bucket_idx * g.width) AS spread
   FROM bucket_grid g
 ),
-filled AS (
+uniform_filled AS (
   SELECT sn.series,
          ab.spread,
          COALESCE(ob.value, 0.0) AS value
@@ -3042,10 +3052,93 @@ filled AS (
      OR (sn.series = 'ask' AND ab.side_key = 'ask')
      OR (sn.series LIKE '% bid' AND ab.side_key = 'bid')
      OR (sn.series LIKE '% ask' AND ab.side_key = 'ask')
+),
+chosen AS (
+  SELECT series, spread, value
+  FROM actual_points
+  WHERE LOWER(COALESCE(NULLIF(trim('${{ladder_binning}}'), ''), 'actual')) <> 'uniform'
+  UNION ALL
+  SELECT series, spread, value
+  FROM uniform_filled
+  WHERE LOWER(COALESCE(NULLIF(trim('${{ladder_binning}}'), ''), 'actual')) = 'uniform'
 )
 SELECT series, spread, value
-FROM filled
+FROM chosen
 ORDER BY spread, series"""
+
+
+def _latest_grid_geometry_sql() -> str:
+    """Compare MPC orderbook_grid vs execution_grid on the selected diagnostics frame."""
+
+    return f"""WITH latest AS (
+  SELECT e.payload
+  FROM mm_events e
+  WHERE {diagnostics_scope_filter_sql()}
+    AND e.event_type = 'ControllerDiagnostics'
+    AND (
+      '${{target_frame_mode}}' = 'latest'
+      OR e.event_id = ${{target_frame_event_id:sqlstring}}
+    )
+    AND e.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
+    AND e.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
+    AND e.actor_id = ANY(ARRAY[${{actor_id:sqlstring}}]::text[])
+    AND $__timeFilter(e.ts)
+  ORDER BY e.ts DESC
+  LIMIT 1
+)
+SELECT *
+FROM (
+  SELECT 1 AS sort_key,
+         'role'::text AS field,
+         COALESCE(l.payload #>> ARRAY['orderbook_grid', 'role'], 'mpc_simulation') AS mpc_orderbook_grid,
+         COALESCE(l.payload #>> ARRAY['execution_grid', 'role'], 'execution_only') AS execution_grid
+  FROM latest l
+  UNION ALL
+  SELECT 2,
+         'mode / step',
+         COALESCE(
+           l.payload #>> ARRAY['orderbook_grid', 'spread_step'],
+           l.payload #>> ARRAY['optimizer', 'config', 'spread_step']
+         ),
+         COALESCE(l.payload #>> ARRAY['execution_grid', 'mode'], 'uniform')
+  FROM latest l
+  UNION ALL
+  SELECT 3,
+         'spread_max',
+         COALESCE(
+           l.payload #>> ARRAY['orderbook_grid', 'spread_max'],
+           l.payload #>> ARRAY['optimizer', 'config', 'spread_max']
+         ),
+         COALESCE(
+           l.payload #>> ARRAY['execution_grid', 'spread_max'],
+           l.payload #>> ARRAY['orderbook_grid', 'spread_max'],
+           l.payload #>> ARRAY['optimizer', 'config', 'spread_max']
+         )
+  FROM latest l
+  UNION ALL
+  SELECT 4,
+         'levels',
+         COALESCE(l.payload #>> ARRAY['orderbook_grid', 'levels'], ''),
+         COALESCE(l.payload #>> ARRAY['execution_grid', 'levels'], '')
+  FROM latest l
+  UNION ALL
+  SELECT 5,
+         'spread_min / inner_linear_max',
+         '',
+         CONCAT_WS(
+           ' / ',
+           NULLIF(l.payload #>> ARRAY['execution_grid', 'spread_min'], ''),
+           NULLIF(l.payload #>> ARRAY['execution_grid', 'inner_linear_max'], '')
+         )
+  FROM latest l
+  UNION ALL
+  SELECT 6,
+         'ladder',
+         COALESCE(l.payload #>> ARRAY['orderbook_grid', 'spread_ladder'], '[]'),
+         COALESCE(l.payload #>> ARRAY['execution_grid', 'spread_ladder'], '[]')
+  FROM latest l
+) AS rows
+ORDER BY sort_key"""
 
 
 def _latest_action_pipeline_stage_depth_sql(stage: str, *, role: str | None = "local") -> str:
@@ -3690,34 +3783,54 @@ def orderbook_depth() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Per-**Exchange** orderbook and MPC ladder views. "
+            "Per-**Exchange** orderbook and strategy ladder views. "
             "**Orderbook depth** is the latest ingested `MarketEvent` book (no strategy required). "
-            "**Clean orderbook** and ladder/placement panels use the selected diagnostics frame, "
-            "so they stay empty until a strategy is running on that venue. "
-            "Depth curves use `price - mid` on the x-axis. **Marginal ladder**, **After venue rounding**, "
-            "and **Exchange-accepted placements** use uniform spread buckets (Spread max / Spread buckets) "
-            "with bid/ask bars aligned across panels.",
+            "**Clean orderbook** and ladder/placement panels use the selected diagnostics frame. "
+            "Depth curves use `price - mid` on the x-axis. "
+            "**Marginal ladder** / placement stems default to **actual** order spreads "
+            "(preserves log/hybrid execution geometry). Switch Ladder binning → `uniform` "
+            "to re-bucket into Spread max / Spread buckets for cross-stage alignment. "
+            "The grid table compares `orderbook_grid` (MPC) vs `execution_grid` (live samples).",
             y=0,
             h=4,
         ),
-        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw", role=None), x=0, y=4, w=24),
-        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean", role=None), x=0, y=12, w=24),
-        _xy_depth_panel(4, "Action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role=None), x=0, y=20, w=24),
+        _panel(
+            8,
+            "MPC orderbook_grid vs execution_grid",
+            "table",
+            PG_DS,
+            _latest_grid_geometry_sql(),
+            x=0,
+            y=4,
+            w=24,
+            h=5,
+            fmt="table",
+            description=(
+                "Resolved grids on the selected ControllerDiagnostics frame. "
+                "MPC geometry drives soft-fill; execution_grid is the live sample of D(δ)."
+            ),
+        ),
+        _xy_depth_panel(2, "Orderbook depth", _orderbook_depth_sql("raw", role=None), x=0, y=9, w=24),
+        _xy_depth_panel(3, "Clean orderbook depth", _orderbook_depth_sql("clean", role=None), x=0, y=17, w=24),
+        _xy_depth_panel(4, "Action ladder depth", _latest_action_pipeline_stage_depth_sql("ladder", role=None), x=0, y=25, w=24),
         _stem_spread_bucket_panel(
             5,
             "Marginal ladder",
             _latest_action_pipeline_stage_spread_bucket_sql("ladder", role=None),
             x=0,
-            y=28,
+            y=33,
             w=24,
-            description="Marginal ladder orders on the controller spread grid (pre-cap) for the selected exchange.",
+            description=(
+                "Marginal ladder orders (pre-cap). Default ladder_binning=actual plots each "
+                "order at its true spread from mid; uniform rebins for aligned comparison."
+            ),
         ),
         _stem_spread_bucket_panel(
             6,
             "After venue rounding",
             _latest_action_pipeline_stage_spread_bucket_sql("rules_valid", role=None),
             x=0,
-            y=38,
+            y=43,
             w=12,
         ),
         _stem_spread_bucket_panel(
@@ -3725,7 +3838,7 @@ def orderbook_depth() -> dict[str, Any]:
             "Exchange-accepted placements",
             _latest_action_pipeline_stage_spread_bucket_sql("router_accepted", role=None),
             x=12,
-            y=38,
+            y=43,
             w=12,
         ),
     ]
@@ -3735,6 +3848,7 @@ def orderbook_depth() -> dict[str, Any]:
         panels,
         tags=["orderbook"],
         extra_templating=[
+            _custom_var("ladder_binning", "Ladder binning", "actual,uniform"),
             _custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100"),
             _custom_var("spread_buckets", "Spread buckets", "20,40,60,80"),
             _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),
@@ -4232,15 +4346,30 @@ def target_order_stems() -> dict[str, Any]:
             "Scope",
             "Live or pinned strategy-to-execution ladder, split local left and global right. "
             "Latest mode follows the newest ControllerDiagnostics event; pinned mode uses the "
-            "selected target frame. Each chart plots marginal qty in uniform spread buckets "
-            "(`spread from mid`, width = Spread max / Spread buckets) so every stage shares the "
-            "same horizontal range. Bid is green, ask is red.",
+            "selected target frame. Default **Ladder binning = actual** plots each order at its "
+            "true `price - mid` (correct for log/hybrid `execution_grid`). Choose `uniform` to "
+            "re-bucket into Spread max / Spread buckets for aligned stage comparison. "
+            "Bid is green, ask is red.",
             y=0,
+            h=4,
+        ),
+        _panel(
+            100,
+            "MPC orderbook_grid vs execution_grid",
+            "table",
+            PG_DS,
+            _latest_grid_geometry_sql(),
+            x=0,
+            y=4,
+            w=24,
+            h=5,
+            fmt="table",
         ),
     ]
     panel_id = 2
+    stem_y0 = 9
     for row, (title, stage, field, reason, include_reason) in enumerate(stages):
-        y = 3 + stem_gap * row
+        y = stem_y0 + stem_gap * row
         for role, x in (("local", 0), ("global", 12)):
             role_title = title
             if title == "09 Removed by risk / collateral":
@@ -4261,8 +4390,9 @@ def target_order_stems() -> dict[str, Any]:
                     w=12,
                     h=stem_h,
                     description=(
-                        "Marginal order qty per uniform spread bucket from mid. "
-                        "Adjust Spread max / Spread buckets variables to widen or refine bars."
+                        "Marginal order qty vs spread from mid. "
+                        "ladder_binning=actual keeps true execution prices; "
+                        "uniform uses Spread max / Spread buckets."
                     ),
                 )
             )
@@ -4273,6 +4403,7 @@ def target_order_stems() -> dict[str, Any]:
         panels,
         tags=["actions", "execution"],
         extra_templating=[
+            _custom_var("ladder_binning", "Ladder binning", "actual,uniform"),
             _custom_var("spread_max", "Spread max", "2000,5000,10000,20000,500,200,100"),
             _custom_var("spread_buckets", "Spread buckets", "20,40,60,80"),
             _custom_var("target_frame_mode", "Target frame mode", "latest,pinned"),

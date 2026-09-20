@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import { GrafanaPanel } from "../components/GrafanaPanel";
 import {
+  LADDER_BINNING_OPTIONS,
   SPREAD_BUCKET_OPTIONS,
   SPREAD_MAX_OPTIONS,
   TARGET_FRAME_MODES,
@@ -205,6 +206,19 @@ export function ObservabilityPage() {
             />
             {showFrameScope ? (
               <>
+                <label>
+                  Ladder binning
+                  <select
+                    value={scope.ladder_binning}
+                    onChange={(event) => patchScope({ ladder_binning: event.target.value })}
+                  >
+                    {LADDER_BINNING_OPTIONS.map((row) => (
+                      <option key={row.value} value={row.value}>
+                        {row.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label>
                   Spread max
                   <select

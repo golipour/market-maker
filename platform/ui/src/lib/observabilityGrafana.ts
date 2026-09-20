@@ -14,6 +14,10 @@ export const TIME_RANGES = [
 
 export const SPREAD_MAX_OPTIONS = ["2000", "5000", "10000", "20000", "500", "200", "100"] as const;
 export const SPREAD_BUCKET_OPTIONS = ["20", "40", "60", "80"] as const;
+export const LADDER_BINNING_OPTIONS = [
+  { value: "actual", label: "Actual spreads" },
+  { value: "uniform", label: "Uniform buckets" },
+] as const;
 export const TARGET_FRAME_MODES = [
   { value: "latest", label: "Latest" },
   { value: "pinned", label: "Pinned" },
@@ -37,6 +41,7 @@ export type GrafanaScopeState = {
   run_id: string;
   spread_max: string;
   spread_buckets: string;
+  ladder_binning: string;
   target_frame_mode: string;
 };
 
@@ -51,6 +56,7 @@ export const DEFAULT_GRAFANA_SCOPE: GrafanaScopeState = {
   run_id: ALL,
   spread_max: "2000",
   spread_buckets: "20",
+  ladder_binning: "actual",
   target_frame_mode: "latest",
 };
 
@@ -65,6 +71,7 @@ const STRING_KEYS = [
   "run_id",
   "spread_max",
   "spread_buckets",
+  "ladder_binning",
   "target_frame_mode",
 ] as const;
 
@@ -125,6 +132,7 @@ const VAR_PARAMS = [
   ["var-run_id", "run_id"],
   ["var-spread_max", "spread_max"],
   ["var-spread_buckets", "spread_buckets"],
+  ["var-ladder_binning", "ladder_binning"],
   ["var-target_frame_mode", "target_frame_mode"],
 ] as const;
 

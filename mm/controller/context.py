@@ -346,7 +346,19 @@ class DecisionContext:
             ),
             ledger_source=self.ledger_source,
             physical_state=self._physical_state_diagnostics(),
+            orderbook_grid=self._orderbook_grid_diagnostics(decision),
+            execution_grid=self._execution_grid_diagnostics(decision),
         )
+
+    def _orderbook_grid_diagnostics(self, decision: StrategyDecision | None) -> dict[str, Any]:
+        if decision is not None and decision.diagnostics.orderbook_grid:
+            return dict(decision.diagnostics.orderbook_grid)
+        return self.config.orderbook_grid.as_contract()
+
+    def _execution_grid_diagnostics(self, decision: StrategyDecision | None) -> dict[str, Any]:
+        if decision is not None and decision.diagnostics.execution_grid:
+            return dict(decision.diagnostics.execution_grid)
+        return self.config.execution_grid.as_contract(canonical=self.config.orderbook_grid)
 
     def _state_diagnostics(self, decision: StrategyDecision | None) -> StateDiagnostics:
         local_base, local_quote = self._local_wallet_legs()

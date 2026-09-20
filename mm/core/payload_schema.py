@@ -724,6 +724,8 @@ def controller_diagnostics_event(diagnostics: Any) -> dict[str, Any]:
             if diagnostics.physical_state is not None
             else None
         ),
+        orderbook_grid=dict(getattr(diagnostics, "orderbook_grid", {}) or {}),
+        execution_grid=dict(getattr(diagnostics, "execution_grid", {}) or {}),
     )
 
 
