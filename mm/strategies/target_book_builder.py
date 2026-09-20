@@ -73,8 +73,13 @@ def build_joint_target_book_from_sigmoid(
     global_event: MarketEvent | None = None,
     global_constraints: OrderConstraints | None = None,
     global_sigmoid_action: Any | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> tuple[JointTargetBook, ActionPipelineReport, list[Order], list[Order]]:
-    """Discretize MPC output into a joint target book and pipeline report."""
+    """Discretize MPC output into a joint target book and pipeline report.
+
+    ``spread_ladder`` is the execution-only sample of continuous depth. When
+    omitted, ``orderbook_grid.spread_ladder()`` is used (legacy single-grid mode).
+    """
 
     local_orders, pipeline, ladder = build_orders_from_sigmoid_with_report(
         actor_id=actor_id,
@@ -84,6 +89,7 @@ def build_joint_target_book_from_sigmoid(
         constraints=local_constraints,
         continuous=continuous,
         anchor_price=local_anchor_price,
+        spread_ladder=spread_ladder,
     )
     action_ladder = list(ladder)
     local_book = build_venue_target_book_from_orders(
@@ -105,6 +111,7 @@ def build_joint_target_book_from_sigmoid(
             sigmoid_action=global_sigmoid_action,
             orderbook_grid=orderbook_grid,
             constraints=global_constraints,
+            spread_ladder=spread_ladder,
         )
         action_ladder.extend(global_ladder)
         pipeline.ladder = merge_stage_reports(pipeline.ladder, global_pipeline.ladder)

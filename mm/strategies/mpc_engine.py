@@ -412,10 +412,11 @@ class MpcStrategyEngine:
             self.binding.local,
             max_orders_per_side=local_max_orders_per_side,
         )
+        execution_ladder = self.config.execution_spread_ladder()
         continuous_depth = _continuous_action_depth_series(
             sigmoid_action,
             mid=float(state.mid),
-            orderbook_grid=self.config.orderbook_grid,
+            spread_ladder=execution_ladder,
         )
         sourcing_mode = (
             "liquidity_sourcing"
@@ -443,6 +444,7 @@ class MpcStrategyEngine:
             global_event=global_event,
             global_constraints=global_constraints,
             global_sigmoid_action=global_sigmoid,
+            spread_ladder=execution_ladder,
         )
         action = joint_target_book_to_action(joint_target_book)
         order_summaries = tuple(_order_summary(order) for order in action.orders)
@@ -499,6 +501,9 @@ class MpcStrategyEngine:
                 optimizer=optimizer,
                 continuous_action_depth=continuous_depth,
                 orderbook_grid=self.config.orderbook_grid.as_contract(),
+                execution_grid=self.config.execution_grid.as_contract(
+                    canonical=self.config.orderbook_grid
+                ),
             ),
         )
         self._previous_frame = frame
@@ -1105,15 +1110,21 @@ def _continuous_action_depth_series(
     sigmoid_action: Any,
     *,
     mid: float,
-    orderbook_grid: Any,
+    orderbook_grid: Any | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> dict[str, Any]:
-    """Effective cumulative depth ``D(spread) - D(0)`` on the same grid as ladder orders."""
+    """Effective cumulative depth ``D(spread) - D(0)`` on the execution sample ladder."""
 
     depth_bid = _effective_depth_callable(sigmoid_action, "bid")
     depth_ask = _effective_depth_callable(sigmoid_action, "ask")
     if not callable(depth_bid) or not callable(depth_ask):
         return {"kind": "unknown", "mid": float(mid), "bid": [], "ask": []}
-    levels = list(orderbook_grid.spread_ladder())
+    if spread_ladder is not None:
+        levels = list(spread_ladder)
+    elif orderbook_grid is not None:
+        levels = list(orderbook_grid.spread_ladder())
+    else:
+        return {"kind": "unknown", "mid": float(mid), "bid": [], "ask": []}
     mid_f = float(mid)
     bid: list[dict[str, float]] = []
     ask: list[dict[str, float]] = []

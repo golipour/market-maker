@@ -30,6 +30,7 @@ def test_orderbook_grid_contract() -> None:
     assert contract["spread_step"] == 25.0
     assert contract["levels"] == 4
     assert contract["spread_ladder"] == [25.0, 50.0, 75.0, 100.0]
+    assert contract["role"] == "mpc_simulation"
 
 
 def test_runtime_parses_orderbook_grid_spread_fields() -> None:
@@ -46,6 +47,8 @@ def test_runtime_parses_orderbook_grid_spread_fields() -> None:
     assert config.controller.orderbook_grid.spread_max == 500.0
     assert config.controller.orderbook_grid.spread_step == 50.0
     assert config.controller.orderbook_grid.levels == 10
+    # Missing execution_grid defaults to mirroring the MPC ladder.
+    assert config.controller.execution_spread_ladder() == config.controller.orderbook_grid.spread_ladder()
 
 
 def test_orderbook_grid_requires_spread_fields() -> None:

@@ -674,6 +674,7 @@ def strategy_decision_event(
         "optimizer": decision.diagnostics.optimizer,
         "continuous_action_depth": decision.diagnostics.continuous_action_depth,
         "orderbook_grid": decision.diagnostics.orderbook_grid,
+        "execution_grid": decision.diagnostics.execution_grid,
         "latency_ms": decision.latency_ms,
         "unit_policy": decision.diagnostics.unit_policy,
         "decision_hash": decision.decision_hash,

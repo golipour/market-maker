@@ -33,6 +33,7 @@ MarketDataSourceKind = Literal["local", "bus"]
 BusKind = Literal["memory", "redis_streams"]
 BusBackpressurePolicy = Literal["block", "drop_oldest", "drop_newest"]
 FillEventSource = Literal["exchange_fill_history", "open_order_delta"]
+ExecutionGridMode = Literal["uniform", "log", "hybrid", "explicit"]
 
 
 def _normalize_reference_price_source(value: Any) -> ReferenceVenueRole:
@@ -338,12 +339,15 @@ class ObservabilityRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class OrderbookGridConfig:
-    """Spread grid for relative orderbook projection and MPC optimization.
+    """Internal MPC spread grid for book projection, soft fills, and optimization.
 
     Quote-per-base distances from mid are bucketed from 0 to ``spread_max`` in steps
     of ``spread_step``. Bucket index ``i`` covers spreads in
     ``((i) * spread_step, (i + 1) * spread_step]``; cumulative depth is evaluated at
     the upper edge ``(i + 1) * spread_step``.
+
+    Live order prices are controlled separately by ``ExecutionGridConfig``. When no
+    execution grid is configured, the target book defaults to this same ladder.
     """
 
     spread_max: float = 100.0
@@ -362,7 +366,7 @@ class OrderbookGridConfig:
         return max(1, int(math.ceil(self.spread_max / self.spread_step)))
 
     def spread_ladder(self) -> tuple[float, ...]:
-        """Discrete quote spreads for limit orders: step, 2*step, …, up to spread_max."""
+        """Discrete quote spreads: step, 2*step, …, up to spread_max."""
         return tuple(
             min(self.spread_max, self.spread_step * float(i + 1))
             for i in range(self.levels)
@@ -374,10 +378,190 @@ class OrderbookGridConfig:
             "spread_step": self.spread_step,
             "levels": self.levels,
             "spread_ladder": list(self.spread_ladder()),
+            "role": "mpc_simulation",
             "index_policy": (
                 "bucket i is cumulative depth through quote spread (i + 1) * spread_step from mid"
             ),
             "qty_policy": "array values are base-asset quantities",
+        }
+
+
+def _normalize_execution_spreads(
+    spreads: list[float] | tuple[float, ...],
+    *,
+    spread_max: float,
+) -> tuple[float, ...]:
+    """Strictly increasing positive spreads in ``(0, spread_max]``, always ending at ``spread_max``."""
+    import math
+
+    cleaned: list[float] = []
+    for raw in spreads:
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0.0:
+            continue
+        if value > spread_max + 1e-12:
+            raise ValueError(
+                f"execution_grid spread {value} exceeds canonical/execution spread_max {spread_max}"
+            )
+        cleaned.append(min(spread_max, value))
+    cleaned.sort()
+    out: list[float] = []
+    for value in cleaned:
+        if not out or abs(value - out[-1]) > 1e-9:
+            out.append(value)
+    if not out or abs(out[-1] - spread_max) > 1e-9:
+        out.append(float(spread_max))
+    return tuple(out)
+
+
+def _log_spaced_spreads(spread_min: float, spread_max: float, levels: int) -> list[float]:
+    import math
+
+    if spread_min <= 0.0:
+        raise ValueError("execution_grid.spread_min must be positive for log/hybrid modes")
+    if levels < 2:
+        raise ValueError("execution_grid.levels must be >= 2 for log/hybrid modes")
+    if spread_min >= spread_max:
+        raise ValueError("execution_grid.spread_min must be < spread_max")
+    ratio = spread_max / spread_min
+    return [
+        float(spread_min * math.pow(ratio, float(i) / float(levels - 1)))
+        for i in range(levels)
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionGridConfig:
+    """Execution-only ladder that samples continuous depth ``D(δ)`` into live orders.
+
+    Does **not** change MPC book bucketing or soft-fill geometry. Default
+    ``mode="uniform"`` with no overrides mirrors ``orderbook_grid.spread_ladder()``.
+
+    Modes:
+    - ``uniform``: linear steps (optional ``spread_step`` / ``spread_max`` overrides)
+    - ``log``: geometric spacing on ``[spread_min, spread_max]`` with ``levels`` points
+    - ``hybrid``: linear inner band to ``inner_linear_max``, then geometric outer band
+    - ``explicit``: caller-provided ``spreads`` (outer edge forced to ``spread_max``)
+    """
+
+    mode: ExecutionGridMode = "uniform"
+    spread_max: float | None = None
+    spread_step: float | None = None
+    levels: int | None = None
+    spread_min: float | None = None
+    inner_linear_max: float | None = None
+    inner_step: float | None = None
+    spreads: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in ("uniform", "log", "hybrid", "explicit"):
+            raise ValueError(
+                "execution_grid.mode must be one of: uniform, log, hybrid, explicit"
+            )
+        object.__setattr__(self, "mode", mode)
+        if self.spread_max is not None and float(self.spread_max) <= 0.0:
+            raise ValueError("execution_grid.spread_max must be positive when set")
+        if self.spread_step is not None and float(self.spread_step) <= 0.0:
+            raise ValueError("execution_grid.spread_step must be positive when set")
+        if self.levels is not None and int(self.levels) < 1:
+            raise ValueError("execution_grid.levels must be >= 1 when set")
+        if self.spread_min is not None and float(self.spread_min) <= 0.0:
+            raise ValueError("execution_grid.spread_min must be positive when set")
+        if self.inner_linear_max is not None and float(self.inner_linear_max) <= 0.0:
+            raise ValueError("execution_grid.inner_linear_max must be positive when set")
+        if self.inner_step is not None and float(self.inner_step) <= 0.0:
+            raise ValueError("execution_grid.inner_step must be positive when set")
+        if self.spreads is not None:
+            object.__setattr__(self, "spreads", tuple(float(s) for s in self.spreads))
+
+    def resolved_spread_max(self, canonical: OrderbookGridConfig) -> float:
+        if self.spread_max is None:
+            return float(canonical.spread_max)
+        value = float(self.spread_max)
+        if value > float(canonical.spread_max) + 1e-12:
+            raise ValueError(
+                "execution_grid.spread_max must be <= orderbook_grid.spread_max "
+                f"({value} > {canonical.spread_max})"
+            )
+        return value
+
+    def spread_ladder(self, *, canonical: OrderbookGridConfig) -> tuple[float, ...]:
+        """Resolved execution spreads inside ``(0, spread_max]``, always including ``spread_max``."""
+        import math
+
+        spread_max = self.resolved_spread_max(canonical)
+        mode = self.mode
+
+        if mode == "uniform":
+            step = float(self.spread_step) if self.spread_step is not None else float(canonical.spread_step)
+            if (
+                self.spread_step is None
+                and self.spread_max is None
+                and abs(spread_max - float(canonical.spread_max)) <= 1e-12
+            ):
+                return canonical.spread_ladder()
+            levels = max(1, int(math.ceil(spread_max / step)))
+            raw = [min(spread_max, step * float(i + 1)) for i in range(levels)]
+            return _normalize_execution_spreads(raw, spread_max=spread_max)
+
+        if mode == "explicit":
+            if not self.spreads:
+                raise ValueError("execution_grid.spreads is required when mode=explicit")
+            return _normalize_execution_spreads(self.spreads, spread_max=spread_max)
+
+        if mode == "log":
+            if self.spread_min is None:
+                raise ValueError("execution_grid.spread_min is required when mode=log")
+            levels = int(self.levels) if self.levels is not None else 8
+            raw = _log_spaced_spreads(float(self.spread_min), spread_max, levels)
+            return _normalize_execution_spreads(raw, spread_max=spread_max)
+
+        # hybrid
+        inner_max = (
+            float(self.inner_linear_max)
+            if self.inner_linear_max is not None
+            else (float(self.spread_min) if self.spread_min is not None else None)
+        )
+        if inner_max is None:
+            raise ValueError(
+                "execution_grid.inner_linear_max (or spread_min) is required when mode=hybrid"
+            )
+        if inner_max >= spread_max:
+            raise ValueError("execution_grid.inner_linear_max must be < spread_max")
+        inner_step = (
+            float(self.inner_step)
+            if self.inner_step is not None
+            else float(canonical.spread_step)
+        )
+        inner_levels = max(1, int(math.ceil(inner_max / inner_step)))
+        inner = [min(inner_max, inner_step * float(i + 1)) for i in range(inner_levels)]
+        outer_min = float(self.spread_min) if self.spread_min is not None else inner_max
+        outer_min = max(outer_min, inner_max)
+        if outer_min >= spread_max:
+            return _normalize_execution_spreads(inner, spread_max=spread_max)
+        outer_levels = int(self.levels) if self.levels is not None else 8
+        outer = _log_spaced_spreads(outer_min, spread_max, max(2, outer_levels))
+        return _normalize_execution_spreads([*inner, *outer], spread_max=spread_max)
+
+    def as_contract(self, *, canonical: OrderbookGridConfig) -> dict[str, Any]:
+        ladder = self.spread_ladder(canonical=canonical)
+        return {
+            "mode": self.mode,
+            "spread_max": self.resolved_spread_max(canonical),
+            "spread_step": self.spread_step,
+            "levels": len(ladder),
+            "configured_levels": self.levels,
+            "spread_min": self.spread_min,
+            "inner_linear_max": self.inner_linear_max,
+            "inner_step": self.inner_step,
+            "spreads": list(self.spreads) if self.spreads is not None else None,
+            "spread_ladder": list(ladder),
+            "role": "execution_only",
+            "note": (
+                "Samples continuous D(δ) into live orders; does not change MPC "
+                "soft-fill / book-bucketing geometry (see orderbook_grid)."
+            ),
         }
 
 
@@ -588,6 +772,7 @@ class ControllerRuntimeConfig:
     diagnostics_topic: str | None = None
     target_books_topic: str | None = None
     orderbook_grid: OrderbookGridConfig = field(default_factory=OrderbookGridConfig)
+    execution_grid: ExecutionGridConfig = field(default_factory=ExecutionGridConfig)
     max_orders_per_side: int = 5
     reference_price_source: ReferenceVenueRole = "global"
     pricing: PricingRuntimeConfig = field(default_factory=PricingRuntimeConfig)
@@ -642,6 +827,10 @@ class ControllerRuntimeConfig:
         if parent is not None:
             return int(getattr(parent, "interval_ms", 30_000) or 30_000)
         return 30_000
+
+    def execution_spread_ladder(self) -> tuple[float, ...]:
+        """Resolved live-order spreads (execution grid sampled within the MPC domain)."""
+        return self.execution_grid.spread_ladder(canonical=self.orderbook_grid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1575,7 +1764,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         assert_optimizer_fits_budget(payload)
     except ImportError:  # pragma: no cover - validator module is always present
         pass
-    return ControllerRuntimeConfig(
+    controller = ControllerRuntimeConfig(
         enabled=bool(payload.get("enabled", False)),
         actor_id=str(payload.get("actor_id", "mpc-controller")),
         dry_run=_bool_config_key(
@@ -1610,6 +1799,7 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             str(payload["target_books_topic"]) if payload.get("target_books_topic") is not None else None
         ),
         orderbook_grid=_orderbook_grid_from_mapping(payload),
+        execution_grid=_execution_grid_from_mapping(payload),
         max_orders_per_side=int(payload.get("max_orders_per_side", 5)),
         reference_price_source=_normalize_reference_price_source(
             payload.get("reference_price_source", "global")
@@ -1624,6 +1814,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         risk=_risk_from_mapping(payload.get("risk")),
         reconcile=_reconcile_from_mapping(payload.get("reconcile")),
     )
+    # Fail fast if the execution ladder cannot be resolved inside the MPC domain.
+    controller.execution_spread_ladder()
+    return controller
 
 
 def _reconcile_from_mapping(payload: Any) -> ReconcileRuntimeConfig:
@@ -1707,6 +1900,32 @@ def _orderbook_grid_from_mapping(payload: dict[str, Any]) -> OrderbookGridConfig
     )
 
 
+def _execution_grid_from_mapping(payload: dict[str, Any]) -> ExecutionGridConfig:
+    grid = payload.get("execution_grid")
+    if grid is None:
+        return ExecutionGridConfig()
+    if not isinstance(grid, dict):
+        raise ValueError("execution_grid must be an object")
+    spreads_raw = grid.get("spreads")
+    spreads: tuple[float, ...] | None = None
+    if spreads_raw is not None:
+        if not isinstance(spreads_raw, (list, tuple)):
+            raise ValueError("execution_grid.spreads must be a list of numbers")
+        spreads = tuple(float(v) for v in spreads_raw)
+    return ExecutionGridConfig(
+        mode=str(grid.get("mode", "uniform")),  # type: ignore[arg-type]
+        spread_max=float(grid["spread_max"]) if grid.get("spread_max") is not None else None,
+        spread_step=float(grid["spread_step"]) if grid.get("spread_step") is not None else None,
+        levels=int(grid["levels"]) if grid.get("levels") is not None else None,
+        spread_min=float(grid["spread_min"]) if grid.get("spread_min") is not None else None,
+        inner_linear_max=(
+            float(grid["inner_linear_max"]) if grid.get("inner_linear_max") is not None else None
+        ),
+        inner_step=float(grid["inner_step"]) if grid.get("inner_step") is not None else None,
+        spreads=spreads,
+    )
+
+
 def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, Any]:
     if config is None:
         return {"enabled": False}
@@ -1724,6 +1943,7 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "action_topic": config.normalized_action_topic,
         "target_books_topic": config.normalized_target_books_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
+        "execution_grid": config.execution_grid.as_contract(canonical=config.orderbook_grid),
         "max_orders_per_side": config.max_orders_per_side,
         "vwap_depth_note": (
             "derived each frame from abs(local_inventory), or from "

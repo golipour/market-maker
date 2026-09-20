@@ -114,6 +114,43 @@ def test_ladder_orders_use_effective_depth_not_raw_depth_at_zero() -> None:
     assert sell_qtys == [2.0, 2.0, 2.0]
 
 
+def test_ladder_orders_honor_explicit_execution_spread_ladder() -> None:
+    from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook
+
+    event = MarketEvent(
+        exchange="nobitex",
+        symbol="USDT_IRT",
+        interval_ms=1000,
+        t_start_ms=0,
+        t_end_ms=1000,
+        orderbook=RawOrderbook(
+            exchange="nobitex",
+            symbol="USDT_IRT",
+            timestamp_ms=1000,
+            bids=(PriceLevel(price=99.0, qty=1.0),),
+            asks=(PriceLevel(price=101.0, qty=1.0),),
+            is_snapshot=True,
+        ),
+        trades=(),
+        buy_volume=0.0,
+        sell_volume=0.0,
+        vwap=0.0,
+        imbalance=0.0,
+        microprice=0.0,
+    )
+    orders = ladder_orders_from_sigmoid(
+        actor_id="a",
+        event=event,
+        sigmoid_action=_RawSigmoidWithBaseline(),
+        orderbook_grid=_FakeGrid(),
+        spread_ladder=(2.0, 5.0),
+    )
+    buy = [o for o in orders if o.side == "buy"]
+    # mid = 100; effective depth = raw(spread) - raw(0) => qty = Δspread
+    assert [round(o.price, 6) for o in buy] == [98.0, 95.0]
+    assert [o.qty for o in buy] == [2.0, 3.0]
+
+
 def test_binding_merges_api_venue_then_config_fallback(monkeypatch) -> None:
     from mm.core.models.instrument import build_instrument_spec
     from mm.exchanges.shared import instrument_spec_trade_stats as mod

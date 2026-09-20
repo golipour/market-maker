@@ -54,14 +54,16 @@ def ladder_orders_from_sigmoid(
     sigmoid_action: Any,
     orderbook_grid: Any,
     anchor_price: float | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> list[Order]:
-    """Marginal ladder on ``orderbook_grid.spread_ladder()`` (no venue or cap rules)."""
+    """Marginal ladder on ``spread_ladder`` or ``orderbook_grid.spread_ladder()``."""
     orders, _report = ladder_orders_from_sigmoid_with_report(
         actor_id=actor_id,
         event=event,
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
         anchor_price=anchor_price,
+        spread_ladder=spread_ladder,
     )
     return orders
 
@@ -73,10 +75,15 @@ def ladder_orders_from_sigmoid_with_report(
     sigmoid_action: Any,
     orderbook_grid: Any,
     anchor_price: float | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> tuple[list[Order], ActionStageReport]:
-    """Marginal ladder with a stage summary for diagnostics."""
+    """Marginal ladder with a stage summary for diagnostics.
+
+    ``spread_ladder`` overrides ``orderbook_grid.spread_ladder()`` so the live
+    book can use an execution-only geometry without changing the MPC grid.
+    """
     mid = float(anchor_price) if anchor_price is not None else mid_from_orderbook(event.orderbook)
-    levels = list(orderbook_grid.spread_ladder())
+    levels = list(spread_ladder) if spread_ladder is not None else list(orderbook_grid.spread_ladder())
     rejection_counts: dict[str, int] = {}
     orders: list[Order] = []
     orders.extend(
@@ -177,6 +184,7 @@ def build_orders_from_sigmoid(
     orderbook_grid: Any,
     constraints: OrderConstraints,
     anchor_price: float | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> list[Order]:
     orders, _pipeline, _ladder = build_orders_from_sigmoid_with_report(
         actor_id=actor_id,
@@ -185,6 +193,7 @@ def build_orders_from_sigmoid(
         orderbook_grid=orderbook_grid,
         constraints=constraints,
         anchor_price=anchor_price,
+        spread_ladder=spread_ladder,
     )
     return orders
 
@@ -198,6 +207,7 @@ def build_orders_from_sigmoid_with_report(
     constraints: OrderConstraints,
     continuous: dict[str, Any] | None = None,
     anchor_price: float | None = None,
+    spread_ladder: list[float] | tuple[float, ...] | None = None,
 ) -> tuple[list[Order], ActionPipelineReport, list[Order]]:
     ladder, ladder_report = ladder_orders_from_sigmoid_with_report(
         actor_id=actor_id,
@@ -205,6 +215,7 @@ def build_orders_from_sigmoid_with_report(
         sigmoid_action=sigmoid_action,
         orderbook_grid=orderbook_grid,
         anchor_price=anchor_price,
+        spread_ladder=spread_ladder,
     )
     capped, capped_report = cap_orders_per_side_with_report(ladder, constraints.max_orders_per_side)
     pipeline = ActionPipelineReport(

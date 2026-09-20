@@ -1,9 +1,10 @@
 # Mathematical Formulation of the Spread Grid and Depth Curves
 
-This document is the compact mathematical statement of the **shared relative
-spread grid**, how the public book and the MPC quote action are projected onto
-it, how soft fills consume that depth, and how the continuous action becomes a
-live ladder of orders.
+This document is the compact mathematical statement of the **internal MPC
+spread grid** and the optional **execution ladder**, how the public book and
+the MPC quote action are projected onto the internal grid, how soft fills
+consume that depth, and how the continuous action becomes a live ladder of
+orders.
 
 It is the counterpart of
 [`mpc-mathematical-formulation.md`](mpc-mathematical-formulation.md) for the
@@ -14,7 +15,8 @@ older research notes.
 
 Primary references:
 
-- `mm.runtime.config.OrderbookGridConfig`
+- `mm.runtime.config.OrderbookGridConfig` (MPC simulation grid)
+- `mm.runtime.config.ExecutionGridConfig` (live-order sample ladder)
 - `mm.mpc.mpc_tensor_batched._spread_grid_tensor`, `_book_cumulative_from_ob_rel`, `soft_fill_batched`
 - `mm.mpc.state_tensor` (depth tensors, State → fixed-length book arrays)
 - `mm.mpc.l_param` (sigmoid-mixture decode, size at $S_{\max}$)
@@ -25,21 +27,26 @@ Primary references:
 
 ## 1. Role in the controller
 
-One config block, `controller.orderbook_grid`, defines a **single linear
-spread geometry** reused for:
+Two config blocks define the geometry:
 
-| Stage | What uses the grid |
+| Config | Role |
 | --- | --- |
-| State construction | Project absolute venue book levels to relative spreads from mid |
-| MPC book tensors | Bucket and accumulate market depth on the same edges |
-| Soft fill | Match sampled market-order flow against market + quoted level depth |
-| Book-derived marks | Best bid/ask / fixed-depth VWAP features from post-flow books |
-| Continuous action | Evaluate the sigmoid mixture $D(\delta)$ on those edges |
-| Execution ladder | Turn $D$ into marginal limit orders at those spreads |
+| `controller.orderbook_grid` | **Internal MPC grid** — book projection, soft fill, objective, Adam |
+| `controller.execution_grid` | **Execution ladder** — samples continuous $D(\delta)$ into live orders |
 
-Because the same $(S_{\max},\Delta)$ enter both the **objective** and the
-**target book**, changing either parameter changes the optimization problem,
-not only the display resolution of an unchanged continuous action.
+| Stage | Grid used |
+| --- | --- |
+| State construction | `orderbook_grid` — project absolute venue book levels to relative spreads |
+| MPC book tensors | `orderbook_grid` — bucket and accumulate market depth |
+| Soft fill | `orderbook_grid` — match sampled flow against market + quoted depth |
+| Book-derived marks | `orderbook_grid` — best bid/ask / VWAP from post-flow books |
+| Continuous action (optimizer) | `orderbook_grid` — evaluate $D$ inside Adam / diagnostics snapshots |
+| Live ladder / `action_pipeline.continuous` | `execution_grid` — turn $D$ into marginal limit orders |
+
+When `execution_grid` is omitted or `mode=uniform` with no overrides, the
+execution ladder **mirrors** `orderbook_grid.spread_ladder()` (legacy
+single-grid behaviour). Changing only `execution_grid` does **not** change
+the Monte Carlo objective; changing `orderbook_grid` still does.
 
 ---
 
@@ -93,13 +100,15 @@ Implementation:
 ```text
 _grid_levels(S_max, Δ)           → M
 _spread_grid_tensor(..., M, Δ)   → (s_1,…,s_M) clamped to S_max
-OrderbookGridConfig.spread_ladder() → same tuple for execution
+OrderbookGridConfig.spread_ladder() → same tuple (MPC / default execution)
+ExecutionGridConfig.spread_ladder(canonical=…) → live sample ladder
 ```
 
 Example: $S_{\max}=100$, $\Delta=30$ → $(30,60,90,100)$.
 
-There is **no** separate simulation grid and execution grid in the current
-code. The ladder that goes live is exactly $\{s_j\}$.
+The live order ladder is produced separately by `ExecutionGridConfig` (§7).
+When that config is the default uniform mirror, the live ladder equals
+$\{s_j\}$ above.
 
 ---
 
@@ -280,58 +289,77 @@ fill operator, not a subsampled evaluation of the same one.
 
 ## 7. From continuous depth to live orders
 
-After Adam, the same $\{s_j\}$ become the execution ladder
-(`ladder_orders_from_sigmoid_with_report`):
+After Adam, a **fixed** continuous $D$ is sampled on the **execution
+ladder** $\{s^{\mathrm{exec}}_k\}$ (`controller.execution_grid`), not
+necessarily on the internal MPC edges:
 
 $$
-q_j^{\mathrm{live}}
+q_k^{\mathrm{live}}
 =
-\max\bigl(0,\, \tilde{D}(s_j) - \tilde{D}(s_{j-1})\bigr).
+\max\bigl(0,\, \tilde{D}(s^{\mathrm{exec}}_k) - \tilde{D}(s^{\mathrm{exec}}_{k-1})\bigr).
 $$
 
-Bid price $p_t - s_j$, ask price $p_t + s_j$. Zero marginal levels are
-dropped. Then:
+Bid price $p_t - s^{\mathrm{exec}}_k$, ask price $p_t + s^{\mathrm{exec}}_k$.
+Zero marginal levels are dropped. Then:
 
 1. Cap largest-$q$ orders per side to `max_orders_per_side`.
 2. Venue tick / lot / min-qty / min-notional
    (`apply_venue_constraints`) — **after** the strategy ladder.
 3. Risk / reconcile layers decide which orders actually go live.
 
-Diagnostics (`action_pipeline.continuous`) report $\tilde{D}(s_j)$ on this
-same ladder so Grafana / replay see the curve the optimizer used.
+`execution_grid` modes:
+
+| Mode | Geometry |
+| --- | --- |
+| `uniform` | Linear steps (optional `spread_step` / `spread_max` overrides; default = MPC ladder) |
+| `log` | Geometric points on `[spread_min, spread_max]` with `levels` samples |
+| `hybrid` | Linear inner band to `inner_linear_max`, then geometric outer band |
+| `explicit` | Caller-provided `spreads` (outer edge forced to `spread_max`) |
+
+All execution spreads must lie in $(0, S_{\max}]$ of the MPC grid and
+**always include** $S_{\max}$ so outer-edge size constraints remain visible.
+
+Diagnostics:
+
+- `diagnostics.orderbook_grid` — internal MPC geometry
+- `diagnostics.execution_grid` — resolved live sample ladder
+- `action_pipeline.continuous` — $\tilde{D}$ evaluated on the **execution** ladder
+
+Optimizer action snapshots remain on the internal MPC grid.
 
 ---
 
 ## 8. Why the book is sensitive to $S_{\max}$ and $\Delta$
 
-### 8.1 Not just resolution
+### 8.1 Internal grid still changes the decision problem
 
-If the action were chosen in continuous $\delta$-space and the grid were
-only a sampler, refining $\Delta$ would approximately preserve $D$. Here
-the grid also defines:
+Changing `orderbook_grid.spread_max` / `spread_step` still changes:
 
 - market depth aggregation (§4),
 - soft-fill levels (§6),
-- the abscissa of the size constraint (§5.1),
-- the live order set (§7).
+- the abscissa of the size constraint (§5.1).
 
-So two configs with the same continuous $D$ but different $(S_{\max},\Delta)$
-are **not** the same decision problem, and the optimizer will generally
-converge to different $u$.
+So two configs with different **internal** $(S_{\max},\Delta)$ are **not**
+the same decision problem.
 
-### 8.2 $S_{\max}$ as economic / risk horizon
+### 8.2 Execution ladder is mostly resolution / fingerprint
 
-Raising $S_{\max}$ while keeping the size floor/cap at the outer edge
-allows the mixture to satisfy $\tilde{D}(S_{\max})\ge Q_{\min}$ by placing
-almost all size in the far tail. Near-mid emptiness is then a valid local
-optimum of $J$ unless other terms (validity / presence) punish it.
+Changing only `execution_grid` rematerializes the **same** continuous $D$
+onto a different sample set. Cumulative depth between neighbouring
+execution points is preserved by construction (differencing $\tilde{D}$).
+Remaining sensitivities are post-sample effects:
 
-### 8.3 $\Delta$ as fill and ladder coarseness
+- `max_orders_per_side` keeps largest quantities, not nearest prices;
+- tick / lot / min-notional rounding and duplicate-tick merges;
+- cancel/replace churn from denser near-mid samples.
 
-Larger $\Delta$ means fewer orders, thicker marginals when $D$ rises inside
-a bucket, and coarser public-book competition in soft fill. Smaller
-$\Delta$ increases ladder cardinality (and cancel/replace churn) and
-splits the same cumulative rise across more price levels.
+### 8.3 $S_{\max}$ as economic / risk horizon
+
+Raising internal $S_{\max}$ while keeping the size floor/cap at the outer
+edge allows the mixture to satisfy $\tilde{D}(S_{\max})\ge Q_{\min}$ by
+placing almost all size in the far tail. Near-mid emptiness is then a
+valid local optimum of $J$ unless other terms (validity / presence)
+punish it.
 
 ### 8.4 Interaction with validity
 
@@ -343,25 +371,22 @@ presence preference.
 
 ---
 
-## 9. Design note (not implemented)
+## 9. Design status
 
-A natural split—not present in the current code—would be:
+The internal / execution split from §1 and §7 is **implemented**:
 
-1. **Internal MPC grid** $\{s_j\}$ for book bucketing, soft fill, and
-   evaluating $\tilde{D}$ inside Adam (must stay consistent everywhere in
-   $\Phi$).
-2. **Execution ladder** $\{s^{\mathrm{exec}}_k\}$ used only when building
-   live orders from a fixed continuous $D$.
+1. **Internal MPC grid** `{s_j}` — unchanged uniform linear geometry for
+   book bucketing, soft fill, and Adam.
+2. **Execution ladder** `{s^{\mathrm{exec}}_k}` — optional uniform / log /
+   hybrid / explicit sampler used only when building live orders from a
+   fixed continuous $D$.
 
-Then changing exchange order granularity would not silently change the
-Monte Carlo objective. A hybrid / log-spaced **execution** ladder could
-place more small orders near mid without altering fill simulation. Making
-the **internal** grid non-uniform is a larger change: every
-`ceil(\delta/\Delta)` bucket rule must become an edge-lookup on irregular
-$\{s_j\}$.
+Bounded temporal jitter / randomization of the execution ladder is **not**
+implemented yet; keep execution deterministic until replay/seed contracts
+exist.
 
-Until that split exists, treat `spread_max` / `spread_step` as **joint**
-control of simulation geometry and live ladder shape.
+Making the **internal** grid non-uniform remains a larger change: every
+`ceil(δ/Δ)` bucket rule must become an edge-lookup on irregular `{s_j}`.
 
 ---
 
@@ -370,11 +395,12 @@ control of simulation geometry and live ladder shape.
 | Symbol | Config / code |
 | --- | --- |
 | $S_{\max},\Delta,M$ | `orderbook_grid.spread_max`, `.spread_step`, `.levels` |
-| $\{s_j\}$ | `spread_ladder()`, `_spread_grid_tensor` |
+| $\{s_j\}$ | `orderbook_grid.spread_ladder()`, `_spread_grid_tensor` |
+| $\{s^{\mathrm{exec}}_k\}$ | `execution_grid.spread_ladder(canonical=...)`, `ControllerRuntimeConfig.execution_spread_ladder()` |
 | $\mathrm{idx}(\delta)$ | `_spread_bucket_index` |
 | $m_j, C^{\mathrm{mkt}}$ | `_book_cumulative_from_ob_rel` / `_book_cumulative_from_arrays` |
 | $D,\tilde{D}$ | `l_param` + `effective_depth_*_tensor` |
 | $Q_{\min},Q_{\mathrm{cap}}$ | `cumulative_qty_floor_at_spread_max`, `cumulative_qty_cap_at_spread_max` |
 | $\tau,a$ | `soft_fill_temp`, `soft_fill_activation` |
 | queue share | `soft_fill_queue_model` (`back_of_queue` / pro-rata) |
-| live $q_j$ | `ladder_orders_from_sigmoid_with_report` |
+| live $q_k$ | `ladder_orders_from_sigmoid_with_report(..., spread_ladder=...)` |

@@ -12,6 +12,7 @@
     "strategy_presets.*.controller.optimizer.kind": ["monte_carlo_mpc_tensor_batched"],
     "strategy_presets.*.controller.optimizer.*.soft_fill_activation": ["sigmoid", "hardsigmoid"],
     "strategy_presets.*.controller.optimizer.*.soft_fill_queue_model": ["back_of_queue", "pro_rata"],
+    "strategy_presets.*.controller.execution_grid.mode": ["uniform", "log", "hybrid", "explicit"],
     "bus.kind": ["memory", "redis_streams"]
   },
   "exchanges": {
@@ -190,9 +191,13 @@
         "decisions_topic": "strategy:decisions",
         "action_topic": "strategy:actions",
         "orderbook_grid": {
-          "_comment": "Absolute quote-per-base spread grid used for both optimizer depth curves and target order ladder prices.",
+          "_comment": "Internal MPC spread grid for soft-fill / book bucketing / optimization. Changing these changes the economic problem, not just display resolution.",
           "spread_step": 20.0,
           "spread_max": 200.0
+        },
+        "execution_grid": {
+          "_comment": "Optional live-order sampling of continuous D(δ). Default mode=uniform with no overrides mirrors orderbook_grid. Modes: uniform | log | hybrid | explicit. Log/hybrid require spread_min > 0; hybrid also uses inner_linear_max / inner_step. Always stays inside orderbook_grid.spread_max and includes the outer edge.",
+          "mode": "uniform"
         },
         "risk": {
           "_comment": "Hard pre-execution gates. local = quoting exchange, global = selected liquidity source/reference slot.",

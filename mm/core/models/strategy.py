@@ -59,6 +59,7 @@ class DecisionDiagnostics:
     optimizer: dict[str, Any] = field(default_factory=dict)
     continuous_action_depth: dict[str, Any] = field(default_factory=dict)
     orderbook_grid: dict[str, Any] = field(default_factory=dict)
+    execution_grid: dict[str, Any] = field(default_factory=dict)
     unit_policy: str = "prices=quote_per_base, quantities=base, cash/notional=quote"
 
 
