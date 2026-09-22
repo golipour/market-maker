@@ -651,6 +651,63 @@
         "graphMode": "area",
         "justifyMode": "auto"
       }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 13
+      },
+      "id": 13,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH latest_diagnostics AS (\n  SELECT e.payload, e.exchange\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  ORDER BY e.ts DESC\n  LIMIT 1\n),\ninterval_mark AS (\n  SELECT COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(d.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(d.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(d.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(d.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(d.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS mark_price\n  FROM latest_diagnostics d\n),\nrole_exchanges AS (\n  SELECT gates.key AS role_exchange,\n         gates.value->>'role' AS role\n  FROM latest_diagnostics d\n  CROSS JOIN LATERAL jsonb_each(COALESCE(d.payload #> ARRAY['execution_gates','venue_gates'], '{}'::jsonb)) AS gates\n  UNION\n  SELECT d.exchange AS role_exchange,\n         'local' AS role\n  FROM latest_diagnostics d\n  WHERE d.exchange IS NOT NULL\n),\nfills AS (\n  SELECT\n    CASE lower(trim(COALESCE(e.payload->>'side', '')))\n  WHEN 'buy' THEN 'bid'\n  WHEN 'bid' THEN 'bid'\n  WHEN 'sell' THEN 'ask'\n  WHEN 'ask' THEN 'ask'\n  ELSE 'unknown'\nEND AS side,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'qty', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'qty', ''))::double precision\n  ELSE 0.0\nEND AS qty,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'price', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'price', ''))::double precision\n  ELSE NULL\nEND AS price,\n    CASE\n  WHEN trim(COALESCE(e.payload->>'fee', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'fee', ''))::double precision\n  ELSE 0.0\nEND AS fee\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'private:state:' || id || ':fills' FROM unnest(ARRAY[${exchange:sqlstring}]::text[]) AS id)\n    AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    \n    AND $__timeFilter(e.ts)\n),\nagg AS (\n  SELECT\n    SUM(qty) FILTER (WHERE side = 'bid' AND qty > 0) AS bid_qty,\n    SUM(qty) FILTER (WHERE side = 'ask' AND qty > 0) AS ask_qty,\n    SUM(fee) AS total_fee,\n    SUM(price * qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'bid' AND price IS NOT NULL AND qty > 0), 0.0) AS bid_avg_price,\n    SUM(price * qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0)\n      / NULLIF(SUM(qty) FILTER (WHERE side = 'ask' AND price IS NOT NULL AND qty > 0), 0.0) AS ask_avg_price\n  FROM fills\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       (LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) * (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0))) + (CASE\n  WHEN COALESCE(bid_qty, 0.0) >= COALESCE(ask_qty, 0.0) THEN\n    (COALESCE(bid_qty, 0.0) - COALESCE(ask_qty, 0.0))\n    * (interval_mark.mark_price - COALESCE(bid_avg_price, 0.0))\n  ELSE\n    (COALESCE(ask_qty, 0.0) - COALESCE(bid_qty, 0.0))\n    * (COALESCE(ask_avg_price, 0.0) - interval_mark.mark_price)\nEND) + (-COALESCE(total_fee, 0.0)) AS value\nFROM agg\nLEFT JOIN interval_mark ON TRUE",
+          "refId": "A"
+        }
+      ],
+      "title": "Total PnL",
+      "type": "stat",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
     }
   ],
   "refresh": "60s",

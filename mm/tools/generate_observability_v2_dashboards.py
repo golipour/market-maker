@@ -5070,6 +5070,7 @@ def fill_spread_pnl() -> dict[str, Any]:
         _panel(10, "Spread PnL", "stat", PG_DS, _fill_interval_stat_sql("spread_pnl"), x=0, y=13, w=6, h=5, unit="currency"),
         _panel(11, "Inventory PnL", "stat", PG_DS, _fill_interval_stat_sql("inventory_pnl"), x=6, y=13, w=6, h=5, unit="currency"),
         _panel(12, "Fee PnL", "stat", PG_DS, _fill_interval_stat_sql("fee_pnl"), x=12, y=13, w=6, h=5, unit="currency"),
+        _panel(13, "Total PnL", "stat", PG_DS, _fill_interval_stat_sql("total_pnl"), x=18, y=13, w=6, h=5, unit="currency"),
     ]
     return _dashboard(
         "mm-obs-v2-fill-spread-pnl",
@@ -6557,6 +6558,8 @@ END""",
         "fee_pnl": "-COALESCE(total_fee, 0.0)",
         "total_fee": "COALESCE(total_fee, 0.0)",
     }
+    stat_exprs["total_pnl"] = f"({stat_exprs['spread_pnl']}) + ({stat_exprs['inventory_pnl']}) + ({stat_exprs['fee_pnl']})"
+    
     if stat not in stat_exprs:
         raise ValueError(f"unknown fill interval stat: {stat}")
     side = _side_sql("e.payload->>'side'")
