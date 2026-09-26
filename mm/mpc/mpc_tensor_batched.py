@@ -19,6 +19,7 @@ from mm.mpc.l_param import (
     ReservationSkewParams,
     SpreadStructureParams,
     action_param_len,
+    reservation_logit_index,
     reservation_r_offset_from_params,
     sigmoid_action_from_flat_raw,
     validate_l_param_config,
@@ -124,9 +125,9 @@ class VenueOptimizerParams:
         if "w_inv" in data or "inventory_zone" in data:
             raise ValueError(
                 "optimizer venue keys w_inv and inventory_zone were removed; "
-                "use viability {min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, "
-                "lambda_max, dual_ewma_decay}"
+                "use viability {min_viable_quote, shortfall_tolerance, "
+                "lambda_init, lambda_learning_rate, lambda_max, "
+                "dual_ewma_decay, recovery_fraction}"
             )
         if "w_book" in data:
             raise ValueError(
@@ -1543,9 +1544,25 @@ class MonteCarloMPCTensorBatched:
                         viability_components=viability_components,
                     )
 
+                l_cfg = self._l_param_config()
+                if l_cfg is not None and float(l_cfg.reservation_r_max) > 0.0:
+                    r_off_t = reservation_r_offset_from_params(
+                        x_torch[:single_len],
+                        n_components=n,
+                        r_max=float(l_cfg.reservation_r_max),
+                    )
+                    r_idx = reservation_logit_index(n)
+                    raw_r = x_torch[r_idx]
+                    components["reservation_r_offset"] = r_off_t
+                    components["reservation_shift_quote"] = r_off_t * mid_0
+                    components["reservation_raw_logit"] = raw_r
+
                 def _finite_item(t) -> float:
                     try:
-                        x = float(t.detach().item())
+                        if hasattr(t, "detach"):
+                            x = float(t.detach().item())
+                        else:
+                            x = float(t)
                         return x if math.isfinite(x) else 0.0
                     except Exception:
                         return 0.0
@@ -1709,6 +1726,9 @@ class MonteCarloMPCTensorBatched:
                         local_lambda_applied=lambda_applied_local,
                         local_lambda_learned=self._viability_lambda_local,
                     )
+        snap_final = build_action_snapshot(final_action, mid=mid_0, spread_levels=spread_levels)
+        snap_best = build_action_snapshot(best_action, mid=mid_0, spread_levels=spread_levels)
+
         diagnostics = OptimizerRunDiagnostics(
             config={
                 "kind": "monte_carlo_mpc_tensor_batched",
@@ -1743,8 +1763,8 @@ class MonteCarloMPCTensorBatched:
             best=best_metrics,
             best_epoch=best_epoch,
             action_initial=action_initial_snap,
-            action_final=build_action_snapshot(final_action, mid=mid_0, spread_levels=spread_levels),
-            action_best=build_action_snapshot(best_action, mid=mid_0, spread_levels=spread_levels),
+            action_final=snap_final,
+            action_best=snap_best,
             gradients={
                 "nonfinite_loss_count": nonfinite_loss_count,
                 "nonfinite_grad_count": nonfinite_grad_count,

@@ -126,7 +126,6 @@ def _migrate_book_quality(payload: Any) -> tuple[dict[str, Any] | None, bool]:
 _LEGACY_VIABILITY_KEY_MAP = {
     "min_quote_qty": "min_viable_quote",
     "min_free_quote": "min_viable_quote",
-    "margin_sharpness": "margin_buffer",
 }
 
 
@@ -136,17 +135,19 @@ def _canonical_viability_defaults() -> dict[str, float]:
         raise ValueError("runtime example missing optimizer.local.viability")
     return {
         "min_viable_quote": float(viability.get("min_viable_quote", 50_000.0)),
-        "margin_buffer": float(viability.get("margin_buffer", 5_000.0)),
-        "availability_target": float(viability.get("availability_target", 0.99)),
         "shortfall_tolerance": float(viability.get("shortfall_tolerance", 0.05)),
         "lambda_init": float(viability.get("lambda_init", 0.0)),
         "lambda_learning_rate": float(viability.get("lambda_learning_rate", 0.02)),
         "lambda_max": float(viability.get("lambda_max", 100.0)),
         "dual_ewma_decay": float(viability.get("dual_ewma_decay", 0.9)),
+        "recovery_fraction": float(viability.get("recovery_fraction", 0.0)),
     }
 
 
 _LEGACY_VIABILITY_REMOVED_KEYS = (
+    "margin_buffer",
+    "availability_target",
+    "margin_sharpness",
     "lambda_leakage",
     "lambda_reset_on_target",
     "lambda_log_update",
@@ -188,17 +189,11 @@ def _migrate_viability_min_viable_quote_semantics(payload: dict[str, Any]) -> bo
         if cur != canonical:
             viability["min_viable_quote"] = canonical
             changed = True
-    if "margin_buffer" not in viability:
-        viability["margin_buffer"] = defaults["margin_buffer"]
-        changed = True
-    for key in ("lambda_max", "dual_ewma_decay"):
+    for key in ("lambda_max", "dual_ewma_decay", "recovery_fraction"):
         if key not in viability:
             viability[key] = defaults[key]
             changed = True
     changed = _strip_removed_viability_keys(viability) or changed
-    if float(viability.get("availability_target", defaults["availability_target"])) < 0.95:
-        viability["availability_target"] = defaults["availability_target"]
-        changed = True
     return changed
 
 

@@ -122,6 +122,11 @@ def build_action_snapshot(
     if action is None:
         return ActionSnapshot()
     effective = action.as_effective()
+    r_offset = float(getattr(effective, "reservation_r_offset", 0.0) or 0.0)
+    r_mid = float(getattr(effective, "reservation_mid", float(mid)) or 0.0)
+    shift_quote = r_mid * r_offset
+    raw_logit = float(getattr(effective, "raw_reservation_logit", 0.0) or 0.0)
+
     bid: list[dict[str, float]] = []
     ask: list[dict[str, float]] = []
     mid_f = float(mid)
@@ -139,14 +144,45 @@ def build_action_snapshot(
             bid.append({"spread_quote": s, "price": mid_f - s, "cumulative_qty": db})
         if math.isfinite(da):
             ask.append({"spread_quote": s, "price": mid_f + s, "cumulative_qty": da})
+
+    bid_qty_touch = bid[0]["cumulative_qty"] if bid else 0.0
+    ask_qty_touch = ask[0]["cumulative_qty"] if ask else 0.0
+    bid_qty_max = bid[-1]["cumulative_qty"] if bid else 0.0
+    ask_qty_max = ask[-1]["cumulative_qty"] if ask else 0.0
+    s_min = float(spread_levels[0]) if spread_levels else 0.0
+    s_max = float(spread_levels[-1]) if spread_levels else 0.0
+    bid_notional_touch = bid_qty_touch * max(0.0, mid_f - s_min)
+    ask_notional_touch = ask_qty_touch * max(0.0, mid_f + s_min)
+    bid_notional_max = bid_qty_max * max(0.0, mid_f - s_max)
+    ask_notional_max = ask_qty_max * max(0.0, mid_f + s_max)
+
     return ActionSnapshot(
         effective_depth={
             "kind": "sigmoid_mixture",
             "mid": mid_f,
+            "reservation_r_offset": r_offset,
+            "reservation_shift_quote": shift_quote,
+            "raw_reservation_logit": raw_logit,
+            "bid_qty_touch": bid_qty_touch,
+            "ask_qty_touch": ask_qty_touch,
+            "bid_notional_touch": bid_notional_touch,
+            "ask_notional_touch": ask_notional_touch,
+            "bid_qty_spread_max": bid_qty_max,
+            "ask_qty_spread_max": ask_qty_max,
+            "bid_notional_spread_max": bid_notional_max,
+            "ask_notional_spread_max": ask_notional_max,
             "bid": bid,
             "ask": ask,
         },
-        raw_params={"flat": list(effective.to_flat())},
+        raw_params={
+            "flat": list(effective.to_flat()),
+            "reservation_r_offset": r_offset,
+            "reservation_shift_quote": shift_quote,
+            "raw_reservation_logit": raw_logit,
+        },
+        reservation_r_offset=r_offset,
+        reservation_shift_quote=shift_quote,
+        raw_reservation_logit=raw_logit,
     )
 
 
@@ -156,6 +192,9 @@ def action_snapshot_payload(snapshot: ActionSnapshot | None) -> dict[str, Any]:
     return {
         "effective_depth": dict(snapshot.effective_depth),
         "raw_params": dict(snapshot.raw_params),
+        "reservation_r_offset": float(snapshot.reservation_r_offset),
+        "reservation_shift_quote": float(snapshot.reservation_shift_quote),
+        "raw_reservation_logit": float(snapshot.raw_reservation_logit),
     }
 
 

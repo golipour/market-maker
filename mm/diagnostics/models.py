@@ -133,6 +133,9 @@ class ObjectiveSnapshot:
 class ActionSnapshot:
     effective_depth: dict[str, Any] = field(default_factory=dict)
     raw_params: dict[str, Any] = field(default_factory=dict)
+    reservation_r_offset: float = 0.0
+    reservation_shift_quote: float = 0.0
+    raw_reservation_logit: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

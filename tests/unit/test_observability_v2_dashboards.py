@@ -34,6 +34,31 @@ def test_optimizer_weighted_components_sql_includes_final_objective_total() -> N
     assert panels_by_title["Objective components (weighted J terms)"]["targets"][0]["rawSql"] == sql
 
 
+def test_optimizer_diagnostics_dashboard_panels() -> None:
+    dashboard = optimizer_diagnostics()
+    panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    assert "Reservation skew & shifts" in panels_by_title
+    res_sql = panels_by_title["Reservation skew & shifts"]["targets"][0]["rawSql"]
+    assert "reservation_r_offset" in res_sql
+    assert "reservation_shift_quote" in res_sql
+
+    assert "Reserve deficit & recovery tracking" in panels_by_title
+    rec_sql = panels_by_title["Reserve deficit & recovery tracking"]["targets"][0]["rawSql"]
+    assert "viability_recovery_shortfall" in rec_sql
+    assert "viability_recovery_penalty" in rec_sql
+
+    assert "Action executable depth & touch metrics" in panels_by_title
+    depth_sql = panels_by_title["Action executable depth & touch metrics"]["targets"][0]["rawSql"]
+    assert "bid_qty_touch" in depth_sql
+    assert "ask_qty_touch" in depth_sql
+
+    viability_cfg_sql = panels_by_title["Viability config"]["targets"][0]["rawSql"]
+    assert "recovery_fraction" in viability_cfg_sql
+    assert "margin_buffer" not in viability_cfg_sql
+    assert "availability_target" not in viability_cfg_sql
+
+
 def test_observability_v2_dashboard_defaults_are_lightweight() -> None:
     dashboard = market_data_quality()
     templating = {item["name"]: item for item in dashboard["templating"]["list"]}
@@ -647,7 +672,7 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert f"'{role}_cash' AS metric" in sql
         assert f"'{role}_inventory_value'" in sql
         assert f"'{role}_wealth'" in sql
-        assert "COALESCE(reported_wealth, cash + inventory * mark_price) AS value" in sql
+        assert "COALESCE(reported_wealth, cash + inventory * COALESCE(mark_price, 0.0)) AS value" in sql
 
     decomposition_expected = {
         "Cumulative net spread capture PnL": (0, 27, "(delta_cash + delta_inventory * mark_price_prev)"),

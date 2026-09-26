@@ -17,7 +17,12 @@ from mm.mpc.joint_mpc import (
     wealth_0_from_state,
     _finite_item,
 )
-from mm.mpc.l_param import action_param_len, sigmoid_action_from_flat_raw
+from mm.mpc.l_param import (
+    action_param_len,
+    reservation_logit_index,
+    reservation_r_offset_from_params,
+    sigmoid_action_from_flat_raw,
+)
 from mm.mpc.objective_terms import (
     BookQualityParams,
     book_quality_score,
@@ -889,6 +894,31 @@ def optimize_joint_with_diagnostics(
                     viability_term="global_viability_penalty",
                     component_prefix="global_",
                 )
+
+            # Stamp local reservation skew metrics
+            if local_l_param is not None and float(local_l_param.reservation_r_max) > 0.0:
+                local_r_off_t = reservation_r_offset_from_params(
+                    local_h0,
+                    n_components=local_n,
+                    r_max=float(local_l_param.reservation_r_max),
+                )
+                local_r_idx = reservation_logit_index(local_n)
+                components["reservation_r_offset"] = local_r_off_t
+                components["reservation_shift_quote"] = local_r_off_t * mid_0
+                components["reservation_raw_logit"] = local_h0[local_r_idx]
+
+            # Stamp global reservation skew metrics
+            if global_l_param is not None and float(global_l_param.reservation_r_max) > 0.0:
+                global_r_off_t = reservation_r_offset_from_params(
+                    global_h0,
+                    n_components=global_n,
+                    r_max=float(global_l_param.reservation_r_max),
+                )
+                global_r_idx = reservation_logit_index(global_n)
+                components["global_reservation_r_offset"] = global_r_off_t
+                components["global_reservation_shift_quote"] = global_r_off_t * global_mid_0
+                components["global_reservation_raw_logit"] = global_h0[global_r_idx]
+
             J_mean_raw = torch_mod.nan_to_num(
                 total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
             )
@@ -1135,8 +1165,8 @@ def optimize_joint_with_diagnostics(
         best=best_metrics,
         best_epoch=best_epoch,
         action_initial=action_initial_snap,
-        action_final=build_action_snapshot(final_action, mid=mid_0, spread_levels=spread_levels),
-        action_best=build_action_snapshot(best_local, mid=mid_0, spread_levels=spread_levels),
+        action_final=(snap_final := build_action_snapshot(final_action, mid=mid_0, spread_levels=spread_levels)),
+        action_best=(snap_best := build_action_snapshot(best_local, mid=mid_0, spread_levels=spread_levels)),
         gradients={
             "nonfinite_loss_count": nonfinite_loss_count,
             "nonfinite_grad_count": nonfinite_grad_count,

@@ -25,13 +25,12 @@ from mm.mpc.objective_terms import (
 def _params(*, eta: float = 1.0, epsilon: float = 0.0, lambda_max: float = 100.0) -> ViabilityParams:
     return ViabilityParams(
         min_viable_quote=100.0,
-        margin_buffer=10.0,
-        availability_target=0.99,
         shortfall_tolerance=epsilon,
         lambda_init=0.0,
         lambda_learning_rate=eta,
         lambda_max=lambda_max,
         dual_ewma_decay=0.0,
+        recovery_fraction=0.0,
     )
 
 

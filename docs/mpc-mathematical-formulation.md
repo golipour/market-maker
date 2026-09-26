@@ -318,20 +318,32 @@ Properties that matter for Adam:
 Diagnostic health $1/(1+S)$ may be logged as
 `viability_min_availability`. It is **not** used in $J$ or the dual.
 
-`availability_target` $A^*$ and `margin_buffer` $\delta$ remain in
-config for compatibility. They do not enter $\mathcal{S}$ or the dual.
+Legacy keys `availability_target` $A^*$ and `margin_buffer` $\delta$ have been
+removed from the configuration schema, as they do not enter $\mathcal{S}$ or the dual.
 
-### 7.2 Lagrangian penalty
+### 7.2 Explicit recovery objective
+
+When a reserve deficit exists at step $h=0$ ($d_{s, 0} > 0$ for $s \in \{\mathrm{bid}, \mathrm{ask}\}$), the optimizer can be configured to actively recover the missing balance rather than merely avoiding further depletion. The expected recovery shortfall is:
 
 $$
-\text{viability penalty} = -\lambda_t\,\mathcal{S}(u;\xi_t).
+\mathcal{S}_{\mathrm{rec}}(u;\xi_t) = \mathbb{E}\left[ \sum_{s \in \{\mathrm{bid}, \mathrm{ask}\}, d_{s, 0} > 0} \left[ d_{s, 1} - (1 - \rho)\,d_{s, 0} \right]_+^2 \right]
+$$
+
+where $\rho \in [0, 1]$ is the configured `recovery_fraction` (default `0.0`).
+- If $\rho = 0.0$ (default), $\mathcal{S}_{\mathrm{rec}} = 0$, preserving the standard floor constraint.
+- If $\rho > 0.0$, the optimizer pays a quadratic penalty whenever post-fill deficit $d_{s, 1}$ fails to reduce the initial deficit $d_{s, 0}$ by at least fraction $\rho$. This provides an explicit gradient pulling the optimizer toward fills that replenish the depleted side.
+
+### 7.3 Lagrangian penalty
+
+$$
+\text{viability penalty} = -\lambda_t\,\mathcal{S}(u;\xi_t) - \lambda_t\,\mathcal{S}_{\mathrm{rec}}(u;\xi_t).
 $$
 
 $\lambda_t$ is **fixed** for every Adam epoch of decision $t$. Gradients
 flow: action $\to$ first-step fills $\to$ $(b_1,q_1,p_1)$ $\to$
-$S_1$ $\to$ $J$.
+$(S_1, S_{\mathrm{rec}, 1})$ $\to$ $J$.
 
-### 7.3 Why this stays soft (spread widening)
+### 7.4 Why this stays soft (spread widening)
 
 A hard capacity clamp that forces quote size to zero when the wallet is
 near $q_{\min}$ would empty the book. That fights validity, which wants

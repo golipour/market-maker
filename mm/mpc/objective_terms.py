@@ -39,16 +39,19 @@ class ViabilityParams:
     Penalty term is ``-λ · S`` with squared hinge deficits (zero above
     ``min_viable_quote``). Dual ``λ`` is a bounded linear multiplier updated
     from an EWMA of ``S``, not ``exp(θ)``.
+
+    When ``recovery_fraction > 0``, an explicit deficit recovery term penalizes
+    failure to reduce existing reserve deficits by at least fraction ``recovery_fraction``
+    per step.
     """
 
     min_viable_quote: float = 50_000.0
-    margin_buffer: float = 5_000.0
-    availability_target: float = 0.99
     shortfall_tolerance: float = 0.05
     lambda_init: float = 0.0
     lambda_learning_rate: float = 0.02
     lambda_max: float = 100.0
     dual_ewma_decay: float = 0.9
+    recovery_fraction: float = 0.0
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -78,14 +81,11 @@ class ViabilityParams:
         if removed:
             raise ValueError(
                 "removed viability keys; use "
-                "{min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, "
-                "lambda_max, dual_ewma_decay}: "
+                "{min_viable_quote, shortfall_tolerance, lambda_init, "
+                "lambda_learning_rate, lambda_max, dual_ewma_decay, "
+                "recovery_fraction}: "
                 + ", ".join(removed)
             )
-        availability_target = float(payload.get("availability_target", 0.99))
-        if not (0.0 < availability_target <= 1.0):
-            raise ValueError("viability.availability_target must be in (0, 1]")
         shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
         if shortfall_tolerance < 0.0:
             raise ValueError("viability.shortfall_tolerance must be >= 0")
@@ -98,28 +98,29 @@ class ViabilityParams:
         dual_ewma_decay = float(payload.get("dual_ewma_decay", 0.9))
         if not (0.0 <= dual_ewma_decay < 1.0):
             raise ValueError("viability.dual_ewma_decay must be in [0, 1)")
+        recovery_fraction = float(payload.get("recovery_fraction", 0.0))
+        if not (0.0 <= recovery_fraction <= 1.0):
+            raise ValueError("viability.recovery_fraction must be in [0, 1]")
         lambda_init = max(0.0, float(payload.get("lambda_init", 0.0)))
         return cls(
             min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
-            margin_buffer=max(1e-9, float(payload.get("margin_buffer", 5_000.0))),
-            availability_target=availability_target,
             shortfall_tolerance=shortfall_tolerance,
             lambda_init=min(lambda_init, lambda_max),
             lambda_learning_rate=lambda_learning_rate,
             lambda_max=lambda_max,
             dual_ewma_decay=dual_ewma_decay,
+            recovery_fraction=recovery_fraction,
         )
 
     def as_mapping(self) -> dict[str, float]:
         return {
             "min_viable_quote": self.min_viable_quote,
-            "margin_buffer": self.margin_buffer,
-            "availability_target": self.availability_target,
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
             "lambda_learning_rate": self.lambda_learning_rate,
             "lambda_max": self.lambda_max,
             "dual_ewma_decay": self.dual_ewma_decay,
+            "recovery_fraction": self.recovery_fraction,
         }
 
 
@@ -461,6 +462,35 @@ def viability_path_shortfall(
     path_next = step_deficit[:, 1]
     path_next_health = step_parts["viability_step_availability"][:, 1]
     shortfall_mean = path_next.mean()
+    zero = torch.zeros((), dtype=inventory_path.dtype, device=inventory_path.device)
+
+    rho = max(0.0, min(1.0, float(params.recovery_fraction)))
+    if rho > 0.0:
+        d_bid_0 = step_parts["viability_bid_deficit"][:, 0]
+        d_ask_0 = step_parts["viability_ask_deficit"][:, 0]
+        d_bid_1 = step_parts["viability_bid_deficit"][:, 1]
+        d_ask_1 = step_parts["viability_ask_deficit"][:, 1]
+        target_bid = (1.0 - rho) * d_bid_0
+        target_ask = (1.0 - rho) * d_ask_0
+        rec_bid = torch.where(
+            d_bid_0 > 1e-9,
+            torch.clamp(d_bid_1 - target_bid, min=0.0),
+            torch.zeros_like(d_bid_1),
+        )
+        rec_ask = torch.where(
+            d_ask_0 > 1e-9,
+            torch.clamp(d_ask_1 - target_ask, min=0.0),
+            torch.zeros_like(d_ask_1),
+        )
+        rec_step_deficit = rec_bid * rec_bid + rec_ask * rec_ask
+        recovery_shortfall = rec_step_deficit.mean()
+        rec_bid_mean = rec_bid.mean()
+        rec_ask_mean = rec_ask.mean()
+    else:
+        recovery_shortfall = zero
+        rec_bid_mean = zero
+        rec_ask_mean = zero
+
     components = {
         "viability_shortfall": shortfall_mean,
         "viability_min_availability": path_next_health.mean(),
@@ -471,6 +501,10 @@ def viability_path_shortfall(
         "viability_bid_deficit": step_parts["viability_bid_deficit"][:, 1].mean(),
         "viability_ask_deficit": step_parts["viability_ask_deficit"][:, 1].mean(),
         "viability_step_deficit": path_next.mean(),
+        "viability_recovery_fraction": rho,
+        "viability_recovery_shortfall": recovery_shortfall,
+        "viability_recovery_bid_deficit": rec_bid_mean,
+        "viability_recovery_ask_deficit": rec_ask_mean,
     }
     return shortfall_mean, components
 
@@ -669,8 +703,10 @@ OBJECTIVE_CONTRIBUTION_KEYS: frozenset[str] = frozenset(
         "risk_adjusted_return",
         "validity_penalty",
         "viability_penalty",
+        "viability_recovery_penalty",
         "global_validity_penalty",
         "global_viability_penalty",
+        "global_viability_recovery_penalty",
     }
 )
 
@@ -992,4 +1028,19 @@ def combine_viability_term(
             out[f"{viability_term}_raw"] = value
         else:
             out[f"{component_prefix}{key}"] = value
+
+    # Explicit recovery objective
+    rec_shortfall = (viability_components or {}).get("viability_recovery_shortfall")
+    recovery_term = (
+        "global_viability_recovery_penalty"
+        if component_prefix == "global_" or viability_term.startswith("global_")
+        else "viability_recovery_penalty"
+    )
+    if viability_params is not None and float(viability_params.recovery_fraction) > 0.0 and rec_shortfall is not None:
+        rec_weighted = -lam * rec_shortfall
+        objective = objective + rec_weighted
+        out[recovery_term] = rec_weighted
+    else:
+        out[recovery_term] = 0.0
+
     return objective, out

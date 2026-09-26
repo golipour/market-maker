@@ -97,12 +97,14 @@ function testViabilityDualFieldsAreOnBothVenues() {
       "dual_ewma_decay",
       "shortfall_tolerance",
       "lambda_learning_rate",
+      "recovery_fraction",
     ]) {
       const path = `${base}.${key}`;
       assert.ok(FIELD_BY_PATH.has(path), `missing ${path}`);
     }
     assert.equal(getAt(withDefaults, `${base}.lambda_max`), 100);
     assert.equal(getAt(withDefaults, `${base}.dual_ewma_decay`), 0.9);
+    assert.equal(getAt(withDefaults, `${base}.recovery_fraction`), 0.0);
   }
 }
 

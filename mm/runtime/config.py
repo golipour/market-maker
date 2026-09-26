@@ -1736,9 +1736,9 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
             if removed_inventory_zone:
                 raise ValueError(
                     f"removed controller.optimizer.{venue} keys {', '.join(removed_inventory_zone)}; "
-                    "use viability {min_viable_quote, margin_buffer, availability_target, "
-                    "shortfall_tolerance, lambda_init, lambda_learning_rate, "
-                    "lambda_max, dual_ewma_decay}"
+                    "use viability {min_viable_quote, shortfall_tolerance, "
+                    "lambda_init, lambda_learning_rate, lambda_max, "
+                    "dual_ewma_decay, recovery_fraction}"
                 )
             if "w_book" in venue_payload:
                 raise ValueError(
@@ -2012,9 +2012,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
             ),
             "viability": (
                 "two-sided wallet-reserve term with linear Lagrange multiplier; "
-                "keys {min_viable_quote, margin_buffer, availability_target, "
-                "shortfall_tolerance, lambda_init, lambda_learning_rate, "
-                "lambda_max, dual_ewma_decay}"
+                "keys {min_viable_quote, shortfall_tolerance, lambda_init, "
+                "lambda_learning_rate, lambda_max, dual_ewma_decay, recovery_fraction}"
             ),
             "book_quality": (
                 "book shape preferences: hard_structure caps first-touch decode "

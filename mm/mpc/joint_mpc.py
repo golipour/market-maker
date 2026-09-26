@@ -306,7 +306,10 @@ def wealth_0_from_state(state: State, reference_price_source: str | None = None)
 
 def _finite_item(t) -> float:
     try:
-        x = float(t.detach().item())
+        if hasattr(t, "detach"):
+            x = float(t.detach().item())
+        else:
+            x = float(t)
         return x if math.isfinite(x) else 0.0
     except Exception:
         return 0.0

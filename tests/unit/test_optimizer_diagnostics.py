@@ -144,7 +144,7 @@ def test_optimizer_diagnostics_best_not_worse_than_initial() -> None:
     assert float(best["value"]) >= float(initial["value"]) - 1e-9
     comp_sum = sum(float(v) for v in best["components"].values())
     assert comp_sum == pytest.approx(float(best["value"]), rel=1e-5)
-    assert set(best["components"]) == {"risk_adjusted_return"}
+    assert "risk_adjusted_return" in best["components"]
     assert best["expected_total_return"] is not None
     fracs = best.get("contribution_fractions") or {}
     assert fracs
@@ -229,3 +229,48 @@ def test_objective_snapshot_payload_improvement_fields() -> None:
     assert "final_minus_initial" in improvement
     if improvement["best_minus_initial"] is not None:
         assert math.isfinite(float(improvement["best_minus_initial"]))
+
+
+def test_optimizer_diagnostics_records_reservation_and_recovery() -> None:
+    from mm.mpc.l_param import ReservationSkewParams
+    from mm.mpc.mpc_tensor_batched import VenueOptimizerParams
+    from mm.mpc.objective_terms import ViabilityParams
+
+    local_opt = VenueOptimizerParams(
+        n_components=1,
+        reservation_skew=ReservationSkewParams(max_abs_skew=0.005),
+        viability=ViabilityParams(min_viable_quote=50_000.0, recovery_fraction=0.1),
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
+    )
+    mpc = MonteCarloMPCTensorBatched(
+        _FixedPriceModel(),
+        _FixedFlowModel(),
+        _FixedExecutionModel(),
+        n_components=1,
+        n_samples=2,
+        horizon=1,
+        spread_max=10.0,
+        spread_step=5.0,
+        adam_epochs=3,
+        fixed_mc_samples=True,
+        device="cpu",
+        local_optimizer=local_opt,
+    )
+    _, diagnostics = mpc.optimize_with_diagnostics(_minimal_state())
+    payload = diagnostics.to_payload()
+    action_best = payload["action"]["best"]
+    assert "reservation_r_offset" in action_best
+    assert "reservation_shift_quote" in action_best
+    assert "raw_reservation_logit" in action_best
+    assert "bid_qty_touch" in action_best["effective_depth"]
+    assert "ask_qty_touch" in action_best["effective_depth"]
+
+    final_comps = payload["objective"]["final"]["components"]
+    assert "reservation_r_offset" in final_comps
+    assert "reservation_shift_quote" in final_comps
+    assert "reservation_raw_logit" in final_comps
+    assert "viability_recovery_shortfall" in final_comps
+    assert "viability_recovery_penalty" in final_comps
+    assert "viability_recovery_fraction" in final_comps
+    assert final_comps["viability_recovery_fraction"] == pytest.approx(0.1)

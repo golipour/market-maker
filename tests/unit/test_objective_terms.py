@@ -30,13 +30,12 @@ from mm.mpc.objective_terms import (
 def _viability_params(**overrides: float) -> ViabilityParams:
     defaults = {
         "min_viable_quote": 100.0,
-        "margin_buffer": 10.0,
-        "availability_target": 0.99,
         "shortfall_tolerance": 0.05,
         "lambda_init": 0.0,
         "lambda_learning_rate": 0.02,
         "lambda_max": 100.0,
         "dual_ewma_decay": 0.0,
+        "recovery_fraction": 0.0,
     }
     defaults.update(overrides)
     return ViabilityParams(**defaults)
@@ -51,7 +50,7 @@ def test_viability_from_mapping_rejects_legacy_keys() -> None:
     with pytest.raises(ValueError, match="removed viability keys"):
         ViabilityParams.from_mapping({"min_quote_qty": 1.0, "margin_sharpness": 0.1})
     with pytest.raises(ValueError, match="removed viability keys"):
-        ViabilityParams.from_mapping({"min_free_quote": 1.0, "margin_buffer": 0.1})
+        ViabilityParams.from_mapping({"min_free_quote": 1.0})
 
 
 def test_quadratic_deficit_is_zero_when_total_balances_exceed_viable_floor() -> None:
@@ -126,7 +125,7 @@ def test_quadratic_deficit_gradient_grows_deeper_below_floor() -> None:
 
 
 def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
-    params = _viability_params(availability_target=0.99)
+    params = _viability_params()
     inventory_path = torch.tensor([[0.0, 0.0], [10.0, 10.0]], dtype=torch.float64)
     cash_path = torch.tensor([[1000.0, 1000.0], [1000.0, 1000.0]], dtype=torch.float64)
     mid_path = torch.full_like(inventory_path, 100.0)
@@ -143,7 +142,7 @@ def test_viability_path_shortfall_penalizes_low_min_availability() -> None:
 
 def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
     """Rollout paths must include post-orderflow wallet snapshots, not only pre-fill."""
-    params = _viability_params(availability_target=0.99)
+    params = _viability_params()
     mid = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
     post_fill_path = {
         "inventory_path": torch.tensor([[10.0, 0.0]], dtype=torch.float64),
@@ -170,7 +169,7 @@ def test_viability_path_shortfall_penalizes_post_fill_depletion() -> None:
 
 def test_viability_path_shortfall_uses_next_step_not_terminal_recovery() -> None:
     """Step-1 availability must not be masked by a healthier terminal wallet."""
-    params = _viability_params(availability_target=0.99)
+    params = _viability_params()
     mid = torch.tensor([[100.0, 100.0, 100.0]], dtype=torch.float64)
     inv = torch.tensor([[0.0, 0.0, 10.0]], dtype=torch.float64)
     cash = torch.tensor([[50.0, 50.0, 1000.0]], dtype=torch.float64)
@@ -186,7 +185,7 @@ def test_viability_path_shortfall_uses_next_step_not_terminal_recovery() -> None
 
 def test_viability_path_shortfall_ignores_pre_action_step_zero() -> None:
     """h=0 is the live wallet before the MPC action; first post-fill step matters."""
-    params = _viability_params(availability_target=0.99)
+    params = _viability_params()
     mid = torch.tensor([[100.0, 100.0, 100.0]], dtype=torch.float64)
     dead_then_recovered = {
         "inventory_path": torch.tensor([[0.0, 10.0, 10.0]], dtype=torch.float64),
@@ -480,9 +479,9 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         ),
         dtype=torch.float64,
     )
-    market_cum_bid = torch.tensor([0.0, 5.0, 10.0], dtype=torch.float64)
-    market_cum_ask = torch.tensor([0.0, 5.0, 10.0], dtype=torch.float64)
-    quoted_score, _ = book_quality_score(
+    market_cum_bid = torch.tensor([0.0, 5.0, 10.0, 15.0, 20.0], dtype=torch.float64)
+    market_cum_ask = torch.tensor([0.0, 5.0, 10.0, 15.0, 20.0], dtype=torch.float64)
+    quoted_score, quoted_comps = book_quality_score(
         flat,
         l_param=l_param,
         n_components=2,
@@ -494,7 +493,7 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         mid_price=100.0,
         params=BookQualityParams(soft_scoring=BookQualitySoftScoring(measure="quoted")),
     )
-    combined_score, _ = book_quality_score(
+    combined_score, combined_comps = book_quality_score(
         flat,
         l_param=l_param,
         n_components=2,
@@ -508,4 +507,53 @@ def test_book_quality_combined_mode_boosts_presence_from_market_depth() -> None:
         market_cum_bid=market_cum_bid,
         market_cum_ask=market_cum_ask,
     )
-    assert float(combined_score) >= float(quoted_score)
+    assert float(combined_comps["book_presence"]) >= float(quoted_comps["book_presence"])
+
+
+def test_viability_recovery_objective_penalizes_lack_of_deficit_reduction() -> None:
+    # Initial state has base deficit (ask deficit)
+    # min_viable_quote = 100.0, mid = 10.0
+    # At t=0: inventory = 5.0 base -> notional = 50.0 quote -> deficit d_ask_0 = (100 - 50)/100 = 0.5
+    # Target with recovery_fraction = 0.2 is (1 - 0.2) * 0.5 = 0.4 (i.e. notional >= 60.0, base >= 6.0)
+    params_no_rec = _viability_params(min_viable_quote=100.0, recovery_fraction=0.0)
+    params_rec = _viability_params(min_viable_quote=100.0, recovery_fraction=0.2)
+
+    mid = torch.tensor([[10.0, 10.0]], dtype=torch.float64)
+    cash = torch.tensor([[200.0, 200.0]], dtype=torch.float64) # no bid deficit
+
+    # Scenario A: Inventory unchanged at 5.0 (deficit remains 0.5 > target 0.4)
+    inv_unrecovered = torch.tensor([[5.0, 5.0]], dtype=torch.float64)
+    shortfall_a, comps_a = viability_path_shortfall(
+        inv_unrecovered, cash_path=cash, mid_path=mid, params=params_rec
+    )
+    assert float(comps_a["viability_recovery_shortfall"]) > 0.0
+    # Expected rec_ask = 0.5 - 0.4 = 0.1, rec_shortfall = 0.1^2 = 0.01
+    assert float(comps_a["viability_recovery_shortfall"]) == pytest.approx(0.01, rel=1e-4)
+
+    # With recovery_fraction = 0, recovery shortfall is 0
+    _, comps_no_rec = viability_path_shortfall(
+        inv_unrecovered, cash_path=cash, mid_path=mid, params=params_no_rec
+    )
+    assert float(comps_no_rec["viability_recovery_shortfall"]) == 0.0
+
+    # Scenario B: Inventory recovers to 6.5 (notional 65.0, deficit = 0.35 <= target 0.4)
+    inv_recovered = torch.tensor([[5.0, 6.5]], dtype=torch.float64)
+    _, comps_b = viability_path_shortfall(
+        inv_recovered, cash_path=cash, mid_path=mid, params=params_rec
+    )
+    assert float(comps_b["viability_recovery_shortfall"]) == 0.0
+
+    # In combine_viability_term, recovery penalty scales with lambda
+    base_obj = torch.tensor(1.0, dtype=torch.float64)
+    obj_out, out_comps = combine_viability_term(
+        base_obj,
+        {},
+        viability_lambda=10.0,
+        viability_params=params_rec,
+        viability_shortfall=shortfall_a,
+        viability_components=comps_a,
+    )
+    assert float(out_comps["viability_recovery_penalty"]) == pytest.approx(-10.0 * 0.01, rel=1e-4)
+    # Objective includes both primary viability and recovery penalty
+    expected_obj = 1.0 - 10.0 * float(shortfall_a) - 10.0 * 0.01
+    assert float(obj_out) == pytest.approx(expected_obj, rel=1e-4)

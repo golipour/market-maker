@@ -596,6 +596,8 @@ def sigmoid_action_from_flat_raw(
         n_components=n,
         r_max=float(l_param.reservation_r_max),
     )
+    r_idx = reservation_logit_index(n)
+    raw_logit = float(arr[r_idx]) if len(arr) > r_idx else 0.0
     bid_L, bid_k, bid_x0 = materialize_side_np(
         arr,
         side_off=0,
@@ -621,6 +623,7 @@ def sigmoid_action_from_flat_raw(
         ask_x0=tuple(float(x) for x in ask_x0),
         reservation_r_offset=r_offset,
         reservation_mid=float(mid_price or 0.0),
+        raw_reservation_logit=raw_logit,
     )
 
 

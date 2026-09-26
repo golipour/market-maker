@@ -4319,6 +4319,39 @@ def optimizer_diagnostics() -> dict[str, Any]:
             w=12,
             decimals=4,
         ),
+        _panel(
+            12,
+            "Reservation skew & shifts",
+            "timeseries",
+            PG_DS,
+            _optimizer_reservation_skew_sql(),
+            x=12,
+            y=42,
+            w=12,
+            decimals=4,
+        ),
+        _panel(
+            13,
+            "Reserve deficit & recovery tracking",
+            "timeseries",
+            PG_DS,
+            _optimizer_recovery_tracking_sql(),
+            x=0,
+            y=49,
+            w=12,
+            decimals=4,
+        ),
+        _panel(
+            14,
+            "Action executable depth & touch metrics",
+            "timeseries",
+            PG_DS,
+            _optimizer_action_depth_sql(),
+            x=12,
+            y=49,
+            w=12,
+            decimals=4,
+        ),
     ]
     return _dashboard("mm-obs-v2-optimizer", "MM Observability v2 / 04 Optimizer Diagnostics", panels, tags=["optimizer"])
 
@@ -5593,8 +5626,10 @@ _OBJECTIVE_CONTRIBUTION_KEYS_SQL = ", ".join(
         "risk_adjusted_return",
         "validity_penalty",
         "viability_penalty",
+        "viability_recovery_penalty",
         "global_validity_penalty",
         "global_viability_penalty",
+        "global_viability_recovery_penalty",
     )
 )
 
@@ -5669,6 +5704,10 @@ WHERE {_diagnostics_filter()}
     kv.key IN (
       'viability_penalty_raw',
       'viability_shortfall',
+      'viability_recovery_penalty',
+      'viability_recovery_shortfall',
+      'viability_recovery_bid_deficit',
+      'viability_recovery_ask_deficit',
       'viability_min_availability',
       'viability_step_availability',
       'viability_bid_margin',
@@ -5680,6 +5719,10 @@ WHERE {_diagnostics_filter()}
       'viability_dual_gap',
       'global_viability_penalty_raw',
       'global_viability_shortfall',
+      'global_viability_recovery_penalty',
+      'global_viability_recovery_shortfall',
+      'global_viability_recovery_bid_deficit',
+      'global_viability_recovery_ask_deficit',
       'global_viability_min_availability',
       'global_viability_step_availability',
       'global_viability_bid_margin',
@@ -5753,13 +5796,12 @@ def _optimizer_viability_config_sql() -> str:
         f"'{key}'"
         for key in (
             "min_viable_quote",
-            "margin_buffer",
-            "availability_target",
             "shortfall_tolerance",
             "lambda_init",
             "lambda_learning_rate",
             "lambda_max",
             "dual_ewma_decay",
+            "recovery_fraction",
         )
     )
     return f"""SELECT e.ts AS "time",
@@ -5775,6 +5817,93 @@ CROSS JOIN LATERAL jsonb_each_text(
 ) AS kv
 WHERE {_diagnostics_filter()}
   AND kv.key IN ({keys_sql})
+ORDER BY 1"""
+
+
+def _optimizer_reservation_skew_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND (
+    kv.key IN (
+      'reservation_r_offset',
+      'reservation_shift_quote',
+      'reservation_raw_logit',
+      'global_reservation_r_offset',
+      'global_reservation_shift_quote',
+      'global_reservation_raw_logit'
+    )
+  )
+ORDER BY 1"""
+
+
+def _optimizer_recovery_tracking_sql() -> str:
+    value = _numeric_sql("kv.value", default="NULL")
+    return f"""SELECT e.ts AS "time", kv.key AS metric, {value} AS value
+FROM mm_events e
+CROSS JOIN LATERAL jsonb_each_text(
+  COALESCE(e.payload #> ARRAY['optimizer','objective','final','components'], '{{}}'::jsonb)
+) AS kv
+WHERE {_diagnostics_filter()}
+  AND (
+    kv.key IN (
+      'viability_bid_deficit',
+      'viability_ask_deficit',
+      'viability_recovery_shortfall',
+      'viability_recovery_penalty',
+      'global_viability_bid_deficit',
+      'global_viability_ask_deficit',
+      'global_viability_recovery_shortfall',
+      'global_viability_recovery_penalty'
+    )
+  )
+ORDER BY 1"""
+
+
+def _optimizer_action_depth_sql() -> str:
+    return f"""WITH best_action AS (
+  SELECT e.ts,
+         e.payload #> ARRAY['optimizer','action','best'] AS a
+  FROM mm_events e
+  WHERE {_diagnostics_filter()}
+)
+SELECT ts AS "time", metric, value
+FROM (
+  SELECT ts, 'reservation_r_offset' AS metric,
+         {_numeric_sql("a->>'reservation_r_offset'", default="NULL")} AS value
+  FROM best_action
+  WHERE a ? 'reservation_r_offset'
+  UNION ALL
+  SELECT ts, 'reservation_shift_quote' AS metric,
+         {_numeric_sql("a->>'reservation_shift_quote'", default="NULL")} AS value
+  FROM best_action
+  WHERE a ? 'reservation_shift_quote'
+  UNION ALL
+  SELECT ts, 'bid_qty_touch' AS metric,
+         {_numeric_sql("a->'effective_depth'->>'bid_qty_touch'", default="NULL")} AS value
+  FROM best_action
+  WHERE a #> ARRAY['effective_depth'] ? 'bid_qty_touch'
+  UNION ALL
+  SELECT ts, 'ask_qty_touch' AS metric,
+         {_numeric_sql("a->'effective_depth'->>'ask_qty_touch'", default="NULL")} AS value
+  FROM best_action
+  WHERE a #> ARRAY['effective_depth'] ? 'ask_qty_touch'
+  UNION ALL
+  SELECT ts, 'bid_qty_spread_max' AS metric,
+         {_numeric_sql("a->'effective_depth'->>'bid_qty_spread_max'", default="NULL")} AS value
+  FROM best_action
+  WHERE a #> ARRAY['effective_depth'] ? 'bid_qty_spread_max'
+  UNION ALL
+  SELECT ts, 'ask_qty_spread_max' AS metric,
+         {_numeric_sql("a->'effective_depth'->>'ask_qty_spread_max'", default="NULL")} AS value
+  FROM best_action
+  WHERE a #> ARRAY['effective_depth'] ? 'ask_qty_spread_max'
+) s
+WHERE value IS NOT NULL
 ORDER BY 1"""
 
 

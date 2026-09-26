@@ -24,9 +24,12 @@ def test_migrate_inventory_zone_to_viability() -> None:
     assert "w_inv" not in local
     assert "inventory_zone" not in local
     assert local["viability"]["min_viable_quote"] == 50_000.0
-    assert local["viability"]["lambda_init"] == 0.0
+    assert local["viability"]["lambda_init"] == 1.0
     assert local["viability"]["lambda_max"] == 100.0
     assert local["viability"]["dual_ewma_decay"] == 0.9
+    assert "margin_buffer" not in local["viability"]
+    assert "availability_target" not in local["viability"]
+    assert local["viability"]["recovery_fraction"] == 0.0
 
 
 def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
@@ -43,8 +46,10 @@ def test_migrate_sparse_optimizer_fills_canonical_defaults() -> None:
     optimizer = migrated["controller"]["optimizer"]
     assert optimizer["local"]["viability"]["lambda_init"] == 0.0
     assert optimizer["local"]["validity"]["min_score"] == 0.3
-    assert optimizer["global"]["viability"]["availability_target"] == 0.99
-    assert optimizer["adam_epochs"] == 40
+    assert "availability_target" not in optimizer["global"]["viability"]
+    assert "margin_buffer" not in optimizer["global"]["viability"]
+    assert optimizer["global"]["viability"]["recovery_fraction"] == 0.0
+    assert optimizer["adam_epochs"] == 20
 
 
 def test_migrate_w_book_to_validity() -> None:
@@ -116,9 +121,10 @@ def test_migrate_legacy_viability_keys_to_viable_quote_formulation() -> None:
     viability = migrated["controller"]["optimizer"]["local"]["viability"]
     assert "min_free_quote" not in viability
     assert "margin_sharpness" not in viability
+    assert "margin_buffer" not in viability
+    assert "availability_target" not in viability
+    assert viability["recovery_fraction"] == 0.0
     assert viability["min_viable_quote"] == 50_000.0
-    assert viability["margin_buffer"] == 5_000.0
-    assert viability["availability_target"] == 0.99
 
 
 def test_migrate_oversized_viability_min_viable_quote_resyncs_to_canonical() -> None:

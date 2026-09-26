@@ -195,6 +195,7 @@ class EffectiveSigmoidMixtureAction(SigmoidMixtureAction):
 
     reservation_r_offset: float = 0.0
     reservation_mid: float = 0.0
+    raw_reservation_logit: float = 0.0
 
     def _curve_spread_for_market(self, market_spread: float, side: str) -> float:
         from mm.mpc.l_param import curve_spread_for_market_spread_np
