@@ -219,7 +219,13 @@ def _upsert_postgres(client: GrafanaClient, *, user: str, password: str) -> None
     if status == 200 and isinstance(existing, dict) and existing.get("id") is not None:
         body["id"] = existing["id"]
         status, payload = client.put("/api/datasources/uid/postgres-mm", body)
-        action = "updated"
+        if status in {200, 201}:
+            action = "updated"
+        elif status == 403:
+            print("datasource postgres-mm provisioned via configmap (already active)")
+            return
+        else:
+            raise SystemExit(f"postgres datasource failed: http {status} {payload}")
     else:
         status, payload = client.post("/api/datasources", body)
         action = "created"
@@ -458,27 +464,35 @@ def _argocd_grafana_sync_policy() -> dict | None:
 
 
 def _ensure_argocd_ignore_grafana_datasources() -> None:
-    """Keep postgres-mm in Grafana's ConfigMap across grafana-staging auto-sync."""
+    """Keep postgres-mm and grafana.ini in Grafana's ConfigMap across grafana-staging auto-sync."""
 
     app = _kubectl_json("-n", "argocd", "get", "application", "grafana-staging")
     spec = app.get("spec") or {}
     ignores = list(spec.get("ignoreDifferences") or [])
-    already = any(
-        row.get("kind") == "ConfigMap"
-        and row.get("name") == "grafana"
-        and "/data/datasources.yaml" in (row.get("jsonPointers") or [])
-        for row in ignores
-        if isinstance(row, dict)
-    )
-    if not already:
+    found = False
+    updated = False
+    for row in ignores:
+        if isinstance(row, dict) and row.get("kind") == "ConfigMap" and row.get("name") == "grafana":
+            found = True
+            pointers = list(row.get("jsonPointers") or [])
+            for pointer in ("/data/datasources.yaml", "/data/grafana.ini"):
+                if pointer not in pointers:
+                    pointers.append(pointer)
+                    updated = True
+            row["jsonPointers"] = pointers
+            break
+    if not found:
         ignores.append(
             {
                 "group": "",
                 "kind": "ConfigMap",
                 "name": "grafana",
-                "jsonPointers": ["/data/datasources.yaml"],
+                "jsonPointers": ["/data/datasources.yaml", "/data/grafana.ini"],
             }
         )
+        updated = True
+
+    if updated:
         op = "add" if spec.get("ignoreDifferences") is None else "replace"
         result = subprocess.run(
             [
@@ -499,9 +513,9 @@ def _ensure_argocd_ignore_grafana_datasources() -> None:
         )
         if result.returncode != 0:
             raise SystemExit(f"patch grafana-staging ignoreDifferences failed: {result.stderr.strip()}")
-        print("argocd ignores grafana datasources.yaml")
+        print("argocd ignores grafana datasources.yaml and grafana.ini")
     else:
-        print("argocd already ignores grafana datasources.yaml")
+        print("argocd already ignores grafana datasources.yaml and grafana.ini")
 
 
 
