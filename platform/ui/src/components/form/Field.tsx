@@ -85,6 +85,7 @@ export function Field({ field, value, inherited, overridden, onChange, onClear }
           type="number"
           step={field.step ?? "any"}
           min={field.min}
+          max={field.max}
           value={value === undefined || value === null ? "" : String(value)}
           placeholder={placeholder}
           onChange={(e) => {

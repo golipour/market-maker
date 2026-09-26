@@ -21,6 +21,7 @@ export type FieldDef = {
   options?: readonly FieldOption[];
   step?: string;
   min?: number;
+  max?: number;
   when?: FieldWhen | FieldWhen[];
 };
 
