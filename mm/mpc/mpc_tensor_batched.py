@@ -1440,6 +1440,12 @@ class MonteCarloMPCTensorBatched:
                     if h == 0:
                         book_cum_bid_h = book_cum_bid_0
                         book_cum_ask_h = book_cum_ask_0
+                        # ``ob_bids``/``ob_asks`` are still the epoch-invariant
+                        # initial book and ``mid_fallback_t`` is ``mid_fallback_0``,
+                        # so this is exactly the ``mid_init`` computed before the
+                        # Adam loop. Reuse it instead of re-deriving it on every
+                        # epoch's first horizon step.
+                        mid_t = mid_init
                     else:
                         book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
 
@@ -1456,12 +1462,13 @@ class MonteCarloMPCTensorBatched:
                         eps_buy_next = eps_buy_h
                         eps_sell_next = eps_sell_h
 
-                    mid_t = _mid_from_book_best_levels_batched(
-                        ob_bids,
-                        ob_asks,
-                        mid_fallback_t,
-                        spread_grid,
-                    )
+                    if h != 0:
+                        mid_t = _mid_from_book_best_levels_batched(
+                            ob_bids,
+                            ob_asks,
+                            mid_fallback_t,
+                            spread_grid,
+                        )
                     (
                         bid_quote_size_min_t,
                         bid_quote_size_max_t,
