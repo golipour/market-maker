@@ -1459,8 +1459,13 @@ class MonteCarloMPCTensorBatched:
                 # constants instead of reallocating them per epoch.
                 inv_t = inv_t_0
                 cash_t = cash_t_0
-                ob_bids = ob_bids_0.clone()
-                ob_asks = ob_asks_0.clone()
+                # ``ob_bids``/``ob_asks`` are only read or rebound within the
+                # horizon loop (``ob_bids, ob_asks = ob_bids_next, ob_asks_next``);
+                # nothing writes into them in place, so rebinding straight to the
+                # epoch-invariant originals is safe and skips two per-epoch
+                # (n_samples, grid_levels) copies.
+                ob_bids = ob_bids_0
+                ob_asks = ob_asks_0
                 mid_fallback_t = mid_fallback_0
 
                 total_reward = total_reward_0
