@@ -89,21 +89,30 @@ class Runner:
                 model.update(t, y)
                 continue
             out = model.predict(t, y)
-            # models may return (mu, sd, target) or (mu, sd, p0, target)
+            # Contract:
+            #   (mu, sd, target)                 -> plain density with `nu`
+            #   (mu, sd, p0, target)             -> hurdle, p0 = P(target == 0)
+            # A model with a custom density returns a `logpdf` method and a
+            # 3-tuple; `logpdf` then takes (target, mu, sd).
             if len(out) == 4:
                 m, s, p0, tgt = out
+            elif len(out) == 3 and hasattr(model, "logpdf"):
+                m, s, tgt = out
+                p0 = None
             else:
                 m, s, tgt = out
                 p0 = None
             if np.isfinite(tgt):
-                self.mu[t], self.sd[t], self.p0[t] = m, s, (p0 if p0 is not None else np.nan)
+                self.mu[t], self.sd[t] = m, s
+                self.p0[t] = p0 if p0 is not None else np.nan
                 if p0 is not None:
-                    # hurdle: point mass at 0, Student-t core on the rest
                     if tgt == 0:
                         self.loss[t] = -float(np.log(max(p0, 1e-12)))
                     else:
                         llc = log_student_t(abs(tgt), m, s, nu if nu else 4.0)
                         self.loss[t] = -float(llc - np.log(max(1.0 - p0, 1e-12)))
+                elif hasattr(model, "logpdf"):
+                    self.loss[t] = -float(model.logpdf(tgt, m, s))
                 elif nu is not None:
                     self.loss[t] = -log_student_t(tgt, m, s, nu)
                 else:

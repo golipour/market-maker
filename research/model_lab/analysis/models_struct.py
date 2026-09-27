@@ -121,25 +121,21 @@ class QuoteMixture(BaseModel):
         e = 0.5 * y["spread"][t]
         return e if np.isfinite(e) and e > 0 else 50.0
 
-    def logpdf(self, tgt, mu, sd, sd_e):
-        """log int phi_nu((tgt - mu - u) / sd) phi_e(u / sd_e) du, scaled."""
+    def predict(self, t, y):
+        # 3-tuple: the custom logpdf integrates over the quote error itself.
+        sig = np.sqrt(self.s / self.w) if self.w > 0 else self.start_sd
+        sig = max(sig, self.floor)
+        self._sd_e = self._eta(y, t) / np.sqrt(3.0)
+        return (0.0, sig, self.target(y, t))
+
+    def logpdf(self, tgt, mu, sd):
+        sd_e = getattr(self, "_sd_e", 1.0)
         from .preq import log_student_t
-        from scipy.special import gammaln
-        nu = self.nu
-        # Gauss-Hermite on the quote error
         acc = 0.0
         for i in range(self.nq):
             u = sd_e * self.qx[i]
-            acc += self.qw[i] * np.exp(log_student_t(tgt - mu - u, 0.0, sd, nu)
-                                        + gammaln(0.5 * (nu + 1.0)) - gammaln(0.5 * nu)
-                                        - 0.5 * np.log(nu * np.pi))
-        return np.log(np.maximum(acc, 1e-300))
-
-    def predict(self, t, y):
-        sig = np.sqrt(self.s / self.w) if self.w > 0 else self.start_sd
-        sig = max(sig, self.floor)
-        eta = self._eta(y, t)
-        return (0.0, sig, eta / np.sqrt(3.0), self.target(y, t))
+            acc += self.qw[i] * np.exp(log_student_t(tgt - mu - u, 0.0, sd, self.nu))
+        return float(np.log(max(acc, 1e-300)))
 
     def update(self, t, y):
         x = self.target(y, t)

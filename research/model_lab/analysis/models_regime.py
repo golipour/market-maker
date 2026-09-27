@@ -126,12 +126,14 @@ class RegScaleHurdleLog(BaseModel):
         return ie * self.n_stale + ist
 
     def _sd(self, c):
-        pooled = self.ls.sum() / max(self.w2_total(), 1e-9) if self.w2_total() else np.log(self.start_sd ** 2)
+        tot = self.w2_total()
+        pooled = (self.ls.sum() / tot) if tot > 0 else np.log(self.start_sd ** 2)
         if self.lw[c] <= 0:
             return self.start_sd
-        # multiplicative shrinkage toward the pooled level
+        # multiplicative shrinkage toward the pooled level, with hard clipping
         v = (1.0 - self.shrink) * self.ls[c] + self.shrink * pooled
-        return float(np.sqrt(max(np.exp(v), self.floor ** 2)))
+        v = float(np.clip(v, np.log(self.floor ** 2), np.log((50.0 * self.start_sd) ** 2)))
+        return float(np.sqrt(np.exp(v)))
 
     def w2_total(self):
         return float(self.lw.sum())
@@ -157,5 +159,7 @@ class RegScaleHurdleLog(BaseModel):
         self.ls[c] = self.ls[c] * self.lam
         self.lw[c] = self.lw[c] * self.lam
         if x != 0:
-            self.ls[c] += np.log(max(x * x, 1e-6))
+            v = np.log(max(x * x, 1e-6))
+            v = float(np.clip(v, np.log(self.floor ** 2), np.log((50.0 * self.start_sd) ** 2)))
+            self.ls[c] += v
             self.lw[c] += 1.0

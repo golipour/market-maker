@@ -122,7 +122,11 @@ for nm, a in [("|dmid|", np.abs(y['dmid'])), ("dmid^2", y['dmid'] ** 2), ("|dmid
     print("  %-11s ACF: " % nm + "  ".join("L%d=%+.3f" % (k, c) for k, c in zip((1, 2, 5, 10, 20), cs)))
 
 print("\n[1.10] Zero-mass of the move: a discrete hurdle must be modelled explicitly")
-nz = y['dmid'][np.isfinite(y['dmid'])]
-print("  P(dmid=0) = %.4f" % np.mean(nz == 0))
+fin = np.isfinite(y['dmid'])
+print("  P(dmid=0) = %.4f" % np.mean(y['dmid'][fin] == 0))
+# db/da are lagged differences of length N-1 (dmid is length N), so index the
+# dmid==0 mask against the first N-1 entries to keep the shapes aligned.
+z = fin[:-1] & (y['dmid'][:-1] == 0)
+print("  n(dmid=0) = %d" % int(z.sum()))
 print("  Among dmid==0: P(bid also unchanged)=%.4f P(ask also unchanged)=%.4f"
-      % (np.mean(db[nz == 0] == 0), np.mean(da[nz == 0] == 0)))
+      % (np.mean(db[z] == 0), np.mean(da[z] == 0)))

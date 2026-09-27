@@ -1,2 +1,47 @@
-/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/models_regime.py:134: RuntimeWarning: overflow encountered in exp
-  return float(np.sqrt(max(np.exp(v), self.floor ** 2)))
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/.venv/lib/python3.11/site-packages/numpy/_core/fromnumeric.py:3824: RuntimeWarning: Mean of empty slice
+  return _methods._mean(a, axis=axis, dtype=dtype,
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/.venv/lib/python3.11/site-packages/numpy/_core/_methods.py:142: RuntimeWarning: invalid value encountered in scalar divide
+  ret = ret.dtype.type(ret / rcount)
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/p7_regime.py:75: RuntimeWarning: invalid value encountered in divide
+  chi = float(((cnt - exp) ** 2 / exp).sum() / 19.0)
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/p7_regime.py:77: RuntimeWarning: Mean of empty slice
+  % (name, zz.mean(), zz.std(), chi, cov80))
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/.venv/lib/python3.11/site-packages/numpy/_core/_methods.py:219: RuntimeWarning: Degrees of freedom <= 0 for slice
+  ret = _var(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/.venv/lib/python3.11/site-packages/numpy/_core/_methods.py:178: RuntimeWarning: invalid value encountered in divide
+  arrmean = um.true_divide(arrmean, div, out=arrmean,
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/.venv/lib/python3.11/site-packages/numpy/_core/_methods.py:211: RuntimeWarning: invalid value encountered in scalar divide
+  ret = ret.dtype.type(ret / rcount)
+============================================================================================
+PHASE 7 - CANDIDATE SET ON ONE FIXED TARGET CONTRACT
+============================================================================================
+N = 347640  warmup = 8000   target: dmid over [t,t+1], IRT ticks
+All models causal and online; 95% CIs from a moving-block bootstrap.
+
+  B1 EWMA Gaussian sd                      n= 339639 mean=  8.4559 med=  8.5264 p90=   9.497 p99=  10.213 max=    13.72
+  B2 EWMA Student-t sd                     n= 339639 mean=  4.7497 med=  4.7848 p90=   5.270 p99=   5.628 max=     7.38
+  B3 Student-t, sd=c*eta                   n= 339639 mean=  5.8989 med=  6.0456 p90=   7.392 p99=   8.111 max=    10.11
+  S1 quote-mixture (structural)            n= 339639 mean=-12.8488 med=-21.9692 p90=   2.215 p99=   4.976 max=    12.86
+  R1 regime hurdle (levels)                n= 339639 mean=  1.8343 med=  1.7979 p90=   2.873 p99=   5.024 max=    18.60
+  R2 regime hurdle (log+shrink)            n= 339639 mean=  1.9148 med=  2.1388 p90=   2.735 p99=   3.432 max=    15.07
+
+--------------------------------------------------------------------------------------------
+Paired loss difference vs B2 (the strong simple baseline)
+--------------------------------------------------------------------------------------------
+  B1 EWMA Gaussian sd              d=+3.7062 CI[+3.6894,+3.7230] p=0.0e+00  worse
+  B3 Student-t, sd=c*eta           d=+1.1491 CI[+1.1337,+1.1645] p=0.0e+00  worse
+  S1 quote-mixture (structural)    d=-17.5985 CI[-17.7105,-17.4835] p=0.0e+00  BETTER
+  R1 regime hurdle (levels)        d=-2.9154 CI[-2.9278,-2.9035] p=0.0e+00  BETTER
+  R2 regime hurdle (log+shrink)    d=-2.8350 CI[-2.8500,-2.8212] p=0.0e+00  BETTER
+
+--------------------------------------------------------------------------------------------
+CALIBRATION of each candidate (PIT on its own predictive law)
+--------------------------------------------------------------------------------------------
+  model                            z mean     z sd       PIT chi2/19  80% cov   
+  B1 EWMA Gaussian sd              nan        nan        nan          nan       
+  B2 EWMA Student-t sd             nan        nan        nan          nan       
+  B3 Student-t, sd=c*eta           nan        nan        nan          nan       
+  S1 quote-mixture (structural)    0.0034     0.9744     82121.224    0.8799    
+  R1 regime hurdle (levels)        0.0037     0.8214     86578.671    0.9144    
+  R2 regime hurdle (log+shrink)    0.0011     0.3894     100718.053   0.9912    
+  (PIT chi2/19 ~ 1 is calibrated; 80% coverage should be ~0.80)

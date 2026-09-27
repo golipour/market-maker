@@ -36,10 +36,17 @@ CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "cache.n
 
 def load(path: str | None = None) -> dict:
     """Stream the gz export; float64 throughout, no object arrays."""
-    if path is None and os.path.exists(CACHE):
-        z = np.load(CACHE, allow_pickle=True)
+    if path is None:
+        for cand in (CACHE, CSV + ".gz", CSV):
+            if os.path.exists(cand):
+                path = cand
+                break
+        else:
+            raise FileNotFoundError(
+                "no source found; expected one of " + ", ".join((CACHE, CSV + ".gz", CSV)))
+    if path == CACHE:
+        z = np.load(path, allow_pickle=True)
         return {k: z[k] for k in z.files}
-    path = path or CSV + ".gz"
     opener = gzip.open if path.endswith(".gz") else open
     cols: dict[str, list] = {c: [] for c in NUM_COLS}
     ts: list = []
@@ -58,7 +65,7 @@ def load(path: str | None = None) -> dict:
     for k in list(out):
         out[k] = out[k][order]
     out["t_end"] = out["t_end_ms"].astype(np.int64)
-    if path == CSV + ".gz":
+    if path in (CSV, CSV + ".gz"):
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         np.savez_compressed(CACHE, **out)
     return out
