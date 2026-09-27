@@ -709,14 +709,12 @@ def _solve_spread_leg_L_torch(
     q_total_t = q_total
     q_is_vector = torch.is_tensor(q_total_t) and q_total_t.ndim > 0
     if not q_is_vector and n == 1:
-        L_eff = torch.zeros(1, dtype=d1_c.dtype, device=d1_c.device)
-        L_eff[0] = q_total / delta_max[0].clamp(min=1e-12)
-        return L_eff
+        return (q_total / delta_max[0].clamp(min=1e-12)).reshape(1)
     if q_is_vector and n == 1:
         return q_total_t.reshape(-1, 1) / delta_max[0].clamp(min=1e-12)
     z_tm = (tail_v * delta_max[1:]).sum().clamp(min=1e-12)
     tail_c = (tail_v * delta_center[1:]).sum()
-    q_spread_t = torch.tensor(q_spread, dtype=d1_c.dtype, device=d1_c.device)
+    q_spread_t = _scalar_tensor(q_spread, q_spread, d1_c, clamp_zero=False)
     denom = d1_c - d1_m * tail_c / z_tm
     if q_is_vector:
         q_flat = q_total_t.reshape(-1)
@@ -728,9 +726,8 @@ def _solve_spread_leg_L_torch(
         )
         L1 = torch.maximum(L1, q_spread_t / d1_c)
         q_tail = (q_flat - L1 * d1_m).clamp(min=0.0)
-        L_eff = torch.zeros(q_flat.shape[0], n, dtype=d1_c.dtype, device=d1_c.device)
-        L_eff[:, 0] = L1
-        L_eff[:, 1:] = q_tail.unsqueeze(1) * tail_v.unsqueeze(0) / z_tm
+        tail = q_tail.unsqueeze(1) * tail_v.unsqueeze(0) / z_tm
+        L_eff = torch.cat([L1.reshape(-1, 1), tail], dim=1)
         total_at_max = (L_eff * delta_max.unsqueeze(0)).sum(dim=1).clamp(min=1e-12)
         scale = torch.minimum(torch.ones_like(total_at_max), q_flat / total_at_max)
         L_eff = L_eff * scale.unsqueeze(1)
@@ -739,9 +736,7 @@ def _solve_spread_leg_L_torch(
     L1 = torch.where(denom.abs() < 1e-12, q_spread_t / d1_c, numer / denom)
     L1 = torch.maximum(L1, q_spread_t / d1_c)
     q_tail = (q_total - L1 * d1_m).clamp(min=0.0)
-    L_eff = torch.zeros(n, dtype=d1_c.dtype, device=d1_c.device)
-    L_eff[0] = L1
-    L_eff[1:] = q_tail * tail_v / z_tm
+    L_eff = torch.cat([L1.reshape(1), q_tail * tail_v / z_tm])
     total_at_max = (L_eff * delta_max).sum().clamp(min=1e-12)
     scale = torch.minimum(torch.ones_like(total_at_max), q_total / total_at_max)
     L_eff = L_eff * scale
@@ -779,31 +774,38 @@ def materialize_side_torch(
         spread_cap = float(l_param.quote_spread_max)
         scale = torch.sigmoid(u_scale)
         spread_w = torch.softmax(torch.stack([u_bid, u_ask]), dim=0)
-        min_center = torch.tensor(
-            _min_structured_center(spread_cap),
-            dtype=params.dtype,
-            device=params.device,
+        min_center = _scalar_tensor(
+            _min_structured_center(spread_cap), None, params, clamp_zero=False
         )
         centers = torch.clamp(scale * spread_cap * spread_w, min=min_center)
         x0_first = centers[0] if side_off == 0 else centers[1]
-        x0_eff = torch.zeros(n, dtype=params.dtype, device=params.device)
-        x0_eff[0] = x0_first
-        for i in range(1, n):
-            frac = torch.sigmoid(x0_raw[i])
-            x0_eff[i] = x0_first + (spread_max - x0_first) * frac
+        # Tail centers are ``x0_first + (spread_max - x0_first) * sigmoid(x0_raw)``.
+        # Built vectorized and concatenated with the head, instead of filling a
+        # zeros tensor element by element in a Python loop: the same values with
+        # one op instead of n slice-assignments, and a cheaper backward.
+        if n > 1:
+            tail_centers = x0_first + (spread_max - x0_first) * torch.sigmoid(x0_raw[1:])
+            x0_eff = torch.cat([x0_first.reshape(1), tail_centers])
+        else:
+            x0_eff = x0_first.reshape(1)
     else:
         x0_eff = spread_max * torch.sigmoid(x0_raw)
 
     if l_param.spread_structured:
         eps_val = min(max(float(l_param.quote_spread_k_epsilon), 1e-6), 0.49)
         logit_eps = torch.log(
-            torch.tensor(eps_val / (1.0 - eps_val), dtype=params.dtype, device=params.device)
+            _scalar_tensor(
+                eps_val / (1.0 - eps_val), None, params, clamp_zero=False
+            )
         )
         k_min = -logit_eps / x0_eff[0].clamp(min=1e-6)
-        k_eff = torch.zeros(n, dtype=params.dtype, device=params.device)
-        k_eff[0] = k_min + torch.nn.functional.softplus(k_raw[0]) + 1e-8
+        k_head = k_min + torch.nn.functional.softplus(k_raw[0]) + 1e-8
         if n > 1:
-            k_eff[1:] = torch.nn.functional.softplus(k_raw[1:]) + 1e-8
+            k_eff = torch.cat(
+                [k_head.reshape(1), torch.nn.functional.softplus(k_raw[1:]) + 1e-8]
+            )
+        else:
+            k_eff = k_head.reshape(1)
     else:
         k_eff = torch.nn.functional.softplus(k_raw) + 1e-8
 
@@ -826,8 +828,7 @@ def materialize_side_torch(
                 tail_v=tail_v,
             )
         else:
-            L_eff = torch.zeros(n, dtype=params.dtype, device=params.device)
-            L_eff[0] = q_total / delta_at_max[0].clamp(min=1e-12)
+            L_eff = (q_total / delta_at_max[0].clamp(min=1e-12)).reshape(n)
         return L_eff, k_eff, x0_eff
 
     w = torch.softmax(L_raw, dim=-1)
