@@ -232,6 +232,14 @@ CREATE TABLE IF NOT EXISTS mm_optimizer_facts (
     risk_ms DOUBLE PRECISION,
     publish_ms DOUBLE PRECISION,
     execute_ms DOUBLE PRECISION,
+    setup_ms DOUBLE PRECISION,
+    sample_ms DOUBLE PRECISION,
+    forward_ms DOUBLE PRECISION,
+    objective_ms DOUBLE PRECISION,
+    backward_ms DOUBLE PRECISION,
+    adam_ms DOUBLE PRECISION,
+    diagnostics_ms DOUBLE PRECISION,
+    epochs_run INT,
     initial_value DOUBLE PRECISION,
     final_value DOUBLE PRECISION,
     best_value DOUBLE PRECISION,
@@ -298,6 +306,14 @@ ALTER TABLE mm_model_score_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
 ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
 ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
 ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS setup_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS sample_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS forward_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS objective_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS backward_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS adam_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS diagnostics_ms DOUBLE PRECISION;
+ALTER TABLE mm_optimizer_facts ADD COLUMN IF NOT EXISTS epochs_run INT;
 ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS frame_id TEXT;
 ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS decision_id TEXT;
 ALTER TABLE mm_optimizer_component_facts ADD COLUMN IF NOT EXISTS target_book_id TEXT;
@@ -639,7 +655,9 @@ class PostgresEventWriter:
                                 best_expected_total_reward, best_expected_total_return,
                                 best_expected_next_reward, best_main_reward_mean,
                                 best_global_reward_mean, gradient_issue_count, rollout_count,
-                                frame_id, decision_id, target_book_id
+                                frame_id, decision_id, target_book_id,
+                                setup_ms, sample_ms, forward_ms, objective_ms,
+                                backward_ms, adam_ms, diagnostics_ms, epochs_run
                             ) VALUES %s
                             ON CONFLICT (event_id) DO NOTHING
                             """,
@@ -1361,6 +1379,14 @@ def _optimizer_fact_row(envelope: EventEnvelope) -> tuple[Any, ...] | None:
         _optional_str(payload.get("frame_id")),
         _optional_str(payload.get("decision_id")),
         _optional_str(payload.get("target_book_id")),
+        _timing_float(timing, "setup_ms"),
+        _timing_float(timing, "sample_ms"),
+        _timing_float(timing, "forward_ms"),
+        _timing_float(timing, "objective_ms"),
+        _timing_float(timing, "backward_ms"),
+        _timing_float(timing, "adam_ms"),
+        _timing_float(timing, "diagnostics_ms"),
+        _int_or_none(timing.get("epochs_run")),
     )
 
 

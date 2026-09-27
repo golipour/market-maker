@@ -14,6 +14,12 @@ TIGHTNESS_SPREAD_SCALE = "tightness_spread_scale"
 
 MAX_ABS_SKEW = "max_abs_skew"
 
+# Performance / observability knobs (Phase 0 of the optimizer performance plan).
+# How often full per-epoch objective diagnostics are materialized. 1 keeps the
+# historical every-epoch behavior; higher values record only the first, last,
+# sampled, and best epochs, which is sufficient for the published diagnostics.
+OPTIMIZER_DIAGNOSTICS_EVERY = "optimizer_diagnostics_every"
+
 REMOVED_VENUE_OPTIMIZER_ALIASES: dict[str, str] = {
     "quote_size_min_per_side": CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX,
     "quote_size_max_per_side": CUMULATIVE_QTY_CAP_AT_SPREAD_MAX,

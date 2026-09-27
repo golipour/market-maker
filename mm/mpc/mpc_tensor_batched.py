@@ -63,6 +63,7 @@ from mm.mpc.optimizer_diagnostics import (
     OptimizerRunDiagnostics,
     build_action_snapshot,
 )
+from mm.mpc.optimizer_timing import OptimizerStageTimer, stage_timing_payload
 from mm.observability.logs import log_event
 
 from mm.pricing import vwap_prices_batched
@@ -277,6 +278,24 @@ def _inv_softplus_np(y: float) -> float:
     if y_f > 50.0:
         return y_f
     return float(np.log(np.expm1(y_f)))
+
+
+def _epoch_needs_metrics(epoch: int, last_epoch: int, every: int) -> bool:
+    """Return True when full per-epoch diagnostics should be materialized.
+
+    Converting every objective component to a Python float each epoch was a
+    measurable share of optimizer wall time (scalar extraction on a CPU tensor
+    is a real Python/C boundary crossing). Only the first, last, and
+    best-so-far epochs are needed for the published diagnostics, so the rest
+    can be skipped.
+
+    ``every <= 1`` restores the previous behavior of recording every epoch.
+    """
+    if every <= 1:
+        return True
+    if epoch == 0 or epoch == last_epoch:
+        return True
+    return epoch % every == 0
 
 
 def _finite_action_flat_or_none(flat: Any, expected_len: int) -> np.ndarray | None:
@@ -836,6 +855,7 @@ class MonteCarloMPCTensorBatched:
         cumulative_qty_floor_at_spread_max: float | int | None = None,
         cumulative_qty_cap_at_spread_max: float | int | None = None,
         objective_normalize: dict[str, Any] | ObjectiveNormalizeParams | None = None,
+        optimizer_diagnostics_every: int = 1,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -849,6 +869,11 @@ class MonteCarloMPCTensorBatched:
         self.adam_lr = adam_lr
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
+        # How often to materialize full per-epoch objective diagnostics.
+        # 1 keeps the historical every-epoch behavior; higher values record
+        # only the first, last, sampled, and best epochs. The best epoch is
+        # always captured because it drives the published ``best`` snapshot.
+        self.optimizer_diagnostics_every = max(1, int(optimizer_diagnostics_every))
         self.device = device
         if isinstance(warm_start, WarmStartParams):
             self.warm_start = warm_start
@@ -1049,6 +1074,8 @@ class MonteCarloMPCTensorBatched:
 
             return optimize_joint_with_diagnostics(self, state)
         torch_mod = _get_torch()
+        stage_timer = OptimizerStageTimer()
+        setup_started = time.perf_counter()
         if isinstance(self.device, str) and self.device.lower() == "cpu":
             _device = torch_mod.device("cpu")
         elif self.device is None:
@@ -1188,6 +1215,7 @@ class MonteCarloMPCTensorBatched:
             return buy_vol, sell_vol, eps_buy, eps_sell, price_innov
 
         batch_time_sec = 0.0
+        stage_timer.record("setup", (time.perf_counter() - setup_started) * 1000.0)
         if self.fixed_mc_samples:
             t_batch = time.perf_counter()
             (
@@ -1198,6 +1226,7 @@ class MonteCarloMPCTensorBatched:
                 fixed_price_innov,
             ) = draw_samples()
             batch_time_sec = time.perf_counter() - t_batch
+            stage_timer.record("sample", batch_time_sec * 1000.0)
 
         spread_levels = tuple(
             round(min(self.spread_max, i * self.spread_step), 12)
@@ -1225,12 +1254,21 @@ class MonteCarloMPCTensorBatched:
         initial_metrics: EpochObjectiveMetrics | None = None
         final_metrics: EpochObjectiveMetrics | None = None
         best_metrics: EpochObjectiveMetrics | None = None
+        best_epoch_metrics: EpochObjectiveMetrics | None = None
         self._last_J_components_initial = None
         captured_initial_components = False
         nonfinite_loss_count = 0
         nonfinite_grad_count = 0
         last_eval_x = best_x.detach().clone()
         t0 = time.perf_counter()
+        # Wall-clock accumulated inside ``closure`` so the Adam stage can be
+        # measured as the residual of ``optimizer.step`` rather than double
+        # counting the rollout/objective work it already contains.
+        closure_wall_ms = 0.0
+        # Monte Carlo draws issued inside ``closure`` are already part of the
+        # forward region, so they are subtracted to keep ``optimize_ms`` a
+        # clean sum of non-overlapping stages.
+        sample_inside_forward_ms = 0.0
         adaptive_warm_resolved = not needs_adaptive_probe
 
         for epoch in range(self.adam_epochs):
@@ -1246,10 +1284,14 @@ class MonteCarloMPCTensorBatched:
                 cur_flat = x_torch.detach().cpu().numpy()[:single_len]
                 print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
-            def closure(probe_only: bool = False):
+            def closure(probe_only: bool = False, want_metrics: bool = True):
                 nonlocal batch_time_sec, captured_initial_components
                 nonlocal initial_metrics, final_metrics
                 nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
+                nonlocal closure_wall_ms, sample_inside_forward_ms
+                nonlocal best_epoch_metrics
+                closure_started = time.perf_counter()
+                forward_started = time.perf_counter()
                 optimizer.zero_grad()
                 with torch_mod.no_grad():
                     x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
@@ -1266,7 +1308,10 @@ class MonteCarloMPCTensorBatched:
                 else:
                     t_batch = time.perf_counter()
                     buy_vol, sell_vol, eps_buy, eps_sell, price_innov = draw_samples()
-                    batch_time_sec += time.perf_counter() - t_batch
+                    drawn = time.perf_counter() - t_batch
+                    batch_time_sec += drawn
+                    stage_timer.record("sample", drawn * 1000.0)
+                    sample_inside_forward_ms += drawn * 1000.0
 
                 inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
                 cash_t = torch_mod.full((self.n_samples, 1), cash_0, dtype=dtype, device=_device)
@@ -1481,7 +1526,12 @@ class MonteCarloMPCTensorBatched:
                     inv_t = inv_next
                     cash_t = cash_next
 
+                stage_timer.record(
+                    "forward",
+                    max(0.0, (time.perf_counter() - forward_started) * 1000.0 - sample_inside_forward_ms),
+                )
                 returns = total_reward / wealth_0
+                objective_started = time.perf_counter()
                 J_mean_raw = torch_mod.nan_to_num(
                     total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
                 )
@@ -1557,6 +1607,9 @@ class MonteCarloMPCTensorBatched:
                     components["reservation_shift_quote"] = r_off_t * mid_0
                     components["reservation_raw_logit"] = raw_r
 
+                stage_timer.record("objective", (time.perf_counter() - objective_started) * 1000.0)
+                diagnostics_started = time.perf_counter()
+
                 def _finite_item(t) -> float:
                     try:
                         if hasattr(t, "detach"):
@@ -1567,8 +1620,15 @@ class MonteCarloMPCTensorBatched:
                     except Exception:
                         return 0.0
 
+                loss = -J
                 obj_value = _finite_item(J)
-                if not probe_only:
+                # Per-epoch scalar extraction is a real Python/C boundary
+                # crossing, so full metrics are only materialized for the
+                # sampled epochs plus any epoch that turns out to be a new
+                # best (the published ``best`` snapshot depends on it).
+                # ``best_loss`` tracks the minimum of ``loss = -J``.
+                is_new_best = math.isfinite(obj_value) and (-obj_value) < best_loss
+                if not probe_only and (want_metrics or is_new_best):
                     epoch_metrics = EpochObjectiveMetrics.from_tensors(
                         objective_value=obj_value,
                         components={k: _finite_item(v) for k, v in components.items()},
@@ -1590,10 +1650,13 @@ class MonteCarloMPCTensorBatched:
                     self._last_E_dW_next = epoch_metrics.expected_next_reward
                     self._last_main_reward_mean = epoch_metrics.main_reward_mean
                     self._last_global_reward_mean = epoch_metrics.global_reward_mean
-                loss = -J
+                    if is_new_best:
+                        best_epoch_metrics = epoch_metrics
+                stage_timer.record("diagnostics", (time.perf_counter() - diagnostics_started) * 1000.0)
                 if not torch_mod.isfinite(loss):
                     nonfinite_loss_count += 1
                 if torch_mod.isfinite(loss):
+                    backward_started = time.perf_counter()
                     loss.backward()
                     if x_torch.grad is not None:
                         if not torch_mod.isfinite(x_torch.grad).all():
@@ -1601,6 +1664,8 @@ class MonteCarloMPCTensorBatched:
                             x_torch.grad.detach().zero_()
                         else:
                             torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
+                    stage_timer.record("backward", (time.perf_counter() - backward_started) * 1000.0)
+                closure_wall_ms += (time.perf_counter() - closure_started) * 1000.0
                 return loss
 
             if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
@@ -1636,16 +1701,26 @@ class MonteCarloMPCTensorBatched:
                     optimizer = self._optimizer
                 adaptive_warm_resolved = True
 
-            loss = optimizer.step(lambda: closure(probe_only=False))
+            want_metrics = _epoch_needs_metrics(
+                epoch, self.adam_epochs - 1, self.optimizer_diagnostics_every
+            )
+            step_started = time.perf_counter()
+            loss = optimizer.step(lambda: closure(probe_only=False, want_metrics=want_metrics))
+            # ``optimizer.step`` runs the closure before applying the update, so
+            # the Adam arithmetic itself is the residual after the closure cost.
+            step_wall_ms = (time.perf_counter() - step_started) * 1000.0
+            stage_timer.record("adam", max(0.0, step_wall_ms - closure_wall_ms))
+            closure_wall_ms = 0.0
+            stage_timer.bump_epochs()
             if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
                 best_loss = loss.item()
                 best_x = last_eval_x.detach().clone()
                 best_epoch = epoch
-                if final_metrics is not None:
-                    best_metrics = final_metrics
-                best_J_mean = final_metrics.expected_total_reward if final_metrics else 0.0
-                best_J_mean_next = final_metrics.expected_next_reward if final_metrics else 0.0
-                best_main_reward_mean = final_metrics.main_reward_mean if final_metrics else 0.0
+                if best_epoch_metrics is not None:
+                    best_metrics = best_epoch_metrics
+                    best_J_mean = best_epoch_metrics.expected_total_reward
+                    best_J_mean_next = best_epoch_metrics.expected_next_reward
+                    best_main_reward_mean = best_epoch_metrics.main_reward_mean
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
@@ -1752,12 +1827,15 @@ class MonteCarloMPCTensorBatched:
                     n_components=self.global_n_components,
                 ),
             },
-            timing={
-                "sample_draw_sec": float(batch_time_sec),
-                "train_sec": float(train_time_sec),
-                "total_sec": float(total_sec),
-                "best_epoch": best_epoch,
-            },
+            timing=stage_timing_payload(
+                stage_timer,
+                legacy={
+                    "sample_draw_sec": float(batch_time_sec),
+                    "train_sec": float(train_time_sec),
+                    "total_sec": float(total_sec),
+                    "best_epoch": best_epoch,
+                },
+            ),
             initial=initial_metrics,
             final=final_metrics,
             best=best_metrics,
@@ -1788,6 +1866,9 @@ class MonteCarloMPCTensorBatched:
                 "n_samples": self.n_samples,
                 "horizon": self.horizon,
                 "best_epoch": best_epoch,
+                "epochs_run": stage_timer.epochs_run,
+                "stage_ms": {f"{k}_ms": v for k, v in stage_timer.totals_ms.items()},
+                "optimize_ms": stage_timer.total_ms(),
             },
         )
         return best_action, diagnostics
