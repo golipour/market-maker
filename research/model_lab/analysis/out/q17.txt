@@ -1,0 +1,61 @@
+============================================================================================
+Q13 - THREE-COMPONENT MIXTURE (zero + granular + heavy body)
+============================================================================================
+
+[13.1] Shape of the non-zero branch
+  P(|y| = 0.5) = 0.1844   P(|y| = 1.0) = 0.0910   P(|y| = 1.5) = 0.0404
+  P(|y| <= 2)  = 0.3456
+  => 34.6% of non-zero moves are within 2 ticks of zero.
+  These cannot come from a body with median |y| = 9 under ANY
+  single Student-t.  They are a separate component.
+================================================================================================
+Q17 - THE GRANULAR SCALE, UNCONSTRAINED
+================================================================================================
+
+[17.1] The small-move profile, exactly
+   P(|dmid| = 0.5) = 0.11970
+   P(|dmid| = 1.0) = 0.05911
+   P(|dmid| = 1.5) = 0.02624
+   P(|dmid| = 2.0) = 0.01934
+   P(|dmid| = 2.5) = 0.01573
+   P(|dmid| = 3.0) = 0.01105
+   P(|dmid| = 4.0) = 0.00973
+   P(|dmid| = 5.0) = 0.01305
+  Ratios against the smallest grid step:
+     P(1.0)/P(0.5) = 0.494
+     P(1.5)/P(0.5) = 0.219
+     P(2.0)/P(0.5) = 0.162
+     P(3.0)/P(0.5) = 0.092
+     P(5.0)/P(0.5) = 0.109
+
+================================================================================================
+[17.2] Scan the granular window k with the floor released
+================================================================================================
+  model                            mean               1st half d               2nd half d
+  free floor k=0.5               3.9283  +0.3670[+0.3568,+0.3770] +0.3276[+0.3191,+0.3371]
+  free floor k=1.0               3.8783  +0.3316[+0.3209,+0.3424] +0.2636[+0.2533,+0.2746]
+  free floor k=2.0               3.8007  +0.2600[+0.2480,+0.2727] +0.1803[+0.1682,+0.1923]
+  free floor k=4.0               3.8789  +0.3420[+0.3300,+0.3541] +0.2550[+0.2435,+0.2668]
+
+================================================================================================
+[17.3] The optimum granular scale actually learned
+  best k = 2.0
+  learned sigma1 = 1.0065  (floor was 0.35)
+  learned p1     = 0.2490
+  learned s2     = 27.692
+  alpha          = 0.9595
+
+  => the small-move component has scale well below one grid step,
+     which is why the point-mass version (Q16) failed: the data has
+     mass at 1.0, 1.5 and 2.0 as well, and a single atom cannot
+     represent them.
+
+================================================================================================
+[17.4] FINAL HEADLINE vs the production reference
+================================================================================================
+  reference mean NLL = 3.5814
+  final     mean NLL = 3.8007
+  gain = -0.2192 nats/step (-6.1%)
+  block-bootstrap CI[-0.2286, -0.2097]   t=50.5  p=0  n=339638
+
+================================================================================================

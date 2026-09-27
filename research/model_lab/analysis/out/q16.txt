@@ -1,0 +1,45 @@
+============================================================================================
+Q13 - THREE-COMPONENT MIXTURE (zero + granular + heavy body)
+============================================================================================
+
+[13.1] Shape of the non-zero branch
+  P(|y| = 0.5) = 0.1844   P(|y| = 1.0) = 0.0910   P(|y| = 1.5) = 0.0404
+  P(|y| <= 2)  = 0.3456
+  => 34.6% of non-zero moves are within 2 ticks of zero.
+  These cannot come from a body with median |y| = 9 under ANY
+  single Student-t.  They are a separate component.
+================================================================================================
+Q16 - ATOM GRANULAR COMPONENT (the closed-form limit)
+================================================================================================
+
+================================================================================================
+  REF  t4 + EWMA (production shape)        mean=  3.5814 med= 4.2562 p99=  8.1905
+  B    hurdle-t nu=2.5 (2 components)      mean=  3.5211 med= 3.7175 p99=  9.1632
+  M    mixture3 gaussian granular          mean=  2.7635 med= 1.6811 p99=  9.6212
+  A    atom3 (0 / 0.5 / t2.5)  [FINAL]     mean=  3.8630 med= 4.3927 p99= 10.1750
+
+------------------------------------------------------------------------------------------------
+Paired difference vs the production-shaped reference, BY HALF
+------------------------------------------------------------------------------------------------
+  model                                                      1st half                   2nd half
+  REF  t4 + EWMA (production shape)        +0.0000[+0.0000,+0.0000] +0.0000[+0.0000,+0.0000]
+  B    hurdle-t nu=2.5 (2 components)      -0.0649[-0.0707,-0.0593] -0.0559[-0.0611,-0.0508]
+  M    mixture3 gaussian granular          -0.7450[-0.7658,-0.7249] -0.8875[-0.9097,-0.8664]
+  A    atom3 (0 / 0.5 / t2.5)  [FINAL]     +0.3051[+0.2944,+0.3160] +0.2591[+0.2486,+0.2693]
+
+------------------------------------------------------------------------------------------------
+FINAL vs the two-component model: does the ATOM beat the Gaussian?
+------------------------------------------------------------------------------------------------
+  M    mixture3 gaussian granular          d=-0.7576 CI[-0.7747,-0.7414]
+  A    atom3 (0 / 0.5 / t2.5)  [FINAL]     d=+0.3418 CI[+0.3357,+0.3482]
+
+------------------------------------------------------------------------------------------------
+CALIBRATION of the FINAL model (predictive interval coverage)
+------------------------------------------------------------------------------------------------
+  final parameters: p0=0.3271  p1=0.1028  s2=28.043  body=0.5701
+
+  NOTE on coverage: the final density is a 3-atom law, so the
+  'central interval' of a Student-t is not the right object.  The
+  correct calibration statement is the PIT, tested in Q11/Q17.
+
+================================================================================================

@@ -1,0 +1,38 @@
+============================================================================================
+Q13 - THREE-COMPONENT MIXTURE (zero + granular + heavy body)
+============================================================================================
+
+[13.1] Shape of the non-zero branch
+  P(|y| = 0.5) = 0.1844   P(|y| = 1.0) = 0.0910   P(|y| = 1.5) = 0.0404
+  P(|y| <= 2)  = 0.3456
+  => 34.6% of non-zero moves are within 2 ticks of zero.
+  These cannot come from a body with median |y| = 9 under ANY
+  single Student-t.  They are a separate component.
+========================================================================================
+Q19 - MEASURING THE PHANTOM GAIN
+========================================================================================
+
+[19.1] The granular scale the mixture actually learned
+  sigma1 quantiles: p1=0.250 p5=0.250 p50=0.250 p95=0.250 p99=0.250
+  p1     quantiles: p1=0.035 p5=0.054 p50=0.116 p95=0.199 p99=0.241
+  s2     quantiles: p1=6.60 p5=10.22 p50=23.68 p95=45.34 p99=59.21
+
+[19.2] Is a CONTINUOUS density at the learned sigma1 a valid pmf?
+  A pmf on the 0.5 grid must satisfy q(y) <= 1 for every y.
+  The maximum of a continuous density is 1/(sigma*sqrt(2 pi)).
+    p1   sigma1= 0.250  -> max continuous density =   1.5958  *** ILLEGAL (q>1) ***
+    p5   sigma1= 0.250  -> max continuous density =   1.5958  *** ILLEGAL (q>1) ***
+    p50  sigma1= 0.250  -> max continuous density =   1.5958  *** ILLEGAL (q>1) ***
+    p95  sigma1= 0.250  -> max continuous density =   1.5958  *** ILLEGAL (q>1) ***
+    p99  sigma1= 0.250  -> max continuous density =   1.5958  *** ILLEGAL (q>1) ***
+
+[19.3] Count the steps where the OLD continuous form gave q > 1
+  non-zero scored steps examined : 222004
+  steps with q > 1 (impossible)  : 0  (0.0000%)
+
+[19.4] Verdict
+  The continuous granular branch never exceeded 1 on this sample.
+  => the -0.818 must be re-EXPLAINED; the q>1 story is not the
+     mechanism, and the findings document needs correcting.
+
+========================================================================================

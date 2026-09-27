@@ -20,6 +20,31 @@ if TYPE_CHECKING:
     from mm.mpc.mpc_state import EffectiveSigmoidMixtureAction
 
 
+def _torch() -> Any:
+    """Return the ``torch`` module, importing it lazily on first use.
+
+    Torch is an optional dependency for parts of this package, so it is not
+    imported at module scope. The result is memoized so the hot torch paths
+    resolve to a plain module-level reference after the first call.
+
+    This indirection exists instead of a bare ``__import__("torch")`` inside
+    each function because a dynamic import cannot be traced by
+    ``torch.compile`` (Dynamo raises "Attempted to call function marked as
+    skipped"), which makes every function that decodes parameters
+    un-compilable. A memoized accessor is Dynamo-friendly and also removes
+    the repeated import-machinery lookup from the innermost decode path.
+    """
+    global _TORCH_MODULE
+    if _TORCH_MODULE is None:
+        import torch as _torch_mod
+
+        _TORCH_MODULE = _torch_mod
+    return _TORCH_MODULE
+
+
+_TORCH_MODULE: Any | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class SpreadStructureParams:
     """Structured first-touch spread geometry for a venue optimizer block."""
@@ -205,7 +230,7 @@ class LParamConfig:
         quote_size_min: Any | None = None,
         quote_size_max: Any | None = None,
     ) -> Any:
-        torch = __import__("torch")
+        torch = _torch()
         if quote_size_min is None:
             lo = torch.tensor(float(self.quote_size_min), dtype=u_depth.dtype, device=u_depth.device)
         elif torch.is_tensor(quote_size_min):
@@ -281,7 +306,7 @@ def reservation_r_offset_from_params(
     n_components: int,
     r_max: float,
 ) -> Any:
-    torch = __import__("torch")
+    torch = _torch()
     if float(r_max) <= 0.0:
         return torch.zeros((), dtype=params.dtype, device=params.device)
     idx = reservation_logit_index(n_components)
@@ -317,7 +342,7 @@ def curve_spread_for_market_spread(
 
     if mid_price is None or reservation_r_offset is None:
         return market_spread
-    torch = __import__("torch")
+    torch = _torch()
     r_off = reservation_r_offset
     if not torch.is_tensor(r_off):
         r_off = torch.as_tensor(r_off, dtype=market_spread.dtype, device=market_spread.device)
@@ -632,7 +657,7 @@ def component_delta_at_torch(
     x0: Any,
     spread: float,
 ) -> Any:
-    torch = __import__("torch")
+    torch = _torch()
     s = float(spread)
     return torch.sigmoid(k_eff * (s - x0)) - torch.sigmoid(k_eff * (-x0))
 
@@ -653,7 +678,7 @@ def _solve_spread_leg_L_torch(
     delta_max: Any,
     tail_v: Any,
 ) -> Any:
-    torch = __import__("torch")
+    torch = _torch()
     n = int(delta_center.numel())
     d1_c = delta_center[0].clamp(min=1e-12)
     d1_m = delta_max[0]
@@ -708,7 +733,7 @@ def materialize_side_torch(
     quote_size_min: Any | None = None,
     quote_size_max: Any | None = None,
 ) -> tuple[Any, Any, Any]:
-    torch = __import__("torch")
+    torch = _torch()
     n = n_components
     L_raw = params[side_off + 0 : side_off + 3 * n : 3]
     k_raw = params[side_off + 1 : side_off + 3 * n : 3]

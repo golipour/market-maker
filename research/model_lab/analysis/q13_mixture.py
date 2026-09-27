@@ -138,85 +138,87 @@ class Mixture3(M.HurdleT):
         if tgt == 0:
             return np.log(p0)
         rem = max(1.0 - p0 - p1, 1e-9)
-        from scipy.special import log_ndtr
-        g = float(log_ndtr(tgt / max(sig1, 1e-9))
-                  - np.log(max(sig1, 1e-9)) - 0.5 * np.log(2 * np.pi))
+        # BOTH branches must be evaluated as LATTICE probabilities.  A
+        # continuous density sampled at a lattice point can exceed 1, which
+        # is not a valid pmf (asserted in the runners).
+        g = M.t_logpmf_gauss_lattice(tgt, max(sig1, 1e-6))
         b = M.t_logpmf_lattice(tgt, max(sd, 1e-9), nu)
         return float(np.logaddexp(np.log(p1) + g,
                                    np.log(rem) + b))
 
 
-def run(model):
-    loss = np.full(N, np.nan)
-    sd = np.full(N, np.nan)
-    for t in range(N - 2):
-        if t < WARM:
+if __name__ == '__main__':
+    def run(model):
+        loss = np.full(N, np.nan)
+        sd = np.full(N, np.nan)
+        for t in range(N - 2):
+            if t < WARM:
+                model.update(t, y)
+                continue
+            out = model.predict(t, y)
+            m_, s_, tgt, pars = out
+            if np.isfinite(tgt):
+                ll = model.logpdf(tgt, m_, s_, pars)
+                assert ll <= 1e-9, "impossible density at t=%d ll=%r" % (t, ll)
+                loss[t] = -ll
+                sd[t] = s_
             model.update(t, y)
-            continue
-        out = model.predict(t, y)
-        m_, s_, tgt, pars = out
-        if np.isfinite(tgt):
-            ll = model.logpdf(tgt, m_, s_, pars)
-            assert ll <= 1e-9, "impossible density at t=%d ll=%r" % (t, ll)
-            loss[t] = -ll
-            sd[t] = s_
-        model.update(t, y)
-    return loss, sd
+        return loss, sd
 
 
-print("\n" + "=" * 92)
-CANDS = []
-for k in (0.5, 1.0, 1.5, 2.0, 3.0):
-    CANDS.append(("mixture3 k=%.0f nu=2.5" % k,
-                  lambda k=k: Mixture3(nu=2.5, lam=0.98, lam_p=0.98, k=k)))
-CANDS.append(("mixture3 k=1 nu=3.0",
-              lambda: Mixture3(nu=3.0, lam=0.98, lam_p=0.98, k=1.0)))
-CANDS.append(("mixture3 k=1 nu=2.0",
-              lambda: Mixture3(nu=2.0, lam=0.98, lam_p=0.98, k=1.0)))
-CANDS.append(("mixture3 k=1 nu=1.5",
-              lambda: Mixture3(nu=1.5, lam=0.98, lam_p=0.98, k=1.0)))
-CANDS.append(("mixture3 k=1 lam=0.995",
-              lambda: Mixture3(nu=2.5, lam=0.995, lam_p=0.995, k=1.0)))
-CANDS.append(("mixture3 k=1 no calib",
-              lambda: Mixture3(nu=2.5, lam=0.98, lam_p=0.98, k=1.0,
-                               calibrate=False)))
-CANDS.append(("BASELINE hurdle-t nu=2.5",
-              lambda: M.HurdleT(nu=2.5, lam=0.98, lam_p=0.98)))
+    print("\n" + "=" * 92)
+    CANDS = []
+    for k in (0.5, 1.0, 1.5, 2.0, 3.0):
+        CANDS.append(("mixture3 k=%.0f nu=2.5" % k,
+                      lambda k=k: Mixture3(nu=2.5, lam=0.98, lam_p=0.98, k=k)))
+    CANDS.append(("mixture3 k=1 nu=3.0",
+                  lambda: Mixture3(nu=3.0, lam=0.98, lam_p=0.98, k=1.0)))
+    CANDS.append(("mixture3 k=1 nu=2.0",
+                  lambda: Mixture3(nu=2.0, lam=0.98, lam_p=0.98, k=1.0)))
+    CANDS.append(("mixture3 k=1 nu=1.5",
+                  lambda: Mixture3(nu=1.5, lam=0.98, lam_p=0.98, k=1.0)))
+    CANDS.append(("mixture3 k=1 lam=0.995",
+                  lambda: Mixture3(nu=2.5, lam=0.995, lam_p=0.995, k=1.0)))
+    CANDS.append(("mixture3 k=1 no calib",
+                  lambda: Mixture3(nu=2.5, lam=0.98, lam_p=0.98, k=1.0,
+                                   calibrate=False)))
+    CANDS.append(("BASELINE hurdle-t nu=2.5",
+                  lambda: M.HurdleT(nu=2.5, lam=0.98, lam_p=0.98)))
 
-res = {}
-print("%-30s %10s %10s %10s" % ("model", "mean", "median", "p99"))
-for nm, mk in CANDS:
-    L, sd = run(mk())
-    res[nm] = (L, sd)
-    fin = L[np.isfinite(L)]
-    print("%-30s %10.4f %10.4f %10.4f"
-          % (nm, fin.mean(), np.percentile(fin, 50), np.percentile(fin, 99)))
+    res = {}
+    print("%-30s %10s %10s %10s" % ("model", "mean", "median", "p99"))
+    for nm, mk in CANDS:
+        L, sd = run(mk())
+        res[nm] = (L, sd)
+        fin = L[np.isfinite(L)]
+        print("%-30s %10.4f %10.4f %10.4f"
+              % (nm, fin.mean(), np.percentile(fin, 50), np.percentile(fin, 99)))
 
-BASE = "BASELINE hurdle-t nu=2.5"
-HALF = N // 2
-print("\n" + "-" * 92)
-print("Paired difference vs the two-component baseline, BY HALF")
-print("-" * 92)
-b = res[BASE][0]
-print("  %-30s %26s %26s" % ("model", "1st half", "2nd half"))
-for nm, (L, sd) in res.items():
-    row = "  %-30s" % nm
-    for lo, hi in ((WARM, HALF), (HALF, N - 2)):
-        d = L[lo:hi] - b[lo:hi]
-        mean, l, h, n = S.moving_block_ci(d, B=1200, seed=23)
-        row += " %+.4f[%+.4f,%+.4f]" % (mean, l, h)
-    print(row)
+    BASE = "BASELINE hurdle-t nu=2.5"
+    HALF = N // 2
+    print("\n" + "-" * 92)
+    print("Paired difference vs the two-component baseline, BY HALF")
+    print("-" * 92)
+    b = res[BASE][0]
+    print("  %-30s %26s %26s" % ("model", "1st half", "2nd half"))
+    for nm, (L, sd) in res.items():
+        row = "  %-30s" % nm
+        for lo, hi in ((WARM, HALF), (HALF, N - 2)):
+            d = L[lo:hi] - b[lo:hi]
+            mean, l, h, n = S.moving_block_ci(d, B=1200, seed=23)
+            row += " %+.4f[%+.4f,%+.4f]" % (mean, l, h)
+        print(row)
 
-print("\n" + "-" * 92)
-print("CALIBRATION of the continuous branch (z sd ~ 1, cov ~ nominal)")
-print("-" * 92)
-tgt = np.full(N, np.nan)
-tgt[:-1] = y["dmid"][1:]
-print("  %-30s %14s %14s" % ("model", "z sd", "90% cov"))
-for nm, (L, sd) in res.items():
-    m = (np.arange(N) >= WARM) & np.isfinite(sd) & (sd > 0) & np.isfinite(tgt)
-    m &= (tgt != 0)
-    zz = tgt[m] / sd[m]
-    print("  %-30s %14.3f %14.4f"
-          % (nm, zz.std(), np.mean(np.abs(zz) < 1.645)))
-print("\n" + "=" * 92)
+    print("\n" + "-" * 92)
+    print("CALIBRATION of the continuous branch (z sd ~ 1, cov ~ nominal)")
+    print("-" * 92)
+    tgt = np.full(N, np.nan)
+    tgt[:-1] = y["dmid"][1:]
+    print("  %-30s %14s %14s" % ("model", "z sd", "90% cov"))
+    for nm, (L, sd) in res.items():
+        m = (np.arange(N) >= WARM) & np.isfinite(sd) & (sd > 0) & np.isfinite(tgt)
+        m &= (tgt != 0)
+        zz = tgt[m] / sd[m]
+        print("  %-30s %14.3f %14.4f"
+              % (nm, zz.std(), np.mean(np.abs(zz) < 1.645)))
+    print("\n" + "=" * 92)

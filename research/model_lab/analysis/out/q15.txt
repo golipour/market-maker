@@ -1,0 +1,60 @@
+============================================================================================
+Q13 - THREE-COMPONENT MIXTURE (zero + granular + heavy body)
+============================================================================================
+
+[13.1] Shape of the non-zero branch
+  P(|y| = 0.5) = 0.1844   P(|y| = 1.0) = 0.0910   P(|y| = 1.5) = 0.0404
+  P(|y| <= 2)  = 0.3456
+  => 34.6% of non-zero moves are within 2 ticks of zero.
+  These cannot come from a body with median |y| = 9 under ANY
+  single Student-t.  They are a separate component.
+================================================================================================
+Q15 - FINAL VERDICT
+================================================================================================
+
+[15.1] The lattice atom, stated precisely
+  P(|dmid| = 0.5) = 0.1197   P(|dmid| = 1.0) = 0.0591   ratio = 2.025
+  A smooth density on a .5 grid gives ratio ~1.0 (synthetic: 0.99).
+  => the move law has an ATOM at the smallest grid step, produced by
+     the quote-refresh channel, not by the value process.
+
+================================================================================================
+[15.2] HEADLINE: prequential log loss, both halves, paired block bootstrap
+================================================================================================
+  model                                            mean NLL
+  production-shaped reference (t4+EWMA)              3.5814
+  FINAL mixture3 (0 + granular + t2.5 body)          2.7635
+
+  paired difference vs reference                                   1st half                   2nd half
+  FINAL mixture3                                 -0.7450[-0.7656,-0.7248] -0.8875[-0.9081,-0.8657]
+
+  FULL SAMPLE: d = -0.8180  CI[-0.8344, -0.8019]  t = -121.8  p = 0  n = 339638
+  i.e. the final model is better by 0.818 nats/step (22.8% of the
+  reference loss).
+
+================================================================================================
+[15.3] THE LEARNED PARAMETERS (these are the model)
+================================================================================================
+  quantile                       p0         p1     sigma1         s2
+  p1                         0.1030     0.0346      0.250       6.60
+  p5                         0.1515     0.0542      0.250      10.22
+  p25                        0.2439     0.0882      0.250      17.48
+  p50                        0.3263     0.1156      0.250      23.68
+  p75                        0.4277     0.1467      0.250      31.34
+  p95                        0.6132     0.1990      0.250      45.34
+  p99                        0.7348     0.2408      0.250      59.21
+
+  p0 + p1 should be < 1 and the remainder the body weight:
+  median p0 + p1 = 0.4419  -> body weight 0.5581
+  final alpha = 0.9595
+
+================================================================================================
+[15.4] CALIBRATION: predictive interval coverage (the MPC-relevant object)
+================================================================================================
+  nominal 0.50 -> empirical 0.6905   (ratio 1.381)
+  nominal 0.80 -> empirical 0.7496   (ratio 0.937)
+  nominal 0.90 -> empirical 0.7778   (ratio 0.864)
+  nominal 0.95 -> empirical 0.7996   (ratio 0.842)
+  nominal 0.99 -> empirical 0.8371   (ratio 0.846)
+
+================================================================================================

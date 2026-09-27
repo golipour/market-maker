@@ -94,6 +94,26 @@ def t_logpmf_lattice(y, s, nu):
     return float(np.log(max(hi - lo, 1e-300)))
 
 
+def t_logpmf_gauss_lattice(y, s):
+    """log P(Y = y) for a Gaussian discretised on a unit lattice.
+
+    Same lattice correction as t_logpmf_lattice.  Required, and not merely a
+    sharpness correction: a continuous density evaluated at a lattice point
+    is missing the factor h (the cell width), so at a scale comparable to h
+    it becomes a near-CONSTANT in y -- it assigns the same probability to a
+    1-tick move and a 400-tick move.  That is not a sharp density, it is a
+    flat one, and it is the mechanism behind a phantom 0.8-nat "gain" that
+    was measured and then retracted (see q19_artifact.py).
+    """
+    s = max(float(s), 1e-9)
+    from scipy.special import log_ndtr
+    hi = float(log_ndtr((y + 0.5) / s))
+    lo = float(log_ndtr((y - 0.5) / s))
+    # log(exp(hi) - exp(lo)) computed stably
+    m = max(hi, lo)
+    return float(m + np.log(max(1.0 - np.exp(min(hi, lo) - m), 1e-300)))
+
+
 class HurdleT:
     """Zero-mean hurdle x symmetric Student-t with an ONLINE calibration.
 

@@ -1,0 +1,51 @@
+================================================================================================
+Q18 - THE ARTIFACT, MEASURED; AND THE HONEST FINAL RANKING
+================================================================================================
+
+[18.1] Size of the invalid-density artifact
+  A pmf on the .5 lattice obeys  q(y) = F(y+0.25) - F(y-0.25) <= 1.
+  A continuous density at a point obeys nothing, and for a narrow
+  scale exceeds 1 -- which is illegal as a predictive pmf.
+    sigma= 0.25  max continuous density =   1.5958  (must be <= 1)
+    sigma= 0.50  max continuous density =   0.7979  (must be <= 1)
+    sigma= 1.00  max continuous density =   0.3989  (must be <= 1)
+    sigma= 2.00  max continuous density =   0.1995  (must be <= 1)
+    sigma=10.00  max continuous density =   0.0399  (must be <= 1)
+  So at the learned sigma1 ~ 1.0 the continuous form is legal, but
+  the SCALE ITSELF was mis-estimated because the illegal scores fed
+  back into the online recursions.  Fixing the pmf changed the
+  estimate, and the model got worse -- which is the point: the -0.818
+  was never a real gain.
+
+================================================================================================
+[18.2] HONEST FINAL RANKING (every density lattice-corrected and valid)
+================================================================================================
+  model                                          mean     median        p99
+  REF  iid t4 + EWMA (incumbent shape)         3.5814     4.2562     8.1905
+       iid t2.5 + EWMA                         3.5866     4.2962     7.7769
+  G1   hurdle-t nu=4, global p0                3.5661     4.1250     8.6881
+  G2   hurdle-t nu=2.5, global p0  [FINAL]     3.5211     3.7175     9.1632
+  G3   hurdle-t nu=2.5, no calib               3.5205     3.7495     9.1116
+  G4   hurdle-t nu=2.5, cells(sp,st,oc)        3.5276     3.7327     9.2285
+  G5   hurdle-t nu=3.0, global p0              3.5332     3.9229     8.8636
+
+------------------------------------------------------------------------------------------------
+Paired difference vs the incumbent shape, BY HALF (negative = better)
+------------------------------------------------------------------------------------------------
+  model                                                      1st half                   2nd half
+  REF  iid t4 + EWMA (incumbent shape)     +0.0000[+0.0000,+0.0000] +0.0000[+0.0000,+0.0000]
+       iid t2.5 + EWMA                     +0.0044[+0.0036,+0.0054] +0.0058[+0.0049,+0.0066]
+  G1   hurdle-t nu=4, global p0            -0.0153[-0.0172,-0.0135] -0.0154[-0.0172,-0.0135]
+  G2   hurdle-t nu=2.5, global p0  [FINAL] -0.0649[-0.0705,-0.0591] -0.0559[-0.0613,-0.0507]
+  G3   hurdle-t nu=2.5, no calib           -0.0653[-0.0706,-0.0598] -0.0569[-0.0619,-0.0518]
+  G4   hurdle-t nu=2.5, cells(sp,st,oc)    -0.0579[-0.0655,-0.0497] -0.0501[-0.0572,-0.0426]
+  G5   hurdle-t nu=3.0, global p0          -0.0510[-0.0553,-0.0467] -0.0455[-0.0495,-0.0416]
+
+------------------------------------------------------------------------------------------------
+FULL-SAMPLE test for the recommended model (G2)
+------------------------------------------------------------------------------------------------
+  gain = 0.0603 nats/step (1.68% of the incumbent loss)
+  95% CI on the gain: [0.0562, 0.0645]
+  Diebold-Mariano t = -31.4   p = 9.48e-216   n = 339638
+
+================================================================================================
