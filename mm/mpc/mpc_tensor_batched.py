@@ -1375,6 +1375,31 @@ class MonteCarloMPCTensorBatched:
         total_main_reward_0 = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
         step_reward_0_init = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
 
+        # More epoch-invariant ``h == 0`` state. At the first horizon step the
+        # book, inventory, cash and mid are all still the initial ones, so the
+        # capacity bounds, the VWAP target depths and the upstream VWAP
+        # constants are the same on every epoch. Deriving them once here keeps
+        # the per-epoch path from redoing the identical arithmetic.
+        (
+            bid_quote_size_min_0_t,
+            bid_quote_size_max_0_t,
+            ask_quote_size_min_0_t,
+            ask_quote_size_max_0_t,
+        ) = _quote_capacity_bounds_batched(
+            cash=cash_t_0,
+            inventory=inv_t_0,
+            mid_price=mid_init,
+            optimizer=self.local_optimizer,
+        )
+        sell_vwap_depth_0_t = torch_mod.abs(inv_t_0)
+        buy_vwap_depth_0_t = torch_mod.clamp(cash_t_0 / torch_mod.clamp(mid_init, min=1e-9), min=0.0)
+        buy_vwap_const_t = torch_mod.full(
+            (n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device
+        )
+        sell_vwap_const_t = torch_mod.full(
+            (n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device
+        )
+
         for epoch in range(self.adam_epochs):
             # Cooperative cancellation: ``StrategyRunner`` installs a
             # ``threading.Event`` so a timed-out decide can break out of
@@ -1469,35 +1494,41 @@ class MonteCarloMPCTensorBatched:
                             mid_fallback_t,
                             spread_grid,
                         )
-                    (
-                        bid_quote_size_min_t,
-                        bid_quote_size_max_t,
-                        ask_quote_size_min_t,
-                        ask_quote_size_max_t,
-                    ) = _quote_capacity_bounds_batched(
-                        cash=cash_t,
-                        inventory=inv_t,
-                        mid_price=mid_t,
-                        optimizer=self.local_optimizer,
-                    )
-                    sell_vwap_depth_t = torch_mod.abs(inv_t)
-                    buy_vwap_depth_t = torch_mod.clamp(cash_t / torch_mod.clamp(mid_t, min=1e-9), min=0.0)
                     if h == 0:
-                        # Use upstream VWAPs computed from the initial inventory depth,
-                        # instead of recomputing from the book arrays.
-                        buy_vwap_book_t = torch_mod.full(
-                            (self.n_samples, 1),
-                            float(state.buy_vwap),
-                            dtype=dtype,
-                            device=_device,
+                        # Everything here is a function of the initial book,
+                        # inventory, cash and mid only, so reuse the values
+                        # derived once before the Adam loop.
+                        (
+                            bid_quote_size_min_t,
+                            bid_quote_size_max_t,
+                            ask_quote_size_min_t,
+                            ask_quote_size_max_t,
+                        ) = (
+                            bid_quote_size_min_0_t,
+                            bid_quote_size_max_0_t,
+                            ask_quote_size_min_0_t,
+                            ask_quote_size_max_0_t,
                         )
-                        sell_vwap_book_t = torch_mod.full(
-                            (self.n_samples, 1),
-                            float(state.sell_vwap),
-                            dtype=dtype,
-                            device=_device,
-                        )
+                        sell_vwap_depth_t = sell_vwap_depth_0_t
+                        buy_vwap_depth_t = buy_vwap_depth_0_t
+                        # Use upstream VWAPs computed from the initial inventory
+                        # depth, instead of recomputing from the book arrays.
+                        buy_vwap_book_t = buy_vwap_const_t
+                        sell_vwap_book_t = sell_vwap_const_t
                     else:
+                        (
+                            bid_quote_size_min_t,
+                            bid_quote_size_max_t,
+                            ask_quote_size_min_t,
+                            ask_quote_size_max_t,
+                        ) = _quote_capacity_bounds_batched(
+                            cash=cash_t,
+                            inventory=inv_t,
+                            mid_price=mid_t,
+                            optimizer=self.local_optimizer,
+                        )
+                        sell_vwap_depth_t = torch_mod.abs(inv_t)
+                        buy_vwap_depth_t = torch_mod.clamp(cash_t / torch_mod.clamp(mid_t, min=1e-9), min=0.0)
                         if conditional_price_model and conditional_buy_vwap_t is not None:
                             buy_vwap_book_t = conditional_buy_vwap_t
                             sell_vwap_book_t = conditional_sell_vwap_t
