@@ -92,7 +92,7 @@ def dm_test(diffs, block=None):
         c = float((dm[k:] * dm[:-k]).sum() / n)
         s += 2.0 * (1.0 - k / (lag + 1.0)) * c
     s = max(s, 1e-300)
-    t = float(dm.sum() / np.sqrt(s * n))
+    t = float(d.sum() / np.sqrt(s * n))
     p = float(2.0 * stats.t.sf(abs(t), df=max(1, n - 1)))
     return t, p
 

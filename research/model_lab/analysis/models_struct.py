@@ -54,7 +54,7 @@ class MicropriceAnchor(BaseModel):
 
     def __init__(self, lam=0.995, floor=1.0, start_sd=50.0):
         self.lam, self.floor, self.start_sd = lam, floor, start_sd
-        self.P = np.eye(2) * 1e3
+        self.P = np.eye(2) * 1e-2
         self.b = np.zeros(2)
         self.rs, self.rw = 0.0, 0.0
 
@@ -77,7 +77,72 @@ class MicropriceAnchor(BaseModel):
             return
         r = tgt - float(x @ self.b)
         Px = self.P @ x
-        k = Px / max(self.lam + float(x @ Px), 1e-12)
-        self.b = self.b + k * r
-        self.P = (self.P - np.outer(k, Px)) / self.lam + 1e-3 * np.eye(2)
-        self.rs, self.rw = ewma_update(self.rs, self.rw, r * r, self.lam)
+        k = np.clip(Px / max(self.lam + float(x @ Px), 1e-12), -1.0, 1.0)
+        self.b = np.clip(self.b + k * r, -1e5, 1e5)
+        self.P = (self.P - np.outer(k, Px)) / self.lam + 1e-2 * np.eye(2)
+        self.P = np.clip(self.P, 0.0, 1e6)
+        self.rs, self.rw = ewma_update(self.rs, self.rw, min(r * r, 1e7), self.lam)
+
+
+class QuoteMixture(BaseModel):
+    """THE STRUCTURAL MODEL, derived rather than fitted.
+
+    Phase 1 established the mechanism, so the predictive law is written down
+    from it and then *tested*:
+
+        efficient price   p:      p_{t+1} = p_t + sigma_t * z,   z ~ Student(nu)
+                                     (driftless; the mean is left at 0)
+        quoted mid        m:      m_t = p_t + e_t
+        quote error       e_t:    iid, mean 0, var = eta_t^2 / 3   (uniform on the
+                                     [-eta_t, eta_t] quote interval, eta = half-spread)
+
+    Observation model is exact; the ONLY free parameters are the conditional
+    scale sigma_t and nu.  Scoring dmid_{t+1} requires integrating over the
+    unknown e_t, which is done in closed form for the Gaussian case and by
+    Gauss-Hermite quadrature for the Student case, so the reported NLL is the
+    NLL of the induced law of dmid, not of dmid minus an assumed error.
+
+    Why this is the right object: the production model scores the raw quoted
+    mid with a single Gaussian.  That conflates the innovation of the
+    *efficient price* with the *redraw of the quote*, whose variance is
+    eta^2/3 and is therefore itself a function of the observable spread.
+    """
+    name = "STRUCTURAL: quote-mixture (efficient price + uniform quote error)"
+
+    def __init__(self, lam=0.99, floor=1.0, nu=4.0, start_sd=50.0, nq=7):
+        self.lam, self.floor, self.nu = lam, floor, nu
+        self.start_sd, self.nq = start_sd, nq
+        self.s, self.w = 0.0, 0.0
+        x, wt = np.polynomial.hermite_e.hermegauss(nq)
+        self.qx = x
+        self.qw = wt / np.sqrt(2.0 * np.pi)
+
+    def _eta(self, y, t):
+        e = 0.5 * y["spread"][t]
+        return e if np.isfinite(e) and e > 0 else 50.0
+
+    def logpdf(self, tgt, mu, sd, sd_e):
+        """log int phi_nu((tgt - mu - u) / sd) phi_e(u / sd_e) du, scaled."""
+        from .preq import log_student_t
+        from scipy.special import gammaln
+        nu = self.nu
+        # Gauss-Hermite on the quote error
+        acc = 0.0
+        for i in range(self.nq):
+            u = sd_e * self.qx[i]
+            acc += self.qw[i] * np.exp(log_student_t(tgt - mu - u, 0.0, sd, nu)
+                                        + gammaln(0.5 * (nu + 1.0)) - gammaln(0.5 * nu)
+                                        - 0.5 * np.log(nu * np.pi))
+        return np.log(np.maximum(acc, 1e-300))
+
+    def predict(self, t, y):
+        sig = np.sqrt(self.s / self.w) if self.w > 0 else self.start_sd
+        sig = max(sig, self.floor)
+        eta = self._eta(y, t)
+        return (0.0, sig, eta / np.sqrt(3.0), self.target(y, t))
+
+    def update(self, t, y):
+        x = self.target(y, t)
+        if not np.isfinite(x):
+            return
+        self.s, self.w = ewma_update(self.s, self.w, min(x * x, 1e7), self.lam)

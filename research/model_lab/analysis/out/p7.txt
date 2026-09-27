@@ -1,0 +1,2 @@
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/models_regime.py:134: RuntimeWarning: overflow encountered in exp
+  return float(np.sqrt(max(np.exp(v), self.floor ** 2)))
