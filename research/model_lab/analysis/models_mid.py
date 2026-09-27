@@ -40,7 +40,7 @@ class EWMAStatic(BaseModel):
 
     def predict(self, t, y):
         sd = self.s / self.w if self.w > 0 else self.start_sd
-        return 0.0, max(sd, self.floor), None, self.target(y, t)
+        return 0.0, max(sd, self.floor), self.target(y, t)
 
     def update(self, t, y):
         x = self.target(y, t)
@@ -60,7 +60,7 @@ class StudentEWMA(BaseModel):
 
     def predict(self, t, y):
         sd = self.s / self.w if self.w > 0 else self.start_sd
-        return 0.0, max(sd, self.floor), -1.0, self.target(y, t)
+        return 0.0, max(sd, self.floor), self.target(y, t)
 
     def update(self, t, y):
         x = self.target(y, t)
@@ -73,9 +73,9 @@ class MA1EWMA(BaseModel):
 
     name = "mean+scale: MA(1) RLS + EWMA scale"
 
-    def __init__(self, lam=0.995, floor=1.0, ridge=1e-3, start_sd=50.0):
+    def __init__(self, lam=0.995, floor=1.0, ridge=1e-2, start_sd=50.0):
         self.lam, self.floor, self.ridge = lam, floor, ridge
-        self.P = np.eye(2) * 1e3
+        self.P = np.eye(2) * 1e-2
         self.b = np.zeros(2)
         self.rs, self.rw = 0.0, 0.0
         self.start_sd = start_sd
@@ -87,10 +87,10 @@ class MA1EWMA(BaseModel):
     def predict(self, t, y):
         x = self._x(y, t)
         if x is None:
-            return 0.0, self.start_sd, None, self.target(y, t)
+            return 0.0, self.start_sd, self.target(y, t)
         mu = float(x @ self.b)
         sd = self.rs / self.rw if self.rw > 0 else self.start_sd
-        return mu, max(sd, self.floor), None, self.target(y, t)
+        return mu, max(sd, self.floor), self.target(y, t)
 
     def update(self, t, y):
         x = self._x(y, t)
@@ -99,10 +99,11 @@ class MA1EWMA(BaseModel):
             return
         r = tgt - float(x @ self.b)
         Px = self.P @ x
-        k = Px / max(self.lam + float(x @ Px), 1e-12)
-        self.b = self.b + k * r
+        k = np.clip(Px / max(self.lam + float(x @ Px), 1e-12), -1.0, 1.0)
+        self.b = np.clip(self.b + k * r, -1e5, 1e5)
         self.P = (self.P - np.outer(k, Px)) / self.lam + self.ridge * np.eye(2)
-        self.rs, self.rw = ewma_update(self.rs, self.rw, r * r, self.lam)
+        self.P = np.clip(self.P, 0.0, 1e6)
+        self.rs, self.rw = ewma_update(self.rs, self.rw, min(r * r, 1e7), self.lam)
 
 
 class SpreadNormalised(BaseModel):
@@ -126,7 +127,7 @@ class SpreadNormalised(BaseModel):
     def predict(self, t, y):
         eta = self._eta(y, t)
         c = self.s / self.w if self.w > 0 else self.c
-        return 0.0, max(c * (eta if np.isfinite(eta) else 50.0), self.floor), None, self.target(y, t)
+        return 0.0, max(c * (eta if np.isfinite(eta) else 50.0), self.floor), self.target(y, t)
 
     def update(self, t, y):
         eta = self._eta(y, t)

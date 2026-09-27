@@ -1,0 +1,32 @@
+========================================================================================
+PHASE 2 - PREDICTABILITY LADDER (prequential, paired, block-bootstrap)
+========================================================================================
+N = 347640  warmup = 4000   target: dmid over [t,t+1], IRT ticks
+CI: moving-block bootstrap, 1500 resamples, block ~ n^(1/3)
+
+  L1  EWMA Gaussian sd, zero mean          n= 343639 mean=  8.4441 med=  8.5167 p90=   9.493 p99=  10.210 max=    13.72
+  L2  EWMA Student-t, zero mean            n= 343639 mean=  4.7438 med=  4.7799 p90=   5.268 p99=   5.627 max=     7.38
+  L3  Laplace (mean|x|) EWMA               n= 343639 mean=  6.6583 med=  4.1922 p90=  10.190 p99=  47.643 max=  7242.52
+  L4  Student-t, sd=c*halfspread           n= 343639 mean=  5.8967 med=  6.0440 p90=   7.387 p99=   8.108 max=    10.11
+  L5  Student-t + vol feedback             n= 343639 mean=  4.8368 med=  4.8694 p90=   5.344 p99=   5.689 max=     7.39
+  L6  MA(1) mean + EWMA sd                 n= 343639 mean= 10.9901 med= 11.0506 p90=  12.367 p99=  13.131 max=    14.06
+  L7  microprice-anchored mean             n= 343639 mean=  8.6173 med=  8.6622 p90=   9.541 p99=  10.165 max=    13.17
+  L8  STRUCTURAL quote-mixture             n= 343639 mean=  4.3014 med=  4.1206 p90=   5.109 p99=   7.270 max=    20.98
+
+----------------------------------------------------------------------------------------
+Paired loss difference vs L1 (negative = better); 95% block-bootstrap CI
+----------------------------------------------------------------------------------------
+  L2  EWMA Student-t, zero mean        d=-3.7003 CI[-3.7165,-3.6838] p=0.0e+00  BETTER
+  L3  Laplace (mean|x|) EWMA           d=-1.7858 CI[-1.8833,-1.6757] p=4.1e-276  BETTER
+  L4  Student-t, sd=c*halfspread       d=-2.5475 CI[-2.5658,-2.5291] p=0.0e+00  BETTER
+  L5  Student-t + vol feedback         d=-3.6073 CI[-3.6241,-3.5901] p=0.0e+00  BETTER
+  L6  MA(1) mean + EWMA sd             d=+2.5460 CI[+2.5247,+2.5695] p=0.0e+00  WORSE
+  L7  microprice-anchored mean         d=+0.1732 CI[+0.1648,+0.1821] p=0.0e+00  WORSE
+  L8  STRUCTURAL quote-mixture         d=-4.1427 CI[-4.1677,-4.1168] p=0.0e+00  BETTER
+
+----------------------------------------------------------------------------------------
+Fitted coefficients after the full run
+----------------------------------------------------------------------------------------
+  MA(1):      dmid_t = +6.720 -0.1185*dmid_(t-1)
+  microprice: dmid_t = +6.623 +0.1346*(micro-mid)/(half-spread)
+  (classical order-imbalance theory predicts the slope ~ -0.5..-1.0)

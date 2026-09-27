@@ -1,0 +1,22 @@
+========================================================================================
+PHASE 4 - THE CONDITIONAL SCALE (Student-t nu=4, zero mean, online beta)
+========================================================================================
+N = 347640  warmup = 4000   target: dmid over [t,t+1]
+
+  sd = EWMA (no driver)                    n= 343639 mean=  4.7407 med=  4.7799 p90=   5.268 p99=   5.586 max=     5.63
+  sd = c * half-spread                     n= 343639 mean=  4.2658 med=  4.3962 p90=   5.586 p99=   7.989 max=    19.17
+  sd ~ |dmid_prev| (vol feedback)          n= 343639 mean=  4.7667 med=  4.8072 p90=   5.297 p99=   5.586 max=     5.61
+  sd ~ book staleness                      n= 343639 mean=  4.7396 med=  4.7787 p90=   5.270 p99=   5.586 max=     5.62
+  sd ~ trade occurrence                    n= 343639 mean=  4.7459 med=  4.7855 p90=   5.275 p99=   5.586 max=     5.61
+
+----------------------------------------------------------------------------------------
+Paired loss difference vs the pure-EWMA scale (95% block-bootstrap CI)
+----------------------------------------------------------------------------------------
+  sd = c * half-spread               d=-0.4749 CI[-0.4879,-0.4626]  BETTER
+  sd ~ |dmid_prev| (vol feedback)    d=+0.0259 CI[+0.0253,+0.0265]  worse
+  sd ~ book staleness                d=-0.0011 CI[-0.0015,-0.0006]  BETTER
+  sd ~ trade occurrence              d=+0.0051 CI[+0.0048,+0.0055]  worse
+
+  fitted volatility-feedback beta (EWMA) = +5.8132
+  fitted flow-occurrence beta (EWMA)     = +0.1332
+  fitted staleness beta (EWMA)           = +0.1670

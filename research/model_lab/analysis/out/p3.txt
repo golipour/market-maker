@@ -1,0 +1,19 @@
+====================================================================================
+PHASE 3 - IS THE NEGATIVE MEAN REAL, OR ESTIMATION NOISE?
+====================================================================================
+N = 347640  warmup = 4000   target: dmid over [t,t+1]
+
+  k=0 (zero mean, Student-t)               n= 343639 mean=  4.7437 med=  4.7799 p90=   5.268 p99=   5.626 max=     7.38
+
+Scan of the DERIVED reversion strength k (no free mean parameter):
+  k      mean NLL   paired 95% CI vs k=0         verdict
+  0.00   4.7437     [+0.0000, +0.0000]       not resolved
+  0.05   4.7437     [-0.0000, +0.0000]       not resolved
+  0.10   4.7437     [+0.0000, +0.0000]       worse
+  0.15   4.7437     [+0.0000, +0.0000]       worse
+  0.20   4.7437     [+0.0000, +0.0000]       worse
+  0.30   4.7437     [+0.0000, +0.0000]       worse
+  0.50   4.7437     [+0.0000, +0.0001]       worse
+  0.80   4.7437     [+0.0000, +0.0001]       worse
+
+  best k = 0.00  (mean NLL 4.7437)
