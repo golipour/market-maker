@@ -714,8 +714,8 @@ def soft_fill_batched(
     # Recover market-book level volumes from cumulative market book.
     book_bid_prev = torch.cat([torch.zeros_like(book_cum_bid[:, :1]), book_cum_bid[:, :-1]], dim=1)
     book_ask_prev = torch.cat([torch.zeros_like(book_cum_ask[:, :1]), book_cum_ask[:, :-1]], dim=1)
-    book_bid_level = torch.clamp(book_cum_bid - book_bid_prev, min=0.0)
-    book_ask_level = torch.clamp(book_cum_ask - book_ask_prev, min=0.0)
+    book_bid_level = torch.relu(book_cum_bid - book_bid_prev)
+    book_ask_level = torch.relu(book_cum_ask - book_ask_prev)
 
     # Convert cumulative quoted depth to marginal level sizes. Dynamic bid/ask
     # maxima are already inside the decoder above.
@@ -737,8 +737,8 @@ def soft_fill_batched(
         [torch.zeros_like(depth_ask_sample[:, :1]), depth_ask_sample[:, :-1]],
         dim=1,
     )
-    marg_bid = torch.clamp(depth_bid_sample - depth_bid_prev, min=0.0)
-    marg_ask = torch.clamp(depth_ask_sample - depth_ask_prev, min=0.0)
+    marg_bid = torch.relu(depth_bid_sample - depth_bid_prev)
+    marg_ask = torch.relu(depth_ask_sample - depth_ask_prev)
 
     # Combine market book and our quotes on each level.
     scale = max(0.0, float(depth_scale))
@@ -806,15 +806,15 @@ def soft_fill_batched(
 
     # Market-book next state after market-flow consumption (our resting remainder is canceled).
     consumed_bid_market = torch.minimum(
-        torch.clamp(consumed_bid_level - fill_bid_level, min=0.0),
+        torch.relu(consumed_bid_level - fill_bid_level),
         book_bid_level,
     )
     consumed_ask_market = torch.minimum(
-        torch.clamp(consumed_ask_level - fill_ask_level, min=0.0),
+        torch.relu(consumed_ask_level - fill_ask_level),
         book_ask_level,
     )
-    ob_bids_next = torch.clamp(book_bid_level - consumed_bid_market, min=0.0)
-    ob_asks_next = torch.clamp(book_ask_level - consumed_ask_market, min=0.0)
+    ob_bids_next = torch.relu(book_bid_level - consumed_bid_market)
+    ob_asks_next = torch.relu(book_ask_level - consumed_ask_market)
     mid_exp = mid_price.expand(-1, spread_grid.shape[0])
     cash_bid = (fill_bid_level * (mid_exp - spread_grid.unsqueeze(0))).sum(dim=1)
     cash_ask = (fill_ask_level * (mid_exp + spread_grid.unsqueeze(0))).sum(dim=1)
@@ -856,8 +856,8 @@ def _quote_capacity_bounds_batched(
         else float("inf")
     )
     hard_cap = torch.full_like(cash, max(0.0, hard_cap_value))
-    cash_qty = torch.clamp(cash, min=0.0) / torch.clamp(mid_price, min=1e-12)
-    inventory_qty = torch.clamp(inventory, min=0.0)
+    cash_qty = torch.relu(cash) / torch.clamp(mid_price, min=1e-12)
+    inventory_qty = torch.relu(inventory)
     bid_max = torch.minimum(hard_cap, cash_qty)
     ask_max = torch.minimum(hard_cap, inventory_qty)
     bid_min = torch.zeros_like(bid_max)
@@ -1392,7 +1392,7 @@ class MonteCarloMPCTensorBatched:
             optimizer=self.local_optimizer,
         )
         sell_vwap_depth_0_t = torch_mod.abs(inv_t_0)
-        buy_vwap_depth_0_t = torch_mod.clamp(cash_t_0 / torch_mod.clamp(mid_init, min=1e-9), min=0.0)
+        buy_vwap_depth_0_t = torch_mod.relu(cash_t_0 / torch_mod.clamp(mid_init, min=1e-9))
         buy_vwap_const_t = torch_mod.full(
             (n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device
         )
@@ -1528,7 +1528,7 @@ class MonteCarloMPCTensorBatched:
                             optimizer=self.local_optimizer,
                         )
                         sell_vwap_depth_t = torch_mod.abs(inv_t)
-                        buy_vwap_depth_t = torch_mod.clamp(cash_t / torch_mod.clamp(mid_t, min=1e-9), min=0.0)
+                        buy_vwap_depth_t = torch_mod.relu(cash_t / torch_mod.clamp(mid_t, min=1e-9))
                         if conditional_price_model and conditional_buy_vwap_t is not None:
                             buy_vwap_book_t = conditional_buy_vwap_t
                             sell_vwap_book_t = conditional_sell_vwap_t
@@ -1617,7 +1617,7 @@ class MonteCarloMPCTensorBatched:
                             mech_buy_shape=mech_buy_shape_ref,
                             mech_sell_shape=mech_sell_shape_ref,
                             total_flow=buy_h + sell_h,
-                            buy_depth=torch_mod.clamp(cash_next / torch_mod.clamp(mid_next, min=1e-9), min=0.0),
+                            buy_depth=torch_mod.relu(cash_next / torch_mod.clamp(mid_next, min=1e-9)),
                             sell_depth=torch_mod.abs(inv_next),
                             innovations=innov_h,
                         )
