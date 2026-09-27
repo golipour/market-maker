@@ -1,0 +1,48 @@
+==============================================================================
+Q1 - SERIAL DEPENDENCE OF THE TRANSITION LAW
+==============================================================================
+N = 347640
+standardised innovation: n=347637  mean=+0.0033  sd=1.0398  (want 0, ~0.7 for t4)
+
+[A] Unconditional ACF of dmid (raw move, no scaling)
+    lag 1    -0.2180   (n=347638)
+    lag 2    -0.0482   (n=347637)
+    lag 3    -0.0064   (n=347636)
+    lag 5    -0.0076   (n=347634)
+    lag 10   +0.0008   (n=347629)
+    lag 20   -0.0082   (n=347619)
+    lag 60   +0.0011   (n=347579)
+
+[B] ACF of the STANDARDISED innovation  dmid_t / sd_t
+    <- this is exactly the incumbent's iid assumption.  Want ~0.
+    lag 1    -0.1893   t= -111.6  p=0   (n=347636)
+    lag 2    -0.0537   t=  -31.7  p=4.89e-220   (n=347635)
+    lag 3    -0.0067   t=   -3.9  p=8.63e-05   (n=347634)
+    lag 5    +0.0031   t=   +1.8  p=0.0661   (n=347632)
+    lag 10   +0.0010   t=   +0.6  p=0.541   (n=347627)
+    lag 20   -0.0005   t=   -0.3  p=0.767   (n=347617)
+    lag 60   +0.0020   t=   +1.2  p=0.228   (n=347577)
+
+[C] ACF of the SQUARED standardised innovation
+    <- tests whether the EWMA scale actually tracks conditional variance
+    lag 1    +0.0421   (n=347636)
+    lag 2    +0.0246   (n=347635)
+    lag 3    +0.0203   (n=347634)
+    lag 5    +0.0125   (n=347632)
+    lag 10   +0.0146   (n=347627)
+    lag 20   +0.0042   (n=347617)
+    lag 60   -0.0011   (n=347577)
+
+[D] Volatility-of-volatility: is the scale itself predictable?
+    If |z_t| is predictable from |z_{t-1}|, the scale should be a
+    filtered quantity, not a plain EWMA.
+    ACF(|z|) lag 1    +0.1812   (n=347636)
+    ACF(|z|) lag 2    +0.1332   (n=347635)
+    ACF(|z|) lag 3    +0.0977   (n=347634)
+    ACF(|z|) lag 5    +0.0754   (n=347632)
+
+[E] Decay of the squared-innovation autocorrelation (GARCH signature)
+    ACF1(z^2)=+0.0421  half-life to <50% of that: 2 steps
+    sum(ACF) over 120 lags = +0.217  (=> integrated persistence)
+
+==============================================================================

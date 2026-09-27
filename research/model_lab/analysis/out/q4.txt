@@ -1,0 +1,32 @@
+====================================================================================
+Q4 - IS THE NEGATIVE ACF A MEAN EFFECT OR A SCALE ARTIFACT?
+====================================================================================
+
+[4.1] The scale is SMOOTH in t, which is the mechanical source.
+  |sd_t - sd_{t-1}| : median=0.2199  mean=0.3602  (vs median sd 44.49)
+  -> relative change per step: median 0.4942%
+
+[4.2] Decompose ACF(z) into the two mechanisms that create it.
+  ACF1(z) = 2*Cov(z_t,z_{t-1}) because sd(z)=1.
+  raw x:      ACF1 = -0.2180
+  z = x/sd:   ACF1 = -0.1893
+  1/sd alone: ACF1 = +0.9861   <- the ARTEFACT, no market content
+  sd alone:   ACF1 = +0.9990
+
+  => the sign flip is largely produced by dividing by a smooth sd.
+
+[4.3] THE DECISIVE TEST: how much variance does the lag-1 value explain?
+  regress  x_t = 0.167747 + -0.218008 * x_{t-1}   R^2 = 0.04753  p=0
+  n = 347638
+
+  Implied nats/step for a Gaussian with the optimal linear predictor:
+    sigma^2_uncond=2726.8282   sigma^2_resid=2597.2288
+    gain = 0.5*log(s2/resid) = 0.02435 nats/step
+  This is the CEILING on any linear mean model, and D2 achieved -0.0004.
+
+[4.4] Same test on the CONTINUOUS part only (zeros excluded)
+Traceback (most recent call last):
+  File "/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/q4_residual.py", line 100, in <module>
+    mm2 = both & np.isfinite(x[1:]) & np.isfinite(x[:-1])
+          ~~~~~^~~~~~~~~~~~~~~~~~~~
+ValueError: operands could not be broadcast together with shapes (347640,) (347639,) 

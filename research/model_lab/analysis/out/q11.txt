@@ -1,0 +1,27 @@
+====================================================================================
+Q11 - PIT CALIBRATION OF THE WINNER (B: hurdle-t, nu=2.5, alpha online)
+====================================================================================
+
+[11.1] Overall PIT uniformity (n = 339638)
+  mean u = 0.5700   (want 0.5)
+  KS test vs Uniform(0,1): D=0.16908  p=0
+  decile counts (want 33964 each):
+    472 11657 37328 47741 37742 41697 68928 37304 17152 39617
+  chi2/9 = 11262.80  (want ~1)
+
+[11.2] PIT by branch
+  zero move  (y==0)  n= 117634  mean=0.3972  KS D=0.29248 p=0  frac in [0,0.35] = 0.4257
+  non-zero move      n= 222004  mean=0.6615  KS D=0.30748 p=0  frac in [0,0.35] = 0.1055
+
+[11.3] The zero branch is the weak point: PIT values for y==0 are
+  concentrated below p0, so their uniformity is governed entirely by
+  how well p0 is estimated.  Mean PIT | y==0 should be ~p0/2.
+  mean PIT on the zero branch = 0.3972  (p0 ~ 0.346, so ~0.173 expected)
+
+[11.4] Coverage of the predictive INTERVAL (the MPC-relevant object)
+  nominal 0.50 -> empirical 0.0089  (ratio 0.018)
+  nominal 0.80 -> empirical 0.0143  (ratio 0.018)
+  nominal 0.90 -> empirical 0.0161  (ratio 0.018)
+  nominal 0.95 -> empirical 0.0171  (ratio 0.018)
+
+====================================================================================

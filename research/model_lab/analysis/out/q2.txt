@@ -1,0 +1,34 @@
+/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/models_dep.py:251: RuntimeWarning: overflow encountered in scalar divide
+  self.pphi = (self.pphi + up * up) / self.lam_phi
+==========================================================================================
+Q2 - SERIAL-DEPENDENCE LADDER (prequential, paired, block bootstrap)
+==========================================================================================
+N = 347640  warmup = 8000  target: dmid over [t, t+1], IRT ticks
+  D0 iid Student-t, EWMA scale             n= 339639 mean=  3.2291 med=  2.9699 p90=   4.346 p99=   6.733 max=    20.00
+  D1 + hurdle at zero (online p0)          n= 339639 mean=  2.3341 med=  2.4261 p90=   3.983 p99=   6.269 max=    19.71
+  D2 + ARCH mean (fixed phi)               n= 339639 mean=  2.3337 med=  2.4261 p90=   3.982 p99=   6.267 max=    19.71
+  D3 + GARCH scale from |shock|            n= 339639 mean=  3.6524 med=  1.6365 p90=  10.637 p99=  14.180 max=    27.65
+  D4 ARCH mean + GARCH scale + hurdle (phi online) n= 339639 mean=  3.6548 med=  1.6590 p90=  10.593 p99=  14.143 max=    27.66
+  D4 ARCH mean + GARCH scale + hurdle (phi online) n= 339639 mean=  3.6524 med=  1.6365 p90=  10.637 p99=  14.180 max=    27.65
+
+------------------------------------------------------------------------------------------
+Paired difference vs D0 iid Student-t, EWMA scale  (negative = better)
+------------------------------------------------------------------------------------------
+  D0 iid Student-t, EWMA scale                   d=+0.0000 CI[+0.0000,+0.0000]  t=    +0.0 p=1  not resolved
+  D1 + hurdle at zero (online p0)                d=-0.8950 CI[-0.9106,-0.8814]  t=  -161.5 p=0  BETTER
+  D2 + ARCH mean (fixed phi)                     d=-0.8954 CI[-0.9109,-0.8818]  t=  -161.6 p=0  BETTER
+  D3 + GARCH scale from |shock|                  d=+0.4233 CI[+0.3883,+0.4564]  t=   +30.7 p=4.05e-206  worse
+  D4 ARCH mean + GARCH scale + hurdle (phi online) d=+0.4233 CI[+0.3883,+0.4564]  t=   +30.7 p=4.05e-206  worse
+
+------------------------------------------------------------------------------------------
+CALIBRATION (PIT on each model's own predictive law)
+------------------------------------------------------------------------------------------
+  model                                            z mean     z sd    80% cov
+  D0 iid Student-t, EWMA scale                    +0.0034   1.0369     0.8529
+  D1 + hurdle at zero (online p0)                 +0.0034   1.0369     0.8529
+  D2 + ARCH mean (fixed phi)                      +0.0034   1.0361     0.8530
+  D3 + GARCH scale from |shock|                   +0.0172   6.8570     0.6622
+  D4 ARCH mean + GARCH scale + hurdle (phi online)  +0.0172   6.8570     0.6622
+  want z mean ~ 0, z sd ~ 1, 80% cov ~ 0.80
+
+==========================================================================================

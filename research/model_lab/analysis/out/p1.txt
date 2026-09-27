@@ -55,8 +55,5 @@ N = 347640 contiguous 10s buckets (40.2 days)
 
 [1.10] Zero-mass of the move: a discrete hurdle must be modelled explicitly
   P(dmid=0) = 0.3507
-Traceback (most recent call last):
-  File "/Users/teanab/Documents/projects/market-maker/research/model_lab/analysis/p1_measurement.py", line 128, in <module>
-    % (np.mean(db[nz == 0] == 0), np.mean(da[nz == 0] == 0)))
-               ~~^^^^^^^^^
-IndexError: boolean index did not match indexed array along axis 0; size of axis is 347640 but size of corresponding boolean axis is 347639
+  n(dmid=0) = 121923
+  Among dmid==0: P(bid also unchanged)=0.9734 P(ask also unchanged)=0.9734

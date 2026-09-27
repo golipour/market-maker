@@ -1,0 +1,58 @@
+================================================================================================
+Q10 - FINAL MODEL, OUT-OF-SAMPLE CONFIRMATION
+================================================================================================
+
+================================================================================================
+  REF  iid t4 + EWMA scale                 mean=  3.5814 med= 4.2562 p90=  5.968 p99=  8.190  alpha=n/a
+  REF+ lattice-consistent t4               mean=  3.5814 med= 4.2562 p90=  5.968 p99=  8.190  alpha=n/a
+  A   hurdle-t nu=4 global                 mean=  3.5661 med= 4.1250 p90=  6.150 p99=  8.688  alpha=0.985
+  B   hurdle-t nu=2.5 global               mean=  3.5211 med= 3.7175 p90=  6.846 p99=  9.163  alpha=0.959
+  C   B + cells (sp,stale,trade) [FINAL]   mean=  3.5276 med= 3.7327 p90=  6.807 p99=  9.228  alpha=0.930
+  D   C without calibration                mean=  3.5312 med= 3.7833 p90=  6.750 p99=  9.222  alpha=1.000
+  E   B frozen at 0.6x scale (sharp)       mean=  3.5794 med= 3.3215 p90=  7.780 p99= 10.441  alpha=1.000
+  F   B frozen at 1.4x scale (safe)        mean=  3.5529 med= 4.0891 p90=  6.229 p99=  8.465  alpha=1.000
+
+------------------------------------------------------------------------------------------------
+Paired difference vs REF  iid t4 + EWMA scale, BY HALF (negative = better)
+------------------------------------------------------------------------------------------------
+  model                                                      1st half                   2nd half
+  REF  iid t4 + EWMA scale                 +0.0000[+0.0000,+0.0000] +0.0000[+0.0000,+0.0000]
+  REF+ lattice-consistent t4               +0.0000[+0.0000,+0.0000] +0.0000[+0.0000,+0.0000]
+  A   hurdle-t nu=4 global                 -0.0153[-0.0172,-0.0135] -0.0154[-0.0173,-0.0134]
+  B   hurdle-t nu=2.5 global               -0.0649[-0.0705,-0.0590] -0.0559[-0.0610,-0.0504]
+  C   B + cells (sp,stale,trade) [FINAL]   -0.0579[-0.0657,-0.0501] -0.0501[-0.0576,-0.0426]
+  D   C without calibration                -0.0530[-0.0608,-0.0452] -0.0477[-0.0553,-0.0404]
+  E   B frozen at 0.6x scale (sharp)       -0.0118[-0.0225,-0.0007] +0.0072[-0.0032,+0.0178]
+  F   B frozen at 1.4x scale (safe)        -0.0279[-0.0353,-0.0209] -0.0293[-0.0362,-0.0227]
+
+------------------------------------------------------------------------------------------------
+CALIBRATION BY HALF  (want z sd ~ 1, 80% cov ~ 0.80)
+------------------------------------------------------------------------------------------------
+  model                                                  1st half               2nd half
+  REF  iid t4 + EWMA scale                  sd=1.044 cov=0.857  sd=1.030 cov=0.849
+  REF+ lattice-consistent t4                sd=1.044 cov=0.857  sd=1.030 cov=0.849
+  A   hurdle-t nu=4 global                  sd=1.208 cov=0.837  sd=1.200 cov=0.825
+  B   hurdle-t nu=2.5 global                sd=1.960 cov=0.773  sd=1.946 cov=0.761
+  C   B + cells (sp,stale,trade) [FINAL]    sd=1.970 cov=0.780  sd=1.965 cov=0.765
+  D   C without calibration                 sd=1.897 cov=0.788  sd=1.910 cov=0.772
+  E   B frozen at 0.6x scale (sharp)        sd=3.162 cov=0.735  sd=3.183 cov=0.719
+  F   B frozen at 1.4x scale (safe)         sd=1.355 cov=0.828  sd=1.364 cov=0.813
+
+------------------------------------------------------------------------------------------------
+PIT DECILE CALIBRATION of the FINAL model (uniformity check)
+------------------------------------------------------------------------------------------------
+  PIT deciles of the standardised residual:
+    -1.595 -0.126 -0.017 0.000 0.000 0.000 0.022 0.148 1.641
+  (a uniform PIT would be flat 0.1..0.9; these are the RAW residual
+   quantiles, so a good model tracks the fat-tailed distribution.)
+
+  coverage ladder (standardised residual, |z| quantiles):
+    nominal 0.50 -> empirical 0.5000
+    nominal 0.80 -> empirical 0.8000
+    nominal 0.90 -> empirical 0.9000
+    nominal 0.95 -> empirical 0.9500
+    nominal 0.99 -> empirical 0.9900
+
+  final alpha = 0.9300
+
+================================================================================================

@@ -1,0 +1,53 @@
+========================================================================================
+Q12 - IS THE CONTINUOUS BRANCH CALIBRATED?
+========================================================================================
+
+[12.1] Global vs conditional p0: which predicts the zero better?
+
+  global p0 (hurdle-only log loss = -0.61107, alpha=0.959)
+    pred p0                realised P(y=0)        n
+      0.1448               0.1760               33964
+      0.2052               0.2220               33964
+      0.2437               0.2542               33964
+      0.2775               0.2843               33963
+      0.3098               0.3112               33964
+      0.3437               0.3390               33964
+      0.3816               0.3720               33963
+      0.4285               0.4149               33964
+      0.4968               0.4802               33964
+      0.6321               0.6098               33964
+
+  cell p0 (hurdle-only log loss = -0.61127, alpha=0.959)
+    pred p0                realised P(y=0)        n
+      0.1355               0.1620               33964
+      0.2015               0.2191               33964
+      0.2432               0.2542               33964
+      0.2792               0.2849               33963
+      0.3136               0.3149               33964
+      0.3488               0.3440               33964
+      0.3896               0.3823               33963
+      0.4380               0.4285               33964
+      0.5003               0.4831               33964
+      0.6166               0.5905               33964
+
+[12.2] The CONTINUOUS branch alone: is it calibrated?
+  n = 222004 non-zero moves
+  sd of the standardised residual = 2.4158
+    nominal 0.50 -> empirical 0.5704  (ratio 1.141)
+    nominal 0.80 -> empirical 0.6976  (ratio 0.872)
+    nominal 0.90 -> empirical 0.7794  (ratio 0.866)
+    nominal 0.95 -> empirical 0.8640  (ratio 0.909)
+    nominal 0.99 -> empirical 0.9845  (ratio 0.994)
+
+[12.3] Is the non-zero move distribution SYMMETRIC?
+  mean/sd = +0.00836
+  P(dmid<0 | dmid!=0) = 0.4846   (want 0.5000)
+  kurtosis of the standardised residual = 85.495
+  (t2.5 has excess kurtosis 330.432; Gaussian has 3.0)
+
+[12.4] Does the conditional p0 reduce the hurdle log loss?
+  global p0 hurdle loss = -0.611067
+  cell   p0 hurdle loss = -0.611266
+  difference            = -0.000200 (negative = conditional is better)
+
+========================================================================================

@@ -5,6 +5,7 @@ Single MPC implementation; MPCOptimizer protocol and helpers live here.
 
 from __future__ import annotations
 
+import functools
 import math
 import time
 from dataclasses import dataclass
@@ -439,6 +440,32 @@ def _spread_grid_tensor(
     return torch_mod.minimum(grid, torch_mod.tensor(float(spread_max), dtype=dtype, device=device))
 
 
+@functools.lru_cache(maxsize=8)
+def _spread_grid_cached(
+    grid_levels: int,
+    spread_step: float,
+    spread_max: float,
+    device_str: str,
+    dtype_name: str,
+) -> Any:
+    """Memoized ``_spread_grid_tensor`` for repeated decides.
+
+    The spread grid is a pure function of optimizer configuration, which never
+    changes across decides, yet it was rebuilt on every call. Caching removes
+    one ``arange`` + ``tensor`` + ``minimum`` per decide from the setup path.
+
+    The grid is treated as read-only by every consumer (it is only read,
+    broadcast and sliced), so handing the same tensor out is safe.
+    """
+    import torch as _torch
+
+    device = _torch.device(device_str)
+    dtype = getattr(_torch, dtype_name)
+    return _spread_grid_tensor(
+        _torch, grid_levels, spread_step, device, dtype, spread_max=spread_max
+    )
+
+
 def _book_cumulative_from_ob_rel(
     ob_rel: OrderbookRelative,
     grid_levels: int,
@@ -448,27 +475,35 @@ def _book_cumulative_from_ob_rel(
 ) -> tuple[Any, Any]:
     """Build cumulative qty tensors on quote spread buckets through each bucket upper edge."""
     torch_mod = _get_torch()
+    step = max(1e-12, float(spread_step))
     bid_cum = torch_mod.zeros(grid_levels, dtype=dtype, device=device)
     ask_cum = torch_mod.zeros(grid_levels, dtype=dtype, device=device)
-    step = max(1e-12, float(spread_step))
     b_sum = 0.0
     for (spread, qty) in sorted(ob_rel.bids, key=lambda x: x[0]):
         idx = _spread_bucket_index(float(spread), step, grid_levels)
         if 0 <= idx < grid_levels:
             b_sum += float(qty)
             bid_cum[idx] = b_sum
-    for i in range(1, grid_levels):
-        if bid_cum[i].item() == 0:
-            bid_cum[i] = bid_cum[i - 1]
     a_sum = 0.0
     for (spread, qty) in sorted(ob_rel.asks, key=lambda x: x[0]):
         idx = _spread_bucket_index(float(spread), step, grid_levels)
         if 0 <= idx < grid_levels:
             a_sum += float(qty)
             ask_cum[idx] = a_sum
-    for i in range(1, grid_levels):
-        if ask_cum[i].item() == 0:
-            ask_cum[i] = ask_cum[i - 1]
+    # Forward-fill empty buckets. The book is stored as a running total written
+    # only at populated buckets, so an empty bucket inherits the previous level.
+    # Only *exact* zeros are filled: a populated bucket can legitimately hold a
+    # smaller cumulative value than its predecessor, and must not be raised.
+    # (A ``cummax`` would clamp those too and is therefore NOT equivalent.)
+    # Building the index list in Python and indexing once keeps the loop off
+    # the tensor, removing one ``.item()`` host sync per level per side.
+    if grid_levels > 1:
+        for cum in (bid_cum, ask_cum):
+            zero_idx = (cum == 0).nonzero().flatten().tolist()
+            for i in zero_idx:
+                if i == 0:
+                    continue
+                cum[i] = cum[i - 1]
     return bid_cum, ask_cum
 
 
@@ -1131,13 +1166,12 @@ class MonteCarloMPCTensorBatched:
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
             state.ob_rel, self.grid_levels, self.spread_step, _device, dtype
         )
-        spread_grid = _spread_grid_tensor(
-            torch_mod,
-            self.grid_levels,
-            self.spread_step,
-            _device,
-            dtype,
-            spread_max=self.spread_max,
+        spread_grid = _spread_grid_cached(
+            int(self.grid_levels),
+            float(self.spread_step),
+            float(self.spread_max),
+            str(_device),
+            str(dtype).replace("torch.", ""),
         )
         mid_0 = float(state.mid)
         inv_0 = float(state.inventory)

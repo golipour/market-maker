@@ -124,9 +124,9 @@ for nm, a in [("|dmid|", np.abs(y['dmid'])), ("dmid^2", y['dmid'] ** 2), ("|dmid
 print("\n[1.10] Zero-mass of the move: a discrete hurdle must be modelled explicitly")
 fin = np.isfinite(y['dmid'])
 print("  P(dmid=0) = %.4f" % np.mean(y['dmid'][fin] == 0))
-# db/da are lagged differences of length N-1 (dmid is length N), so index the
-# dmid==0 mask against the first N-1 entries to keep the shapes aligned.
-z = fin[:-1] & (y['dmid'][:-1] == 0)
+# dmid / dbid / dask all share the length-N contract (NaN-padded at index 0),
+# so the zero-move mask aligns directly with db and da.
+z = fin & (y['dmid'] == 0)
 print("  n(dmid=0) = %d" % int(z.sum()))
 print("  Among dmid==0: P(bid also unchanged)=%.4f P(ask also unchanged)=%.4f"
       % (np.mean(db[z] == 0), np.mean(da[z] == 0)))

@@ -19,7 +19,8 @@ import gzip
 import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-CSV = os.path.join(REPO, "research", "model_lab", "nobitex_USDT_IRT_10000ms.csv")
+LAB = os.path.join(REPO, "research", "model_lab")
+CSV = os.path.join(LAB, "dataset", "nobitex_USDT_IRT_10000ms.csv")
 
 NUM_COLS = [
     "t_start_ms", "t_end_ms", "interval_ms",
