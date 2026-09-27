@@ -52,7 +52,7 @@ from mm.mpc.warm_start import (
 )
 from mm.mpc.mpc_state import SigmoidMixtureAction, State
 from mm.core.wallet import portfolio_wealth
-from mm.mpc.torch_device import resolve_torch_device
+from mm.mpc.torch_device import apply_torch_threads, resolve_torch_device
 from mm.mpc.state_tensor import (
     effective_depth_bid_tensor,
     effective_depth_ask_tensor,
@@ -278,6 +278,30 @@ def _inv_softplus_np(y: float) -> float:
     if y_f > 50.0:
         return y_f
     return float(np.log(np.expm1(y_f)))
+
+
+SUPPORTED_TENSOR_DTYPES: tuple[str, ...] = ("float64", "float32")
+
+
+def _resolve_tensor_dtype(torch_mod: Any, name: str | None) -> Any:
+    """Map a configured dtype name to a torch dtype.
+
+    ``float64`` remains the default because it is the validated reference
+    behavior. ``float32`` roughly halves memory bandwidth for the rollout,
+    which is the dominant optimizer cost on CPU, but is only safe for live
+    quoting after deterministic replay parity has been demonstrated.
+
+    An unknown value is rejected rather than silently falling back, so a
+    typo in configuration can never quietly change numerics.
+    """
+    key = str(name or "float64").strip().lower()
+    if key in ("float64", "double", "f64"):
+        return torch_mod.float64
+    if key in ("float32", "float", "f32"):
+        return torch_mod.float32
+    raise ValueError(
+        f"unsupported tensor_dtype {name!r}; expected one of {', '.join(SUPPORTED_TENSOR_DTYPES)}"
+    )
 
 
 def _epoch_needs_metrics(epoch: int, last_epoch: int, every: int) -> bool:
@@ -856,6 +880,8 @@ class MonteCarloMPCTensorBatched:
         cumulative_qty_cap_at_spread_max: float | int | None = None,
         objective_normalize: dict[str, Any] | ObjectiveNormalizeParams | None = None,
         optimizer_diagnostics_every: int = 1,
+        tensor_dtype: str = "float64",
+        torch_threads: int | str | None = None,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -874,6 +900,15 @@ class MonteCarloMPCTensorBatched:
         # only the first, last, sampled, and best epochs. The best epoch is
         # always captured because it drives the published ``best`` snapshot.
         self.optimizer_diagnostics_every = max(1, int(optimizer_diagnostics_every))
+        # Validated eagerly so a bad value fails at construction rather than
+        # on the first live decision.
+        self.tensor_dtype = str(tensor_dtype or "float64").strip().lower()
+        _resolve_tensor_dtype(torch, self.tensor_dtype)
+        # The rollout tensors are small, so torch's default intra-op fan-out
+        # costs more in synchronization than it recovers. Measured at
+        # N=64, H=4, E=40: 1 thread 178.7ms, 2 threads 186.7ms,
+        # 4 threads 195.1ms, 8 threads 215.9ms.
+        self.torch_threads = apply_torch_threads(torch_threads)
         self.device = device
         if isinstance(warm_start, WarmStartParams):
             self.warm_start = warm_start
@@ -1008,6 +1043,9 @@ class MonteCarloMPCTensorBatched:
     def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
         return self._last_diagnostics
 
+    def _resolve_dtype(self, torch_mod: Any) -> Any:
+        return _resolve_tensor_dtype(torch_mod, self.tensor_dtype)
+
     def normalize_terminal_objective(
         self,
         objective: Any,
@@ -1082,7 +1120,7 @@ class MonteCarloMPCTensorBatched:
             _device = resolve_torch_device(None)
         else:
             _device = resolve_torch_device(str(self.device).strip() or None)
-        dtype = torch_mod.float64
+        dtype = self._resolve_dtype(torch_mod)
 
         book_cum_bid, book_cum_ask = _book_cumulative_from_ob_rel(
             state.ob_rel, self.grid_levels, self.spread_step, _device, dtype
@@ -1815,6 +1853,8 @@ class MonteCarloMPCTensorBatched:
                 "spread_step": self.spread_step,
                 "vwap_depth": vwap_depth,
                 "reference_price_source": self.reference_price_source,
+                "tensor_dtype": self.tensor_dtype,
+                "optimizer_diagnostics_every": self.optimizer_diagnostics_every,
                 "objective_normalize": self.objective_normalize.as_mapping(),
                 "warm_start": self.warm_start.as_mapping(),
                 "warm_start_resolved": warm_meta,

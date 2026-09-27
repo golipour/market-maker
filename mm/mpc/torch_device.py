@@ -62,3 +62,53 @@ def _cuda_runtime_ok(torch_mod) -> bool:
         return bool(torch_mod.isfinite(x + 1.0).all().item())
     except Exception:
         return False
+
+
+def resolve_torch_threads(explicit: int | str | None = None) -> int | None:
+    """
+    Resolve the intra-op thread count for the MPC rollout.
+
+    The rollout tensors are small (a few thousand elements), so the default
+    OpenMP fan-out costs more in synchronization than it recovers in parallel
+    work. Measured on the Bitwana optimizer at ``N=64, H=4, E=40`` on CPU:
+
+    ============  ============
+    threads       wall time
+    ============  ============
+    1             178.7 ms
+    2             186.7 ms
+    4 (default)   195.1 ms
+    8             215.9 ms
+    ============  ============
+
+    Extra threads made it monotonically slower, so the default is pinned to a
+    single thread unless ``MM_TORCH_THREADS`` overrides it.
+
+    Returns ``None`` when no override applies, meaning "leave torch as-is".
+    """
+    raw: str | int | None = explicit
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        raw = os.environ.get("MM_TORCH_THREADS", "").strip()
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
+def apply_torch_threads(explicit: int | str | None = None) -> int | None:
+    """Apply ``resolve_torch_threads`` to the global torch thread pool."""
+    import torch as torch_mod
+
+    threads = resolve_torch_threads(explicit)
+    if threads is None:
+        return None
+    try:
+        torch_mod.set_num_threads(threads)
+    except Exception:
+        return None
+    return threads
