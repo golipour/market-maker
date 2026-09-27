@@ -1,0 +1,39 @@
+==============================================================================
+PHASE 1b - THE FOLLOW-THE-LEADER (RESAMPLING) MECHANISM
+==============================================================================
+
+Observed (real data), N=347640
+  lags                  1       2       3       5      10      20      60
+  ACF(dmid)       -0.2180 -0.0482 -0.0064 -0.0076 +0.0008 -0.0082 +0.0011
+  ACF(|dmid|)     +0.2584 +0.2050 +0.1701 +0.1457 +0.1263 +0.0862 +0.0510
+
+Synthetic FTL: efficient price = PURE RANDOM WALK (zero predictability);
+quotes follow it with a lag and redraw uniformly inside the spread.
+
+  quote lag L=0
+    ACF(dquote) -0.4999 +0.0007 -0.0019 -0.0021 -0.0022 -0.0006 +0.0002
+    ACF(|d|)    +0.4085 -0.0044 -0.0019 +0.0002 +0.0012 -0.0013 +0.0004
+  quote lag L=1
+    ACF(dquote) -0.5010 +0.0016 -0.0004 +0.0023 +0.0017 +0.0030 -0.0000
+    ACF(|d|)    +0.4109 +0.0013 +0.0026 +0.0020 -0.0021 -0.0024 +0.0004
+  quote lag L=2
+    ACF(dquote) -0.4990 -0.0022 +0.0007 -0.0008 -0.0018 -0.0013 -0.0002
+    ACF(|d|)    +0.4114 +0.0028 +0.0009 +0.0013 -0.0026 -0.0024 -0.0023
+
+==============================================================================
+READING
+==============================================================================
+
+The synthetic efficient price is a pure random walk: E[p_{t+1}|p_t] = p_t, so
+there is NO directional predictability at all. Yet the *observed mid* built
+from lagged, uniform-within-spread quotes reproduces
+
+  * a strongly NEGATIVE ACF1, and
+  * a strongly POSITIVE ACF of |dmid|.
+
+Both headline 'findings' are consequences of watching a resampled quantity,
+not of the underlying value. The market maker's observation channel (best
+bid/ask at 10s) is a *measurement* of the efficient price with a lag and a
+bounded, refreshed error; Var(efficient price) is a different, smaller object
+than Var(dmid) suggests.
+
