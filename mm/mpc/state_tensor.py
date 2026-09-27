@@ -233,6 +233,76 @@ def _depth_from_materialized(L: "Tensor", sigmoid_values: "Tensor") -> "Tensor":
     return (L.unsqueeze(1) * sigmoid_values.unsqueeze(0)).sum(dim=-1)
 
 
+def _materialize_side(
+    params: "Tensor",
+    *,
+    side: str,
+    n_components: int,
+    use_softplus: bool,
+    l_param: "LParamConfig | None",
+    quote_size_min: "Tensor | float | None" = None,
+    quote_size_max: "Tensor | float | None" = None,
+) -> "tuple[Tensor, Tensor, Tensor]":
+    """Return ``(L, k, x0)`` for one side.
+
+    Factored out so that callers needing the depth curve at several spreads
+    (notably the executable depth, which evaluates the curve over the spread
+    grid *and* at zero spread) materialize the action parameters only once
+    instead of once per evaluation.
+    """
+    from mm.mpc.l_param import materialize_side_torch, positive_L_torch
+
+    torch = _get_torch()
+    base = 3 * n_components if side == "ask" else 0
+    if l_param is not None:
+        return materialize_side_torch(
+            params,
+            side_off=base,
+            n_components=n_components,
+            l_param=l_param,
+            quote_size_min=quote_size_min,
+            quote_size_max=quote_size_max,
+        )
+    L_raw = params[base + 0 : base + 3 * n_components : 3]
+    k_raw = params[base + 1 : base + 3 * n_components : 3]
+    x0 = params[base + 2 : base + 3 * n_components : 3]
+    L = positive_L_torch(
+        L_raw,
+        k_raw,
+        x0,
+        params=params,
+        side_off=base,
+        l_param=l_param,
+        use_softplus=use_softplus,
+    )
+    k = _softplus_positive(k_raw) if use_softplus else k_raw
+    return L, k, x0
+
+
+def _depth_at_spreads(
+    L: "Tensor",
+    k: "Tensor",
+    x0: "Tensor",
+    spread: "Tensor",
+    *,
+    side: str,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
+) -> "Tensor":
+    """Evaluate the depth curve for already-materialized ``(L, k, x0)``."""
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    torch = _get_torch()
+    curve_spread = curve_spread_for_market_spread(
+        spread,
+        side=side,
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
+    z = (curve_spread.unsqueeze(-1) - x0) * k
+    return _depth_from_materialized(L, torch.sigmoid(z))
+
+
 def effective_depth_bid_tensor(
     params: "Tensor",
     spread: "Tensor",
@@ -246,17 +316,31 @@ def effective_depth_bid_tensor(
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
     torch = _get_torch()
-    depth_kw = {
-        "use_softplus": use_softplus,
-        "l_param": l_param,
-        "quote_size_min": quote_size_min,
-        "quote_size_max": quote_size_max,
-        "mid_price": mid_price,
-        "reservation_r_offset": reservation_r_offset,
-    }
-    raw = depth_bid_tensor(params, spread, n_components, **depth_kw)
+    # Materialize (L, k, x0) once and reuse it for both curve evaluations.
+    # Previously each ``depth_bid_tensor`` call re-materialized the action
+    # parameters, doubling the per-epoch work in the dominant autograd path.
+    L, k, x0 = _materialize_side(
+        params,
+        side="bid",
+        n_components=n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_min=quote_size_min,
+        quote_size_max=quote_size_max,
+    )
+    raw = _depth_at_spreads(
+        L, k, x0, spread,
+        side="bid",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_bid_tensor(params, s0, n_components, **depth_kw)
+    base = _depth_at_spreads(
+        L, k, x0, s0,
+        side="bid",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
@@ -275,17 +359,28 @@ def effective_depth_ask_tensor(
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
     torch = _get_torch()
-    depth_kw = {
-        "use_softplus": use_softplus,
-        "l_param": l_param,
-        "quote_size_min": quote_size_min,
-        "quote_size_max": quote_size_max,
-        "mid_price": mid_price,
-        "reservation_r_offset": reservation_r_offset,
-    }
-    raw = depth_ask_tensor(params, spread, n_components, **depth_kw)
+    L, k, x0 = _materialize_side(
+        params,
+        side="ask",
+        n_components=n_components,
+        use_softplus=use_softplus,
+        l_param=l_param,
+        quote_size_min=quote_size_min,
+        quote_size_max=quote_size_max,
+    )
+    raw = _depth_at_spreads(
+        L, k, x0, spread,
+        side="ask",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
-    base = depth_ask_tensor(params, s0, n_components, **depth_kw)
+    base = _depth_at_spreads(
+        L, k, x0, s0,
+        side="ask",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+    )
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
     return torch.clamp(raw - base, min=0.0)
