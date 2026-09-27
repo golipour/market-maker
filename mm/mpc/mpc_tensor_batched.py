@@ -499,17 +499,23 @@ def _mid_from_book_best_levels_batched(
     center_mid sets the absolute price reference; spread_grid is quote-price distance from mid.
     """
     big = float(spread_grid.max().item()) + 1000.0
-    mask_b = (ob_bids > 0).to(center_mid.dtype)
-    mask_a = (ob_asks > 0).to(center_mid.dtype)
-    spread_b = spread_grid.unsqueeze(0) * mask_b + (1.0 - mask_b) * big
-    spread_a = spread_grid.unsqueeze(0) * mask_a + (1.0 - mask_a) * big
+    big_t = torch.tensor(big, dtype=center_mid.dtype, device=center_mid.device)
+    # Select the spread (or the "absent" sentinel) directly instead of
+    # blending two float tensors via a 0/1 mask. The arithmetic form
+    # ``grid * mask + (1 - mask) * big`` spends four dispatches per side
+    # (compare, cast, rsub, mul, add) where the equivalent ``where`` needs
+    # one, and it is bit-exact: 1*x + 0 is x and 0*x + 1 is big with no
+    # rounding. These helpers run a few hundred times per optimizer run, so
+    # the saved dispatches are worth taking.
+    spread_b = torch.where(ob_bids > 0, spread_grid.unsqueeze(0), big_t)
+    spread_a = torch.where(ob_asks > 0, spread_grid.unsqueeze(0), big_t)
     best_bid_spread = spread_b.min(dim=1, keepdim=True)[0]
     best_ask_spread = spread_a.min(dim=1, keepdim=True)[0]
     best_bid = center_mid - best_bid_spread
     best_ask = center_mid + best_ask_spread
     # If one side is empty, keep center_mid for that side (same fallback as previous logic).
-    no_bid = best_bid_spread >= big
-    no_ask = best_ask_spread >= big
+    no_bid = best_bid_spread >= big_t
+    no_ask = best_ask_spread >= big_t
     best_bid = torch.where(no_bid, center_mid, best_bid)
     best_ask = torch.where(no_ask, center_mid, best_ask)
     return 0.5 * (best_bid + best_ask)
@@ -524,11 +530,11 @@ def _best_spread_from_book_batched(
     big = float(spread_grid.max().item()) + 1000.0
     dtype = ob_bids.dtype
     device = ob_bids.device
-    mask_b = (ob_bids > 0).to(dtype)
-    mask_a = (ob_asks > 0).to(dtype)
     big_t = torch.tensor(big, dtype=dtype, device=device)
-    spread_b = spread_grid.unsqueeze(0) * mask_b + (1.0 - mask_b) * big_t
-    spread_a = spread_grid.unsqueeze(0) * mask_a + (1.0 - mask_a) * big_t
+    # See ``_mid_from_book_best_levels_batched``: a direct ``where`` replaces
+    # the 0/1 mask blend bit-exactly at lower dispatch cost.
+    spread_b = torch.where(ob_bids > 0, spread_grid.unsqueeze(0), big_t)
+    spread_a = torch.where(ob_asks > 0, spread_grid.unsqueeze(0), big_t)
     best_bid_spread = spread_b.min(dim=1, keepdim=True)[0]
     best_ask_spread = spread_a.min(dim=1, keepdim=True)[0]
     spread = best_bid_spread + best_ask_spread
