@@ -1,0 +1,53 @@
+==============================================================================
+PHASE 0 — DATA AUDIT
+==============================================================================
+raw rows                 : 348,315
+contiguous 10s rows      : 347,640
+gaps skipped             : 674 (max gap 177070s)
+span                     : 42.98 days  2026-08-15 09:35:30+00 -> 2026-09-27 08:59:50+00
+
+--- price level / grid ---
+mid  min/med/max        : 185150 / 225578 / 239789
+distinct mid increments  : [ 0.  1.  2.  3.  4.  5.  6.  7.  8.  9. 10. 11.]  (n=67)
+distinct bid increments  : [ 1.  2.  3.  4.  5.  6.  7.  8.  9. 10. 11. 12.]
+tick size (mode)         : 1
+
+--- spread ---
+spread min/p10/med/p90/max: 1 / 1 / 49 / 252 / 2614
+relative spread bps med  : 2.2   p90 11.9
+P(spread==0)             : 0.0000
+spread terciles: tight<7 (28%), mid (56%), wide>=199
+
+--- flow ---
+P(total==0)              : 0.4499
+total>0  n=191,253  med=120 p90=1049 p99=5246 max=29870
+buy  P(=0)               : 0.5879
+sell P(=0)               : 0.6164
+P(buy=0 & sell=0)        : 0.4499
+corr(bv,sv)              : 0.0763
+trade_count: mean=2.31 med=1 p99=18
+log1p(total) skew/kurt  : 0.419 / -1.307
+
+--- staleness (book age at decision time) ---
+stale_ms min/p10/med/p90/max: 0 / 338 / 1993 / 3559 / 810858
+P(stale==0)              : 0.0003
+P(stale>1000ms)          : 0.7138   P(>5000ms) 0.0013
+corr(stale, |dmid| next) : -0.0016
+corr(stale, total next)  : -0.0122
+
+--- microprice / imbalance ---
+microprice-mid: med=-0.45 sd=52.21  (half-spread med 24.5)
+corr(micro-mid, dmid next) : 0.0570
+queue_imb (bidqty-askqty)/(sum): med=-0.290 sd=0.739
+corr(imb, dmid next)     : 0.1311
+corr(imb, |dmid| next)   : 0.0384
+corr(imb, total next)    : 0.0093
+corr(stale, imb)         : -0.0110  <-- staleness inflates apparent imbalance
+
+--- depth ---
+bid_depth_levels uniq    : [24.]
+ask_depth_levels uniq    : [24.]
+best_bid_qty  p10/med/p90/max: 5/146/2194/142502
+best_ask_qty  p10/med/p90/max: 10/275/3929/177355
+ratio ask_qty/bid_qty med: 1.82  <-- asymmetric venue
+corr(ask_qty/bid_qty, dmid next): -0.0083
