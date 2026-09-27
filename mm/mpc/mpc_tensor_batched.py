@@ -1349,6 +1349,32 @@ class MonteCarloMPCTensorBatched:
         sample_inside_forward_ms = 0.0
         adaptive_warm_resolved = not needs_adaptive_probe
 
+        # ---- Epoch-invariant rollout constants -------------------------------
+        # Every value below is a pure function of the incoming state and the
+        # optimizer config, so it is identical on all ``adam_epochs`` closures.
+        # Building them once outside the loop removes redundant recomputation
+        # from the hottest path. ``mid_init`` alone is ~38us at production
+        # shapes (n_samples=64, grid_levels=10), i.e. ~0.76ms per decide across
+        # 20 epochs.
+        n_samples = self.n_samples
+        inv_t_0 = torch_mod.full((n_samples, 1), inv_0, dtype=dtype, device=_device)
+        cash_t_0 = torch_mod.full((n_samples, 1), cash_0, dtype=dtype, device=_device)
+        mid_fallback_0 = torch_mod.full((n_samples, 1), mid_0, dtype=dtype, device=_device)
+        book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(n_samples, -1)
+        book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(n_samples, -1)
+        mid_init = _mid_from_book_best_levels_batched(
+            ob_bids_0,
+            ob_asks_0,
+            mid_fallback_0,
+            spread_grid,
+        )
+        inv_path_0 = inv_t_0.squeeze(1)
+        cash_path_0 = cash_t_0.squeeze(1)
+        mid_path_0 = mid_init.squeeze(1)
+        total_reward_0 = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+        total_main_reward_0 = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+        step_reward_0_init = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+
         for epoch in range(self.adam_epochs):
             # Cooperative cancellation: ``StrategyRunner`` installs a
             # ``threading.Event`` so a timed-out decide can break out of
@@ -1391,30 +1417,21 @@ class MonteCarloMPCTensorBatched:
                     stage_timer.record("sample", drawn * 1000.0)
                     sample_inside_forward_ms += drawn * 1000.0
 
-                inv_t = torch_mod.full((self.n_samples, 1), inv_0, dtype=dtype, device=_device)
-                cash_t = torch_mod.full((self.n_samples, 1), cash_0, dtype=dtype, device=_device)
+                # ``inv_t``/``cash_t``/``mid_fallback_t`` are read-only here (only
+                # rebound to derived values below), so reuse the hoisted
+                # constants instead of reallocating them per epoch.
+                inv_t = inv_t_0
+                cash_t = cash_t_0
                 ob_bids = ob_bids_0.clone()
                 ob_asks = ob_asks_0.clone()
-                mid_fallback_t = torch_mod.full((self.n_samples, 1), mid_0, dtype=dtype, device=_device)
+                mid_fallback_t = mid_fallback_0
 
-                book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(self.n_samples, -1)
-                book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(self.n_samples, -1)
-
-                total_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                total_main_reward = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                step_reward_0 = torch_mod.zeros(self.n_samples, dtype=dtype, device=_device)
-                inv_path: list[Any] = []
-                cash_path: list[Any] = []
-                mid_path: list[Any] = []
-                mid_init = _mid_from_book_best_levels_batched(
-                    ob_bids,
-                    ob_asks,
-                    mid_fallback_t,
-                    spread_grid,
-                )
-                inv_path.append(inv_t.squeeze(1))
-                cash_path.append(cash_t.squeeze(1))
-                mid_path.append(mid_init.squeeze(1))
+                total_reward = total_reward_0
+                total_main_reward = total_main_reward_0
+                step_reward_0 = step_reward_0_init
+                inv_path: list[Any] = [inv_path_0]
+                cash_path: list[Any] = [cash_path_0]
+                mid_path: list[Any] = [mid_path_0]
                 conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
                 conditional_buy_vwap_t = None
                 conditional_sell_vwap_t = None
