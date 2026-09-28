@@ -1,0 +1,13 @@
+-- Server-side extraction of per-level book state for the production price model.
+--
+-- We reproduce exactly what TorchConditionalMechanicalMixturePriceModel needs
+-- per transition (price_torch.py:476-540):
+--
+--   prev_ob : bids/asks price->qty maps, mid
+--   cur_ob  : same
+--   buy_vol / sell_vol : aggressor volumes from the 'trades' array
+--
+-- Emitted as a compact scalar projection (no JSON blobs) so the transfer is
+-- small, plus the mechanical features the model derives from depth.
+--
+-- read-only: SELECT only, no writes, no locks.
