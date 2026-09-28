@@ -1,0 +1,66 @@
+================================================================================================
+Q20 - PRODUCTION GAUSSIAN vs THE PROPOSED HURDLE-STUDENT-T
+================================================================================================
+
+[20.1] What production actually implements
+  mm/mpc/price_torch.py:49  GaussianPriceModel
+    m_{t+1} = round(m_t + mu + eps),  eps ~ N(0, sigma^2)
+    density  q(y) = Phi((y+0.5-m)/s) - Phi((y-0.5-m)/s)   [lattice OK]
+    sigma tracked by the residual model's EWMA:
+      s2 <- gamma*s2 + alpha*(e - mu)^2     (price_torch.py:273-274)
+  Default kind = 'residual' (mpc_engine.py:312)
+
+  So production already gets the LATTICE right.  What it lacks is
+  the point mass at zero and the tail index.
+
+================================================================================================
+  model                                            mean     median        p99
+  PRODUCTION  Gaussian (mu=0)                    6.1676     4.7369    15.8086
+  PRODUCTION  Gaussian (mu=AR1)                  6.1672     4.7369    15.8027
+  PRODUCTION  Gaussian slow (a=.02,g=.98)        5.3670     4.8307    12.2656
+  PROPOSED   hurdle-Student-t nu=2.5             3.5211     3.7175     9.1632
+  PROPOSED   hurdle-Student-t nu=2.5 no calib     3.5205     3.7495     9.1116
+  PROPOSED   hurdle-Student-t nu=4               3.5539     4.0751     8.7263
+
+------------------------------------------------------------------------------------------------
+Paired difference vs PRODUCTION, BY HALF (negative = better)
+------------------------------------------------------------------------------------------------
+  model                                                        1st half                   2nd half
+  PRODUCTION  Gaussian (mu=0)                +0.0000[+0.0000,+0.0000] +0.0000[+0.0000,+0.0000]
+  PRODUCTION  Gaussian (mu=AR1)              -0.0016[-0.0135,+0.0102] +0.0006[-0.0087,+0.0112]
+  PRODUCTION  Gaussian slow (a=.02,g=.98)    -0.8630[-0.9921,-0.7385] -0.7412[-0.8558,-0.6313]
+  PROPOSED   hurdle-Student-t nu=2.5         -2.7310[-2.8751,-2.5938] -2.5659[-2.6996,-2.4294]
+  PROPOSED   hurdle-Student-t nu=2.5 no calib -2.7313[-2.8754,-2.5941] -2.5668[-2.7002,-2.4303]
+  PROPOSED   hurdle-Student-t nu=4           -2.6950[-2.8375,-2.5577] -2.5361[-2.6689,-2.4006]
+
+------------------------------------------------------------------------------------------------
+HEADLINE: proposed vs production
+------------------------------------------------------------------------------------------------
+  production mean NLL = 6.1676
+  proposed   mean NLL = 3.5211
+  GAIN = 2.6465 nats/step  (42.91% of the production loss)
+  95% CI on the gain: [2.5490, 2.7439]
+  Diebold-Mariano t = -56.0  p = 0  n = 339638
+  In decision terms: 22866 nats per day per path (8640 buckets).
+
+------------------------------------------------------------------------------------------------
+CALIBRATION: why the production Gaussian is not just wrong, but
+DANGEROUS for a sampler (this is what the MPC consumes)
+------------------------------------------------------------------------------------------------
+
+  PRODUCTION  Gaussian (mu=0)
+    z sd          = 2.4766   (calibrated target 1.0)
+    50% interval  -> 0.7387 actual   (under-covers by -47.7%)
+    80% interval  -> 0.8187 actual   (under-covers by -2.3%)
+    90% interval  -> 0.8658 actual   (under-covers by 3.8%)
+    99% interval  -> 0.9478 actual   (under-covers by 4.3%)
+
+  PROPOSED   hurdle-Student-t nu=2.5
+    z sd          = 1.9532   (calibrated target 1.0)
+    50% interval  -> 0.7067 actual   (under-covers by -41.3%)
+    80% interval  -> 0.7673 actual   (under-covers by 4.1%)
+    90% interval  -> 0.7961 actual   (under-covers by 11.5%)
+    99% interval  -> 0.8568 actual   (under-covers by 13.5%)
+    P(y=0) nominal 0.3464 vs actual 0.3464
+
+================================================================================================

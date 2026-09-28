@@ -640,27 +640,6 @@ def _soft_fill_fraction(
     return torch.sigmoid(scaled)
 
 
-def _pad_shift_right(x: torch.Tensor) -> torch.Tensor:
-    """``[0, x[0], ..., x[n-2]]`` along the last axis.
-
-    Equivalent to ``torch.cat([zeros_like(x[:, :1]), x[:, :-1]], dim=1)`` for a
-    2-D input, but as a single pad: the cat form allocates a zero tensor and
-    runs a two-input concat whose backward materialises extra
-    ``SliceBackward`` nodes. Measured ~7% faster over forward+backward at
-    (n_samples, grid_levels) = (64, 10), and bit-identical.
-    """
-    return F.pad(x[:, :-1], (1, 0))
-
-
-def _pad_shift_left(x: torch.Tensor) -> torch.Tensor:
-    """``[x[1], ..., x[n-1], 0]`` along the last axis.
-
-    The left-shift counterpart of :func:`_pad_shift_right`, used for the
-    next-worse-public-level lookup in the back-of-queue split.
-    """
-    return F.pad(x[:, 1:], (0, 1))
-
-
 def soft_fill_batched(
     params: torch.Tensor,
     n_components: int,
@@ -733,16 +712,13 @@ def soft_fill_batched(
     )
 
     # Recover market-book level volumes from cumulative market book.
-    # ``F.pad`` shifts and zero-fills in one op; the equivalent
-    # ``torch.cat([zeros, x[:, :-1]])`` allocates a zero tensor and runs a
-    # two-input concat, and its backward carries the SliceBackward nodes.
-    book_bid_prev = _pad_shift_right(book_cum_bid)
-    book_ask_prev = _pad_shift_right(book_cum_ask)
-    book_bid_level = torch.relu(book_cum_bid - book_bid_prev)
-    book_ask_level = torch.relu(book_cum_ask - book_ask_prev)
-
-    # Convert cumulative quoted depth to marginal level sizes. Dynamic bid/ask
-    # maxima are already inside the decoder above.
+    # Bid and ask follow *identical* formulas and differ only in which input
+    # feeds each. At production shapes the fill chain is dispatch-bound, not
+    # FLOP-bound, so evaluating both sides as one stacked ``(2, N, G)`` chain
+    # roughly halves the number of aten calls for the same arithmetic. The
+    # side axis is a *leading* axis, so the per-row shifts and the per-row
+    # reductions (dim=2) stay independent -- no seam, unlike stacking on the
+    # grid axis. Results are bit-identical.
     depth_bid_sample = (
         depth_bid.unsqueeze(0).expand_as(book_cum_bid)
         if depth_bid.ndim == 1
@@ -753,80 +729,65 @@ def soft_fill_batched(
         if depth_ask.ndim == 1
         else depth_ask
     )
-    depth_bid_prev = _pad_shift_right(depth_bid_sample)
-    depth_ask_prev = _pad_shift_right(depth_ask_sample)
-    marg_bid = torch.relu(depth_bid_sample - depth_bid_prev)
-    marg_ask = torch.relu(depth_ask_sample - depth_ask_prev)
+    book_cum = torch.stack([book_cum_bid, book_cum_ask], dim=0)
+    depth_sample = torch.stack([depth_bid_sample, depth_ask_sample], dim=0)
+    vol = torch.stack([sell_vol, buy_vol], dim=0)
+
+    # ``F.pad`` shifts and zero-fills in one op; the equivalent
+    # ``torch.cat([zeros, x[:, :-1]])`` allocates a zero tensor and runs a
+    # two-input concat, and its backward carries the SliceBackward nodes.
+    book_prev = F.pad(book_cum[:, :, :-1], (1, 0))
+    book_level = torch.relu(book_cum - book_prev)
+
+    # Convert cumulative quoted depth to marginal level sizes. Dynamic bid/ask
+    # maxima are already inside the decoder above.
+    depth_prev = F.pad(depth_sample[:, :, :-1], (1, 0))
+    marg = torch.relu(depth_sample - depth_prev)
 
     # Combine market book and our quotes on each level.
     scale = max(0.0, float(depth_scale))
-    our_bid_level = marg_bid * scale
-    our_ask_level = marg_ask * scale
-    comb_bid_level = book_bid_level + our_bid_level
-    comb_ask_level = book_ask_level + our_ask_level
+    our_level = marg * scale
+    comb_level = book_level + our_level
 
     # Soft consumption against combined cumulative depth.
-    comb_cum_bid = torch.cumsum(comb_bid_level, dim=1)
-    comb_cum_ask = torch.cumsum(comb_ask_level, dim=1)
-    reach_bid_raw = sell_vol - comb_cum_bid
-    reach_ask_raw = buy_vol - comb_cum_ask
-    bid_pos_scale = torch.clamp(reach_bid_raw.max(dim=1, keepdim=True).values, min=eps)
-    bid_neg_scale = torch.clamp((-reach_bid_raw).max(dim=1, keepdim=True).values, min=eps)
-    ask_pos_scale = torch.clamp(reach_ask_raw.max(dim=1, keepdim=True).values, min=eps)
-    ask_neg_scale = torch.clamp((-reach_ask_raw).max(dim=1, keepdim=True).values, min=eps)
-    reach_bid = torch.where(
-        reach_bid_raw >= 0.0,
-        reach_bid_raw / bid_pos_scale,
-        reach_bid_raw / bid_neg_scale,
+    comb_cum = torch.cumsum(comb_level, dim=2)
+    reach_raw = vol - comb_cum
+    pos_scale = torch.clamp(reach_raw.max(dim=2, keepdim=True).values, min=eps)
+    neg_scale = torch.clamp((-reach_raw).max(dim=2, keepdim=True).values, min=eps)
+    reach = torch.where(
+        reach_raw >= 0.0,
+        reach_raw / pos_scale,
+        reach_raw / neg_scale,
     )
-    reach_ask = torch.where(
-        reach_ask_raw >= 0.0,
-        reach_ask_raw / ask_pos_scale,
-        reach_ask_raw / ask_neg_scale,
-    )
-    fill_frac_bid = _soft_fill_fraction(reach_bid, soft_temp, soft_fill_activation)
-    fill_frac_ask = _soft_fill_fraction(reach_ask, soft_temp, soft_fill_activation)
-    consumed_bid_level = comb_bid_level * fill_frac_bid
-    consumed_ask_level = comb_ask_level * fill_frac_ask
+    fill_frac = _soft_fill_fraction(reach, soft_temp, soft_fill_activation)
+    consumed_level = comb_level * fill_frac
 
     # Split consumed level volumes between market book and our quotes.
     # back_of_queue treats the next worse public level as ahead of our order,
     # which is a conservative differentiable queue approximation.
     queue_model = _normalize_soft_fill_queue_model(soft_fill_queue_model)
     if queue_model == "back_of_queue":
-        bid_next_public = _pad_shift_left(book_bid_level)
-        ask_next_public = _pad_shift_left(book_ask_level)
+        next_public = F.pad(book_level[:, :, 1:], (0, 1))
     else:
-        bid_next_public = torch.zeros_like(book_bid_level)
-        ask_next_public = torch.zeros_like(book_ask_level)
-    bid_share_den = comb_bid_level + bid_next_public
-    ask_share_den = comb_ask_level + ask_next_public
-    bid_share_our = torch.where(
-        bid_share_den > eps,
-        our_bid_level / torch.clamp(bid_share_den, min=eps),
-        torch.zeros_like(comb_bid_level),
+        next_public = torch.zeros_like(book_level)
+    share_den = comb_level + next_public
+    share_our = torch.where(
+        share_den > eps,
+        our_level / torch.clamp(share_den, min=eps),
+        torch.zeros_like(comb_level),
     )
-    ask_share_our = torch.where(
-        ask_share_den > eps,
-        our_ask_level / torch.clamp(ask_share_den, min=eps),
-        torch.zeros_like(comb_ask_level),
-    )
-    fill_bid_level = consumed_bid_level * bid_share_our
-    fill_ask_level = consumed_ask_level * ask_share_our
-    fill_bid = fill_bid_level.sum(dim=1)
-    fill_ask = fill_ask_level.sum(dim=1)
+    fill_level = consumed_level * share_our
+    fill = fill_level.sum(dim=2)
 
     # Market-book next state after market-flow consumption (our resting remainder is canceled).
-    consumed_bid_market = torch.minimum(
-        torch.relu(consumed_bid_level - fill_bid_level),
-        book_bid_level,
+    consumed_market = torch.minimum(
+        torch.relu(consumed_level - fill_level),
+        book_level,
     )
-    consumed_ask_market = torch.minimum(
-        torch.relu(consumed_ask_level - fill_ask_level),
-        book_ask_level,
-    )
-    ob_bids_next = torch.relu(book_bid_level - consumed_bid_market)
-    ob_asks_next = torch.relu(book_ask_level - consumed_ask_market)
+    ob_next = torch.relu(book_level - consumed_market)
+    ob_bids_next, ob_asks_next = ob_next[0], ob_next[1]
+    fill_bid_level, fill_ask_level = fill_level[0], fill_level[1]
+    fill_bid, fill_ask = fill[0], fill[1]
     mid_exp = mid_price.expand(-1, spread_grid.shape[0])
     cash_bid = (fill_bid_level * (mid_exp - spread_grid.unsqueeze(0))).sum(dim=1)
     cash_ask = (fill_ask_level * (mid_exp + spread_grid.unsqueeze(0))).sum(dim=1)
