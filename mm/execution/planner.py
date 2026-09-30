@@ -60,6 +60,7 @@ class ToleranceReconcilePlanner(AbstractExecutionPlanner):
             desired=desired,
             live_orders=ledger.live_orders,
             config=config,
+            include_unattributed=True,
         )
         return ExecutionPlan(
             exchange=target.exchange.lower().strip(),

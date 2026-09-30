@@ -1177,7 +1177,10 @@ def runtime_config_from_mapping(payload: dict[str, Any]) -> MarketMakerRuntimeCo
         max_global_market_age_ms=_optional_int(preset.get("max_global_market_age_ms", payload.get("max_global_market_age_ms"))),
         local_private=_private_from_mapping(local_private_payload),
         global_private=_private_from_mapping(global_private_payload),
-        controller=_controller_from_mapping(controller_payload),
+        controller=_controller_from_mapping(
+            controller_payload,
+            execution_payload=preset.get("execution"),
+        ),
         liquidity_sourcing=liquidity_sourcing,
         execution=_execution_from_preset(
             preset.get("execution"),
@@ -1619,7 +1622,11 @@ def _observability_from_mapping(payload: Any) -> ObservabilityRuntimeConfig:
     )
 
 
-def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
+def _controller_from_mapping(
+    payload: Any,
+    *,
+    execution_payload: Any = None,
+) -> ControllerRuntimeConfig | None:
     if not isinstance(payload, dict):
         return None
     removed_model_keys = [key for key in ("price_model", "market_flow_model") if key in payload]
@@ -1812,19 +1819,31 @@ def _controller_from_mapping(payload: Any) -> ControllerRuntimeConfig | None:
         execution_model=_dict_or_none(payload.get("execution_model")),
         optimizer=_dict_or_none(payload.get("optimizer")),
         risk=_risk_from_mapping(payload.get("risk")),
-        reconcile=_reconcile_from_mapping(payload.get("reconcile")),
+        reconcile=_reconcile_from_mapping(
+            payload.get("reconcile"),
+            fallback=(
+                execution_payload.get("reconcile")
+                if isinstance(execution_payload, dict) and isinstance(execution_payload.get("reconcile"), dict)
+                else (
+                    execution_payload.get("quoting", {}).get("reconcile")
+                    if isinstance(execution_payload, dict) and isinstance(execution_payload.get("quoting"), dict)
+                    else None
+                )
+            ),
+        ),
     )
     # Fail fast if the execution ladder cannot be resolved inside the MPC domain.
     controller.execution_spread_ladder()
     return controller
 
 
-def _reconcile_from_mapping(payload: Any) -> ReconcileRuntimeConfig:
-    if not isinstance(payload, dict):
+def _reconcile_from_mapping(payload: Any, fallback: Any = None) -> ReconcileRuntimeConfig:
+    target = payload if isinstance(payload, dict) else (fallback if isinstance(fallback, dict) else None)
+    if not isinstance(target, dict):
         return ReconcileRuntimeConfig()
     return ReconcileRuntimeConfig(
-        price_tol_bps=max(0.0, float(payload.get("price_tol_bps", 0.0))),
-        qty_tol_rel=max(0.0, float(payload.get("qty_tol_rel", 0.0))),
+        price_tol_bps=max(0.0, float(target.get("price_tol_bps", 0.0))),
+        qty_tol_rel=max(0.0, float(target.get("qty_tol_rel", 0.0))),
     )
 
 

@@ -137,3 +137,24 @@ def test_reconcile_ignores_other_actors() -> None:
     )
     assert plan.keep == ()
     assert plan.place[0].price == 100.0
+    assert plan.cancel_ids == ()
+
+
+def test_reconcile_cleans_up_unattributed_orders() -> None:
+    live = {
+        "live-1": _live("live-1", _order("buy", 100.0, 1.0), actor_id=""),
+        "live-2": _live("live-2", _order("sell", 110.0, 1.0), actor_id=""),
+    }
+    # Matching unattributed order is kept, non-matching unattributed order is cancelled
+    plan = reconcile_target_orders(
+        actor_id="actor-1",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        desired=(_order("buy", 100.0, 1.0),),
+        live_orders=live,
+        include_unattributed=True,
+    )
+    assert plan.keep == (live["live-1"],)
+    assert plan.cancel_ids == ("live-2",)
+    assert plan.place == ()
+

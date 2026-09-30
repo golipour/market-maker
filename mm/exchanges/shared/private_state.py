@@ -177,7 +177,10 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
     def normalize_open_order(self, row: dict, *, timestamp_ms: int) -> OpenOrder | None:
         if not isinstance(row, dict):
             return None
-        order_id = _first_text(row, "clientOrderId", "client_order_id", "id", "orderId", "order_id")
+        if self.exchange == "wallex":
+            order_id = _first_text(row, "clientOrderId", "client_order_id", "id", "orderId", "order_id")
+        else:
+            order_id = _first_text(row, "id", "orderId", "order_id", "clientOrderId", "client_order_id")
         if not order_id:
             return None
         side = _normalize_side(_first_text(row, "side", "type"))
@@ -230,7 +233,10 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
     def normalize_fill(self, row: dict, *, timestamp_ms: int) -> Fill | None:
         if not isinstance(row, dict):
             return None
-        order_id = _first_text(row, "exchange_order_id", "clientOrderId", "client_order_id", "id", "orderId", "order_id")
+        if self.exchange == "wallex":
+            order_id = _first_text(row, "exchange_order_id", "clientOrderId", "client_order_id", "id", "orderId", "order_id")
+        else:
+            order_id = _first_text(row, "exchange_order_id", "id", "orderId", "order_id", "clientOrderId", "client_order_id")
         if not order_id:
             return None
         side = _normalize_side(_first_text(row, "side", "type"))

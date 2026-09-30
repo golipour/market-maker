@@ -560,6 +560,22 @@ export const PRESET_SECTIONS: readonly SectionDef[] = [
         defaultValue: 10,
       },
       {
+        path: "controller.reconcile.price_tol_bps",
+        label: "Reconcile price tolerance (bps)",
+        type: "number",
+        defaultValue: 0,
+        step: "0.1",
+        help: "Max price difference in basis points to keep a resting order in reconcile mode (0 = exact match).",
+      },
+      {
+        path: "controller.reconcile.qty_tol_rel",
+        label: "Reconcile quantity tolerance (rel)",
+        type: "number",
+        defaultValue: 0,
+        step: "0.01",
+        help: "Max relative difference (e.g. 0.05 = 5%) in quantity to keep a resting order in reconcile mode.",
+      },
+      {
         path: "execution.liquidity.planner",
         label: "Liquidity planner",
         type: "select",

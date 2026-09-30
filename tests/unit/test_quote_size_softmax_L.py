@@ -246,3 +246,23 @@ def test_depth_logit_selects_bounds() -> None:
     )
     assert math.isclose(q_lo, q_min, rel_tol=1e-4, abs_tol=1e-4)
     assert math.isclose(q_hi, q_max, rel_tol=1e-4, abs_tol=1e-4)
+
+
+def test_initial_action_component_asymmetry_breaks_degeneracy() -> None:
+    spread_max = 200.0
+    n = 4
+    l_param = _l_param(q_min=1.0, q_max=10.0, spread_max=spread_max, n_components=n)
+    flat = _initial_action_uniform_marginal_qrange(n, spread_max, l_param=l_param)
+    _, _, bid_x0 = materialize_side_np(flat, side_off=0, n_components=n, l_param=l_param)
+    _, _, ask_x0 = materialize_side_np(flat, side_off=3 * n, n_components=n, l_param=l_param)
+
+    # Component centers must be strictly increasing across spread depth to prevent
+    # symmetric fixed-point collapse during optimization.
+    for i in range(n - 1):
+        assert bid_x0[i] < bid_x0[i + 1]
+        assert ask_x0[i] < ask_x0[i + 1]
+
+    # Lowest component starts near inside spread, highest component near max spread
+    assert math.isclose(bid_x0[0], 0.20 * spread_max, rel_tol=1e-3)
+    assert math.isclose(bid_x0[-1], 0.80 * spread_max, rel_tol=1e-3)
+

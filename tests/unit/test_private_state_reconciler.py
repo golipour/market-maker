@@ -201,6 +201,28 @@ def test_nobitex_irt_open_order_normalizes_price_from_rial_to_toman() -> None:
     assert order.remaining_qty == pytest.approx(0.4)
 
 
+def test_nobitex_open_order_prefers_numeric_id_over_wire_client_order_id() -> None:
+    adapter = NobitexRestPrivateStateAdapter("BTC_IRT", api_token="token")
+
+    order = adapter.normalize_open_order(
+        {
+            "id": 987654,
+            "clientOrderId": "d3b07384d113edec49eaa6238ad5ff00",
+            "type": "sell",
+            "price": "10000000",
+            "amount": "0.5",
+            "filledAmount": "0.0",
+            "status": "open",
+        },
+        timestamp_ms=1000,
+    )
+
+    assert order is not None
+    # Must use numeric exchange order ID so int(exchange_order_id) succeeds during cancellation
+    assert order.exchange_order_id == "987654"
+    assert order.order.client_order_id == "d3b07384d113edec49eaa6238ad5ff00"
+
+
 def test_rest_private_state_normalize_balances_skips_zero_rows() -> None:
     adapter = RestPollingPrivateStateAdapter(
         "wallex",

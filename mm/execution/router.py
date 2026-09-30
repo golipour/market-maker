@@ -103,7 +103,7 @@ class OrderRouter:
                     ),
                 )
                 cancel_ms = (time.monotonic_ns() - cancel_started_ns) / 1_000_000
-                if plan.policy == "replace":
+                if plan.policy in ("replace", "reconcile"):
                     return RouterResult(
                         cancelled_ids=tuple(cancelled),
                         failed_cancel_ids=tuple(failed_cancels),

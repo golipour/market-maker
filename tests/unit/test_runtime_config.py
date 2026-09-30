@@ -510,3 +510,43 @@ async def test_runtime_builder_uses_execution_enabled_for_order_commands(monkeyp
     assert "local" in runtime.private_state_selections
     assert runtime.order_command_selections == {}
     assert runtime.order_managers == {}
+
+
+def test_reconcile_tolerances_parsed_from_controller_and_execution_fallback() -> None:
+    # 1. From controller.reconcile
+    cfg1 = runtime_config_from_mapping(
+        _with_controller(
+            _with_preset(
+                venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+                interval_ms=1000,
+            ),
+            {
+                "enabled": True,
+                "reconcile": {"price_tol_bps": 7.5, "qty_tol_rel": 0.08},
+            },
+        )
+    )
+    assert cfg1.controller is not None
+    assert cfg1.controller.reconcile.price_tol_bps == 7.5
+    assert cfg1.controller.reconcile.qty_tol_rel == 0.08
+
+    # 2. From execution.quoting.reconcile fallback
+    base_payload = _with_controller(
+        _with_preset(
+            venues_payload(local={"exchange": "nobitex", "symbol": "BTC_IRT"}),
+            interval_ms=1000,
+        ),
+        {"enabled": True},
+    )
+    preset_name = list(base_payload["strategy_presets"].keys())[0]
+    base_payload["strategy_presets"][preset_name]["execution"] = {
+        "quoting": {
+            "planner": "reconcile",
+            "reconcile": {"price_tol_bps": 12.0, "qty_tol_rel": 0.15},
+        }
+    }
+    cfg2 = runtime_config_from_mapping(base_payload)
+    assert cfg2.controller is not None
+    assert cfg2.controller.reconcile.price_tol_bps == 12.0
+    assert cfg2.controller.reconcile.qty_tol_rel == 0.15
+

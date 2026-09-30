@@ -239,6 +239,32 @@ async def test_order_router_cancel_before_place_for_replace_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_order_router_aborts_placement_on_cancel_failure_for_reconcile_policy() -> None:
+    class FailingCancelAdapter(FakeOrderCommandAdapter):
+        async def cancel_orders(self, order_ids: list[str]) -> None:
+            raise RuntimeError("Nobitex cancel failed: invalid order id")
+
+    adapter = FailingCancelAdapter()
+    bus = InMemoryBus()
+    router = OrderRouter("nobitex", adapter, bus=bus, clock_ms=lambda: 1000)
+    plan = ExecutionPlan(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        actor_id="actor-1",
+        policy="reconcile",
+        cancel=(CancelCommand("live-1", "actor-1", "orphan"),),
+        place=(PlaceCommand("actor-1", Order("nobitex", "BTC_IRT", "sell", 101.0, 1.0)),),
+    )
+
+    result = await router.execute(plan)
+
+    # Cancel failed: MUST abort placements so orders do not accumulate on the exchange!
+    assert result.failed_cancel_ids == ("live-1",)
+    assert result.placed == ()
+    assert adapter.placed == []
+
+
+@pytest.mark.asyncio
 async def test_order_router_does_not_mutate_external_live_order_state() -> None:
     adapter = FakeOrderCommandAdapter()
     router = OrderRouter("nobitex", adapter, clock_ms=lambda: 1000)

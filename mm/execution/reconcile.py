@@ -34,6 +34,7 @@ def reconcile_target_orders(
     desired: Sequence[Order],
     live_orders: Mapping[str, OpenOrder],
     config: ReconcileConfig | None = None,
+    include_unattributed: bool = True,
 ) -> ReconcilePlan:
     """Match *desired* to *live_orders* for one actor; cancel unmatched live, place unmatched targets."""
 
@@ -51,7 +52,13 @@ def reconcile_target_orders(
     scoped_live = [
         open_order
         for open_order in live_orders.values()
-        if _live_matches_scope(open_order, actor_id=actor, exchange=ex, symbol=sym)
+        if _live_matches_scope(
+            open_order,
+            actor_id=actor,
+            exchange=ex,
+            symbol=sym,
+            include_unattributed=include_unattributed,
+        )
     ]
 
     if not scoped_desired:
@@ -103,9 +110,10 @@ def _live_matches_scope(
     actor_id: str,
     exchange: str,
     symbol: str | None,
+    include_unattributed: bool = False,
 ) -> bool:
     order_actor = (open_order.actor_id or "").strip()
-    if order_actor != actor_id:
+    if order_actor != actor_id and not (include_unattributed and not order_actor):
         return False
     order = open_order.order
     if order.exchange.lower().strip() != exchange:

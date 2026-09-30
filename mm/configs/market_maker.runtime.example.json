@@ -190,6 +190,11 @@
         "placement_max_concurrency": 32,
         "decisions_topic": "strategy:decisions",
         "action_topic": "strategy:actions",
+        "reconcile": {
+          "_comment": "Matching tolerances for reconcile execution planner. 0 = exact match.",
+          "price_tol_bps": 5.0,
+          "qty_tol_rel": 0.05
+        },
         "orderbook_grid": {
           "_comment": "Internal MPC spread grid for soft-fill / book bucketing / optimization. Changing these changes the economic problem, not just display resolution.",
           "spread_step": 20.0,

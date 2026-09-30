@@ -394,6 +394,11 @@ def _initial_action_uniform_marginal_qrange(
         core = np.array(bid_part + ask_part, dtype=np.float64)
     else:
         x0_raw = np.zeros(n, dtype=np.float64)
+        if n > 1:
+            fracs = np.linspace(0.20, 0.80, n)
+            for j, frac in enumerate(fracs):
+                frac = min(max(float(frac), 1e-4), 1.0 - 1e-4)
+                x0_raw[j] = float(np.log(frac / (1.0 - frac)))
         bid_part = []
         ask_part = []
         for i in range(n):
