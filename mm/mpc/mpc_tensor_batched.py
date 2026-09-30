@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -57,6 +58,7 @@ from mm.mpc.torch_device import apply_torch_threads, resolve_torch_device
 from mm.mpc.state_tensor import (
     effective_depth_bid_tensor,
     effective_depth_ask_tensor,
+    effective_depth_stacked_tensor,
 )
 from mm.mpc.reward_tensor import terminal_objective
 from mm.mpc.optimizer_diagnostics import (
@@ -690,52 +692,22 @@ def soft_fill_batched(
             n_components=n_components,
             r_max=float(l_param.reservation_r_max),
         )
-    depth_kwargs = {
-        "use_softplus": use_softplus,
-        "l_param": l_param,
-        "quote_size_min": bid_quote_size_min,
-        "quote_size_max": bid_quote_size_max,
-        "mid_price": mid_price,
-        "reservation_r_offset": reservation_r_offset,
-    }
-    depth_bid = effective_depth_bid_tensor(
-        params,
-        spread_grid,
-        n_components,
-        **depth_kwargs,
-    )
-    depth_ask = effective_depth_ask_tensor(
+    depth_sample = effective_depth_stacked_tensor(
         params,
         spread_grid,
         n_components,
         use_softplus=use_softplus,
         l_param=l_param,
-        quote_size_min=ask_quote_size_min,
-        quote_size_max=ask_quote_size_max,
+        bid_quote_size_min=bid_quote_size_min,
+        bid_quote_size_max=bid_quote_size_max,
+        ask_quote_size_min=ask_quote_size_min,
+        ask_quote_size_max=ask_quote_size_max,
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
     )
-
-    # Recover market-book level volumes from cumulative market book.
-    # Bid and ask follow *identical* formulas and differ only in which input
-    # feeds each. At production shapes the fill chain is dispatch-bound, not
-    # FLOP-bound, so evaluating both sides as one stacked ``(2, N, G)`` chain
-    # roughly halves the number of aten calls for the same arithmetic. The
-    # side axis is a *leading* axis, so the per-row shifts and the per-row
-    # reductions (dim=2) stay independent -- no seam, unlike stacking on the
-    # grid axis. Results are bit-identical.
-    depth_bid_sample = (
-        depth_bid.unsqueeze(0).expand_as(book_cum_bid)
-        if depth_bid.ndim == 1
-        else depth_bid
-    )
-    depth_ask_sample = (
-        depth_ask.unsqueeze(0).expand_as(book_cum_ask)
-        if depth_ask.ndim == 1
-        else depth_ask
-    )
+    if depth_sample.ndim == 2:
+        depth_sample = depth_sample.unsqueeze(1).expand(-1, book_cum_bid.shape[0], -1)
     book_cum = torch.stack([book_cum_bid, book_cum_ask], dim=0)
-    depth_sample = torch.stack([depth_bid_sample, depth_ask_sample], dim=0)
     vol = torch.stack([sell_vol, buy_vol], dim=0)
 
     # ``F.pad`` shifts and zero-fills in one op; the equivalent
@@ -800,6 +772,29 @@ def soft_fill_batched(
     cash_delta = cash_ask * one_minus_f - cash_bid
     inv_delta = fill_bid * one_minus_f - fill_ask
     return ob_bids_next, ob_asks_next, cash_delta, inv_delta
+
+
+_COMPILED_SOFT_FILL_KERNEL: Any = None
+_COMPILE_SOFT_FILL_FAILED: bool = False
+
+
+def _get_compiled_soft_fill(torch_mod: Any = torch) -> Any:
+    """Return a compiled version of soft_fill_batched with safe fallback on failure."""
+    global _COMPILED_SOFT_FILL_KERNEL, _COMPILE_SOFT_FILL_FAILED
+    if _COMPILE_SOFT_FILL_FAILED:
+        return soft_fill_batched
+    if _COMPILED_SOFT_FILL_KERNEL is not None:
+        return _COMPILED_SOFT_FILL_KERNEL
+    try:
+        _COMPILED_SOFT_FILL_KERNEL = torch_mod.compile(soft_fill_batched, fullgraph=False)
+        return _COMPILED_SOFT_FILL_KERNEL
+    except Exception as exc:
+        _COMPILE_SOFT_FILL_FAILED = True
+        log_event(
+            "mpc.torch_compile.fallback",
+            {"reason": str(exc)},
+        )
+        return soft_fill_batched
 
 
 def _delta_wealth_mtm_batched(
@@ -901,6 +896,7 @@ class MonteCarloMPCTensorBatched:
         optimizer_diagnostics_every: int = 1,
         tensor_dtype: str = "float64",
         torch_threads: int | str | None = None,
+        compile_soft_fill: bool | None = None,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -923,12 +919,10 @@ class MonteCarloMPCTensorBatched:
         # on the first live decision.
         self.tensor_dtype = str(tensor_dtype or "float64").strip().lower()
         _resolve_tensor_dtype(torch, self.tensor_dtype)
-        # The rollout tensors are small, so torch's default intra-op fan-out
-        # costs more in synchronization than it recovers. Measured at
-        # N=64, H=4, E=40: 1 thread 178.7ms, 2 threads 186.7ms,
-        # 4 threads 195.1ms, 8 threads 215.9ms.
         self.torch_threads = apply_torch_threads(torch_threads)
         self.device = device
+        compile_env = os.environ.get("MM_TORCH_COMPILE", "0").strip().lower() in ("1", "true", "yes")
+        self.compile_soft_fill = bool(compile_soft_fill if compile_soft_fill is not None else compile_env)
         if isinstance(warm_start, WarmStartParams):
             self.warm_start = warm_start
         else:
@@ -1530,25 +1524,59 @@ class MonteCarloMPCTensorBatched:
                         buy_vwap_t = buy_vwap_book_t + eps_buy_h
                         sell_vwap_t = sell_vwap_book_t + eps_sell_h
 
-                    ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
-                        action_h,
-                        n,
-                        mid_t,
-                        book_cum_bid_h,
-                        book_cum_ask_h,
-                        sell_h,
-                        buy_h,
-                        spread_grid,
-                        maker_fee,
-                        soft_temp=self.soft_fill_temp,
-                        soft_fill_activation=self.soft_fill_activation,
-                        soft_fill_queue_model=self.soft_fill_queue_model,
-                        bid_quote_size_min=bid_quote_size_min_t,
-                        bid_quote_size_max=bid_quote_size_max_t,
-                        ask_quote_size_min=ask_quote_size_min_t,
-                        ask_quote_size_max=ask_quote_size_max_t,
-                        **depth_kw,
+                    soft_fill_fn = (
+                        _get_compiled_soft_fill(torch_mod)
+                        if self.compile_soft_fill
+                        else soft_fill_batched
                     )
+                    try:
+                        ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_fn(
+                            action_h,
+                            n,
+                            mid_t,
+                            book_cum_bid_h,
+                            book_cum_ask_h,
+                            sell_h,
+                            buy_h,
+                            spread_grid,
+                            maker_fee,
+                            soft_temp=self.soft_fill_temp,
+                            soft_fill_activation=self.soft_fill_activation,
+                            soft_fill_queue_model=self.soft_fill_queue_model,
+                            bid_quote_size_min=bid_quote_size_min_t,
+                            bid_quote_size_max=bid_quote_size_max_t,
+                            ask_quote_size_min=ask_quote_size_min_t,
+                            ask_quote_size_max=ask_quote_size_max_t,
+                            **depth_kw,
+                        )
+                    except Exception as exc:
+                        if self.compile_soft_fill:
+                            log_event(
+                                "mpc.torch_compile.runtime_fallback",
+                                {"error": str(exc)},
+                            )
+                            self.compile_soft_fill = False
+                            ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
+                                action_h,
+                                n,
+                                mid_t,
+                                book_cum_bid_h,
+                                book_cum_ask_h,
+                                sell_h,
+                                buy_h,
+                                spread_grid,
+                                maker_fee,
+                                soft_temp=self.soft_fill_temp,
+                                soft_fill_activation=self.soft_fill_activation,
+                                soft_fill_queue_model=self.soft_fill_queue_model,
+                                bid_quote_size_min=bid_quote_size_min_t,
+                                bid_quote_size_max=bid_quote_size_max_t,
+                                ask_quote_size_min=ask_quote_size_min_t,
+                                ask_quote_size_max=ask_quote_size_max_t,
+                                **depth_kw,
+                            )
+                        else:
+                            raise
                     inv_next = inv_t + inv_delta.unsqueeze(1)
                     cash_next = cash_t + cash_delta.unsqueeze(1)
                     mid_next = _mid_from_book_best_levels_batched(

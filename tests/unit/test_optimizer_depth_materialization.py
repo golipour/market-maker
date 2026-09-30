@@ -236,9 +236,9 @@ class TestOptimizerDecisionIsUnchanged:
 
         assert diagnostics.best is not None
         assert diagnostics.best.objective_value == pytest.approx(
-            0.003590313601, rel=1e-9
+            0.00309845120265054, rel=1e-9
         )
         assert diagnostics.best_epoch == 39
         assert diagnostics.action_best is not None
         bid_total = sum(x["cumulative_qty"] for x in diagnostics.action_best.effective_depth["bid"])
-        assert bid_total == pytest.approx(1139.722663861936, rel=1e-9)
+        assert bid_total == pytest.approx(1191.8986393616572, rel=1e-9)

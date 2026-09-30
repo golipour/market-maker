@@ -20,9 +20,13 @@ torch = pytest.importorskip("torch")
 
 import torch.nn.functional as F
 
-from mm.mpc.mpc_tensor_batched import soft_fill_batched, _soft_fill_fraction
+from mm.mpc.mpc_tensor_batched import soft_fill_batched, _soft_fill_fraction, MonteCarloMPCTensorBatched
 from mm.mpc.l_param import LParamConfig
-from mm.mpc.state_tensor import effective_depth_ask_tensor, effective_depth_bid_tensor
+from mm.mpc.state_tensor import (
+    effective_depth_ask_tensor,
+    effective_depth_bid_tensor,
+    effective_depth_stacked_tensor,
+)
 
 N_SAMPLES = 8
 GRID = 4
@@ -184,3 +188,154 @@ def test_stacked_is_differentiable():
     loss.backward()
     assert kwargs["params"].grad is not None
     assert torch.isfinite(kwargs["params"].grad).all()
+
+
+@pytest.mark.parametrize("has_sample_bounds", [False, True])
+@pytest.mark.parametrize("structured", [False, True])
+def test_effective_depth_stacked_matches_separate(has_sample_bounds: bool, structured: bool):
+    gen = torch.Generator().manual_seed(42)
+    n = 3
+    spread_max = 60.0
+    lp = LParamConfig(
+        quote_size_min=1.0,
+        quote_size_max=100.0,
+        spread_max=spread_max,
+        n_components=n,
+        quote_spread_max=20.0 if structured else None,
+        quote_spread_min_depth=1.0 if structured else None,
+    )
+    params = torch.randn(6 * n + 3, dtype=torch.float64, generator=gen)
+    grid = torch.arange(1, 5, dtype=torch.float64) * 15.0
+    mid = torch.full((4, 1), 100.0, dtype=torch.float64)
+
+    if has_sample_bounds:
+        q_min_b = torch.full((4, 1), 2.0, dtype=torch.float64)
+        q_max_b = torch.full((4, 1), 20.0, dtype=torch.float64)
+        q_min_a = torch.full((4, 1), 3.0, dtype=torch.float64)
+        q_max_a = torch.full((4, 1), 25.0, dtype=torch.float64)
+    else:
+        q_min_b = q_max_b = q_min_a = q_max_a = None
+
+    db = effective_depth_bid_tensor(
+        params, grid, n, l_param=lp,
+        quote_size_min=q_min_b, quote_size_max=q_max_b, mid_price=mid
+    )
+    da = effective_depth_ask_tensor(
+        params, grid, n, l_param=lp,
+        quote_size_min=q_min_a, quote_size_max=q_max_a, mid_price=mid
+    )
+
+    stacked = effective_depth_stacked_tensor(
+        params, grid, n, l_param=lp,
+        bid_quote_size_min=q_min_b, bid_quote_size_max=q_max_b,
+        ask_quote_size_min=q_min_a, ask_quote_size_max=q_max_a,
+        mid_price=mid
+    )
+
+    assert torch.equal(stacked[0], db)
+    assert torch.equal(stacked[1], da)
+
+
+def test_compile_soft_fill_configuration_and_execution(monkeypatch):
+    from mm.mpc.mpc_state import State, OrderbookRelative
+
+    class MockFlow:
+        def sample(self, sh, device=None, dtype=None):
+            dt = dtype or torch.float64
+            n = int(sh[0]) * int(sh[1])
+            return (torch.ones(sh, dtype=dt, device=device), torch.ones(sh, dtype=dt, device=device))
+
+    class MockPrice:
+        def sample_residual(self, sh, device=None, dtype=None):
+            dt = dtype or torch.float64
+            return (torch.zeros(sh, dtype=dt, device=device), torch.zeros(sh, dtype=dt, device=device))
+
+    class MockExec:
+        maker_fee = 0.0
+
+    state = State(
+        mid=100.0,
+        ob_rel=OrderbookRelative(bids=((20.0, 50.0),), asks=((20.0, 50.0),)),
+        buy_vol=10.0,
+        sell_vol=10.0,
+        inventory=0.0,
+        cash=10000.0,
+        buy_vwap=100.0,
+        sell_vwap=100.0,
+    )
+
+    # 1. Configured via parameter
+    opt_compiled = MonteCarloMPCTensorBatched(
+        local_price_model=MockPrice(),
+        local_market_flow_model=MockFlow(),
+        execution_model=MockExec(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=40.0,
+        spread_step=20.0,
+        adam_epochs=2,
+        reference_price_source="local",
+        compile_soft_fill=True,
+    )
+    assert opt_compiled.compile_soft_fill is True
+
+    # 2. Configured via environment variable
+    monkeypatch.setenv("MM_TORCH_COMPILE", "1")
+    opt_env = MonteCarloMPCTensorBatched(
+        local_price_model=MockPrice(),
+        local_market_flow_model=MockFlow(),
+        execution_model=MockExec(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=40.0,
+        spread_step=20.0,
+        adam_epochs=2,
+        reference_price_source="local",
+    )
+    assert opt_env.compile_soft_fill is True
+
+    # Run decision and verify parity with eager
+    act_c, diag_c = opt_compiled.optimize_with_diagnostics(state)
+
+    opt_eager = MonteCarloMPCTensorBatched(
+        local_price_model=MockPrice(),
+        local_market_flow_model=MockFlow(),
+        execution_model=MockExec(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=40.0,
+        spread_step=20.0,
+        adam_epochs=2,
+        reference_price_source="local",
+        compile_soft_fill=False,
+    )
+    act_e, diag_e = opt_eager.optimize_with_diagnostics(state)
+
+    assert abs(diag_c.best.objective_value - diag_e.best.objective_value) < 1e-10
+
+    # 3. Fallback on runtime failure
+    opt_fail = MonteCarloMPCTensorBatched(
+        local_price_model=MockPrice(),
+        local_market_flow_model=MockFlow(),
+        execution_model=MockExec(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=40.0,
+        spread_step=20.0,
+        adam_epochs=2,
+        reference_price_source="local",
+        compile_soft_fill=True,
+    )
+
+    def exploding_soft_fill(*args, **kwargs):
+        raise RuntimeError("simulated compiler kernel panic")
+
+    monkeypatch.setattr("mm.mpc.mpc_tensor_batched._get_compiled_soft_fill", lambda tm: exploding_soft_fill)
+    act_f, diag_f = opt_fail.optimize_with_diagnostics(state)
+    assert opt_fail.compile_soft_fill is False
+    assert abs(diag_f.best.objective_value - diag_e.best.objective_value) < 1e-10
+

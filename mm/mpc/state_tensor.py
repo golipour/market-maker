@@ -386,6 +386,132 @@ def effective_depth_ask_tensor(
     return torch.clamp(raw - base, min=0.0)
 
 
+def effective_depth_stacked_tensor(
+    params: "Tensor",
+    spread: "Tensor",
+    n_components: int,
+    *,
+    use_softplus: bool = True,
+    l_param: "LParamConfig | None" = None,
+    bid_quote_size_min: "Tensor | float | None" = None,
+    bid_quote_size_max: "Tensor | float | None" = None,
+    ask_quote_size_min: "Tensor | float | None" = None,
+    ask_quote_size_max: "Tensor | float | None" = None,
+    mid_price: "Tensor | float | None" = None,
+    reservation_r_offset: "Tensor | float | None" = None,
+) -> "Tensor":
+    """Executable bid and ask depth evaluated simultaneously as stacked ``(2, ...)``."""
+    torch = _get_torch()
+    has_reservation = (
+        mid_price is not None
+        and reservation_r_offset is not None
+        and float(
+            reservation_r_offset.abs().item()
+            if torch.is_tensor(reservation_r_offset)
+            else abs(reservation_r_offset)
+        )
+        > 0.0
+    )
+    if l_param is None or l_param.spread_structured or has_reservation:
+        db = effective_depth_bid_tensor(
+            params,
+            spread,
+            n_components,
+            use_softplus=use_softplus,
+            l_param=l_param,
+            quote_size_min=bid_quote_size_min,
+            quote_size_max=bid_quote_size_max,
+            mid_price=mid_price,
+            reservation_r_offset=reservation_r_offset,
+        )
+        da = effective_depth_ask_tensor(
+            params,
+            spread,
+            n_components,
+            use_softplus=use_softplus,
+            l_param=l_param,
+            quote_size_min=ask_quote_size_min,
+            quote_size_max=ask_quote_size_max,
+            mid_price=mid_price,
+            reservation_r_offset=reservation_r_offset,
+        )
+        return torch.stack([db, da], dim=0)
+
+    from mm.mpc.l_param import depth_logit_index
+
+    n = n_components
+    spread_max = float(l_param.spread_max)
+    bid_L_raw = params[0 : 3 * n : 3]
+    bid_k_raw = params[1 : 3 * n : 3]
+    bid_x0_raw = params[2 : 3 * n : 3]
+    ask_L_raw = params[3 * n : 6 * n : 3]
+    ask_k_raw = params[3 * n + 1 : 6 * n : 3]
+    ask_x0_raw = params[3 * n + 2 : 6 * n : 3]
+
+    if use_softplus:
+        k_eff = torch.stack(
+            [
+                torch.nn.functional.softplus(bid_k_raw) + 1e-8,
+                torch.nn.functional.softplus(ask_k_raw) + 1e-8,
+            ],
+            dim=0,
+        )
+    else:
+        k_eff = torch.stack([bid_k_raw, ask_k_raw], dim=0)
+
+    x0_eff = spread_max * torch.stack(
+        [torch.sigmoid(bid_x0_raw), torch.sigmoid(ask_x0_raw)], dim=0
+    )
+
+    u_bid_d = params[depth_logit_index(side_off=0, n_components=n)]
+    u_ask_d = params[depth_logit_index(side_off=3 * n, n_components=n)]
+    q_bid = l_param.quote_size_from_depth_logit_torch(
+        u_bid_d, quote_size_min=bid_quote_size_min, quote_size_max=bid_quote_size_max
+    )
+    q_ask = l_param.quote_size_from_depth_logit_torch(
+        u_ask_d, quote_size_min=ask_quote_size_min, quote_size_max=ask_quote_size_max
+    )
+
+    has_sample_dim = (torch.is_tensor(q_bid) and q_bid.ndim > 0) or (
+        torch.is_tensor(q_ask) and q_ask.ndim > 0
+    )
+    if has_sample_dim:
+        q_bid_t = (
+            q_bid.reshape(-1, 1)
+            if torch.is_tensor(q_bid)
+            else torch.full((1, 1), float(q_bid), dtype=params.dtype, device=params.device)
+        )
+        q_ask_t = (
+            q_ask.reshape(-1, 1)
+            if torch.is_tensor(q_ask)
+            else torch.full((1, 1), float(q_ask), dtype=params.dtype, device=params.device)
+        )
+        q_total = torch.stack([q_bid_t, q_ask_t], dim=0)
+    else:
+        q_total = torch.stack([q_bid, q_ask], dim=0)
+
+    w = torch.stack(
+        [torch.softmax(bid_L_raw, dim=-1), torch.softmax(ask_L_raw, dim=-1)], dim=0
+    )
+    delta = torch.sigmoid(k_eff * (spread_max - x0_eff)) - torch.sigmoid(k_eff * (-x0_eff))
+    z = (w * delta).sum(dim=-1, keepdim=True).clamp(min=1e-12)
+
+    z_grid = (spread.unsqueeze(0).unsqueeze(-1) - x0_eff.unsqueeze(1)) * k_eff.unsqueeze(1)
+    S_grid = torch.sigmoid(z_grid)
+    z0 = (-x0_eff) * k_eff
+    S0 = torch.sigmoid(z0)
+    if has_sample_dim:
+        L_eff = q_total * w.unsqueeze(1) / z.unsqueeze(1)
+        raw = (L_eff.unsqueeze(2) * S_grid.unsqueeze(1)).sum(dim=-1)
+        base = (L_eff * S0.unsqueeze(1)).sum(dim=-1, keepdim=True)
+    else:
+        L_eff = q_total.unsqueeze(-1) * w / z
+        raw = (L_eff.unsqueeze(1) * S_grid).sum(dim=-1)
+        base = (L_eff * S0).sum(dim=-1, keepdim=True)
+
+    return torch.clamp(raw - base, min=0.0)
+
+
 def depth_bid_derivative_tensor(
     params: "Tensor",
     spread: "Tensor",
