@@ -22,17 +22,6 @@ fastapi>=0.100
 pydantic
 uvicorn>=0.23
 
-# Config parsing / test fixtures
-# PyYAML is imported by the Prometheus alert-rule tests.
-PyYAML
-# httpx provides Starlette's TestClient transport for the admin/platform API tests.
-httpx
-
-# Test tooling (dev only; not imported at runtime)
-pytest
-pytest-asyncio
-pytest-randomly
-
 # Observability (optional at runtime; imported lazily when enabled)
 opentelemetry-api
 opentelemetry-sdk

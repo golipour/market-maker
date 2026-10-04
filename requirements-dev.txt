@@ -1,0 +1,16 @@
+# Dev/test-only dependencies (NOT shipped in the runtime Docker image).
+# Local install:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Config parsing / test fixtures
+# PyYAML is imported only by tests/unit/test_prometheus_alert_rules.py.
+PyYAML
+# httpx provides Starlette's TestClient transport for the admin/platform API tests.
+httpx
+
+# Test tooling (dev only; never imported at runtime)
+pytest
+pytest-asyncio
+pytest-randomly
