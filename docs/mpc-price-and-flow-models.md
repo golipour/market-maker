@@ -232,12 +232,14 @@ $$
 q
   = \mathrm{clip}\bigl(
       \sigma(\beta_{\mathrm{gate}}^\top x_{\mathrm{gate}}),\;
-      0.001,\; 0.999
+      0.001,\; 1 - w_{\mathrm{refresh}}^{\min}
     \bigr),
 $$
 
-with logistic $\sigma(z) = (1+e^{-z})^{-1}$. High total flow raises $q$
+with logistic $\sigma(z) = (1+e^{-z})^{-1}$ and default `min_refresh_weight` $w_{\mathrm{refresh}}^{\min} = 0.15$ ($q \le 0.85$). High total flow raises $q$
 when $\beta_{\mathrm{gate},1} > 0$.
+
+Enforcing the refresh floor $w_{\mathrm{refresh}}^{\min} > 0$ prevents **gate saturation**: under heavy, sustained flow where $\beta_{\mathrm{gate}}^\top x_{\mathrm{gate}} \gg 0$, an uncapped gate would push $q \to 1.0$. If a large quote jump or sudden order book shift occurs during that flow burst, the mechanical Gaussian likelihood severely underflows. Capping $q \le 0.85$ (leaving at least $15\%$ weight on the heavy-tailed Student-$t$ innovation branch) preserves tail defense at all times and eliminates likelihood blow-ups.
 
 For each component $c$, the predictive law of the realized move
 $\Delta f_c$ is the mixture
@@ -510,5 +512,6 @@ global_price_model: same kind, Q_ref = 100
 | $m_c$ | `refresh_mean[c]` |
 | $\sigma^{\mathrm{mkt}}_c, \sigma^{\mathrm{ref}}_c$ | `market_sigma`, `refresh_sigma` |
 | $\nu$ | `student_df` |
+| $w_{\mathrm{refresh}}^{\min}$ | `min_refresh_weight` |
 | $\alpha$ (shape) | `shape_alpha` |
 | $\gamma_{\mathrm{price}}$ | `local_price_model.decay` |

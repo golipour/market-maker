@@ -225,7 +225,12 @@ def _student_t_logpdf_var(
     )
 
 
-def _mixture_market_probability(gate_beta: Any, total_flow: float) -> float:
+def _mixture_market_probability(
+    gate_beta: Any,
+    total_flow: float,
+    *,
+    min_refresh_weight: float = 0.15,
+) -> float:
     beta = list(gate_beta) if gate_beta is not None else [0.0, 0.0]
     b0 = float(beta[0]) if len(beta) > 0 else 0.0
     b1 = float(beta[1]) if len(beta) > 1 else 0.0
@@ -234,7 +239,8 @@ def _mixture_market_probability(gate_beta: Any, total_flow: float) -> float:
     if not math.isfinite(score):
         return 0.5
     # Match TorchConditionalMechanicalMixturePriceModel._market_probability_np.
-    return min(0.999, max(0.001, _expit(score)))
+    max_market = max(0.001, 1.0 - max(0.0, min(0.999, float(min_refresh_weight))))
+    return min(max_market, max(0.001, _expit(score)))
 
 
 def score_conditional_mechanical_mid_delta(
@@ -300,7 +306,12 @@ def score_conditional_mechanical_mid_delta(
         )
 
     student_df = float(params_before.get("student_df", 3.0))
-    q_market = _mixture_market_probability(params_before.get("gate_beta"), total_flow)
+    min_refresh_weight = float(params_before.get("min_refresh_weight", 0.15))
+    q_market = _mixture_market_probability(
+        params_before.get("gate_beta"),
+        total_flow,
+        min_refresh_weight=min_refresh_weight,
+    )
     q_refresh = 1.0 - q_market
 
     market_err = float(delta_mid) - market_mean

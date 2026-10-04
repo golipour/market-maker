@@ -235,6 +235,7 @@
           "initial_sigma": 50.0,
           "initial_log_sigma": 0.25,
           "student_df": 3.0,
+          "min_refresh_weight": 0.15,
           "point_mode": "sample"
         },
         "local_market_flow_model": {
@@ -256,7 +257,8 @@
           "reference_vwap_vol": 100.0,
           "shape_alpha": 0.5,
           "decay": 0.99,
-          "student_df": 3.0
+          "student_df": 3.0,
+          "min_refresh_weight": 0.15
         },
         "_optimizer_comment": "Do not add helper _comment keys inside optimizer.local or optimizer.global; those nested objects intentionally reject unknown keys.",
         "_optimizer_options": {

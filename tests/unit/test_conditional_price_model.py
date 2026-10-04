@@ -21,6 +21,7 @@ def test_conditional_price_model_uses_sigmoid_flow_gate_in_rollout() -> None:
 
     model = TorchConditionalMechanicalMixturePriceModel(
         reference_vwap_vol=100.0,
+        min_refresh_weight=0.0,
         point_mode="mean",
     )
     model._gate_beta = np.array([0.0, 1.0], dtype=np.float64)
@@ -127,3 +128,19 @@ def test_conditional_price_model_zero_depth_has_finite_gradient() -> None:
 
     assert torch.isfinite(buy_depth.grad).all()
     assert torch.isfinite(sell_depth.grad).all()
+
+
+def test_conditional_price_model_clamps_gate_with_min_refresh_weight() -> None:
+    torch = pytest.importorskip("torch")
+
+    model = TorchConditionalMechanicalMixturePriceModel(min_refresh_weight=0.15)
+    model._gate_beta = np.array([100.0, 100.0], dtype=np.float64)
+
+    # In numpy
+    prob_np = model._market_probability_np(10.0)
+    assert prob_np == pytest.approx(0.85, rel=1e-5)
+
+    # In torch
+    flow_torch = torch.tensor([10.0], dtype=torch.float64)
+    prob_torch = model._market_probability_torch(flow_torch, dtype=torch.float64, device=flow_torch.device)
+    assert prob_torch.item() == pytest.approx(0.85, rel=1e-5)

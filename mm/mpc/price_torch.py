@@ -386,6 +386,7 @@ class TorchConditionalMechanicalMixturePriceModel:
         initial_log_sigma: float = 0.25,
         sigma_min: float = 1e-6,
         student_df: float = 3.0,
+        min_refresh_weight: float = 0.15,
         point_mode: str = "sample",
         rls_p0: float = 1_000_000.0,
         param_eps: float = 1e-9,
@@ -399,6 +400,7 @@ class TorchConditionalMechanicalMixturePriceModel:
         self._alpha = 1.0 - self._gamma
         self._sigma_min = max(1e-12, float(sigma_min))
         self._student_df = max(2.1, float(student_df))
+        self._min_refresh_weight = max(0.0, min(0.999, float(min_refresh_weight)))
         self._point_mode = str(point_mode or "sample").lower().strip()
         self._param_eps = max(1e-12, float(param_eps))
         self._device = device
@@ -597,6 +599,7 @@ class TorchConditionalMechanicalMixturePriceModel:
             "reference_vwap_vol": self._reference_vwap_vol,
             "shape_alpha": self._shape_alpha,
             "student_df": self._student_df,
+            "min_refresh_weight": self._min_refresh_weight,
             "gate_beta": self._gate_beta.tolist(),
             "market_beta": {name: self._market_beta[name].tolist() for name in self._component_names},
             "refresh_mean": dict(self._refresh_mean),
@@ -759,7 +762,8 @@ class TorchConditionalMechanicalMixturePriceModel:
         x = np.array([1.0, float(log_flow) if math.isfinite(float(log_flow)) else 0.0], dtype=np.float64)
         gate_beta = np.nan_to_num(self._gate_beta, nan=0.0, posinf=20.0, neginf=-20.0)
         score = float(x @ gate_beta)
-        return min(0.999, max(0.001, _expit(score)))
+        max_market = max(0.001, 1.0 - self._min_refresh_weight)
+        return min(max_market, max(0.001, _expit(score)))
 
     def _market_probability_torch(self, total_flow: Any, *, dtype: Any, device: Any) -> Any:
         import torch
@@ -771,8 +775,9 @@ class TorchConditionalMechanicalMixturePriceModel:
             device=device,
         )
         q_market = torch.sigmoid(gate_beta[0] + gate_beta[1] * log_flow)
-        q_market = torch.nan_to_num(q_market, nan=0.5, posinf=0.999, neginf=0.001)
-        return torch.clamp(q_market, min=0.001, max=0.999)
+        max_market = max(0.001, 1.0 - self._min_refresh_weight)
+        q_market = torch.nan_to_num(q_market, nan=0.5, posinf=max_market, neginf=0.001)
+        return torch.clamp(q_market, min=0.001, max=max_market)
 
     def _student_t_logpdf(self, error: float, variance: float) -> float:
         nu = self._student_df
