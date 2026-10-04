@@ -1,0 +1,97 @@
+{
+  "config": {
+    "n_states": 100,
+    "start": 40000,
+    "stride": 1,
+    "epochs": 40,
+    "prod_epochs": 20,
+    "prod_warm": {
+      "enabled": true,
+      "alpha": 0.8,
+      "alpha_mode": "fixed",
+      "preserve_optimizer_state": true
+    }
+  },
+  "summary": [
+    {
+      "key": "cold_lr1.0",
+      "mean_J_best": 0.001691475600778973,
+      "neg_frac": 0.08900000000000001,
+      "max_step": 0.0017185915306005153,
+      "median_best_epoch": 27.0,
+      "mean_J_in_budget": 0.0015461288692100697
+    },
+    {
+      "key": "cold_lr0.5",
+      "mean_J_best": 0.0017006348043802242,
+      "neg_frac": 0.024999999999999994,
+      "max_step": 0.0002508565211854075,
+      "median_best_epoch": 31.0,
+      "mean_J_in_budget": 0.0016984467365480233
+    },
+    {
+      "key": "cold_lr0.25",
+      "mean_J_best": 0.0016956037413478062,
+      "neg_frac": 0.049499999999999995,
+      "max_step": 0.00012647563258117955,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0016425662257265575
+    },
+    {
+      "key": "cold_lr0.15",
+      "mean_J_best": 0.0016734341549503734,
+      "neg_frac": 0.0745,
+      "max_step": 8.6248914005655e-05,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0012820890099991015
+    },
+    {
+      "key": "cold_lr0.1",
+      "mean_J_best": 0.001598800139018029,
+      "neg_frac": 0.09899999999999999,
+      "max_step": 6.342354932372474e-05,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0007968349176347981
+    },
+    {
+      "key": "warm_lr1.0",
+      "mean_J_best": 0.0014625904053648664,
+      "neg_frac": 0.184,
+      "max_step": 0.001050170002520963,
+      "median_best_epoch": 24.0,
+      "mean_J_in_budget": 0.0013769250005201922
+    },
+    {
+      "key": "warm_lr0.5",
+      "mean_J_best": 0.001474959550152033,
+      "neg_frac": 0.018750000000000003,
+      "max_step": 0.0002989274122816223,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0012949431420750952
+    },
+    {
+      "key": "warm_lr0.25",
+      "mean_J_best": 0.0016301485406757781,
+      "neg_frac": 0.009000000000000001,
+      "max_step": 0.0001730366820692052,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0013617188887059671
+    },
+    {
+      "key": "warm_lr0.15",
+      "mean_J_best": 0.0016412960313719666,
+      "neg_frac": 0.00075,
+      "max_step": 8.123530379120894e-05,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.0012941033722216361
+    },
+    {
+      "key": "warm_lr0.1",
+      "mean_J_best": 0.0015887039036200147,
+      "neg_frac": 0.001,
+      "max_step": 4.99399495749949e-05,
+      "median_best_epoch": 39.0,
+      "mean_J_in_budget": 0.001148315269127692
+    }
+  ]
+}

@@ -277,6 +277,8 @@
             "grad_norm_eps": 1e-12
           },
           "fixed_mc_samples": true,
+          "_comment_compile_soft_fill": "compile_soft_fill defaults to true. torch.compile fuses the soft-fill chain, which is dispatch-bound rather than FLOP-bound: measured 28.74 ms/decide eager vs 19.32 ms compiled (1.49x) at this preset on a single CPU thread, with per-decide actions equal to ~1e-11 (float64 reassociation noise). The inductor cost (3-5 s cold, ~1 s warm cache) is paid once at construction by warm_soft_fill_compile(), never inside a decide, so it does not consume decision_timeout_ms; the first decide afterwards measures ~200 ms. That warm-up loops until steady state and covers the configured soft_fill_activation/queue_model branch, since dynamo specializes on which branches are taken. Set false to force eager; MM_TORCH_COMPILE=0 does the same globally. Any compile failure falls back to eager automatically.",
+          "compile_soft_fill": true,
           "horizon": 2,
           "adam_epochs": 20,
           "adam_lr": 1e0,

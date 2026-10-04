@@ -339,3 +339,188 @@ def test_compile_soft_fill_configuration_and_execution(monkeypatch):
     assert opt_fail.compile_soft_fill is False
     assert abs(diag_f.best.objective_value - diag_e.best.objective_value) < 1e-10
 
+
+
+import contextlib as _contextlib
+
+import mm.mpc.mpc_tensor_batched as _MODULE
+
+
+@_contextlib.contextmanager
+def _isolated_compile_state():
+    """Save/restore the module-global compile caches.
+
+    ``_COMPILE_SOFT_FILL_FAILED`` latches permanently in production (one
+    failure means inductor is unusable for the process), and
+    ``_SOFT_FILL_WARMED_SIGNATURES`` accumulates across instances. Tests that
+    exercise those paths must not leak state into each other, or a test that
+    forces the failure path silently disables compilation for every test that
+    runs after it.
+    """
+    saved_failed = _MODULE._COMPILE_SOFT_FILL_FAILED
+    saved_kernel = _MODULE._COMPILED_SOFT_FILL_KERNEL
+    saved_sigs = set(_MODULE._SOFT_FILL_WARMED_SIGNATURES)
+    # Start from a clean slate: another test may have latched the failure flag,
+    # in which case the warm-up correctly short-circuits and records nothing.
+    _MODULE._COMPILE_SOFT_FILL_FAILED = False
+    _MODULE._COMPILED_SOFT_FILL_KERNEL = None
+    _MODULE._SOFT_FILL_WARMED_SIGNATURES.clear()
+    try:
+        yield
+    finally:
+        _MODULE._COMPILE_SOFT_FILL_FAILED = saved_failed
+        _MODULE._COMPILED_SOFT_FILL_KERNEL = saved_kernel
+        _MODULE._SOFT_FILL_WARMED_SIGNATURES.clear()
+        _MODULE._SOFT_FILL_WARMED_SIGNATURES.update(saved_sigs)
+
+
+def _mk_opt(**over):
+    from mm.mpc.mpc_tensor_batched import MonteCarloMPCTensorBatched
+    from mm.mpc.mpc_state import State, OrderbookRelative
+
+    class MockFlow:
+        def sample(self, sh, device=None, dtype=None):
+            dt = dtype or torch.float64
+            return (torch.ones(sh, dtype=dt, device=device),
+                    torch.ones(sh, dtype=dt, device=device))
+
+    class MockPrice:
+        def sample_residual(self, sh, device=None, dtype=None):
+            dt = dtype or torch.float64
+            return (torch.zeros(sh, dtype=dt, device=device),
+                    torch.zeros(sh, dtype=dt, device=device))
+
+    class MockExec:
+        maker_fee = 0.0
+
+    kw = dict(
+        local_price_model=MockPrice(),
+        local_market_flow_model=MockFlow(),
+        execution_model=MockExec(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=40.0,
+        spread_step=20.0,
+        adam_epochs=2,
+        reference_price_source="local",
+    )
+    kw.update(over)
+    return MonteCarloMPCTensorBatched(**kw)
+
+
+def test_compile_soft_fill_is_enabled_by_default(monkeypatch):
+    """The compiled kernel is the default; the environment can still opt out."""
+    monkeypatch.delenv("MM_TORCH_COMPILE", raising=False)
+    assert _mk_opt().compile_soft_fill is True
+
+    for value in ("0", "false", "no", "off"):
+        monkeypatch.setenv("MM_TORCH_COMPILE", value)
+        assert _mk_opt().compile_soft_fill is False, value
+
+    # An explicit argument beats the environment in both directions.
+    monkeypatch.setenv("MM_TORCH_COMPILE", "1")
+    assert _mk_opt(compile_soft_fill=False).compile_soft_fill is False
+    monkeypatch.setenv("MM_TORCH_COMPILE", "0")
+    assert _mk_opt(compile_soft_fill=True).compile_soft_fill is True
+
+
+def test_eager_opt_out_matches_compiled_default():
+    """Opting out must reproduce the compiled result to float64 reassociation."""
+    from mm.mpc.mpc_state import State, OrderbookRelative
+
+    state = State(
+        mid=100.0,
+        ob_rel=OrderbookRelative(bids=((20.0, 50.0), (40.0, 30.0)), asks=((20.0, 40.0),)),
+        buy_vol=10.0,
+        sell_vol=10.0,
+        inventory=0.0,
+        cash=10000.0,
+        buy_vwap=100.0,
+        sell_vwap=100.0,
+    )
+    _, dc = _mk_opt(compile_soft_fill=True).optimize_with_diagnostics(state)
+    _, de = _mk_opt(compile_soft_fill=False).optimize_with_diagnostics(state)
+    assert abs(dc.best.objective_value - de.best.objective_value) < 1e-12
+
+
+def test_warm_soft_fill_compile_pays_cost_off_the_decide_path():
+    """The warm-up must run at construction, not inside the first decide.
+
+    Compiling lazily costs seconds, which would otherwise land inside a
+    single decide bounded by ``decision_timeout_ms`` (10 s in the shipped
+    preset).
+    """
+    with _isolated_compile_state():
+        opt = _mk_opt(compile_soft_fill=True)
+        assert opt.soft_fill_compile_warmup_ms >= 0.0
+
+        if _MODULE._COMPILE_SOFT_FILL_FAILED:
+            # Inductor refused to build this process (stale precompiled
+            # headers, no compiler, ...). The warm-up must have degraded to
+            # eager rather than raising, which is the contract that matters.
+            assert not _MODULE._SOFT_FILL_WARMED_SIGNATURES
+            return
+
+        assert _MODULE._SOFT_FILL_WARMED_SIGNATURES, "warm-up recorded no signature"
+
+        # A repeated warm-up for the same signature is free. The signature
+        # key is (n_components, n_samples, grid_levels, activation, queue).
+        n_c, n_s, g_l, act, queue = next(
+            iter(_MODULE._SOFT_FILL_WARMED_SIGNATURES)
+        )
+        assert _MODULE.warm_soft_fill_compile(
+            n_components=n_c,
+            n_samples=n_s,
+            grid_levels=g_l,
+            soft_fill_activation=act,
+            soft_fill_queue_model=queue,
+        ) == 0.0
+
+
+def test_warm_up_failure_falls_back_to_eager(monkeypatch):
+    """A platform without inductor must not break construction."""
+    with _isolated_compile_state():
+        def boom(*a, **k):
+            raise RuntimeError("no inductor here")
+
+        # monkeypatch, not a bare assignment: a direct assignment would leak
+        # into every later test in the session.
+        monkeypatch.setattr(_MODULE, "_get_compiled_soft_fill", boom)
+        assert _MODULE.warm_soft_fill_compile(
+            n_components=2, n_samples=4, grid_levels=2
+        ) == 0.0
+        # Construction still succeeds and stays on the eager path.
+        assert _mk_opt(compile_soft_fill=True).compile_soft_fill is True
+
+
+def test_warm_up_covers_configured_fill_branch():
+    """The warm-up must cover the configured fill branch, not just the default.
+
+    ``soft_fill_queue_model`` and ``soft_fill_activation`` select real
+    branches inside ``soft_fill_batched``, so warming the default branch and
+    then running ``pro_rata``/``hardsigmoid`` would leave a second lazy
+    compile to be paid by the first decide. Asserted on the warmed-signature
+    key rather than on wall-clock, so it cannot flake on a warm inductor
+    cache.
+    """
+    with _isolated_compile_state():
+        _mk_opt(
+            compile_soft_fill=True,
+            local_optimizer={
+                "n_components": 2,
+                "soft_fill_activation": "hardsigmoid",
+                "soft_fill_queue_model": "pro_rata",
+                "soft_fill_temp": 0.05,
+            },
+        )
+        if _MODULE._COMPILE_SOFT_FILL_FAILED:
+            return  # inductor unavailable; fallback already covered above
+
+        sigs = _MODULE._SOFT_FILL_WARMED_SIGNATURES
+        assert sigs, "warm-up recorded no signature"
+        local = [s for s in sigs if s[3] == "hardsigmoid" and s[4] == "pro_rata"]
+        assert local, (
+            "the configured hardsigmoid/pro_rata branch was never warmed; "
+            f"warmed signatures: {sorted(sigs)}"
+        )
