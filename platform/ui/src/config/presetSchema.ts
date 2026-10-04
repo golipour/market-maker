@@ -311,6 +311,15 @@ function priceModelFields(
       when: modelKindWhen(`${base}.kind`, ["conditional_mechanical_mixture"]),
     },
     {
+      path: `${base}.min_refresh_weight`,
+      label: "Min refresh weight",
+      type: "number",
+      defaultValue: 0.15,
+      step: "0.01",
+      help: "Floor on refresh Student-t weight to prevent gate saturation under heavy flow.",
+      when: modelKindWhen(`${base}.kind`, ["conditional_mechanical_mixture"]),
+    },
+    {
       path: `${base}.point_mode`,
       label: "Point mode",
       type: "select",

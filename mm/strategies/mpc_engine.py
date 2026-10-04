@@ -596,7 +596,11 @@ def _build_controller(
         market_flow_model=local_market_flow_model,
     )
 
-    execution_cfg = dict(config.execution_model or {})
+    execution_cfg = {
+        key: value
+        for key, value in (config.execution_model or {}).items()
+        if not str(key).startswith("_")
+    }
     execution_kind = str(execution_cfg.pop("kind", "real")).lower()
     if execution_kind == "observed_step":
         execution_kind = "real"
@@ -604,7 +608,11 @@ def _build_controller(
         raise ValueError(f"unsupported execution_model kind: {execution_kind}")
     execution_model = RealExecutionModel(**execution_cfg)
 
-    optimizer_cfg = dict(config.optimizer or {})
+    optimizer_cfg = {
+        key: value
+        for key, value in (config.optimizer or {}).items()
+        if not str(key).startswith("_")
+    }
     nested_global_model_keys = [
         key for key in ("global_market_flow_model", "global_price_model") if key in optimizer_cfg
     ]
@@ -707,7 +715,11 @@ def _build_market_flow_model(cfg: dict[str, Any] | None, *, config_name: str) ->
         TorchWeibullModel,
     )
 
-    flow_cfg = dict(cfg or {})
+    flow_cfg = {
+        key: value
+        for key, value in (cfg or {}).items()
+        if not str(key).startswith("_")
+    }
     flow_kind = str(flow_cfg.pop("kind", "hurdle_lognormal")).lower()
     if flow_kind == "gamma":
         return TorchDiscreteGammaModel(**flow_cfg)
@@ -730,7 +742,11 @@ def _build_price_model(
 ) -> Any:
     from mm.mpc.price_torch import TorchConditionalMechanicalMixturePriceModel, TorchResidualPriceModel
 
-    price_cfg = dict(cfg or {})
+    price_cfg = {
+        key: value
+        for key, value in (cfg or {}).items()
+        if not str(key).startswith("_")
+    }
     price_kind = str(price_cfg.pop("kind", "residual")).lower()
     if price_kind in ("conditional_mechanical_mixture", "flow_gated_mixture"):
         removed = [key for key in ("vwap_depth", "reference_vwap_depth") if key in price_cfg]
@@ -825,10 +841,10 @@ def _build_global_price_model(cfg: dict[str, Any] | None) -> Any:
     if kind in ("none", "null", "disabled"):
         return None
     if kind == "ewma_gaussian":
-        payload = {k: v for k, v in cfg.items() if k != "kind"}
+        payload = {k: v for k, v in cfg.items() if k != "kind" and not str(k).startswith("_")}
         return GlobalGaussianPriceModel(**payload)
     if kind == "gaussian":
-        payload = {k: v for k, v in cfg.items() if k != "kind"}
+        payload = {k: v for k, v in cfg.items() if k != "kind" and not str(k).startswith("_")}
         return GaussianGlobalDeltaModel(**payload)
     raise ValueError(f"unsupported global_price_model kind: {kind}")
 

@@ -1754,7 +1754,9 @@ FROM numeric_params{where}
 ORDER BY 1, 2"""
 
 
-_PRICE_SCALE_CONFIG_PARAM_REGEX = r"\.(reference_vwap_vol|shape_alpha|student_df|active_in_mpc)$"
+_PRICE_SCALE_CONFIG_PARAM_REGEX = (
+    r"\.(reference_vwap_vol|shape_alpha|student_df|min_refresh_weight|active_in_mpc)$"
+)
 _HURDLE_P_ALIAS_PARAM_REGEX = r"\.p_(buy|sell)$"
 _ALL_PARAMS_EXCLUDE_REGEX = (
     f"{_PRICE_SCALE_CONFIG_PARAM_REGEX}|{_HURDLE_P_ALIAS_PARAM_REGEX}"

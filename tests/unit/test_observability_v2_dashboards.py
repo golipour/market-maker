@@ -440,6 +440,7 @@ def test_model_parameters_dashboard_flattens_local_and_global_params() -> None:
     assert "reference_vwap_vol" in local_config_sql
     assert "shape_alpha" in local_config_sql
     assert "student_df" in local_config_sql
+    assert "min_refresh_weight" in local_config_sql
     assert "metric !~" in local_all_sql
     assert "reference_vwap_vol" in local_all_sql
     local_flow_sql = panels_by_title["Local market-flow params"]["targets"][0]["rawSql"]
