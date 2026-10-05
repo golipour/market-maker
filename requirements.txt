@@ -2,6 +2,12 @@
 # Local install:
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch
 #   pip install -r requirements.txt
+#
+# NOTE: do NOT add packages here that are not already present in the prebuilt
+# python-deps base image. CI has no DNS for files.pythonhosted.org, so any
+# newly named distribution triggers a pip download and fails the build. The
+# torch.compile toolchain (g++, ninja) is therefore provisioned by apt/vendored
+# in the Dockerfile rather than declared here.
 
 # Core runtime
 numpy
@@ -11,11 +17,6 @@ requests
 websockets
 cryptography
 redis
-
-# Build toolchain for the PyTorch Inductor C++ backend (torch.compile).
-# Ninja drives the codegen build; without it torch.utils.cpp_extension raises
-# "Ninja is required to load C++ extensions" and Inductor cannot compile.
-ninja
 
 # Config / persistence
 python-dotenv>=1.0

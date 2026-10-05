@@ -40,11 +40,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ``g++`` is required by the PyTorch Inductor C++ backend. Without a working
-# compiler, ``torch.compile`` raises ``InvalidCxxCompiler`` on the first call
-# and the optimizer silently runs eager forever -- which is exactly what
-# happened in production before this was added. ``ninja`` comes from
-# requirements.txt (pip wheel, no apt package needed).
+# ``g++`` is required by the PyTorch Inductor C++ backend, and ``ninja``
+# (ninja-build) drives the codegen build. Without both, ``torch.compile`` raises
+# ``InvalidCxxCompiler`` on the first call and the optimizer silently runs eager
+# forever -- which is exactly what happened in production before this was added.
+#
+# Both come from apt rather than pip on purpose: the CI runner has no DNS for
+# files.pythonhosted.org, so declaring ``ninja`` in requirements.txt fails the
+# build. The Debian archive resolves fine.
 #
 # Inductor also needs the CPython headers, which the python:3.11 image already
 # ships at /usr/local/include/python3.11.
@@ -53,6 +56,7 @@ RUN apt-get update \
         ca-certificates \
         libpq5 \
         g++ \
+        ninja-build \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin marketmaker \
     && mkdir -p /config /data/parquet /data/attribution /var/log/mm /var/cache/torchinductor \
@@ -66,10 +70,13 @@ COPY --from=ui /ui/dist platform/ui/dist
 # image that silently runs eager forever. The real compile is not exercised here
 # (it needs app sources and would cost seconds); only the toolchain is checked,
 # which is exactly what regressed.
+#
+# ninja comes from apt (ninja-build), so check the binary rather than importing
+# the pip ``ninja`` module, which is intentionally absent (see requirements.txt).
 RUN set -eux; \
     /opt/venv/bin/python -c "import torch; print('torch OK', torch.__version__)"; \
     command -v g++ >/dev/null || { echo 'ERROR: g++ missing, torch.compile cannot work'; exit 1; }; \
-    /opt/venv/bin/python -c "import ninja; print('ninja OK')" || { echo 'ERROR: ninja missing, inductor cannot build'; exit 1; }; \
+    command -v ninja >/dev/null || { echo 'ERROR: ninja missing, inductor cannot build'; exit 1; }; \
     /opt/venv/bin/python -c "from torch.utils.cpp_extension import verify_ninja_availability; verify_ninja_availability(); print('inductor toolchain OK')" || { echo 'ERROR: inductor build toolchain unusable'; exit 1; }; \
     chown -R marketmaker:marketmaker /config /data /var/log/mm /app/platform /var/cache/torchinductor
 
