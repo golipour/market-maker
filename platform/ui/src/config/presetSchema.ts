@@ -805,6 +805,13 @@ export const PRESET_SECTIONS: readonly SectionDef[] = [
         defaultValue: true,
       },
       {
+        path: "controller.optimizer.compile_soft_fill",
+        label: "Compile soft fill (torch.compile)",
+        type: "boolean",
+        defaultValue: true,
+        help: "Fuses the soft-fill chain with torch.compile (Inductor). Default true. The compile cost (3-5 s cold, ~1 s warm cache) is paid once at construction during startup warm-up, never inside a decide, so it does not consume decision_timeout_ms; the first decide afterwards measures ~200 ms. Set false to force eager. Any compile failure falls back to eager automatically. MM_TORCH_COMPILE=0 forces eager globally.",
+      },
+      {
         path: "controller.optimizer.horizon",
         label: "Horizon",
         type: "number",

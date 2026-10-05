@@ -46,6 +46,16 @@ spec:
               value: "1"
             - name: MM_ORDER_ATTRIBUTION_CACHE_DIR
               value: /data/attribution
+            # PyTorch Inductor writes generated C++/objects here at process
+            # boot (warm_soft_fill_compile). It must be a writable path owned
+            # by the runtime user; the default /tmp gets cleared on restart,
+            # so every restart pays a cold compile. An emptyDir keeps warm
+            # codegen for the pod lifetime, so steady-state boot is the ~1 s
+            # warm-cache path rather than 3-5 s.
+            - name: TORCHINDUCTOR_CACHE_DIR
+              value: /var/cache/torchinductor
+            - name: TORCHINDUCTOR_COMPILE_THREADS
+              value: "1"
           envFrom:
             - secretRef:
                 name: market-maker-secrets
@@ -55,6 +65,8 @@ spec:
               readOnly: true
             - name: attribution-cache
               mountPath: /data/attribution
+            - name: inductor-cache
+              mountPath: /var/cache/torchinductor
           resources:
             requests:
               cpu: 250m
@@ -79,6 +91,8 @@ spec:
           configMap:
             name: market-maker-config
         - name: attribution-cache
+          emptyDir: {}
+        - name: inductor-cache
           emptyDir: {}
 ---
 apiVersion: v1

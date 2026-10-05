@@ -40,21 +40,38 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ``g++`` is required by the PyTorch Inductor C++ backend. Without a working
+# compiler, ``torch.compile`` raises ``InvalidCxxCompiler`` on the first call
+# and the optimizer silently runs eager forever -- which is exactly what
+# happened in production before this was added. ``ninja`` comes from
+# requirements.txt (pip wheel, no apt package needed).
+#
+# Inductor also needs the CPython headers, which the python:3.11 image already
+# ships at /usr/local/include/python3.11.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libpq5 \
+        g++ \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin marketmaker \
-    && mkdir -p /config /data/parquet /data/attribution /var/log/mm
+    && mkdir -p /config /data/parquet /data/attribution /var/log/mm /var/cache/torchinductor \
+    && chown marketmaker:marketmaker /var/cache/torchinductor
 
 COPY --from=python-deps /opt/venv /opt/venv
 COPY mm/ mm/
 COPY --from=ui /ui/dist platform/ui/dist
 
+# Fail the build if the Inductor toolchain is unusable, instead of shipping an
+# image that silently runs eager forever. The real compile is not exercised here
+# (it needs app sources and would cost seconds); only the toolchain is checked,
+# which is exactly what regressed.
 RUN set -eux; \
     /opt/venv/bin/python -c "import torch; print('torch OK', torch.__version__)"; \
-    chown -R marketmaker:marketmaker /config /data /var/log/mm /app/platform
+    command -v g++ >/dev/null || { echo 'ERROR: g++ missing, torch.compile cannot work'; exit 1; }; \
+    /opt/venv/bin/python -c "import ninja; print('ninja OK')" || { echo 'ERROR: ninja missing, inductor cannot build'; exit 1; }; \
+    /opt/venv/bin/python -c "from torch.utils.cpp_extension import verify_ninja_availability; verify_ninja_availability(); print('inductor toolchain OK')" || { echo 'ERROR: inductor build toolchain unusable'; exit 1; }; \
+    chown -R marketmaker:marketmaker /config /data /var/log/mm /app/platform /var/cache/torchinductor
 
 USER marketmaker
 

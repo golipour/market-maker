@@ -12,6 +12,11 @@ websockets
 cryptography
 redis
 
+# Build toolchain for the PyTorch Inductor C++ backend (torch.compile).
+# Ninja drives the codegen build; without it torch.utils.cpp_extension raises
+# "Ninja is required to load C++ extensions" and Inductor cannot compile.
+ninja
+
 # Config / persistence
 python-dotenv>=1.0
 psycopg2-binary>=2.9

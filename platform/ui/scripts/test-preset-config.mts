@@ -169,6 +169,19 @@ function testResetAllPreservesUnknownKeys() {
   assert.deepEqual(next.custom_extension, { enabled: true });
 }
 
+function testCompileSoftFillIsExposedAndDefaultsTrue() {
+  // The engine defaults compile_soft_fill to true (mm/mpc/mpc_tensor_batched.py
+  // reads MM_TORCH_COMPILE, defaulting to on). The schema must mirror that, or
+  // an operator cannot disable it from the form and the field is invisible in
+  // the UI while still being live in production.
+  const path = "controller.optimizer.compile_soft_fill";
+  assert.ok(FIELD_BY_PATH.has(path), `missing ${path}`);
+  const field = FIELD_BY_PATH.get(path)!;
+  assert.equal(field.type, "boolean");
+  assert.equal(field.defaultValue, true);
+  assert.equal(getAt(applySchemaDefaults({}), path), true);
+}
+
 const tests = [
   testStripHelperKeys,
   testMergePreservesUnknown,
@@ -180,6 +193,7 @@ const tests = [
   testCountOverriddenMatchesExplicitOverrides,
   testClearSectionOverridesRemovesOnlyThatSection,
   testResetAllPreservesUnknownKeys,
+  testCompileSoftFillIsExposedAndDefaultsTrue,
 ];
 
 let failed = 0;
