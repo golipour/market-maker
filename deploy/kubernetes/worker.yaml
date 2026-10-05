@@ -54,8 +54,11 @@ spec:
             # warm-cache path rather than 3-5 s.
             - name: TORCHINDUCTOR_CACHE_DIR
               value: /var/cache/torchinductor
+            # Match the container's cpu limit (2). Serial codegen measured
+            # 129 s for one venue signature; letting inductor use both cores
+            # roughly halves that.
             - name: TORCHINDUCTOR_COMPILE_THREADS
-              value: "1"
+              value: "2"
           envFrom:
             - secretRef:
                 name: market-maker-secrets
