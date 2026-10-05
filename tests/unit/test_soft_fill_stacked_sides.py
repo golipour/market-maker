@@ -360,11 +360,13 @@ def _isolated_compile_state():
     saved_failed = _MODULE._COMPILE_SOFT_FILL_FAILED
     saved_kernel = _MODULE._COMPILED_SOFT_FILL_KERNEL
     saved_sigs = set(_MODULE._SOFT_FILL_WARMED_SIGNATURES)
+    saved_unwarmed = set(_MODULE._SOFT_FILL_UNWARMED_SEEN)
     # Start from a clean slate: another test may have latched the failure flag,
     # in which case the warm-up correctly short-circuits and records nothing.
     _MODULE._COMPILE_SOFT_FILL_FAILED = False
     _MODULE._COMPILED_SOFT_FILL_KERNEL = None
     _MODULE._SOFT_FILL_WARMED_SIGNATURES.clear()
+    _MODULE._SOFT_FILL_UNWARMED_SEEN.clear()
     try:
         yield
     finally:
@@ -372,6 +374,8 @@ def _isolated_compile_state():
         _MODULE._COMPILED_SOFT_FILL_KERNEL = saved_kernel
         _MODULE._SOFT_FILL_WARMED_SIGNATURES.clear()
         _MODULE._SOFT_FILL_WARMED_SIGNATURES.update(saved_sigs)
+        _MODULE._SOFT_FILL_UNWARMED_SEEN.clear()
+        _MODULE._SOFT_FILL_UNWARMED_SEEN.update(saved_unwarmed)
 
 
 def _mk_opt(**over):
@@ -523,4 +527,68 @@ def test_warm_up_covers_configured_fill_branch():
         assert local, (
             "the configured hardsigmoid/pro_rata branch was never warmed; "
             f"warmed signatures: {sorted(sigs)}"
+        )
+
+
+def test_unwarmed_shape_never_compiles_on_the_decide_path():
+    """Regression: a shape missing from the warm set must not compile live.
+
+    Production incident: a strategy override changed ``n_samples``/
+    ``grid_levels`` to a combination the construction-time warm-up did not
+    cover. The first live decide for that venue paid a lazy inductor compile
+    measured at 162 s -- far past ``decision_timeout_ms`` (15 s) -- which wedged
+    every controller on "optimizer decision in progress" and stopped quoting
+    entirely.
+
+    The contract is that the decide path only ever calls a kernel whose
+    signature was already warmed. An unwarmed signature must fall back to
+    eager (slower but correct) instead of compiling.
+    """
+    with _isolated_compile_state():
+        from mm.mpc.mpc_state import State, OrderbookRelative
+
+        opt = _mk_opt(compile_soft_fill=True)
+        if _MODULE._COMPILE_SOFT_FILL_FAILED:
+            return  # inductor unavailable on this host; nothing to gate
+
+        # Simulate the incident: forget every warmed signature, as if this
+        # venue's shape had never been paid for at construction.
+        _MODULE._SOFT_FILL_WARMED_SIGNATURES.clear()
+        _MODULE._SOFT_FILL_UNWARMED_SEEN.clear()
+
+        calls: list[int] = []
+        real_get = _MODULE._get_compiled_soft_fill
+
+        def counting_get(torch_mod):
+            calls.append(1)
+            return real_get(torch_mod)
+
+        monkey = pytest.MonkeyPatch()
+        try:
+            monkey.setattr(_MODULE, "_get_compiled_soft_fill", counting_get)
+            state = State(
+                mid=100.0,
+                ob_rel=OrderbookRelative(
+                    bids=((20.0, 50.0), (40.0, 30.0)), asks=((20.0, 40.0),)
+                ),
+                buy_vol=10.0,
+                sell_vol=10.0,
+                inventory=0.0,
+                cash=10000.0,
+                buy_vwap=100.0,
+                sell_vwap=100.0,
+            )
+            opt.optimize_with_diagnostics(state)
+        finally:
+            monkey.undo()
+
+        assert not calls, (
+            "the decide path requested a compiled kernel for an unwarmed "
+            f"shape (signature(s): {sorted(_MODULE._SOFT_FILL_UNWARMED_SEEN)}); "
+            "that is the lazy compile that wedged the controller in production"
+        )
+        # The shortfall must be observable, not silent.
+        assert _MODULE._SOFT_FILL_UNWARMED_SEEN, (
+            "an unwarmed shape ran eager without recording the signature, so "
+            "the missed warm-up would be invisible in logs"
         )

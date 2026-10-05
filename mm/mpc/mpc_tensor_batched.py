@@ -785,6 +785,12 @@ _COMPILE_SOFT_FILL_FAILED: bool = False
 #: semantics, so both are warmed.
 _SOFT_FILL_WARMED_SIGNATURES: set[tuple[Any, ...]] = set()
 
+#: Signatures a decide asked for that construction never warmed. Logged once per
+#: signature so a venue whose shape was never paid for at boot shows up in the
+#: logs instead of silently running eager (or, worse, compiling on the decide
+#: path and blowing the decision timeout).
+_SOFT_FILL_UNWARMED_SEEN: set[tuple[Any, ...]] = set()
+
 #: Maximum warm-up passes per signature. Bounded so a pathological graph
 #: cannot stall process boot; the steady-state check normally exits after 3-4.
 _SOFT_FILL_WARMUP_MAX_PASSES: int = 6
@@ -810,6 +816,31 @@ def _get_compiled_soft_fill(torch_mod: Any = torch) -> Any:
             {"reason": str(exc)},
         )
         return soft_fill_batched
+
+
+def _soft_fill_signature(
+    *,
+    n_components: int,
+    n_samples: int,
+    grid_levels: int,
+    soft_fill_activation: Any,
+    soft_fill_queue_model: Any,
+) -> tuple[Any, ...]:
+    """Key identifying one inductor specialization of ``soft_fill_batched``.
+
+    Inductor specializes generated code on tensor shapes *and* on which Python
+    branches are taken, so a signature must cover both. Warm-up and the decide
+    path must derive the key through this one function; when they computed it
+    separately they drifted, and a live decide paid a 162 s lazy compile that
+    blew ``decision_timeout_ms`` and wedged every controller.
+    """
+    return (
+        int(n_components),
+        max(int(n_samples), 1),
+        max(int(grid_levels), 1),
+        str(soft_fill_activation),
+        str(soft_fill_queue_model),
+    )
 
 
 def warm_soft_fill_compile(
@@ -848,12 +879,12 @@ def warm_soft_fill_compile(
     n = int(n_components)
     ns = max(int(n_samples), 1)
     gl = max(int(grid_levels), 1)
-    signature = (
-        n,
-        ns,
-        gl,
-        str(soft_fill_activation),
-        str(soft_fill_queue_model),
+    signature = _soft_fill_signature(
+        n_components=n,
+        n_samples=ns,
+        grid_levels=gl,
+        soft_fill_activation=soft_fill_activation,
+        soft_fill_queue_model=soft_fill_queue_model,
     )
     if signature in _SOFT_FILL_WARMED_SIGNATURES:
         return 0.0
@@ -1731,11 +1762,41 @@ class MonteCarloMPCTensorBatched:
                         buy_vwap_t = buy_vwap_book_t + eps_buy_h
                         sell_vwap_t = sell_vwap_book_t + eps_sell_h
 
-                    soft_fill_fn = (
-                        _get_compiled_soft_fill(torch_mod)
-                        if self.compile_soft_fill
-                        else soft_fill_batched
-                    )
+                    # Never trigger a lazy inductor compile on the decide
+                    # path. An unwarmed shape used to compile here (measured
+                    # 162 s), which blew ``decision_timeout_ms`` and left the
+                    # controller wedged on "optimizer decision in progress"
+                    # for every subsequent frame. A signature absent from the
+                    # warmed set means this venue's shape was never paid for at
+                    # construction, so run eager -- eager is always correct,
+                    # just slower -- and record it so the shortfall is visible
+                    # in logs rather than silently costing decisions.
+                    venue_n = n
+                    soft_fill_fn = soft_fill_batched
+                    if self.compile_soft_fill:
+                        signature = _soft_fill_signature(
+                            n_components=venue_n,
+                            n_samples=mid_t.shape[0],
+                            grid_levels=spread_grid.shape[-1],
+                            soft_fill_activation=self.soft_fill_activation,
+                            soft_fill_queue_model=self.soft_fill_queue_model,
+                        )
+                        if signature in _SOFT_FILL_WARMED_SIGNATURES:
+                            soft_fill_fn = _get_compiled_soft_fill(torch_mod)
+                        else:
+                            soft_fill_fn = soft_fill_batched
+                            if signature not in _SOFT_FILL_UNWARMED_SEEN:
+                                _SOFT_FILL_UNWARMED_SEEN.add(signature)
+                                log_event(
+                                    "mpc.torch_compile.unwarmed_shape",
+                                    {
+                                        "n_components": venue_n,
+                                        "n_samples": int(mid_t.shape[0]),
+                                        "grid_levels": int(spread_grid.shape[-1]),
+                                        "soft_fill_activation": self.soft_fill_activation,
+                                        "soft_fill_queue_model": self.soft_fill_queue_model,
+                                    },
+                                )
                     try:
                         ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_fn(
                             action_h,
