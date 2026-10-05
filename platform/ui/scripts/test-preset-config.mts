@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import {
   ALL_FIELD_PATHS,
+  PRESET_SECTIONS,
   applySchemaDefaults,
   fieldVisible,
   FIELD_BY_PATH,
@@ -108,6 +109,66 @@ function testViabilityDualFieldsAreOnBothVenues() {
   }
 }
 
+/**
+ * The overrides form reports how many schema fields are explicitly pinned.
+ * This mirrors the counting used by PresetConfigForm so the badge, the
+ * "Reset all to preset" banner, and the disabled state of
+ * "Clear section overrides" are all covered.
+ */
+function countOverridden(value: Record<string, unknown>, paths: readonly string[]): number {
+  return paths.reduce((total, p) => total + (getAt(value, p) !== undefined ? 1 : 0), 0);
+}
+
+function sectionFieldPaths(sectionId: string): string[] {
+  const section = PRESET_SECTIONS.find((s) => s.id === sectionId);
+  assert.ok(section, `missing section ${sectionId}`);
+  return section!.fields.map((f) => f.path);
+}
+
+const OVERRIDE_SAMPLE = {
+  controller: {
+    optimizer: { horizon: 3, n_samples: 16, adam_epochs: 8 },
+    decision_timeout_ms: 15000,
+  },
+};
+
+function testCountOverriddenMatchesExplicitOverrides() {
+  const optimizerPaths = sectionFieldPaths("optimizer");
+  const controllerPaths = sectionFieldPaths("controller");
+  assert.equal(countOverridden(OVERRIDE_SAMPLE, optimizerPaths), 3);
+  assert.equal(countOverridden(OVERRIDE_SAMPLE, controllerPaths), 1);
+  // A field the operator never touched must not count as overridden.
+  assert.equal(countOverridden({}, optimizerPaths), 0);
+  assert.equal(countOverridden({ controller: { optimizer: {} } }, optimizerPaths), 0);
+}
+
+function testClearSectionOverridesRemovesOnlyThatSection() {
+  const optimizerPaths = sectionFieldPaths("optimizer");
+  let next = OVERRIDE_SAMPLE as Record<string, unknown>;
+  for (const p of optimizerPaths) next = deleteAt(next, p);
+  // optimizer block is gone, the rest of the override survives untouched.
+  assert.equal(getAt(next, "controller.optimizer.horizon"), undefined);
+  assert.equal(getAt(next, "controller.optimizer.adam_epochs"), undefined);
+  assert.equal(getAt(next, "controller.decision_timeout_ms"), 15000);
+}
+
+function testResetAllPreservesUnknownKeys() {
+  // "Reset all to preset" must only strip schema-known paths. An unknown key
+  // added by hand in the JSON tab is configuration we cannot see, so dropping
+  // it silently would be data loss.
+  const withUnknown = {
+    controller: { optimizer: { horizon: 3 }, mystery_knob: 7 },
+    custom_extension: { enabled: true },
+  };
+  let next = withUnknown as Record<string, unknown>;
+  for (const section of PRESET_SECTIONS) {
+    for (const field of section.fields) next = deleteAt(next, field.path);
+  }
+  assert.equal(getAt(next, "controller.optimizer.horizon"), undefined);
+  assert.deepEqual(next.controller, { mystery_knob: 7 });
+  assert.deepEqual(next.custom_extension, { enabled: true });
+}
+
 const tests = [
   testStripHelperKeys,
   testMergePreservesUnknown,
@@ -116,6 +177,9 @@ const tests = [
   testKindVisibility,
   testDefaultsFillMissing,
   testViabilityDualFieldsAreOnBothVenues,
+  testCountOverriddenMatchesExplicitOverrides,
+  testClearSectionOverridesRemovesOnlyThatSection,
+  testResetAllPreservesUnknownKeys,
 ];
 
 let failed = 0;

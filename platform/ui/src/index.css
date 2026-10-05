@@ -707,6 +707,43 @@ table.data-table tbody tr:hover {
   border-color: rgba(61, 139, 253, 0.55);
 }
 
+/* Overrides mode: make pinned values impossible to miss. A lone 1px border on
+   the input was not enough signal that a strategy was overriding the preset. */
+.override-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(61, 139, 253, 0.35);
+  border-radius: 6px;
+  background: rgba(61, 139, 253, 0.08);
+  font-size: 0.85rem;
+}
+
+.advanced-section-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: rgba(61, 139, 253, 0.2);
+  border: 1px solid rgba(61, 139, 253, 0.45);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.advanced-section-actions .btn-link[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .checkbox-row {
   display: flex;
   align-items: center;

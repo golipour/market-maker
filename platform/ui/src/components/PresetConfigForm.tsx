@@ -36,13 +36,53 @@ export function PresetConfigForm({ value, onChange, mode, inherited = null }: Pr
     onChange(deleteAt(value, path));
   }
 
+  // In overrides mode, count how many of a section's schema fields currently
+  // carry an explicit value. Drives the per-section "N overridden" badge and
+  // lets the section reset stay disabled when there is nothing to clear.
+  function countOverridden(fields: readonly { path: string }[]): number {
+    return fields.reduce((total, field) => total + (getAt(value, field.path) !== undefined ? 1 : 0), 0);
+  }
+
+  const totalOverridden =
+    mode === "overrides"
+      ? PRESET_SECTIONS.reduce((total, section) => total + countOverridden(section.fields), 0)
+      : 0;
+
   return (
     <div className="preset-config-form">
+      {mode === "overrides" && totalOverridden > 0 ? (
+        <div className="override-summary">
+          <span>
+            <strong>{totalOverridden}</strong> field{totalOverridden === 1 ? "" : "s"} overridden
+            {" — everything else inherits from the preset."}
+          </span>
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => {
+              // Only schema-known paths are removed. Unknown keys the operator
+              // added by hand in the JSON tab are intentionally preserved so a
+              // reset can never silently discard configuration we cannot see.
+              let next = value;
+              for (const section of PRESET_SECTIONS) {
+                for (const field of section.fields) {
+                  next = deleteAt(next, field.path);
+                }
+              }
+              onChange(next);
+            }}
+          >
+            Reset all to preset
+          </button>
+        </div>
+      ) : null}
       {PRESET_SECTIONS.map((section, index) => {
         const fields = section.fields.filter((field) => fieldVisible(field, effective));
         if (fields.length === 0) {
           return null;
         }
+        const overriddenCount =
+          mode === "overrides" ? countOverridden(section.fields) : 0;
         return (
           <Section
             key={section.id}
@@ -50,6 +90,7 @@ export function PresetConfigForm({ value, onChange, mode, inherited = null }: Pr
             title={section.title}
             help={section.help}
             defaultOpen={index < 3 || section.id.startsWith("optimizer")}
+            badge={overriddenCount > 0 ? overriddenCount : undefined}
           >
             <div className="form-grid advanced-field-grid">
               {fields.map((field) => {
@@ -88,6 +129,7 @@ export function PresetConfigForm({ value, onChange, mode, inherited = null }: Pr
                 <button
                   type="button"
                   className="btn-link"
+                  disabled={countOverridden(section.fields) === 0}
                   onClick={() => {
                     let next = value;
                     for (const field of section.fields) {

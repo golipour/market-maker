@@ -5,10 +5,12 @@ type Props = {
   title: string;
   help?: string;
   defaultOpen?: boolean;
+  /** Optional count rendered as a badge, e.g. the number of overridden fields. */
+  badge?: number;
   children: ReactNode;
 };
 
-export function Section({ id, title, help, defaultOpen = true, children }: Props) {
+export function Section({ id, title, help, defaultOpen = true, badge, children }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="advanced-section" data-section={id}>
@@ -20,6 +22,9 @@ export function Section({ id, title, help, defaultOpen = true, children }: Props
       >
         <span className="advanced-section-chevron">{open ? "▾" : "▸"}</span>
         <span>{title}</span>
+        {badge !== undefined ? (
+          <span className="advanced-section-badge">{badge}</span>
+        ) : null}
         {help ? (
           <span className="field-info" title={help} onClick={(e) => e.stopPropagation()}>
             ⓘ
