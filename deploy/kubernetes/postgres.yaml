@@ -46,19 +46,47 @@ spec:
         - name: prepare-pgdata
           image: postgres:17
           imagePullPolicy: IfNotPresent
+          # Must run as the same uid that owns PGDATA (999), not root.
+          # The volume is NFS with root_squash, so uid 0 is squashed to
+          # nobody and cannot traverse pgdata (mode 0700, owned by postgres).
+          # That made the PG_VERSION probe below unreadable, so the guard
+          # wrongly concluded the directory was uninitialised and tried to
+          # `rm -rf` it, which failed with "Permission denied" and, under
+          # `set -e`, crash-looped the initContainer. The database then ran
+          # for a month on an older revision while this one never started.
           securityContext:
-            runAsUser: 0
-            runAsGroup: 0
+            runAsUser: 999
+            runAsGroup: 999
           command:
             - bash
             - -c
             - |
               set -euo pipefail
               dest=/var/lib/postgresql/data
-              chmod 0777 "$dest" || true
-              if [ ! -f "$dest/pgdata/PG_VERSION" ]; then
-                rm -rf "$dest/pgdata"
+              pgdata="$dest/pgdata"
+              chmod 0777 "$dest" 2>/dev/null || true
+
+              # Already initialised: never touch it. This is the only branch
+              # a healthy database ever reaches.
+              if [ -f "$pgdata/PG_VERSION" ]; then
+                echo "prepare-pgdata: existing cluster at $pgdata, leaving it untouched"
+                exit 0
               fi
+
+              # Absent: create it so the postgres entrypoint can initialise.
+              if [ ! -e "$pgdata" ]; then
+                mkdir -p "$pgdata"
+                echo "prepare-pgdata: created empty $pgdata"
+                exit 0
+              fi
+
+              # Exists but has no readable PG_VERSION. This is ambiguous: it
+              # may be a partial init, or it may be a real cluster we simply
+              # cannot read. Deleting here risks destroying the database, so
+              # fail loudly and let a human decide instead.
+              echo "prepare-pgdata: ERROR $pgdata exists but PG_VERSION is absent or unreadable" >&2
+              echo "prepare-pgdata: refusing to delete automatically; inspect the volume before proceeding" >&2
+              exit 1
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
