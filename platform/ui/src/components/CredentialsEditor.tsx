@@ -17,9 +17,14 @@ export function CredentialsEditor({
   value,
   onChange,
 }: CredentialsEditorProps) {
+  const isBitwana = exchange.toLowerCase().trim() === "bitwana";
   const modes = supportedModesForExchange(exchange, authSpec);
   const showSecret = value.auth_mode === "signed_key" || value.auth_mode === "signed_key_passphrase";
   const showPassphrase = value.auth_mode === "signed_key_passphrase";
+  const modeLabels = authSpec?.mode_labels ?? {};
+  // Per-exchange overrides (e.g. bitwana's signed_key is really a JWT pair) so
+  // operators are not asked for an "API key" the venue never issues.
+  const labelFor = (mode: AuthMode) => modeLabels[mode] ?? AUTH_MODE_LABELS[mode];
 
   function setMode(auth_mode: AuthMode) {
     onChange({
@@ -40,7 +45,7 @@ export function CredentialsEditor({
       >
         {modes.map((mode) => (
           <option key={mode} value={mode}>
-            {AUTH_MODE_LABELS[mode]}
+            {labelFor(mode)}
           </option>
         ))}
       </select>
@@ -50,12 +55,12 @@ export function CredentialsEditor({
 
       <div className="form-grid">
         <div className="form-field">
-          <label htmlFor="acc-api-key">API key</label>
+          <label htmlFor="acc-api-key">{isBitwana ? "Access token" : "API key"}</label>
           <input
             id="acc-api-key"
             required
             autoComplete="off"
-            placeholder="Public key or API key"
+            placeholder={isBitwana ? "Access token" : "Public key or API key"}
             value={value.api_key}
             onChange={(e) => onChange({ ...value, api_key: e.target.value })}
           />
@@ -63,13 +68,19 @@ export function CredentialsEditor({
 
         {showSecret ? (
           <div className="form-field">
-            <label htmlFor="acc-api-secret">API secret</label>
+            <label htmlFor="acc-api-secret">{isBitwana ? "Refresh token" : "API secret"}</label>
             <input
               id="acc-api-secret"
               required={!value.api_secret_set}
               type="password"
               autoComplete="new-password"
-              placeholder={value.api_secret_set ? "Leave blank to keep existing" : "Private key or secret"}
+              placeholder={
+                value.api_secret_set
+                  ? "Leave blank to keep existing"
+                  : isBitwana
+                    ? "Refresh token"
+                    : "Private key or secret"
+              }
               value={value.api_secret}
               onChange={(e) =>
                 onChange({

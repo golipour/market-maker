@@ -92,7 +92,6 @@ class PrivateStateReconciler:
 
     async def _listen_rest_polling_unified(self) -> None:
         poll_ms = max(500, int(getattr(self.adapter, "poll_interval_ms", 5000)))
-        publish_errors = getattr(self.adapter, "_publish_error", None)
         try:
             while True:
                 await asyncio.sleep(poll_ms / 1000.0)
@@ -111,10 +110,7 @@ class PrivateStateReconciler:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    if callable(publish_errors):
-                        await publish_errors("unified_rest_poll", exc)  # type: ignore[misc]
-                    else:
-                        await self._publish_adapter_error("unified_rest_poll", exc)
+                    await self._publish_adapter_error("unified_rest_poll", exc)
         except asyncio.CancelledError:
             raise
 
@@ -188,18 +184,23 @@ class PrivateStateReconciler:
         await self._publish(f"private:state:{self.exchange}:snapshot", snapshot.as_payload())
 
     async def _publish_adapter_error(self, source: str, exc: Exception) -> None:
-        publish_errors = getattr(self.adapter, "_publish_error", None)
-        if callable(publish_errors):
-            await publish_errors(source, exc)  # type: ignore[misc]
-            return
+        # Always publish to the persisted errors topic. The adapter's own error
+        # queue is in-process and drained only by a live consumer, so routing here
+        # makes a recurring poll failure visible as a ``PrivateStateAdapterError``
+        # row instead of leaving balances frozen with no recorded cause.
         await self._publish(
             f"private:state:{self.exchange}:errors",
             {
+                "type": "PrivateStateAdapterError",
+                "exchange": self.exchange,
                 "source": source,
                 "error": type(exc).__name__,
                 "message": str(exc),
             },
         )
+        publish_errors = getattr(self.adapter, "_publish_error", None)
+        if callable(publish_errors):
+            await publish_errors(source, exc)  # type: ignore[misc]
 
     async def _publish(self, topic: str, event: Balance | OpenOrder | OrderUpdate | Fill | PrivateStateSnapshot | dict) -> None:
         if self.bus is not None:

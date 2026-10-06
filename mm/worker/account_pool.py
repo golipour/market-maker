@@ -137,11 +137,13 @@ def extend_shared_account_pool(
         if private_config is None:
             credential_status = "skipped"
             error_message = "no_private_config"
+            _log_attachment_skip(account_id, source.normalized_exchange(), credential_status, error_message)
             continue
         api_credentials = private_config.resolved_api_credentials(source.normalized_exchange())
         if not api_credentials:
             credential_status = "missing"
             error_message = "no_resolved_credentials"
+            _log_attachment_skip(account_id, source.normalized_exchange(), credential_status, error_message)
             continue
         auth_mode = private_config.resolved_auth_mode(source.normalized_exchange())
         credential_kind = type(api_credentials).__name__ if not isinstance(api_credentials, str) else "token"
@@ -162,6 +164,7 @@ def extend_shared_account_pool(
         except Exception as exc:
             credential_status = "auth_failed"
             error_message = f"{type(exc).__name__}: {exc}"
+            _log_attachment_skip(account_id, source.normalized_exchange(), credential_status, error_message)
             continue
         pool.private_state_selections[account_id] = private_selection
         attribution_registry = pool.attribution_for(source.normalized_exchange())
@@ -228,6 +231,21 @@ def extend_shared_account_pool(
     )
     pool.attachment_results[account_id] = result
     return result
+
+
+def _log_attachment_skip(account_id: str, exchange: str, status: str, error: str) -> None:
+    """Make a dropped private/execution source visible instead of skipping it silently.
+
+    A source that never resolves credentials leaves the actor running with an empty
+    private-state store, which surfaces downstream as fabricated zero balances rather
+    than as the credential fault that actually caused it.
+    """
+
+    print(
+        f"[account-pool] {account_id} {exchange} private NOT attached "
+        f"status={status} error={error}",
+        flush=True,
+    )
 
 
 def build_shared_account_pool(
