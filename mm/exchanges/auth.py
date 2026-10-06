@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from mm.observability.logs import log_event
+
 AuthMode = Literal["api_key", "signed_key", "signed_key_passphrase"]
 
 AUTH_MODE_LABELS: dict[AuthMode, str] = {
@@ -117,6 +119,32 @@ def resolve_exchange_auth(
     if exchange_key == "bitwana":
         from mm.exchanges.bitwana.private_rest import BitwanaJwtAuth
 
-        return BitwanaJwtAuth(access_token=key, refresh_token=secret)
+        auth = BitwanaJwtAuth(access_token=key, refresh_token=secret)
+        auth.on_refresh = _log_bitwana_token_rotation
+        return auth
 
     raise ValueError(f"unsupported signed auth for exchange: {exchange_key}")
+
+
+def _log_bitwana_token_rotation(
+    *,
+    access_token: str,
+    refresh_token: str,
+    rotated: bool,
+) -> None:
+    """Record that the in-memory Bitwana JWT pair no longer matches the registry.
+
+    The rotated pair is never written back to ``registry_accounts``, so after a
+    restart the worker falls back to the stored token. Logging the rotation makes
+    that divergence visible instead of letting it surface as a silent auth outage.
+    """
+
+    log_event(
+        "bitwana_token_refreshed",
+        {
+            "access_token_set": bool(access_token),
+            "refresh_token_set": bool(refresh_token),
+            "refresh_token_rotated": rotated,
+            "persisted_to_registry": False,
+        },
+    )

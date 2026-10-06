@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 from mm.exchanges.bitwana import private_rest
@@ -27,6 +29,55 @@ def test_bitwana_runtime_credentials_use_access_and_refresh_tokens():
     assert auth.access_token == "access-token"
     assert auth.refresh_token == "refresh-token"
     assert auth.authorization_header() == "access-token"
+
+
+def test_bitwana_token_rotation_is_announced() -> None:
+    """A refreshed pair lives only in memory, so the rotation must be observable."""
+
+    calls: list[dict] = []
+    auth = private_rest.BitwanaJwtAuth(access_token="a1", refresh_token="r1")
+    auth.on_refresh = lambda **kw: calls.append(kw)
+
+    class _Resp:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"accessToken": "a2", "refreshToken": "r2"}
+
+    with mock.patch.object(private_rest.requests, "post", return_value=_Resp()):
+        auth.refresh()
+
+    assert auth.access_token == "a2"
+    assert auth.refresh_token == "r2"
+    assert calls == [
+        {"access_token": "a2", "refresh_token": "r2", "rotated": True},
+    ]
+
+
+def test_bitwana_failed_rotation_notifies_without_raising() -> None:
+    calls: list[dict] = []
+
+    def _boom(**_kw):
+        raise RuntimeError("logger exploded")
+
+    auth = private_rest.BitwanaJwtAuth(access_token="a1", refresh_token="r1")
+    auth.on_refresh = _boom
+
+    class _Resp:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"accessToken": "a2"}
+
+    with mock.patch.object(private_rest.requests, "post", return_value=_Resp()):
+        auth.refresh()  # must not raise even though the notifier failed
+
+    assert auth.access_token == "a2"
+    assert calls == []
 
 
 def test_bitwana_authorization_header_is_raw_jwt() -> None:

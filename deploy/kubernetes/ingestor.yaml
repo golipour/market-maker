@@ -42,6 +42,12 @@ spec:
               value: prod
             - name: MM_WORKER_ID
               value: ingestor-1
+            # Bitwana is served in-cluster by panther-app; bit.yshm.ir is only an
+            # ingress in front of it. Going direct skips that hop (~5.8x faster on
+            # the orderbook path) and avoids the ingress 504s. Plain HTTP, so this
+            # couples market-maker to the panther namespace staying reachable.
+            - name: BITWANA_API_BASE_URL
+              value: "http://panther-app.panther.svc.cluster.local"
           envFrom:
             - secretRef:
                 name: market-maker-secrets

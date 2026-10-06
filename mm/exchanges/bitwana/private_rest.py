@@ -11,6 +11,7 @@ import requests
 
 from mm.core.wallet import wallet_legs_from_available_and_locked
 from mm.exchanges.instrument_wire import build_instrument_wire, merge_wallet_balances_raw
+from mm.observability.logs import log_event
 
 BASE_URL = os.environ.get("BITWANA_API_BASE_URL", "https://bit.yshm.ir").rstrip("/")
 
@@ -94,6 +95,7 @@ class BitwanaJwtAuth:
     refresh_token: str = ""
     base_url: str = BASE_URL
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    on_refresh: Any = field(default=None, repr=False, compare=False)
 
     def authorization_header(self) -> str:
         token = str(self.access_token or "").strip()
@@ -122,8 +124,18 @@ class BitwanaJwtAuth:
                 raise RuntimeError("Bitwana token refresh failed: missing accessToken")
             self.access_token = access
             next_refresh = str(content.get("refreshToken") or "").strip()
+            rotated = bool(next_refresh) and next_refresh != refresh
             if next_refresh:
                 self.refresh_token = next_refresh
+            # The rotated pair only lives in this process. Nothing writes it back to
+            # the registry, so a restart falls back to the stored (possibly expired)
+            # token. Announce every rotation so the window is visible in logs instead
+            # of surfacing later as an unexplained auth failure.
+            if callable(self.on_refresh):
+                try:
+                    self.on_refresh(access_token=access, refresh_token=self.refresh_token, rotated=rotated)
+                except Exception:  # pragma: no cover - never break auth on a notifier fault
+                    pass
 
 
 def coerce_auth(api_token: Any) -> BitwanaJwtAuth | None:
