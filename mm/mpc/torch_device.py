@@ -64,6 +64,58 @@ def _cuda_runtime_ok(torch_mod) -> bool:
         return False
 
 
+def _cgroup_cpu_quota() -> int | None:
+    """Return the cgroup v2 ``cpu.max`` quota in whole CPUs, if declared.
+
+    Returns ``None`` when the quota is unset, unlimited, or the file is not
+    readable (no cgroup v2, or a plain local run).
+    """
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as fh:
+            quota_raw, _period = fh.read().split()[:2]
+    except (OSError, ValueError):
+        return None
+    if quota_raw == "max":
+        return None
+    try:
+        quota = int(quota_raw)
+    except ValueError:
+        return None
+    if quota <= 0:
+        return None
+    return max(1, quota // 100_000)
+
+
+def _cgroup_v1_cpu_quota() -> int | None:
+    """Return the cgroup v1 CPU quota in whole CPUs, if declared."""
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
+            quota = int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+    if quota <= 0:
+        return None
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
+            period = int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+    if period <= 0:
+        return None
+    return max(1, quota // period)
+
+
+def resolve_cpu_quota() -> int | None:
+    """Whole-CPU quota this container is limited to, or ``None`` if unlimited.
+
+    ``torch.get_num_threads()`` defaults to the *node's* core count, which
+    inside a container routinely exceeds the CPU quota the scheduler actually
+    grants. The oversubscribed threads then contend with each other and the
+    rollout gets slower, not faster.
+    """
+    return _cgroup_cpu_quota() or _cgroup_v1_cpu_quota()
+
+
 def resolve_torch_threads(explicit: int | str | None = None) -> int | None:
     """
     Resolve the intra-op thread count for the MPC rollout.
@@ -81,23 +133,51 @@ def resolve_torch_threads(explicit: int | str | None = None) -> int | None:
     8             215.9 ms
     ============  ============
 
-    Extra threads made it monotonically slower, so the default is pinned to a
-    single thread unless ``MM_TORCH_THREADS`` overrides it.
+    The oversubscription penalty is far worse for the ``torch.compile``d
+    kernel, whose generated C++ spawns parallel regions that then contend for
+    the quota. Measured in the production worker (2-CPU quota on an 8-CPU
+    node) on one ``soft_fill_batched`` call, forward+backward:
 
-    Returns ``None`` when no override applies, meaning "leave torch as-is".
+    ============  ==========  ============
+    threads       eager        compiled
+    ============  ==========  ============
+    1             5.54 ms      4.21 ms
+    2            13.77 ms      2.79 ms
+    4             6.68 ms      3.42 ms
+    8            35.33 ms    622.83 ms
+    ============  ==========  ============
+
+    At 8 threads the compiled kernel ran 17x slower than eager: 0.057x, a
+    regression rather than a speedup, purely from thread contention.
+
+    So the count is pinned to the container's CPU quota when no explicit
+    override is given, capped by the visible core count. An explicit argument
+    or ``MM_TORCH_THREADS`` still wins.
     """
     raw: str | int | None = explicit
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         raw = os.environ.get("MM_TORCH_THREADS", "").strip()
-    if raw is None or not str(raw).strip():
+    if raw:
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            value = 0
+        if value >= 1:
+            return value
+
+    # No override: pin to the quota so the compiled kernel is not starved.
+    quota = resolve_cpu_quota()
+    if quota is None:
         return None
     try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return None
-    if value < 1:
-        return None
-    return value
+        import torch as torch_mod
+
+        visible = torch_mod.get_num_threads()
+    except Exception:
+        visible = None
+    if visible is None or visible < 1:
+        return quota
+    return min(quota, visible)
 
 
 def apply_torch_threads(explicit: int | str | None = None) -> int | None:

@@ -386,6 +386,16 @@ def effective_depth_ask_tensor(
     return torch.clamp(raw - base, min=0.0)
 
 
+def _reservation_active(l_param: "LParamConfig") -> bool:
+    """Whether a relative reservation skew is enabled for this venue.
+
+    Equivalent to the ``reservation_r_offset is not None`` check the caller
+    already performs, derived from configuration alone so the decision stays
+    inside the compiled graph.
+    """
+    return float(getattr(l_param, "reservation_r_max", 0.0) or 0.0) > 0.0
+
+
 def effective_depth_stacked_tensor(
     params: "Tensor",
     spread: "Tensor",
@@ -402,17 +412,16 @@ def effective_depth_stacked_tensor(
 ) -> "Tensor":
     """Executable bid and ask depth evaluated simultaneously as stacked ``(2, ...)``."""
     torch = _get_torch()
-    has_reservation = (
-        mid_price is not None
-        and reservation_r_offset is not None
-        and float(
-            reservation_r_offset.abs().item()
-            if torch.is_tensor(reservation_r_offset)
-            else abs(reservation_r_offset)
-        )
-        > 0.0
-    )
-    if l_param is None or l_param.spread_structured or has_reservation:
+    # Whether the reservation skew is in play is a *configuration* fact, not a
+    # per-decide data fact: ``reservation_r_max`` is baked into ``l_param`` and
+    # the offset is always non-zero when it is enabled. Branching on that
+    # instead of on ``float(reservation_r_offset.abs().item()) > 0`` keeps the
+    # same path selection without calling ``.item()`` on a tensor derived from
+    # the trainable ``params``, which is a graph break: inductor could not
+    # capture it, so every venue configured with ``reservation_skew``
+    # (production ships ``max_abs_skew = 0.002``) silently lost the stacked
+    # fast path and paid for two unbatched decoders instead.
+    if l_param is None or l_param.spread_structured or _reservation_active(l_param):
         db = effective_depth_bid_tensor(
             params,
             spread,

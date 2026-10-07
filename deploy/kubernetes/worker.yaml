@@ -65,6 +65,15 @@ spec:
             # roughly halves that.
             - name: TORCHINDUCTOR_COMPILE_THREADS
               value: "2"
+            # torch.get_num_threads() reads the node's core count (8 on
+            # node3), not this container's cpu limit, so the rollout kernel
+            # oversubscribes and collapses. Measured in this pod, one
+            # soft_fill_batched forward+backward: 2.79 ms compiled at 2
+            # threads versus 622.83 ms at 8 -- a 17x regression, i.e. the
+            # compiled kernel ended up slower than eager (0.057x). Pin the
+            # intra-op thread count to the cpu limit.
+            - name: MM_TORCH_THREADS
+              value: "2"
           envFrom:
             - secretRef:
                 name: market-maker-secrets
