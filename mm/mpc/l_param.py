@@ -60,6 +60,16 @@ def _scalar_tensor(value: Any, default: Any, like: Any, *, clamp_zero: bool = Fa
     as-is (never cached, since it can carry gradients or vary per call), and a
     scalar/None input resolves to a constant tensor. ``clamp_zero`` reproduces
     the ``torch.clamp(..., min=0.0)`` that the scalar paths previously applied.
+
+    The cache is only populated while *not* tracing. Dynamo guards on the
+    globals a traced frame reads, so mutating ``_SCALAR_TENSOR_CACHE`` from
+    inside a compiled region installs a ``len(G['_SCALAR_TENSOR_CACHE']) == N``
+    guard; every new bound inserts a key and invalidates it, forcing a
+    recompile. Production sweeps many distinct bound values, hit
+    ``config.recompile_limit (8)`` on ``materialize_side_torch``, and were
+    silently demoted to eager execution. Under tracing the tensors are rebuilt
+    as compile-time constants anyway (inductor folds them), so skipping the
+    cache there costs nothing and keeps the graph stable.
     """
     torch = _torch()
     if torch.is_tensor(value):
@@ -67,10 +77,15 @@ def _scalar_tensor(value: Any, default: Any, like: Any, *, clamp_zero: bool = Fa
         return torch.clamp(out, min=0.0) if clamp_zero else out
     if value is None:
         value = default
-    key = (float(value), like.dtype, str(like.device), clamp_zero)
+    scalar = float(value)
+    if torch.compiler.is_compiling():
+        # Constant-folded by inductor; do not touch the traced global.
+        out = torch.tensor(scalar, dtype=like.dtype, device=like.device)
+        return torch.clamp(out, min=0.0) if clamp_zero else out
+    key = (scalar, like.dtype, str(like.device), clamp_zero)
     cached = _SCALAR_TENSOR_CACHE.get(key)
     if cached is None:
-        cached = torch.tensor(float(value), dtype=like.dtype, device=like.device)
+        cached = torch.tensor(scalar, dtype=like.dtype, device=like.device)
         if clamp_zero:
             cached = torch.clamp(cached, min=0.0)
         _SCALAR_TENSOR_CACHE[key] = cached
@@ -262,23 +277,75 @@ class LParamConfig:
         quote_size_min: Any | None = None,
         quote_size_max: Any | None = None,
     ) -> Any:
+        """Differentiable quote size for a depth logit.
+
+        ``self.quote_size_max is None`` used to be a Python-level branch here,
+        and this function is traced by dynamo inside ``soft_fill_batched``.
+        Each distinct answer forced another specialization of
+        ``materialize_side_torch``; production runs the local (4 components)
+        and global (2 components) venues plus a bitwana override shape, and
+        that exhausted ``torch._dynamo``'s default ``cache_size_limit`` of 8.
+        Once the limit is hit dynamo falls back to eager *permanently* for the
+        function, so the compiled kernel silently stopped being used.
+
+        The bounds are now resolved *outside* the traced arithmetic by
+        :meth:`_quote_size_bounds`, which returns plain floats. The traced
+        body then has a single shape regardless of configuration:
+
+        * capped (configured ``quote_size_max``): ``hi`` is that bound;
+        * uncapped: ``+inf``, so the minimum clamp is a no-op and the sigmoid
+          spans the full range, exactly as before.
+
+        Per-sample tensor bounds stay on their own path because they are data
+        rather than configuration, and production always passes tensors.
+
+        No behavior change; only the number of traced specializations.
+        """
         torch = _torch()
         lo = _scalar_tensor(quote_size_min, self.quote_size_min, u_depth, clamp_zero=True)
-        configured_hi_val = (
-            float(self.quote_size_max)
-            if self.quote_size_max is not None
-            else float("inf")
-        )
-        if quote_size_max is None and self.quote_size_max is None:
-            hi = lo
-        elif quote_size_max is None:
-            hi = _scalar_tensor(configured_hi_val, None, u_depth)
-        elif torch.is_tensor(quote_size_max):
+        configured_hi_val, hi_val = self._quote_size_bounds(quote_size_max)
+        if torch.is_tensor(quote_size_max):
+            # A per-sample bound is data, not configuration, so it keeps its
+            # own traced path.
             hi = torch.clamp(quote_size_max.to(dtype=u_depth.dtype, device=u_depth.device), min=0.0)
+        elif hi_val is None:
+            # Degenerate case: neither a configured cap nor an override, so
+            # the original used ``hi = lo`` and the size collapses to ``lo``.
+            hi = lo
         else:
-            hi = _scalar_tensor(float(quote_size_max), None, u_depth, clamp_zero=True)
+            hi = _scalar_tensor(hi_val, None, u_depth)
         hi = torch.maximum(lo, torch.minimum(_scalar_tensor(configured_hi_val, None, u_depth), hi))
         return lo + torch.sigmoid(u_depth) * (hi - lo)
+
+    def _quote_size_bounds(self, quote_size_max: Any | None) -> tuple[float, float | None]:
+        """Resolve quote-size bounds to plain floats, outside the traced body.
+
+        Returns ``(configured_hi, hi_val)`` mirroring the original branches:
+
+        * configured cap, no override -> ``(cap, cap)``
+        * no cap, no override -> ``(inf, None)``; the ``None`` here means
+          "degenerate, use ``lo``", and is resolved by the caller to a
+          *tensor* so the traced body never branches on it
+        * explicit non-tensor override ``v`` -> ``(min(cap, v), v)``,
+          because the caller clamps by ``configured_hi_val`` afterwards
+        * tensor override -> handled on its own traced path; only
+          ``configured_hi_val`` is reported
+
+        Returning floats unconditionally keeps the traced region free of the
+        ``quote_size_max is None`` branch that exhausted dynamo's cache.
+        """
+        configured = self.quote_size_max
+        configured_hi_val = (
+            float(configured) if configured is not None else float("inf")
+        )
+        if quote_size_max is None:
+            if configured is None:
+                return (configured_hi_val, None)
+            return (configured_hi_val, float(configured))
+        if _torch().is_tensor(quote_size_max):
+            return (configured_hi_val, 0.0)
+        value = max(0.0, float(quote_size_max))
+        return (configured_hi_val, value)
 
 
 def validate_l_param_config(l_param: LParamConfig) -> None:
