@@ -302,7 +302,8 @@ def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None
     assert dashboard["title"] == "MM Observability v2 / 02B Pipeline Time Profile"
 
     expected_titles = {
-        "End-to-end pipeline latency / frame",
+        "Data freshness: how stale is the book we decide on (ms)",
+        "Controller stage durations (ms)",
         "Cumulative pipeline offset vs orderbook timestamp",
         "Cumulative pipeline offset vs frame close (t_end_ms)",
         "Raw feed receive lag latest",
@@ -311,22 +312,36 @@ def test_pipeline_time_profile_dashboard_has_end_to_end_latency_series() -> None
     }
     assert expected_titles.issubset(panels_by_title)
 
-    pipeline_sql = panels_by_title["End-to-end pipeline latency / frame"]["targets"][0]["rawSql"]
-    assert "mm_market_facts" in pipeline_sql
-    assert "market.orderbook_age_at_frame_close" in pipeline_sql
-    assert "market.frame_persist_lag" in pipeline_sql
-    assert "strategy.clean" in pipeline_sql
-    assert "strategy.decide_total" in pipeline_sql
-    assert "strategy.optimizer_sample_draw" in pipeline_sql
-    assert "strategy.optimizer_train_loop" in pipeline_sql
-    assert "strategy.optimizer_total" in pipeline_sql
-    assert "strategy.risk" in pipeline_sql
-    assert "strategy.publish" in pipeline_sql
-    assert "execution.cancel" in pipeline_sql
-    assert "execution.place" in pipeline_sql
-    assert "execution.sync" in pipeline_sql
-    assert "controller.total" in pipeline_sql
-    assert "e.payload #>> ARRAY['optimizer','timing'" in pipeline_sql
+    # Freshness and stage durations are deliberately separate panels: freshness
+    # is a lag between two timestamps from two different writers, stage
+    # durations are monotonic measurements from one writer. Mixing them
+    # implied a shared reference frame that does not exist.
+    freshness_sql = panels_by_title[
+        "Data freshness: how stale is the book we decide on (ms)"
+    ]["targets"][0]["rawSql"]
+    assert "mm_market_facts" in freshness_sql
+    assert "book_age_at_frame_close" in freshness_sql
+    assert "book_persist_lag" in freshness_sql
+    assert "frame_age_at_decide" in freshness_sql
+    assert "global_market_lag" in freshness_sql
+    assert "local_private_age" in freshness_sql
+    assert "global_private_age" in freshness_sql
+    # Durations must not leak into the freshness panel.
+    assert "optimizer','timing" not in freshness_sql
+
+    stages_sql = panels_by_title["Controller stage durations (ms)"]["targets"][0]["rawSql"]
+    assert "('clean'" in stages_sql
+    assert "('decide_total'" in stages_sql
+    assert "('risk'" in stages_sql
+    assert "('publish'" in stages_sql
+    assert "('cancel'" in stages_sql
+    assert "('place'" in stages_sql
+    assert "('exec_sync'" in stages_sql
+    assert "('controller_total'" in stages_sql
+    assert "e.payload #>> ARRAY['optimizer','timing'" in stages_sql
+    # Freshness lags must not leak into the stage-duration panel.
+    assert "mm_market_facts" not in stages_sql
+    assert "frame_age_at_decide" not in stages_sql
 
     orderbook_sql = panels_by_title["Cumulative pipeline offset vs orderbook timestamp"]["targets"][0]["rawSql"]
     assert "+orderbook.ref" in orderbook_sql

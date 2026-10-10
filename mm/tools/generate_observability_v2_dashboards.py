@@ -1302,12 +1302,20 @@ GROUP BY 1, 2"""
     return _zero_filled_step_sql(data_sql, metrics_sql)
 
 
-def _pipeline_profile_sql() -> str:
+def _pipeline_freshness_sql() -> str:
+    """Data freshness only: how stale is the book we are deciding on.
+
+    Kept separate from the stage breakdown because it answers a different
+    question with a different reference point. Every series here is a *lag*
+    between two real timestamps, not a stage duration, and the two come from
+    different writers (the ingestor persists ``mm_market_facts``; the
+    controller publishes ``ControllerDiagnostics``) so they are bucketed
+    independently and must not be read as one aligned trace.
+    """
     market_orderbook_age = "GREATEST((m.t_end_ms - m.orderbook_timestamp_ms)::double precision, 0.0)"
     market_persist_lag = "GREATEST(EXTRACT(EPOCH FROM (m.ts - to_timestamp(m.t_end_ms / 1000.0))) * 1000.0, 0.0)"
-    step_source = _event_step_source_sql("e.payload->>'t_end_ms'", "e.ts")
-    controller_metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
     market_metric_prefix = "(m.exchange || ' ' || m.symbol || ' ')"
+    controller_metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
     value_expr = _pipeline_value_ms_sql("s.raw_value", "s.unit")
     return f"""WITH market AS (
   SELECT
@@ -1317,8 +1325,8 @@ def _pipeline_profile_sql() -> str:
   FROM mm_market_facts m
   CROSS JOIN LATERAL (
     VALUES
-      ('market.orderbook_age_at_frame_close', {market_orderbook_age}),
-      ('market.frame_persist_lag', {market_persist_lag})
+      ('book_age_at_frame_close', {market_orderbook_age}),
+      ('book_persist_lag', {market_persist_lag})
   ) AS s(metric, value)
   WHERE m.exchange = ANY(ARRAY[${{exchange:sqlstring}}]::text[])
     AND m.symbol = ANY(ARRAY[${{symbol:sqlstring}}]::text[])
@@ -1327,25 +1335,16 @@ def _pipeline_profile_sql() -> str:
 ),
 controller AS (
   SELECT
-    {_approx_step_time_alias_sql(step_source)},
+    {_approx_step_time_alias_sql(_event_step_source_sql("e.payload->>'t_end_ms'", "e.ts"))},
     {controller_metric_prefix} || s.metric AS metric,
     {value_expr} AS value
   FROM mm_events e
   CROSS JOIN LATERAL (
     VALUES
-      ('frame.age_at_strategy', e.payload #>> ARRAY['frame','frame_age_ms'], 'ms'),
-      ('frame.global_lag', e.payload #>> ARRAY['frame','global_lag_ms'], 'ms'),
-      ('strategy.clean', e.payload #>> ARRAY['optimizer','timing','clean_ms'], 'ms'),
-      ('strategy.decide_total', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms'),
-      ('strategy.optimizer_sample_draw', e.payload #>> ARRAY['optimizer','timing','sample_draw_sec'], 'sec'),
-      ('strategy.optimizer_train_loop', e.payload #>> ARRAY['optimizer','timing','train_sec'], 'sec'),
-      ('strategy.optimizer_total', e.payload #>> ARRAY['optimizer','timing','total_sec'], 'sec'),
-      ('strategy.risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),
-      ('strategy.publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),
-      ('execution.cancel', e.payload #>> ARRAY['optimizer','timing','cancel_ms'], 'ms'),
-      ('execution.place', e.payload #>> ARRAY['optimizer','timing','place_ms'], 'ms'),
-      ('execution.sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),
-      ('controller.total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')
+      ('frame_age_at_decide', e.payload #>> ARRAY['frame','frame_age_ms'], 'ms'),
+      ('global_market_lag', e.payload #>> ARRAY['frame','global_lag_ms'], 'ms'),
+      ('local_private_age', e.payload #>> ARRAY['frame','local_private_age_ms'], 'ms'),
+      ('global_private_age', e.payload #>> ARRAY['frame','global_private_age_ms'], 'ms')
   ) AS s(metric, raw_value, unit)
   WHERE {_diagnostics_filter()}
 )
@@ -1356,6 +1355,37 @@ UNION ALL
 SELECT "time", metric, value
 FROM controller
 WHERE value IS NOT NULL
+ORDER BY 1, 2"""
+
+
+def _pipeline_stage_durations_sql() -> str:
+    """Where the controller spends wall time, as durations only.
+
+    Every series is a stage duration measured by a monotonic clock inside the
+    controller, so the values are additive and can be stacked. Freshness lags
+    are deliberately excluded: mixing them here made the panel unreadable and
+    implied a shared reference frame that does not exist.
+    """
+    metric_prefix = "(e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ')"
+    value_expr = _pipeline_value_ms_sql("s.raw_value", "s.unit")
+    return f"""SELECT
+  {_approx_step_time_alias_sql(_event_step_source_sql("e.payload->>'t_end_ms'", "e.ts"))},
+  {metric_prefix} || s.metric AS metric,
+  {value_expr} AS value
+FROM mm_events e
+CROSS JOIN LATERAL (
+  VALUES
+    ('clean', e.payload #>> ARRAY['optimizer','timing','clean_ms'], 'ms'),
+    ('decide_total', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms'),
+    ('risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),
+    ('publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),
+    ('cancel', e.payload #>> ARRAY['optimizer','timing','cancel_ms'], 'ms'),
+    ('place', e.payload #>> ARRAY['optimizer','timing','place_ms'], 'ms'),
+    ('exec_sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),
+    ('controller_total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')
+  ) AS s(metric, raw_value, unit)
+WHERE {_diagnostics_filter()}
+  AND {value_expr} IS NOT NULL
 ORDER BY 1, 2"""
 
 
@@ -3876,7 +3906,13 @@ def pipeline_time_profile() -> dict[str, Any]:
         _text(
             1,
             "Scope",
-            "Per-frame stage durations plus cumulative milestone offsets. "
+            "**Data freshness** and **Controller stage durations** are separate panels because they are not "
+            "the same kind of number. Freshness series are *lags between two real timestamps* "
+            "(book age at frame close, frame age at decide, private-state age); stage durations are "
+            "*monotonic clock measurements inside one controller invocation*. "
+            "Freshness also mixes two writers: the ingestor persists `mm_market_facts`, the controller "
+            "publishes `ControllerDiagnostics`, so Grafana buckets each independently and the two are "
+            "not a single aligned trace. Stage durations come from one writer and are additive. "
             "Cumulative charts anchor at local orderbook timestamp or frame close (`t_end_ms`) and plot "
             "when each milestone occurred relative to that anchor. "
             "Strategy milestones start at diagnostics `created_at_ms` (StrategyRunner entry) and add "
@@ -3886,14 +3922,26 @@ def pipeline_time_profile() -> dict[str, Any]:
         ),
         _panel(
             2,
-            "End-to-end pipeline latency / frame",
+            "Data freshness: how stale is the book we decide on (ms)",
             "timeseries",
             PG_DS,
-            _pipeline_profile_sql(),
+            _pipeline_freshness_sql(),
             x=0,
             y=3,
             w=24,
-            h=10,
+            h=8,
+            unit="ms",
+        ),
+        _panel(
+            8,
+            "Controller stage durations (ms)",
+            "timeseries",
+            PG_DS,
+            _pipeline_stage_durations_sql(),
+            x=0,
+            y=11,
+            w=24,
+            h=8,
             unit="ms",
         ),
         _pipeline_cumulative_panel(
@@ -3901,14 +3949,14 @@ def pipeline_time_profile() -> dict[str, Any]:
             "Cumulative pipeline offset vs orderbook timestamp",
             _pipeline_cumulative_profile_sql(anchor="orderbook"),
             x=0,
-            y=13,
+            y=19,
         ),
         _pipeline_cumulative_panel(
             7,
             "Cumulative pipeline offset vs frame close (t_end_ms)",
             _pipeline_cumulative_profile_sql(anchor="t_end"),
             x=0,
-            y=23,
+            y=29,
         ),
         _panel(
             3,
@@ -3917,7 +3965,7 @@ def pipeline_time_profile() -> dict[str, Any]:
             PROM_DS,
             'max by (exchange,symbol,kind)(mm_raw_market_ingest_lag_latest_ms{exchange=~"${exchange:regex}",symbol=~"${symbol:regex}",kind="orderbook"})',
             x=0,
-            y=33,
+            y=39,
             w=12,
             unit="ms",
             legend="{{exchange}} {{symbol}} {{kind}}",
@@ -3929,7 +3977,7 @@ def pipeline_time_profile() -> dict[str, Any]:
             PG_DS,
             _optimizer_substage_profile_sql(),
             x=12,
-            y=33,
+            y=39,
             w=12,
             unit="ms",
         ),
@@ -3940,7 +3988,7 @@ def pipeline_time_profile() -> dict[str, Any]:
             PG_DS,
             _slowest_frames_sql(),
             x=0,
-            y=41,
+            y=47,
             w=24,
             h=9,
             fmt="table",

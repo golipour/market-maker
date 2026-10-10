@@ -429,7 +429,22 @@ def curve_spread_for_market_spread(
     mid_price: Any | None,
     reservation_r_offset: Any | None,
 ) -> Any:
-    """Map market-grid spread to sigmoid argument with relative reservation shift."""
+    """Map market-grid spread to sigmoid argument with relative reservation shift.
+
+    NOTE: the zero-offset short-circuit below reads ``r_off.abs().item()``,
+    which is a host sync and a dynamo graph break. It looks replaceable with a
+    device-side ``torch.where``, but it is not: the early return preserves
+    ``market_spread``'s *shape*, while ``torch.where`` broadcasts both branches
+    to a common shape. When ``r_off`` is exactly zero (which happens whenever
+    the reservation logit initialises to 0) the callers rely on that smaller
+    shape -- ``soft_fill_batched`` branches on ``depth_sample.ndim`` to decide
+    whether to ``expand``, and the broadcast form takes the wrong path and
+    fails with a shape error. Values match either way; shape does not.
+
+    Removing the break therefore needs the shape normalised at the call sites
+    (or the branch hoisted to configuration), not a local rewrite. Left as-is
+    until that is done deliberately.
+    """
 
     if mid_price is None or reservation_r_offset is None:
         return market_spread

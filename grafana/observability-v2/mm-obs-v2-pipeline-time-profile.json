@@ -18,7 +18,7 @@
       },
       "id": 1,
       "options": {
-        "content": "Per-frame stage durations plus cumulative milestone offsets. Cumulative charts anchor at local orderbook timestamp or frame close (`t_end_ms`) and plot when each milestone occurred relative to that anchor. Strategy milestones start at diagnostics `created_at_ms` (StrategyRunner entry) and add monotonic stage timings; `+pipeline_end` is `created_at_ms + controller_total_ms`. Raw adapter receive lag stays on Prometheus because raw market events are not persisted by default.",
+        "content": "**Data freshness** and **Controller stage durations** are separate panels because they are not the same kind of number. Freshness series are *lags between two real timestamps* (book age at frame close, frame age at decide, private-state age); stage durations are *monotonic clock measurements inside one controller invocation*. Freshness also mixes two writers: the ingestor persists `mm_market_facts`, the controller publishes `ControllerDiagnostics`, so Grafana buckets each independently and the two are not a single aligned trace. Stage durations come from one writer and are additive. Cumulative charts anchor at local orderbook timestamp or frame close (`t_end_ms`) and plot when each milestone occurred relative to that anchor. Strategy milestones start at diagnostics `created_at_ms` (StrategyRunner entry) and add monotonic stage timings; `+pipeline_end` is `created_at_ms + controller_total_ms`. Raw adapter receive lag stays on Prometheus because raw market events are not persisted by default.",
         "mode": "markdown"
       },
       "title": "Scope",
@@ -38,7 +38,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 10,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 3
@@ -53,11 +53,57 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH market AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (to_timestamp(m.t_end_ms / 1000.0))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n    (m.exchange || ' ' || m.symbol || ' ') || s.metric AS metric,\n    s.value AS value\n  FROM mm_market_facts m\n  CROSS JOIN LATERAL (\n    VALUES\n      ('market.orderbook_age_at_frame_close', GREATEST((m.t_end_ms - m.orderbook_timestamp_ms)::double precision, 0.0)),\n      ('market.frame_persist_lag', GREATEST(EXTRACT(EPOCH FROM (m.ts - to_timestamp(m.t_end_ms / 1000.0))) * 1000.0, 0.0))\n  ) AS s(metric, value)\n  WHERE m.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND m.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND m.orderbook_timestamp_ms IS NOT NULL\n    AND $__timeFilter(m.ts)\n),\ncontroller AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n    (e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ') || s.metric AS metric,\n    CASE\n  WHEN CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND IS NULL THEN NULL\n  WHEN lower(trim(COALESCE(s.unit, 'ms'))) = 'sec' THEN (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0\n  ELSE (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND)\nEND AS value\n  FROM mm_events e\n  CROSS JOIN LATERAL (\n    VALUES\n      ('frame.age_at_strategy', e.payload #>> ARRAY['frame','frame_age_ms'], 'ms'),\n      ('frame.global_lag', e.payload #>> ARRAY['frame','global_lag_ms'], 'ms'),\n      ('strategy.clean', e.payload #>> ARRAY['optimizer','timing','clean_ms'], 'ms'),\n      ('strategy.decide_total', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms'),\n      ('strategy.optimizer_sample_draw', e.payload #>> ARRAY['optimizer','timing','sample_draw_sec'], 'sec'),\n      ('strategy.optimizer_train_loop', e.payload #>> ARRAY['optimizer','timing','train_sec'], 'sec'),\n      ('strategy.optimizer_total', e.payload #>> ARRAY['optimizer','timing','total_sec'], 'sec'),\n      ('strategy.risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),\n      ('strategy.publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),\n      ('execution.cancel', e.payload #>> ARRAY['optimizer','timing','cancel_ms'], 'ms'),\n      ('execution.place', e.payload #>> ARRAY['optimizer','timing','place_ms'], 'ms'),\n      ('execution.sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),\n      ('controller.total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')\n  ) AS s(metric, raw_value, unit)\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n)\nSELECT \"time\", metric, value\nFROM market\nWHERE value IS NOT NULL\nUNION ALL\nSELECT \"time\", metric, value\nFROM controller\nWHERE value IS NOT NULL\nORDER BY 1, 2",
+          "rawSql": "WITH market AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (to_timestamp(m.t_end_ms / 1000.0))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n    (m.exchange || ' ' || m.symbol || ' ') || s.metric AS metric,\n    s.value AS value\n  FROM mm_market_facts m\n  CROSS JOIN LATERAL (\n    VALUES\n      ('book_age_at_frame_close', GREATEST((m.t_end_ms - m.orderbook_timestamp_ms)::double precision, 0.0)),\n      ('book_persist_lag', GREATEST(EXTRACT(EPOCH FROM (m.ts - to_timestamp(m.t_end_ms / 1000.0))) * 1000.0, 0.0))\n  ) AS s(metric, value)\n  WHERE m.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n    AND m.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n    AND m.orderbook_timestamp_ms IS NOT NULL\n    AND $__timeFilter(m.ts)\n),\ncontroller AS (\n  SELECT\n    to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n    (e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ') || s.metric AS metric,\n    CASE\n  WHEN CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND IS NULL THEN NULL\n  WHEN lower(trim(COALESCE(s.unit, 'ms'))) = 'sec' THEN (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0\n  ELSE (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND)\nEND AS value\n  FROM mm_events e\n  CROSS JOIN LATERAL (\n    VALUES\n      ('frame_age_at_decide', e.payload #>> ARRAY['frame','frame_age_ms'], 'ms'),\n      ('global_market_lag', e.payload #>> ARRAY['frame','global_lag_ms'], 'ms'),\n      ('local_private_age', e.payload #>> ARRAY['frame','local_private_age_ms'], 'ms'),\n      ('global_private_age', e.payload #>> ARRAY['frame','global_private_age_ms'], 'ms')\n  ) AS s(metric, raw_value, unit)\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n)\nSELECT \"time\", metric, value\nFROM market\nWHERE value IS NOT NULL\nUNION ALL\nSELECT \"time\", metric, value\nFROM controller\nWHERE value IS NOT NULL\nORDER BY 1, 2",
           "refId": "A"
         }
       ],
-      "title": "End-to-end pipeline latency / frame",
+      "title": "Data freshness: how stale is the book we decide on (ms)",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_timestamp(floor(EXTRACT(EPOCH FROM (COALESCE(to_timestamp((CASE\n  WHEN trim(COALESCE(e.payload->>'t_end_ms', '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload->>'t_end_ms', ''))::double precision\n  ELSE NULL\nEND) / 1000.0), e.ts))::timestamptz) / GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) * GREATEST(COALESCE(NULLIF('${interval_ms}', '')::double precision, 1000.0) / 1000.0, 0.001)) AS \"time\",\n  (e.actor_id || ' ' || e.exchange || ' ' || e.symbol || ' ') || s.metric AS metric,\n  CASE\n  WHEN CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND IS NULL THEN NULL\n  WHEN lower(trim(COALESCE(s.unit, 'ms'))) = 'sec' THEN (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0\n  ELSE (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND)\nEND AS value\nFROM mm_events e\nCROSS JOIN LATERAL (\n  VALUES\n    ('clean', e.payload #>> ARRAY['optimizer','timing','clean_ms'], 'ms'),\n    ('decide_total', e.payload #>> ARRAY['optimizer','timing','decide_ms'], 'ms'),\n    ('risk', e.payload #>> ARRAY['optimizer','timing','risk_ms'], 'ms'),\n    ('publish', e.payload #>> ARRAY['optimizer','timing','publish_ms'], 'ms'),\n    ('cancel', e.payload #>> ARRAY['optimizer','timing','cancel_ms'], 'ms'),\n    ('place', e.payload #>> ARRAY['optimizer','timing','place_ms'], 'ms'),\n    ('exec_sync', e.payload #>> ARRAY['optimizer','timing','execute_ms'], 'ms'),\n    ('controller_total', e.payload #>> ARRAY['optimizer','timing','controller_total_ms'], 'ms')\n  ) AS s(metric, raw_value, unit)\nWHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND CASE\n  WHEN CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND IS NULL THEN NULL\n  WHEN lower(trim(COALESCE(s.unit, 'ms'))) = 'sec' THEN (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND) * 1000.0\n  ELSE (CASE\n  WHEN trim(COALESCE(s.raw_value, '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(s.raw_value, ''))::double precision\n  ELSE NULL\nEND)\nEND IS NOT NULL\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Controller stage durations (ms)",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -87,7 +133,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 13
+        "y": 19
       },
       "id": 6,
       "targets": [
@@ -136,7 +182,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 29
       },
       "id": 7,
       "targets": [
@@ -185,7 +231,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 33
+        "y": 39
       },
       "id": 3,
       "targets": [
@@ -229,7 +275,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 33
+        "y": 39
       },
       "id": 4,
       "targets": [
@@ -275,7 +321,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 47
       },
       "id": 5,
       "targets": [
