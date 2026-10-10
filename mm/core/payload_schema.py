@@ -120,6 +120,8 @@ def market_event_from_payload(payload: Any) -> Any | None:
 
     from mm.core.models.market import MarketEvent, PriceLevel, RawOrderbook, RawTrade
 
+    if isinstance(payload, MarketEvent):
+        return payload
     if not isinstance(payload, dict):
         return None
     if payload.get("payload_schema") != MARKET_EVENT_SCHEMA:

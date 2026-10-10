@@ -104,19 +104,29 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
     ):
         self.exchange = exchange.lower().strip()
         self.symbol = symbol
-        self.poll_interval_ms = max(100, int(poll_interval_ms))
-        self._rate_limiter = AsyncRateLimiter(self.poll_interval_ms)
+        self.poll_interval_ms = max(10, int(poll_interval_ms))
+        self._trade_rate_limiter = AsyncRateLimiter(self.poll_interval_ms)
+        self._orderbook_rate_limiter = AsyncRateLimiter(self.poll_interval_ms)
+        self._rate_limiter = self._orderbook_rate_limiter
         self._connected = False
         self._error_queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         self._max_seen_trades = max(1, int(max_seen_trades))
         self._seen_trade_order: deque[tuple] = deque()
         self._seen_trades: set[tuple] = set()
         self._transient_backoff_s = self.poll_interval_ms / 1000.0
+        self._transient_backoffs: dict[str, float] = {
+            "trade_stream": self._transient_backoff_s,
+            "orderbook_stream": self._transient_backoff_s,
+        }
         self._last_published_error: tuple[str, str] | None = None
 
     async def connect(self) -> None:
         self._connected = True
         self._transient_backoff_s = self.poll_interval_ms / 1000.0
+        self._transient_backoffs = {
+            "trade_stream": self._transient_backoff_s,
+            "orderbook_stream": self._transient_backoff_s,
+        }
         self._last_published_error = None
 
     async def disconnect(self) -> None:
@@ -127,36 +137,44 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
         if is_permanent_market_data_error(exc):
             await asyncio.sleep(max(300.0, self.poll_interval_ms / 1000.0))
             return
-        self._transient_backoff_s = min(
+        current_backoff = self._transient_backoffs.get(source, self.poll_interval_ms / 1000.0)
+        next_backoff = min(
             60.0,
-            max(self.poll_interval_ms / 1000.0, self._transient_backoff_s * 2.0),
+            max(self.poll_interval_ms / 1000.0, current_backoff * 2.0),
         )
-        await asyncio.sleep(self._transient_backoff_s)
+        self._transient_backoffs[source] = next_backoff
+        self._transient_backoff_s = next_backoff
+        await asyncio.sleep(next_backoff)
 
-    def _reset_poll_backoff(self) -> None:
-        self._transient_backoff_s = self.poll_interval_ms / 1000.0
+    def _reset_poll_backoff(self, source: str | None = None) -> None:
+        initial = self.poll_interval_ms / 1000.0
+        if source is not None:
+            self._transient_backoffs[source] = initial
+        else:
+            for key in self._transient_backoffs:
+                self._transient_backoffs[key] = initial
+        self._transient_backoff_s = initial
 
     async def trade_stream(self) -> AsyncIterator[RawTrade]:
         while self._connected:
             try:
-                await self._rate_limiter.wait()
+                await self._trade_rate_limiter.wait()
                 for trade in await self.fetch_trades():
                     if not self._remember_trade(trade):
                         continue
                     yield trade
-                self._reset_poll_backoff()
+                self._reset_poll_backoff("trade_stream")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await self._sleep_after_poll_error("trade_stream", exc)
                 continue
-            await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def orderbook_stream(self) -> AsyncIterator[RawOrderbook]:
         last_key: tuple[int, float | None, float | None] | None = None
         while self._connected:
             try:
-                await self._rate_limiter.wait()
+                await self._orderbook_rate_limiter.wait()
                 book = await self.fetch_orderbook()
                 bid = book.bids[0].price if book.bids else None
                 ask = book.asks[0].price if book.asks else None
@@ -164,13 +182,12 @@ class RestPollingMarketDataAdapter(AbstractMarketDataAdapter):
                 if key != last_key:
                     last_key = key
                     yield book
-                self._reset_poll_backoff()
+                self._reset_poll_backoff("orderbook_stream")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await self._sleep_after_poll_error("orderbook_stream", exc)
                 continue
-            await asyncio.sleep(self.poll_interval_ms / 1000.0)
 
     async def error_stream(self) -> AsyncIterator[dict[str, str]]:
         while self._connected:
