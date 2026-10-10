@@ -54,6 +54,7 @@ from mm.mpc.warm_start import (
 )
 from mm.mpc.mpc_state import SigmoidMixtureAction, State
 from mm.core.wallet import portfolio_wealth
+from mm.mpc.decide_profiler import maybe_profile_decide
 from mm.mpc.torch_device import apply_torch_threads, resolve_torch_device
 from mm.mpc.state_tensor import (
     effective_depth_bid_tensor,
@@ -2117,7 +2118,10 @@ class MonteCarloMPCTensorBatched:
                 epoch, self.adam_epochs - 1, self.optimizer_diagnostics_every
             )
             step_started = time.perf_counter()
-            loss = optimizer.step(lambda: closure(probe_only=False, want_metrics=want_metrics))
+            with maybe_profile_decide():
+                loss = optimizer.step(
+                    lambda: closure(probe_only=False, want_metrics=want_metrics)
+                )
             # ``optimizer.step`` runs the closure before applying the update, so
             # the Adam arithmetic itself is the residual after the closure cost.
             step_wall_ms = (time.perf_counter() - step_started) * 1000.0

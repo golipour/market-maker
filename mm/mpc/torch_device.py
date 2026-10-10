@@ -181,14 +181,45 @@ def resolve_torch_threads(explicit: int | str | None = None) -> int | None:
 
 
 def apply_torch_threads(explicit: int | str | None = None) -> int | None:
-    """Apply ``resolve_torch_threads`` to the global torch thread pool."""
+    """Apply ``resolve_torch_threads`` to the global torch thread pool.
+
+    ``torch.set_num_threads`` alone was not enough. The measured 17x
+    oversubscription regression came from the *compiled* kernel's generated
+    C++, which runs its own OpenMP regions; that runtime reads
+    ``OMP_NUM_THREADS`` at library-init time, which is before this function is
+    first called (it runs when the optimizer is constructed, after torch is
+    imported). So ``set_num_threads`` constrained the eager dispatch path while
+    the inductor kernel still fanned out to the node's 8 cores.
+
+    Setting the environment variables here means every later consumer agrees on
+    the same count: OpenMP, the inductor C++ runtime, and torch. They are
+    defaults, so an operator-provided value in the environment still wins.
+    Interop threads are left alone when they cannot be changed (torch raises if
+    the pool is already initialized), which is harmless: the intra-op pool is
+    what the rollout kernels use.
+    """
     import torch as torch_mod
 
     threads = resolve_torch_threads(explicit)
     if threads is None:
         return None
+
+    value = str(threads)
+    os.environ.setdefault("OMP_NUM_THREADS", value)
+    os.environ.setdefault("MKL_NUM_THREADS", value)
+    # Inductor's generated C++ reads this one for its own parallel regions.
+    os.environ.setdefault("TORCHINDUCTOR_NUM_THREADS", value)
+
     try:
         torch_mod.set_num_threads(threads)
     except Exception:
-        return None
+        # The intra-op pool may already be in use; the env vars above still
+        # constrain the OpenMP runtime, which is the important one here.
+        pass
+    try:
+        torch_mod.set_num_interop_threads(threads)
+    except Exception:
+        # Already initialized. Not fatal: interop parallelism is not what the
+        # rollout kernels rely on.
+        pass
     return threads

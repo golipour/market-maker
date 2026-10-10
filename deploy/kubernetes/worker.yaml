@@ -60,11 +60,14 @@ spec:
             # warm-cache path rather than 3-5 s.
             - name: TORCHINDUCTOR_CACHE_DIR
               value: /var/cache/torchinductor
-            # Match the container's cpu limit (2). Serial codegen measured
-            # 129 s for one venue signature; letting inductor use both cores
-            # roughly halves that.
+            # Raised from 2 to 4 to match the node's spare capacity (8 cores,
+            # this pod is the only heavy consumer). Halving decide time is NOT
+            # expected: the rollout tensors are small, so per-op dispatch
+            # dominates and extra cores mostly add sync overhead. Set
+            # MM_PROFILE_DECIDE=1 once and read the emitted trace before
+            # concluding more cores is the right lever.
             - name: TORCHINDUCTOR_COMPILE_THREADS
-              value: "2"
+              value: "4"
             # torch.get_num_threads() reads the node's core count (8 on
             # node3), not this container's cpu limit, so the rollout kernel
             # oversubscribes and collapses. Measured in this pod, one
@@ -72,8 +75,15 @@ spec:
             # threads versus 622.83 ms at 8 -- a 17x regression, i.e. the
             # compiled kernel ended up slower than eager (0.057x). Pin the
             # intra-op thread count to the cpu limit.
+            #
+            # apply_torch_threads() exports this to OMP_NUM_THREADS /
+            # TORCHINDUCTOR_NUM_THREADS as well, because inductor's generated
+            # C++ reads OMP_NUM_THREADS at torch-import time -- before the
+            # optimizer (and therefore apply_torch_threads) is ever built.
+            # Without the env export, torch.set_num_threads constrained only
+            # the eager path and the compiled kernel still used 8 threads.
             - name: MM_TORCH_THREADS
-              value: "2"
+              value: "4"
           envFrom:
             - secretRef:
                 name: market-maker-secrets
@@ -87,11 +97,11 @@ spec:
               mountPath: /var/cache/torchinductor
           resources:
             requests:
-              cpu: 250m
+              cpu: 500m
               memory: 512Mi
             limits:
-              cpu: "2"
-              memory: 2Gi
+              cpu: "4"
+              memory: 4Gi
           readinessProbe:
             httpGet:
               path: /metrics
@@ -110,8 +120,30 @@ spec:
             name: market-maker-config
         - name: attribution-cache
           emptyDir: {}
+        # PersistentVolumeClaim, not emptyDir: compiled kernels are worth
+        # keeping across restarts. Serial codegen measured 129 s for a single
+        # venue signature, and production runs two venues x several shape
+        # variants, so a cold compile after every deploy or node reschedule
+        # leaves the worker running eager for minutes. The PVC holds ~30 MB of
+        # generated C++/objects; it is ReadWriteOnce, so only one worker
+        # replica may mount it at a time (replicas: 1).
         - name: inductor-cache
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: market-maker-inductor-cache
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: market-maker-inductor-cache
+  namespace: market-maker
+  labels:
+    app.kubernetes.io/part-of: market-maker
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

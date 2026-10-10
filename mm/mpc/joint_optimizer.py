@@ -55,6 +55,7 @@ from mm.mpc.mpc_tensor_batched import (
     _torch_optimizer_state_is_finite,
     soft_fill_batched,
 )
+from mm.mpc.decide_profiler import maybe_profile_decide
 from mm.mpc.optimizer_diagnostics import (
     EpochObjectiveMetrics,
     OptimizerRunDiagnostics,
@@ -1004,7 +1005,8 @@ def optimize_joint_with_diagnostics(
                 optimizer = mpc._optimizer
             adaptive_warm_resolved = True
 
-        loss = optimizer.step(lambda: closure(probe_only=False))
+        with maybe_profile_decide("joint"):
+            loss = optimizer.step(lambda: closure(probe_only=False))
         if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
             best_loss = loss.item()
             best_x = last_eval_x.detach().clone()
