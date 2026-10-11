@@ -775,6 +775,45 @@ def soft_fill_batched(
     return ob_bids_next, ob_asks_next, cash_delta, inv_delta
 
 
+def _mark_batch_dims_dynamic(*tensors: Any) -> None:
+    """Tell dynamo the leading batch axis is dynamic. Call *before* ``fn(...)``.
+
+    ``soft_fill_batched`` accumulated one specialization per batch length. The
+    live pod logged ``tensor 'sell_vol' size mismatch`` six times and
+    ``tensor 'params' size mismatch`` five times against a
+    ``recompile_limit`` of 8 -- and this worker is ``mode: "multi"``, running
+    ``mpc-usdt-local`` (n_samples 64) and ``bitwana-sample`` (n_samples 16) in
+    one process, so those are permanent axes, not warm-up noise.
+
+    ``mark_dynamic`` replaces the concrete-size guards with symbolic ones, so
+    one kernel serves every sample count. That is the alternative to enlarging
+    ``recompile_limit``, which would not add capacity but delay the same
+    permanent eager fallback.
+
+    Two constraints, both learned the hard way:
+
+    * It must be called on the *inputs* before the compiled region is entered.
+      Calling it inside the traced function raises
+      ``Attempt to trace forbidden callable <function mark_dynamic>`` and takes
+      the whole kernel down to eager -- silently, because the warm-up call is
+      wrapped in a fallback handler.
+    * Only the batch axis varies. The grid and component axes are fixed by the
+      preset, and marking them dynamic would block constant folding and cost
+      kernel performance for nothing.
+    """
+    try:
+        import torch as _torch
+
+        for tensor in tensors:
+            if tensor is None or not _torch.is_tensor(tensor):
+                continue
+            if tensor.is_floating_point() and tensor.ndim >= 1:
+                _torch._dynamo.mark_dynamic(tensor, 0)
+    except Exception:
+        # Best-effort only: a failure here must never take a decision down.
+        return
+
+
 _COMPILED_SOFT_FILL_KERNEL: Any = None
 _COMPILE_SOFT_FILL_FAILED: bool = False
 #: Signatures whose compiled kernel has already been executed once, keyed by
@@ -826,6 +865,9 @@ def _soft_fill_signature(
     grid_levels: int,
     soft_fill_activation: Any,
     soft_fill_queue_model: Any,
+    depth_scale: Any = 1.0,
+    soft_temp: Any = 1.0,
+    maker_fee: Any = 0.0,
 ) -> tuple[Any, ...]:
     """Key identifying one inductor specialization of ``soft_fill_batched``.
 
@@ -834,6 +876,24 @@ def _soft_fill_signature(
     path must derive the key through this one function; when they computed it
     separately they drifted, and a live decide paid a 162 s lazy compile that
     blew ``decision_timeout_ms`` and wedged every controller.
+
+    ``depth_scale`` is part of the key because it is a Python ``float`` that
+    reaches the kernel as ``marg * scale``, and dynamo guards on Python scalars.
+    Measured: compiling at ``depth_scale=1.0`` then calling at ``0.0`` added a
+    frame and cost a 2.7 s lazy compile on the first masked call. The joint
+    path passes ``depth_scale=1.0`` for the local chain and
+    ``depth_scale=global_mask`` (0.0 or 1.0) for the global chain, so omitting
+    it would let the global chain compile inside a live decide -- precisely the
+    failure this signature set exists to prevent.
+
+    ``soft_temp`` and ``maker_fee`` are here for the same reason. Both are
+    Python floats that reach the kernel as ordinary arithmetic
+    (``reach / soft_temp``, fee-scaled margins) with no tensor indirection, so
+    dynamo guards on their exact values. They are constant per venue today,
+    which is why the omission never showed up as a live failure -- but a
+    per-venue override in the UI changes the float and would recompile inside
+    a decide. Keying on them turns that stall into a warm-up miss, which
+    ``resolve_compiled_soft_fill`` already handles by staying eager.
     """
     return (
         int(n_components),
@@ -841,6 +901,9 @@ def _soft_fill_signature(
         max(int(grid_levels), 1),
         str(soft_fill_activation),
         str(soft_fill_queue_model),
+        float(depth_scale),
+        float(soft_temp),
+        float(maker_fee),
     )
 
 
@@ -857,6 +920,7 @@ def warm_soft_fill_compile(
     soft_fill_queue_model: str = "back_of_queue",
     device: Any = None,
     dtype: Any = None,
+    depth_scale: float = 1.0,
     torch_mod: Any = torch,
 ) -> float:
     """Pay the ``torch.compile`` cost for ``soft_fill_batched`` ahead of the first decide.
@@ -886,6 +950,9 @@ def warm_soft_fill_compile(
         grid_levels=gl,
         soft_fill_activation=soft_fill_activation,
         soft_fill_queue_model=soft_fill_queue_model,
+        depth_scale=depth_scale,
+        soft_temp=soft_temp,
+        maker_fee=maker_fee,
     )
     if signature in _SOFT_FILL_WARMED_SIGNATURES:
         return 0.0
@@ -909,6 +976,14 @@ def warm_soft_fill_compile(
         book = torch.zeros((ns, gl), dtype=dtype, device=dev)
         vols = torch.ones((ns, 1), dtype=dtype, device=dev)
         grid = torch.arange(1, gl + 1, dtype=dtype, device=dev)
+        # ``book``/``vols``/``size_*`` carry requires_grad=False here, matching
+        # the decide path: the book cumulative is derived from the observed
+        # orderbook and the quote-capacity bounds from cash/inventory, neither
+        # of which is a function of the optimized parameters. Only ``params``
+        # requires grad. Keeping these flags aligned with the live call means
+        # dynamo does not discover a requires_grad mismatch on the first decide
+        # and pay a lazy compile for it. (Measured: the live pod logged
+        # ``requires_grad mismatch`` against ``book_cum_ask``.)
         # The quote-size bounds must be per-sample tensors of shape (n_samples, 1)
         # to match what ``_quote_capacity_bounds_batched`` produces at runtime.
         # Passing floats instead would guard a different branch and trigger a
@@ -921,6 +996,10 @@ def warm_soft_fill_compile(
             # Compilation is unavailable on this platform; nothing to warm.
             _SOFT_FILL_WARMED_SIGNATURES.add(signature)
             return 0.0
+
+        # Must precede the traced call; inside it, dynamo refuses to trace
+        # ``mark_dynamic`` and silently degrades the kernel to eager.
+        _mark_batch_dims_dynamic(mid, book, vols, size_min, size_max)
 
         # Repeat the call until the measured cost stops falling. Dynamo guards
         # on tensor identity as well as shape, so freshly allocated inputs
@@ -948,6 +1027,7 @@ def warm_soft_fill_compile(
                 bid_quote_size_max=size_max,
                 ask_quote_size_min=size_min,
                 ask_quote_size_max=size_max,
+                depth_scale=float(depth_scale),
                 **depth_kw,
             )
             # Touch the backward too: the rollout runs backward on the first
@@ -975,9 +1055,69 @@ def warm_soft_fill_compile(
             "n_components": n,
             "n_samples": ns,
             "grid_levels": gl,
+            "depth_scale": float(depth_scale),
         },
     )
     return elapsed_ms
+
+
+def resolve_compiled_soft_fill(
+    torch_mod: Any,
+    *,
+    enabled: bool,
+    n_components: int,
+    n_samples: int,
+    grid_levels: int,
+    soft_fill_activation: Any,
+    soft_fill_queue_model: Any,
+    depth_scale: Any = 1.0,
+    soft_temp: Any = 1.0,
+    maker_fee: Any = 0.0,
+) -> Any:
+    """Return the compiled ``soft_fill_batched`` only for a warmed signature.
+
+    Shared by the single-venue rollout in this module and the joint rollout in
+    ``mm.mpc.joint_optimizer``, so both derive the decision from one place. When
+    the two derived it separately they drifted, and a live decide paid a lazy
+    compile (measured 162 s once, 2.7 s for the masked global chain) that blew
+    ``decision_timeout_ms``.
+
+    An unwarmed signature returns eager ``soft_fill_batched`` rather than
+    compiling: eager is always correct, just slower, and compiling inside a
+    decide is the failure mode being guarded against. The shortfall is logged
+    once per signature so a venue whose shape was never paid for at boot is
+    visible in logs instead of silently costing decisions.
+    """
+    if not enabled:
+        return soft_fill_batched
+    signature = _soft_fill_signature(
+        n_components=n_components,
+        n_samples=n_samples,
+        grid_levels=grid_levels,
+        soft_fill_activation=soft_fill_activation,
+        soft_fill_queue_model=soft_fill_queue_model,
+        depth_scale=depth_scale,
+        soft_temp=soft_temp,
+        maker_fee=maker_fee,
+    )
+    if signature in _SOFT_FILL_WARMED_SIGNATURES:
+        return _get_compiled_soft_fill(torch_mod)
+    if signature not in _SOFT_FILL_UNWARMED_SEEN:
+        _SOFT_FILL_UNWARMED_SEEN.add(signature)
+        log_event(
+            "mpc.torch_compile.unwarmed_shape",
+            {
+                "n_components": int(n_components),
+                "n_samples": int(n_samples),
+                "grid_levels": int(grid_levels),
+                "soft_fill_activation": str(soft_fill_activation),
+                "soft_fill_queue_model": str(soft_fill_queue_model),
+                "depth_scale": float(depth_scale),
+                "soft_temp": float(soft_temp),
+                "maker_fee": float(maker_fee),
+            },
+        )
+    return soft_fill_batched
 
 
 def _delta_wealth_mtm_batched(
@@ -1262,34 +1402,45 @@ class MonteCarloMPCTensorBatched:
         # the first decide. This needs ``_l_param_config()`` and the venue
         # fill semantics, so it can only run once ``local_n_components`` and
         # the venue optimizer params exist. Both local and global shapes are
-        # warmed because the joint path may call either variant, and a second
-        # shape would otherwise trigger a second lazy compile inside a decide.
+        # warmed because the joint path -- the one production actually takes --
+        # calls both, and a second shape would otherwise trigger a second lazy
+        # compile inside a decide.
+        #
+        # ``depth_scale`` is warmed per venue as well: it reaches the kernel as
+        # a Python float and is part of the inductor specialization (measured:
+        # a masked 0.0 call after a 1.0 warm-up added a frame and cost a 2.7 s
+        # lazy compile). The joint path passes 1.0 for local and
+        # ``global_mask`` for global, and ``global_mask`` is 0.0 whenever the
+        # venue is inactive -- which is every production decision while
+        # liquidity sourcing is off. So warm both 1.0 and 0.0.
         if self.compile_soft_fill:
             self.soft_fill_compile_warmup_ms = 0.0
-            for venue, n_comp in (
-                ("local", self.local_n_components),
-                ("global", self.global_n_components),
+            for venue, n_comp, depth_scales in (
+                ("local", self.local_n_components, (1.0,)),
+                ("global", self.global_n_components, (1.0, 0.0)),
             ):
                 venue_params = self._venue_optimizer(venue)
-                self.soft_fill_compile_warmup_ms += warm_soft_fill_compile(
-                    n_components=n_comp,
-                    n_samples=self.n_samples,
-                    grid_levels=self.grid_levels,
-                    l_param=self._l_param_config(venue),
-                    depth_kw=self._depth_call_kwargs(venue),
-                    maker_fee=float(
-                        getattr(
-                            self.execution_model,
-                            f"{venue}_maker_fee",
-                            getattr(self.execution_model, "maker_fee", 0.0),
-                        )
-                    ),
-                    soft_temp=float(venue_params.soft_fill_temp),
-                    soft_fill_activation=venue_params.soft_fill_activation,
-                    soft_fill_queue_model=venue_params.soft_fill_queue_model,
-                    device=self.device,
-                    dtype=self._resolve_dtype(torch),
-                )
+                for depth_scale in depth_scales:
+                    self.soft_fill_compile_warmup_ms += warm_soft_fill_compile(
+                        n_components=n_comp,
+                        n_samples=self.n_samples,
+                        grid_levels=self.grid_levels,
+                        l_param=self._l_param_config(venue),
+                        depth_kw=self._depth_call_kwargs(venue),
+                        maker_fee=float(
+                            getattr(
+                                self.execution_model,
+                                f"{venue}_maker_fee",
+                                getattr(self.execution_model, "maker_fee", 0.0),
+                            )
+                        ),
+                        soft_temp=float(venue_params.soft_fill_temp),
+                        soft_fill_activation=venue_params.soft_fill_activation,
+                        soft_fill_queue_model=venue_params.soft_fill_queue_model,
+                        device=self.device,
+                        dtype=self._resolve_dtype(torch),
+                        depth_scale=depth_scale,
+                    )
 
     @property
     def last_diagnostics(self) -> OptimizerRunDiagnostics | None:
@@ -1773,31 +1924,23 @@ class MonteCarloMPCTensorBatched:
                     # just slower -- and record it so the shortfall is visible
                     # in logs rather than silently costing decisions.
                     venue_n = n
-                    soft_fill_fn = soft_fill_batched
-                    if self.compile_soft_fill:
-                        signature = _soft_fill_signature(
-                            n_components=venue_n,
-                            n_samples=mid_t.shape[0],
-                            grid_levels=spread_grid.shape[-1],
-                            soft_fill_activation=self.soft_fill_activation,
-                            soft_fill_queue_model=self.soft_fill_queue_model,
-                        )
-                        if signature in _SOFT_FILL_WARMED_SIGNATURES:
-                            soft_fill_fn = _get_compiled_soft_fill(torch_mod)
-                        else:
-                            soft_fill_fn = soft_fill_batched
-                            if signature not in _SOFT_FILL_UNWARMED_SEEN:
-                                _SOFT_FILL_UNWARMED_SEEN.add(signature)
-                                log_event(
-                                    "mpc.torch_compile.unwarmed_shape",
-                                    {
-                                        "n_components": venue_n,
-                                        "n_samples": int(mid_t.shape[0]),
-                                        "grid_levels": int(spread_grid.shape[-1]),
-                                        "soft_fill_activation": self.soft_fill_activation,
-                                        "soft_fill_queue_model": self.soft_fill_queue_model,
-                                    },
-                                )
+                    soft_fill_fn = resolve_compiled_soft_fill(
+                        torch_mod,
+                        enabled=self.compile_soft_fill,
+                        n_components=venue_n,
+                        n_samples=int(mid_t.shape[0]),
+                        grid_levels=int(spread_grid.shape[-1]),
+                        soft_fill_activation=self.soft_fill_activation,
+                        soft_fill_queue_model=self.soft_fill_queue_model,
+                        depth_scale=1.0,
+                        soft_temp=self.soft_fill_temp,
+                        maker_fee=maker_fee,
+                    )
+                    _mark_batch_dims_dynamic(
+                        mid_t, book_cum_bid_h, book_cum_ask_h, sell_h, buy_h,
+                        bid_quote_size_min_t, bid_quote_size_max_t,
+                        ask_quote_size_min_t, ask_quote_size_max_t,
+                    )
                     try:
                         ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_fn(
                             action_h,

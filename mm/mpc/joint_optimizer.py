@@ -51,8 +51,10 @@ from mm.mpc.mpc_tensor_batched import (
     _quote_capacity_bounds_batched,
     _quote_capacity_bounds_scalar,
     _spread_bucket_index,
+    _mark_batch_dims_dynamic as mark_batch_dims_dynamic,
     _spread_grid_tensor,
     _torch_optimizer_state_is_finite,
+    resolve_compiled_soft_fill,
     soft_fill_batched,
 )
 from mm.mpc.decide_profiler import maybe_profile_decide
@@ -527,41 +529,76 @@ def optimize_joint_with_diagnostics(
                     mid_price=mid_t,
                     optimizer=local_opt,
                 )
-                (
-                    global_bid_quote_size_min_t,
-                    global_bid_quote_size_max_t,
-                    global_ask_quote_size_min_t,
-                    global_ask_quote_size_max_t,
-                ) = _quote_capacity_bounds_batched(
-                    cash=global_cash_t,
-                    inventory=global_inv_t,
-                    mid_price=global_mid_t,
-                    optimizer=global_opt,
-                )
+                if global_mask > 0.0:
+                    (
+                        global_bid_quote_size_min_t,
+                        global_bid_quote_size_max_t,
+                        global_ask_quote_size_min_t,
+                        global_ask_quote_size_max_t,
+                    ) = _quote_capacity_bounds_batched(
+                        cash=global_cash_t,
+                        inventory=global_inv_t,
+                        mid_price=global_mid_t,
+                        optimizer=global_opt,
+                    )
+                else:
+                    # Inactive venue: the fill chain is skipped below, so its
+                    # capacity bounds are never read. Alias the local tensors
+                    # to keep the call signature stable without paying for a
+                    # second bounds evaluation per horizon step.
+                    global_bid_quote_size_min_t = local_bid_quote_size_min_t
+                    global_bid_quote_size_max_t = local_bid_quote_size_max_t
+                    global_ask_quote_size_min_t = local_ask_quote_size_min_t
+                    global_ask_quote_size_max_t = local_ask_quote_size_max_t
                 vwap_depth_t = torch_mod.abs(
                     inv_t + global_inv_t if mpc.liquidity_sourcing_enabled else inv_t
                 )
                 if h == 0:
                     buy_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device)
                     sell_vwap_t = torch_mod.full((mpc.n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device)
-                    global_buy_vwap_t = torch_mod.full(
-                        (mpc.n_samples, 1), float(state.global_buy_vwap or state.buy_vwap), dtype=dtype, device=_device
+                    # Inactive venue: the h>0 branch reuses the local mark, so
+                    # h==0 must agree -- otherwise the first horizon step would
+                    # price inventory off a book the rollout never reads again.
+                    global_buy_vwap_t = (
+                        torch_mod.full(
+                            (mpc.n_samples, 1), float(state.global_buy_vwap or state.buy_vwap), dtype=dtype, device=_device
+                        )
+                        if global_mask > 0.0
+                        else buy_vwap_t
                     )
-                    global_sell_vwap_t = torch_mod.full(
-                        (mpc.n_samples, 1),
-                        float(state.global_sell_vwap or state.sell_vwap),
-                        dtype=dtype,
-                        device=_device,
+                    global_sell_vwap_t = (
+                        torch_mod.full(
+                            (mpc.n_samples, 1),
+                            float(state.global_sell_vwap or state.sell_vwap),
+                            dtype=dtype,
+                            device=_device,
+                        )
+                        if global_mask > 0.0
+                        else sell_vwap_t
                     )
                 else:
+                    buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
+                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth_t
+                    )
+                    # ``vwap_prices_batched`` returns ``(buy, sell)``; the
+                    # bare names keep the pre-existing convention. The local
+                    # book read stays unconditional: the local chain always
+                    # needs it, and the masked global mark aliases it below.
+                    buy_vwap_t, sell_vwap_t = buy_vwap_book_t, sell_vwap_book_t
                     if local_conditional_price and conditional_buy_vwap_t is not None:
                         buy_vwap_t = conditional_buy_vwap_t
                         sell_vwap_t = conditional_sell_vwap_t
-                    else:
-                        buy_vwap_t, sell_vwap_t = vwap_prices_batched(
-                            ob_bids, ob_asks, mid_t, spread_grid, target_depth=vwap_depth_t
-                        )
-                    if global_conditional_price and conditional_global_buy_vwap_t is not None:
+                    if global_mask <= 0.0:
+                        # Inactive venue: reuse the local mark. The global book
+                        # is not quoted on, and ``net_inv_next`` equals the
+                        # local position (see the ``global_inv_next`` carry
+                        # above), so pricing the mark off the global VWAPs
+                        # would only inject a second price process into a
+                        # decision that trades one venue. Skipping the global
+                        # VWAP read keeps the global book out of the graph.
+                        global_buy_vwap_t = buy_vwap_t
+                        global_sell_vwap_t = sell_vwap_t
+                    elif global_conditional_price and conditional_global_buy_vwap_t is not None:
                         global_buy_vwap_t = conditional_global_buy_vwap_t
                         global_sell_vwap_t = conditional_global_sell_vwap_t
                     else:
@@ -579,56 +616,201 @@ def optimize_joint_with_diagnostics(
                     global_buy_vwap_t = global_buy_vwap_t + global_eps_buy_h
                     global_sell_vwap_t = global_sell_vwap_t + global_eps_sell_h
 
-                ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = soft_fill_batched(
-                    local_h,
-                    local_n,
-                    mid_t,
-                    book_cum_bid_h,
-                    book_cum_ask_h,
-                    sell_h,
-                    buy_h,
-                    spread_grid,
-                    local_maker_fee,
-                    soft_temp=local_opt.soft_fill_temp,
+                # Both venue chains go through ``resolve_compiled_soft_fill``,
+                # which returns the inductor kernel only for a signature warmed
+                # at construction and eager otherwise. The joint path is where
+                # production spends its decide budget (``reference_price_source
+                # == "global"`` routes here), so this is the call site that
+                # makes ``compile_soft_fill`` reachable at all; the single-venue
+                # rollout in ``mpc_tensor_batched`` has its own. Note the two
+                # chains differ in ``depth_scale`` -- local is a constant 1.0,
+                # global is ``global_mask`` -- and that scalar is part of the
+                # inductor specialization, so each is warmed and gated
+                # separately. Never let an unwarmed shape compile here.
+                local_soft_fill_fn = resolve_compiled_soft_fill(
+                    torch_mod,
+                    enabled=mpc.compile_soft_fill,
+                    n_components=local_n,
+                    n_samples=int(mid_t.shape[0]),
+                    grid_levels=int(spread_grid.shape[-1]),
                     soft_fill_activation=local_opt.soft_fill_activation,
                     soft_fill_queue_model=local_opt.soft_fill_queue_model,
-                    bid_quote_size_min=local_bid_quote_size_min_t,
-                    bid_quote_size_max=local_bid_quote_size_max_t,
-                    ask_quote_size_min=local_ask_quote_size_min_t,
-                    ask_quote_size_max=local_ask_quote_size_max_t,
                     depth_scale=1.0,
-                    **local_depth_kw,
+                    soft_temp=local_opt.soft_fill_temp,
+                    maker_fee=local_maker_fee,
                 )
-                (
-                    global_ob_bids_next,
-                    global_ob_asks_next,
-                    global_cash_delta,
-                    global_inv_delta,
-                ) = soft_fill_batched(
-                    global_h,
-                    global_n,
-                    global_mid_t,
-                    global_book_cum_bid_h,
-                    global_book_cum_ask_h,
-                    global_sell_h,
-                    global_buy_h,
-                    spread_grid,
-                    global_maker_fee,
-                    soft_temp=global_opt.soft_fill_temp,
+                global_soft_fill_fn = resolve_compiled_soft_fill(
+                    torch_mod,
+                    enabled=mpc.compile_soft_fill,
+                    n_components=global_n,
+                    n_samples=int(global_mid_t.shape[0]),
+                    grid_levels=int(spread_grid.shape[-1]),
                     soft_fill_activation=global_opt.soft_fill_activation,
                     soft_fill_queue_model=global_opt.soft_fill_queue_model,
-                    bid_quote_size_min=global_bid_quote_size_min_t,
-                    bid_quote_size_max=global_bid_quote_size_max_t,
-                    ask_quote_size_min=global_ask_quote_size_min_t,
-                    ask_quote_size_max=global_ask_quote_size_max_t,
                     depth_scale=global_mask,
-                    **global_depth_kw,
+                    soft_temp=global_opt.soft_fill_temp,
+                    maker_fee=global_maker_fee,
                 )
+
+                # Applied before the traced calls: inside the kernel dynamo
+                # refuses to trace mark_dynamic and degrades to eager. Without
+                # this each strategy's n_samples adds its own specialization,
+                # and this worker runs two of them in one process.
+                mark_batch_dims_dynamic(
+                    mid_t, book_cum_bid_h, book_cum_ask_h, sell_h, buy_h,
+                    local_bid_quote_size_min_t, local_bid_quote_size_max_t,
+                    local_ask_quote_size_min_t, local_ask_quote_size_max_t,
+                    global_mid_t, global_book_cum_bid_h, global_book_cum_ask_h,
+                    global_sell_h, global_buy_h,
+                )
+
+                try:
+                    ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = local_soft_fill_fn(
+                        local_h,
+                        local_n,
+                        mid_t,
+                        book_cum_bid_h,
+                        book_cum_ask_h,
+                        sell_h,
+                        buy_h,
+                        spread_grid,
+                        local_maker_fee,
+                        soft_temp=local_opt.soft_fill_temp,
+                        soft_fill_activation=local_opt.soft_fill_activation,
+                        soft_fill_queue_model=local_opt.soft_fill_queue_model,
+                        bid_quote_size_min=local_bid_quote_size_min_t,
+                        bid_quote_size_max=local_bid_quote_size_max_t,
+                        ask_quote_size_min=local_ask_quote_size_min_t,
+                        ask_quote_size_max=local_ask_quote_size_max_t,
+                        depth_scale=1.0,
+                        **local_depth_kw,
+                    )
+                except Exception as exc:
+                    # A compiled kernel that fails at runtime must not take the
+                    # decision with it: drop to eager for the rest of this
+                    # optimizer's life and redo this step eagerly.
+                    if local_soft_fill_fn is not soft_fill_batched:
+                        log_event(
+                            "mpc.torch_compile.runtime_fallback",
+                            {"error": str(exc), "venue": "local"},
+                        )
+                        mpc.compile_soft_fill = False
+                    ob_bids_next, ob_asks_next, local_cash_delta, local_inv_delta = soft_fill_batched(
+                        local_h,
+                        local_n,
+                        mid_t,
+                        book_cum_bid_h,
+                        book_cum_ask_h,
+                        sell_h,
+                        buy_h,
+                        spread_grid,
+                        local_maker_fee,
+                        soft_temp=local_opt.soft_fill_temp,
+                        soft_fill_activation=local_opt.soft_fill_activation,
+                        soft_fill_queue_model=local_opt.soft_fill_queue_model,
+                        bid_quote_size_min=local_bid_quote_size_min_t,
+                        bid_quote_size_max=local_bid_quote_size_max_t,
+                        ask_quote_size_min=local_ask_quote_size_min_t,
+                        ask_quote_size_max=local_ask_quote_size_max_t,
+                        depth_scale=1.0,
+                        **local_depth_kw,
+                    )
+                if global_mask <= 0.0:
+                    # Inactive venue: its quotes are definitionally zero, so
+                    # the fill chain would only produce ~0 deltas while keeping
+                    # the whole global autograd subgraph attached to
+                    # ``global_inv_next`` (and through it to ``ref_next``).
+                    # Carry the book and position forward untouched instead.
+                    # Shapes match the compiled kernel's outputs: per-level
+                    # book (n_samples, grid) and per-sample deltas
+                    # (n_samples,).
+                    global_ob_bids_next = global_ob_bids
+                    global_ob_asks_next = global_ob_asks
+                    global_cash_delta = torch_mod.zeros(
+                        mpc.n_samples, dtype=dtype, device=_device
+                    )
+                    global_inv_delta = torch_mod.zeros(
+                        mpc.n_samples, dtype=dtype, device=_device
+                    )
+                    global_soft_fill_error: Exception | None = None
+                else:
+                    global_soft_fill_error = None
+                    try:
+                        (
+                            global_ob_bids_next,
+                            global_ob_asks_next,
+                            global_cash_delta,
+                            global_inv_delta,
+                        ) = global_soft_fill_fn(
+                            global_h,
+                            global_n,
+                            global_mid_t,
+                            global_book_cum_bid_h,
+                            global_book_cum_ask_h,
+                            global_sell_h,
+                            global_buy_h,
+                            spread_grid,
+                            global_maker_fee,
+                            soft_temp=global_opt.soft_fill_temp,
+                            soft_fill_activation=global_opt.soft_fill_activation,
+                            soft_fill_queue_model=global_opt.soft_fill_queue_model,
+                            bid_quote_size_min=global_bid_quote_size_min_t,
+                            bid_quote_size_max=global_bid_quote_size_max_t,
+                            ask_quote_size_min=global_ask_quote_size_min_t,
+                            ask_quote_size_max=global_ask_quote_size_max_t,
+                            depth_scale=global_mask,
+                            **global_depth_kw,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - eager fallback below
+                        global_soft_fill_error = exc
+                if global_soft_fill_error is not None:
+                    fallback_exc = global_soft_fill_error
+                    if global_soft_fill_fn is not soft_fill_batched:
+                        log_event(
+                            "mpc.torch_compile.runtime_fallback",
+                            {"error": str(fallback_exc), "venue": "global"},
+                        )
+                        mpc.compile_soft_fill = False
+                    (
+                        global_ob_bids_next,
+                        global_ob_asks_next,
+                        global_cash_delta,
+                        global_inv_delta,
+                    ) = soft_fill_batched(
+                        global_h,
+                        global_n,
+                        global_mid_t,
+                        global_book_cum_bid_h,
+                        global_book_cum_ask_h,
+                        global_sell_h,
+                        global_buy_h,
+                        spread_grid,
+                        global_maker_fee,
+                        soft_temp=global_opt.soft_fill_temp,
+                        soft_fill_activation=global_opt.soft_fill_activation,
+                        soft_fill_queue_model=global_opt.soft_fill_queue_model,
+                        bid_quote_size_min=global_bid_quote_size_min_t,
+                        bid_quote_size_max=global_bid_quote_size_max_t,
+                        ask_quote_size_min=global_ask_quote_size_min_t,
+                        ask_quote_size_max=global_ask_quote_size_max_t,
+                        depth_scale=global_mask,
+                        **global_depth_kw,
+                    )
 
                 inv_next = inv_t + local_inv_delta.unsqueeze(1)
                 cash_next = cash_t + local_cash_delta.unsqueeze(1)
-                global_inv_next = global_inv_t + global_inv_delta.unsqueeze(1)
-                global_cash_next = global_cash_t + global_cash_delta.unsqueeze(1)
+                if global_mask > 0.0:
+                    global_inv_next = global_inv_t + global_inv_delta.unsqueeze(1)
+                    global_cash_next = global_cash_t + global_cash_delta.unsqueeze(1)
+                else:
+                    # Inactive venue: carry the (zero) position forward without
+                    # touching the masked chain's outputs. ``global_inv_delta``
+                    # is ~0 by construction (depth_scale=0 zeroes our quotes),
+                    # but adding it would graft the whole global autograd
+                    # subgraph onto ``global_inv_next`` -- and through it onto
+                    # ``ref_next`` -- for every epoch.
+                    global_inv_next = global_inv_t
+                    global_cash_next = global_cash_t
                 local_mid_next = _mid_from_book_best_levels_batched(
                     ob_bids_next,
                     ob_asks_next,
@@ -693,7 +875,7 @@ def optimize_joint_with_diagnostics(
                     buy_vwap_t = conditional_buy_vwap_t
                     sell_vwap_t = conditional_sell_vwap_t
 
-                if global_conditional_price:
+                if global_conditional_price and global_mask > 0.0:
                     ref_depth = float(getattr(global_price_model, "reference_vwap_vol", 100.0))
                     prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = _fixed_depth_shape_features_batched(
                         global_ob_bids,
@@ -763,11 +945,19 @@ def optimize_joint_with_diagnostics(
                 local_step_reward = (
                     cash_next + inv_next * ref_next - (cash_t + inv_t * ref_t)
                 ).squeeze(1)
-                global_step_reward = (
-                    global_cash_next
-                    + global_inv_next * ref_next
-                    - (global_cash_t + global_inv_t * ref_t)
-                ).squeeze(1)
+                if global_mask > 0.0:
+                    global_step_reward = (
+                        global_cash_next
+                        + global_inv_next * ref_next
+                        - (global_cash_t + global_inv_t * ref_t)
+                    ).squeeze(1)
+                else:
+                    # Inactive venue: its position is definitionally zero, so
+                    # its mark-to-market contribution is zero. Skipping the
+                    # arithmetic keeps the masked chain out of the autograd
+                    # graph entirely instead of computing a zero that still
+                    # costs a backward pass.
+                    global_step_reward = torch_mod.zeros_like(local_step_reward)
                 step_reward = local_step_reward + global_step_reward
                 local_inv_path.append(inv_next.squeeze(1))
                 local_cash_path.append(cash_next.squeeze(1))

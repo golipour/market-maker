@@ -469,17 +469,51 @@ def test_warm_soft_fill_compile_pays_cost_off_the_decide_path():
         assert _MODULE._SOFT_FILL_WARMED_SIGNATURES, "warm-up recorded no signature"
 
         # A repeated warm-up for the same signature is free. The signature
-        # key is (n_components, n_samples, grid_levels, activation, queue).
-        n_c, n_s, g_l, act, queue = next(
-            iter(_MODULE._SOFT_FILL_WARMED_SIGNATURES)
-        )
+        # key is (n_components, n_samples, grid_levels, activation, queue,
+        # depth_scale, soft_temp, maker_fee).
+        (
+            n_c,
+            n_s,
+            g_l,
+            act,
+            queue,
+            depth_scale,
+            soft_temp,
+            maker_fee,
+        ) = next(iter(_MODULE._SOFT_FILL_WARMED_SIGNATURES))
         assert _MODULE.warm_soft_fill_compile(
             n_components=n_c,
             n_samples=n_s,
             grid_levels=g_l,
             soft_fill_activation=act,
             soft_fill_queue_model=queue,
+            depth_scale=depth_scale,
+            soft_temp=soft_temp,
+            maker_fee=maker_fee,
         ) == 0.0
+
+
+def test_warm_up_covers_both_depth_scales():
+    """The joint path dispatches at ``depth_scale=1.0`` and ``global_mask``.
+
+    ``depth_scale`` reaches the kernel as a Python float and is part of the
+    inductor specialization (measured: a 0.0 call after a 1.0 warm-up added a
+    frame and cost a 2.7 s lazy compile). ``global_mask`` is 0.0 whenever the
+    global venue is inactive, which is every production decision while
+    liquidity sourcing is off -- so a 1.0-only warm-up would let the global
+    chain compile inside a live decide.
+    """
+    with _isolated_compile_state():
+        opt = _mk_opt(compile_soft_fill=True, global_optimizer={"n_components": 2})
+        if _MODULE._COMPILE_SOFT_FILL_FAILED:
+            return  # inductor unavailable on this host; nothing was warmed
+
+        # ``depth_scale`` is signature index 5, not the last element: the key
+        # also carries ``soft_temp`` and ``maker_fee``, which reach the kernel
+        # as Python floats and are likewise part of the specialization.
+        scales = {sig[5] for sig in _MODULE._SOFT_FILL_WARMED_SIGNATURES}
+        assert 1.0 in scales
+        assert 0.0 in scales, f"masked global chain not warmed; scales={scales}"
 
 
 def test_warm_up_failure_falls_back_to_eager(monkeypatch):

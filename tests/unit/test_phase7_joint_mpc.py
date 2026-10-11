@@ -248,13 +248,21 @@ def test_joint_optimizer_uses_separate_local_and_global_maker_fees(
         global_maker_fee=0.0007,
     )
     fees: list[float] = []
-    original_soft_fill = joint_optimizer.soft_fill_batched
+    # The joint rollout dispatches through ``resolve_compiled_soft_fill``, which
+    # returns the compiled kernel for a warmed signature and eager
+    # ``soft_fill_batched`` otherwise. Intercept at that seam rather than on
+    # ``joint_optimizer.soft_fill_batched`` so the test observes the call that
+    # actually runs, whichever path the resolver selects.
+    original_resolver = joint_optimizer.resolve_compiled_soft_fill
 
-    def capture_soft_fill(*args: object, **kwargs: object) -> object:
-        fees.append(float(args[8]))
-        return original_soft_fill(*args, **kwargs)
+    def capture_resolver(torch_mod, *, enabled, n_components, **kwargs):
+        fn = original_resolver(torch_mod, enabled=enabled, n_components=n_components, **kwargs)
+        def capture_soft_fill(*args: object, **inner: object) -> object:
+            fees.append(float(args[8]))
+            return fn(*args, **inner)
+        return capture_soft_fill
 
-    monkeypatch.setattr(joint_optimizer, "soft_fill_batched", capture_soft_fill)
+    monkeypatch.setattr(joint_optimizer, "resolve_compiled_soft_fill", capture_resolver)
 
     joint.optimize_with_diagnostics(state)
 
@@ -263,6 +271,127 @@ def test_joint_optimizer_uses_separate_local_and_global_maker_fees(
     assert fees[1::2]
     assert all(fee == pytest.approx(0.0002) for fee in fees[0::2])
     assert all(fee == pytest.approx(0.0007) for fee in fees[1::2])
+
+
+def test_joint_path_uses_compiled_soft_fill_for_both_venues(monkeypatch):
+    """Production routes here, so both venue chains must reach the kernel.
+
+    ``reference_price_source == "global"`` -- the shipped default -- dispatches
+    to ``optimize_joint_with_diagnostics``. Before this was wired, the joint
+    path called ``soft_fill_batched`` eagerly and the whole ``torch.compile``
+    stack (Dockerfile toolchain, persistent inductor cache, thread pinning) was
+    idle in production.
+    """
+    import mm.mpc.joint_optimizer as joint_optimizer
+    import mm.mpc.mpc_tensor_batched as mpc_mod
+
+    # Inactive global venue: the production case while liquidity sourcing is
+    # off. It is also what makes the two chains distinguishable here, since
+    # this fixture gives both venues n_components=1 -- the local chain always
+    # dispatches at depth_scale=1.0 and the global one at global_mask.
+    state = _minimal_state(global_active=False)
+    joint = _build_optimizer(liquidity_sourcing_enabled=True)
+    joint.compile_soft_fill = True
+
+    requested: list[tuple[int, float]] = []
+
+    def spy_resolver(torch_mod, *, enabled, n_components, n_samples, grid_levels,
+                     soft_fill_activation, soft_fill_queue_model, depth_scale=1.0,
+                     soft_temp=1.0, maker_fee=0.0):
+        requested.append((n_components, float(depth_scale)))
+        return joint_optimizer.soft_fill_batched
+
+    monkeypatch.setattr(joint_optimizer, "resolve_compiled_soft_fill", spy_resolver)
+    joint.optimize_with_diagnostics(state)
+
+    # Both venue chains, every horizon step, with the masked global scale.
+    assert (1, 1.0) in requested, f"local chain did not resolve a kernel: {requested}"
+    assert (1, 0.0) in requested, f"masked global chain never resolved: {requested}"
+
+
+def test_joint_path_never_compiles_on_the_decide_path(monkeypatch):
+    """An unwarmed joint shape must run eager, not compile inside a decide.
+
+    The global chain dispatches at ``depth_scale=global_mask``, which is 0.0
+    whenever the venue is inactive -- true of every production decision while
+    liquidity sourcing is off. That scalar is part of the inductor
+    specialization, so if it were missing from the warmed set the masked chain
+    would pay a multi-second lazy compile inside a decide bounded by
+    ``decision_timeout_ms``.
+    """
+    import mm.mpc.joint_optimizer as joint_optimizer
+    import mm.mpc.mpc_tensor_batched as mpc_mod
+
+    state = _minimal_state(global_active=False)
+    joint = _build_optimizer(liquidity_sourcing_enabled=True)
+    joint.compile_soft_fill = True
+
+    mpc_mod._SOFT_FILL_WARMED_SIGNATURES.clear()
+    mpc_mod._SOFT_FILL_UNWARMED_SEEN.clear()
+
+    requested: list[int] = []
+    real_get = mpc_mod._get_compiled_soft_fill
+
+    def counting_get(torch_mod):
+        requested.append(1)
+        return real_get(torch_mod)
+
+    monkeypatch.setattr(mpc_mod, "_get_compiled_soft_fill", counting_get)
+    monkeypatch.setattr(joint_optimizer, "resolve_compiled_soft_fill",
+                        mpc_mod.resolve_compiled_soft_fill)
+    joint.optimize_with_diagnostics(state)
+
+    assert not requested, (
+        "the joint decide path requested a compiled kernel for an unwarmed "
+        "shape; that lazy compile is what previously wedged the controller"
+    )
+    assert mpc_mod._SOFT_FILL_UNWARMED_SEEN, (
+        "an unwarmed joint shape ran eager without being recorded, so the "
+        "missed warm-up would be invisible in logs"
+    )
+
+
+def test_soft_fill_signature_keys_on_scalar_arguments():
+    """``soft_temp`` and ``maker_fee`` must select distinct kernels.
+
+    Both are Python floats that reach ``soft_fill_batched`` as bare arithmetic
+    (``reach / soft_temp``, fee-scaled margins) with no tensor indirection, so
+    dynamo guards on their exact values. They are constant per venue today,
+    which is why omitting them from the signature never showed up as a live
+    failure -- but a per-venue override changes the float, and a signature
+    that ignored it would let the kernel compile inside a live decide, the
+    multi-second stall this whole mechanism exists to prevent.
+    """
+    import mm.mpc.mpc_tensor_batched as mpc_mod
+
+    def sig(**over):
+        base = dict(
+            n_components=2,
+            n_samples=16,
+            grid_levels=10,
+            soft_fill_activation="sigmoid",
+            soft_fill_queue_model="back_of_queue",
+            depth_scale=1.0,
+            soft_temp=1.0,
+            maker_fee=0.0,
+        )
+        base.update(over)
+        return mpc_mod._soft_fill_signature(**base)
+
+    reference = sig()
+    assert len(reference) == 8
+
+    # Same shapes, different scalar arguments -> different specializations.
+    assert sig(soft_temp=2.0) != reference
+    assert sig(maker_fee=0.0007) != reference
+    assert sig(depth_scale=0.0) != reference
+
+    # Identical arguments -> the same key, so warm-up and the decide path agree.
+    assert sig() == sig()
+    assert sig(soft_temp=2.0) == sig(soft_temp=2.0)
+
+    # Numeric-vs-numeric-string inputs must not fork the key.
+    assert sig(n_samples="16") == sig(n_samples=16)
 
 
 def test_build_controller_uses_global_price_model_not_local_residual() -> None:

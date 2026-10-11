@@ -236,24 +236,35 @@ def _depth_from_materialized(L: "Tensor", sigmoid_values: "Tensor") -> "Tensor":
 def _materialize_side(
     params: "Tensor",
     *,
-    side: str,
+    side_off: int,
     n_components: int,
     use_softplus: bool,
-    l_param: "LParamConfig | None",
+    l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
 ) -> "tuple[Tensor, Tensor, Tensor]":
-    """Return ``(L, k, x0)`` for one side.
+    """Return ``(L, k, x0)`` for the side whose block starts at ``side_off``.
 
     Factored out so that callers needing the depth curve at several spreads
     (notably the executable depth, which evaluates the curve over the spread
     grid *and* at zero spread) materialize the action parameters only once
     instead of once per evaluation.
+
+    ``side_off`` is a plain integer offset rather than a ``"bid"``/``"ask"``
+    string on purpose. This function used to derive the offset from the string
+    with ``base = 3 * n_components if side == "ask" else 0``, and dynamo traces
+    that comparison as a guard: the live pod logged ``[15/8]`` on this code
+    object with ``last reason: side == 'ask'``, i.e. one code object accumulated
+    15 specializations against a limit of 8 and then fell back to eager for
+    good. The branch is now decided by the caller and arrives as a constant, so
+    the only remaining specialization is the offset value itself (two per
+    component count) rather than string-identity times shape times
+    ``requires_grad``.
     """
     from mm.mpc.l_param import materialize_side_torch, positive_L_torch
 
     torch = _get_torch()
-    base = 3 * n_components if side == "ask" else 0
+    base = int(side_off)
     if l_param is not None:
         return materialize_side_torch(
             params,
@@ -321,7 +332,7 @@ def effective_depth_bid_tensor(
     # parameters, doubling the per-epoch work in the dominant autograd path.
     L, k, x0 = _materialize_side(
         params,
-        side="bid",
+        side_off=0,
         n_components=n_components,
         use_softplus=use_softplus,
         l_param=l_param,
@@ -361,7 +372,7 @@ def effective_depth_ask_tensor(
     torch = _get_torch()
     L, k, x0 = _materialize_side(
         params,
-        side="ask",
+        side_off=3 * n_components,
         n_components=n_components,
         use_softplus=use_softplus,
         l_param=l_param,
