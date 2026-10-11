@@ -145,9 +145,15 @@ def compute_venue_execution_gates(
         global_blocked.append("dry_run_control")
     if frame_step <= config.execution_after_steps:
         global_blocked.append("warmup")
-    if control_plane is not None and config.actor_id in control_plane.state.paused_actors:
+    if control_plane is not None and control_plane.state.kill_switch:
+        global_blocked.append("kill_switch")
+    if control_plane is not None and (
+        config.actor_id.strip() in {str(a).strip() for a in control_plane.state.paused_actors}
+    ):
         global_blocked.append("paused_actor")
-    if control_plane is not None and config.actor_id in control_plane.state.allocation_breached_actors:
+    if control_plane is not None and (
+        config.actor_id.strip() in {str(a).strip() for a in control_plane.state.allocation_breached_actors}
+    ):
         global_blocked.append("allocation_breach")
 
     gates: dict[str, VenueExecutionGate] = {}

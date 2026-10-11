@@ -269,6 +269,11 @@ async def build_worker_components(
             return
         await supervisor.reload()
 
+    async def _on_actor_pause(actor_id: str) -> None:
+        supervisor = supervisors_by_actor.get(actor_id)
+        if supervisor is not None and supervisor.slot.strategy_runner is not None:
+            supervisor.slot.strategy_runner.cancel_decide()
+
     snapshot = load_latest_runtime_control_state(
         config.resolved_registry_database_url() or None
     )
@@ -277,6 +282,7 @@ async def build_worker_components(
         bus=runtime_bus,
         state=RuntimeControlState(paused_actors=set(paused_actors)),
         on_actor_start=_on_actor_start,
+        on_actor_pause=_on_actor_pause,
         managed_actors=actor_ids,
     )
     allocations = load_worker_virtual_allocations(

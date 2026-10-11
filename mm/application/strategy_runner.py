@@ -293,6 +293,34 @@ class StrategyRunner:
         approved: list[Action] = []
 
         try:
+            if self._is_actor_paused():
+                self.cancel_decide()
+                venue_gates = compute_venue_execution_gates(
+                    config=self.config,
+                    execution=self.execution,
+                    liquidity_sourcing=self.liquidity_sourcing,
+                    binding=self.binding,
+                    frame_step=self._frame_step,
+                    joint_target_book=None,
+                    order_managers=self.order_managers,
+                    control_plane=self.control_plane,
+                    frame=clean_frame,
+                    ignore_empty_book=True,
+                )
+                blocked = sorted(
+                    {
+                        reason
+                        for gate in venue_gates.values()
+                        for reason in gate.blocked_reasons
+                    }
+                )
+                ctx.record_execution_gates(
+                    executed=False,
+                    blocked_reasons=blocked,
+                    venue_gates={exchange: gate.as_dict() for exchange, gate in venue_gates.items()},
+                )
+                return approved
+
             decide_started = time.monotonic_ns()
             try:
                 self._engine.set_ledger_context(strategy_ledger)
@@ -775,6 +803,21 @@ class StrategyRunner:
         set_kill_switch = getattr(self.risk_engine, "set_kill_switch", None)
         if callable(set_kill_switch):
             set_kill_switch(self.control_plane.state.kill_switch)
+
+    def _is_actor_paused(self) -> bool:
+        if self.control_plane is None:
+            return False
+        actor = self.config.actor_id.strip()
+        state = self.control_plane.state
+        paused = {str(a).strip() for a in state.paused_actors}
+        breached = {str(a).strip() for a in state.allocation_breached_actors}
+        return bool(state.kill_switch) or actor in paused or actor in breached
+
+    def cancel_decide(self) -> None:
+        """Signal any in-flight optimizer decision to cancel cooperatively."""
+        self._decide_cancel_event.set()
+        if self._decide_task is not None and self._decide_task.done():
+            self._decide_task = None
 
     def _should_execute_live(
         self,

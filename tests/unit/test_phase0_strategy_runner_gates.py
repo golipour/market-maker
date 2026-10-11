@@ -240,3 +240,115 @@ async def test_strategy_runner_no_manager_blocks_live_sync(
     diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
     assert diagnostics["execution_gates"]["executed"] is False
     assert "no_manager" in diagnostics["execution_gates"]["blocked_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_skips_optimization_when_actor_is_paused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decide_called = False
+
+    def _decide_fail(*args: object, **kwargs: object) -> StrategyDecision:
+        nonlocal decide_called
+        decide_called = True
+        raise AssertionError("decide() must NOT be called when actor is paused!")
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", _decide_fail)
+
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    heartbeat_queue = bus.subscribe_queue("strategy:heartbeat:test-runner")
+    manager = RecordingOrderManager(exchange="nobitex")
+    control_plane = RuntimeControlPlane(
+        bus=bus,
+        state=RuntimeControlState(paused_actors={"test-runner"}),
+    )
+    runner = _runner(
+        config=_runner_config(dry_run=False),
+        manager=manager,
+        bus=bus,
+        control_plane=control_plane,
+    )
+
+    await _run_frame(runner)
+
+    assert decide_called is False
+    assert manager.synced == []
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert diagnostics["execution_gates"]["executed"] is False
+    assert "paused_actor" in diagnostics["execution_gates"]["blocked_reasons"]
+
+    heartbeat = await asyncio.wait_for(heartbeat_queue.get(), timeout=1.0)
+    assert heartbeat["decided"] is False
+    assert heartbeat["decision_latency_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_strategy_runner_skips_optimization_when_kill_switch_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decide_called = False
+
+    def _decide_fail(*args: object, **kwargs: object) -> StrategyDecision:
+        nonlocal decide_called
+        decide_called = True
+        raise AssertionError("decide() must NOT be called when kill switch is enabled!")
+
+    monkeypatch.setattr("mm.application.strategy_runner.MpcStrategyEngine.decide", _decide_fail)
+
+    bus = InMemoryBus()
+    diag_queue = bus.subscribe_queue("strategy:diagnostics:test-runner")
+    manager = RecordingOrderManager(exchange="nobitex")
+    control_plane = RuntimeControlPlane(
+        bus=bus,
+        state=RuntimeControlState(kill_switch=True),
+    )
+    runner = _runner(
+        config=_runner_config(dry_run=False),
+        manager=manager,
+        bus=bus,
+        control_plane=control_plane,
+    )
+
+    await _run_frame(runner)
+
+    assert decide_called is False
+    assert manager.synced == []
+
+    diagnostics = await asyncio.wait_for(diag_queue.get(), timeout=1.0)
+    assert diagnostics["execution_gates"]["executed"] is False
+    assert "kill_switch" in diagnostics["execution_gates"]["blocked_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_pause_invokes_on_actor_pause_and_cancels_runner() -> None:
+    bus = InMemoryBus()
+    manager = RecordingOrderManager(exchange="nobitex")
+    runner = _runner(
+        config=_runner_config(dry_run=False),
+        manager=manager,
+        bus=bus,
+    )
+
+    paused_actor: str | None = None
+
+    def _on_pause(actor_id: str) -> None:
+        nonlocal paused_actor
+        paused_actor = actor_id
+        runner.cancel_decide()
+
+    control_plane = RuntimeControlPlane(
+        bus=bus,
+        on_actor_pause=_on_pause,
+    )
+    runner.control_plane = control_plane
+
+    assert not runner._decide_cancel_event.is_set()
+
+    await control_plane.apply({"command": "pause", "actor_id": "test-runner"})
+
+    assert paused_actor == "test-runner"
+    assert "test-runner" in control_plane.state.paused_actors
+    assert runner._decide_cancel_event.is_set()
+

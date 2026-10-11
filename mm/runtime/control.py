@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -28,11 +29,13 @@ class RuntimeControlPlane:
         bus: AbstractEventBus,
         state: RuntimeControlState | None = None,
         on_actor_start: Callable[[str], Awaitable[None]] | None = None,
+        on_actor_pause: Callable[[str], Awaitable[None] | None] | None = None,
         managed_actors: set[str] | tuple[str, ...] | list[str] | None = None,
     ):
         self.bus = bus
         self.state = state or RuntimeControlState()
         self._on_actor_start = on_actor_start
+        self._on_actor_pause = on_actor_pause
         self.managed_actors = {
             str(item).strip()
             for item in (managed_actors if managed_actors is not None else self.state.paused_actors)
@@ -72,7 +75,22 @@ class RuntimeControlPlane:
         name = str(command.get("command", "")).strip()
         actor_id = command.get("actor_id")
         if name == "pause" and actor_id:
-            self.state.paused_actors.add(str(actor_id))
+            actor = str(actor_id)
+            self.state.paused_actors.add(actor)
+            if self._on_actor_pause is not None:
+                try:
+                    res = self._on_actor_pause(actor)
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception as exc:
+                    log_event(
+                        "actor_pause_failed",
+                        {
+                            "actor_id": actor,
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    )
         elif name == "resume" and actor_id:
             actor = str(actor_id)
             try:
@@ -144,6 +162,17 @@ class RuntimeControlPlane:
             return
         self.state.allocation_breached_actors.add(actor)
         self.state.paused_actors.add(actor)
+        if self._on_actor_pause is not None:
+            try:
+                res = self._on_actor_pause(actor)
+                if inspect.isawaitable(res):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(res)
+                    except RuntimeError:
+                        pass
+            except Exception:
+                pass
         log_event(
             "allocation_breach_halt",
             {
