@@ -70,11 +70,10 @@ spec:
               value: "4"
             # torch.get_num_threads() reads the node's core count (8 on
             # node3), not this container's cpu limit, so the rollout kernel
-            # oversubscribes and collapses. Measured in this pod, one
-            # soft_fill_batched forward+backward: 2.79 ms compiled at 2
-            # threads versus 622.83 ms at 8 -- a 17x regression, i.e. the
-            # compiled kernel ended up slower than eager (0.057x). Pin the
-            # intra-op thread count to the cpu limit.
+            # oversubscribes and collapses. With multi-strategy workers
+            # (e.g. concurrent local + sample controllers), setting this to 2
+            # guarantees intra-op threads sum to at most 4 across active
+            # runners, avoiding Linux CFS quota throttling.
             #
             # apply_torch_threads() exports this to OMP_NUM_THREADS /
             # TORCHINDUCTOR_NUM_THREADS as well, because inductor's generated
@@ -83,7 +82,7 @@ spec:
             # Without the env export, torch.set_num_threads constrained only
             # the eager path and the compiled kernel still used 8 threads.
             - name: MM_TORCH_THREADS
-              value: "4"
+              value: "2"
           envFrom:
             - secretRef:
                 name: market-maker-secrets

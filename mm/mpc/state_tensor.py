@@ -230,7 +230,9 @@ def depth_ask_tensor(
 def _depth_from_materialized(L: "Tensor", sigmoid_values: "Tensor") -> "Tensor":
     if L.ndim == 1:
         return (L * sigmoid_values).sum(dim=-1)
-    return (L.unsqueeze(1) * sigmoid_values.unsqueeze(0)).sum(dim=-1)
+    if sigmoid_values.ndim == L.ndim:
+        return (L.unsqueeze(1) * sigmoid_values.unsqueeze(0)).sum(dim=-1)
+    return (L.unsqueeze(1) * sigmoid_values).sum(dim=-1)
 
 
 def _materialize_side(

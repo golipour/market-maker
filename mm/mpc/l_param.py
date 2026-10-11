@@ -429,38 +429,22 @@ def curve_spread_for_market_spread(
     mid_price: Any | None,
     reservation_r_offset: Any | None,
 ) -> Any:
-    """Map market-grid spread to sigmoid argument with relative reservation shift.
-
-    NOTE: the zero-offset short-circuit below reads ``r_off.abs().item()``,
-    which is a host sync and a dynamo graph break. It looks replaceable with a
-    device-side ``torch.where``, but it is not: the early return preserves
-    ``market_spread``'s *shape*, while ``torch.where`` broadcasts both branches
-    to a common shape. When ``r_off`` is exactly zero (which happens whenever
-    the reservation logit initialises to 0) the callers rely on that smaller
-    shape -- ``soft_fill_batched`` branches on ``depth_sample.ndim`` to decide
-    whether to ``expand``, and the broadcast form takes the wrong path and
-    fails with a shape error. Values match either way; shape does not.
-
-    Removing the break therefore needs the shape normalised at the call sites
-    (or the branch hoisted to configuration), not a local rewrite. Left as-is
-    until that is done deliberately.
-    """
-
+    """Map market-grid spread to sigmoid argument with relative reservation shift."""
     if mid_price is None or reservation_r_offset is None:
         return market_spread
     torch = _torch()
     r_off = reservation_r_offset
     if not torch.is_tensor(r_off):
         r_off = torch.as_tensor(r_off, dtype=market_spread.dtype, device=market_spread.device)
-    if float(r_off.abs().item()) <= 0.0:
-        return market_spread
     mid = mid_price
     if not torch.is_tensor(mid):
         mid = torch.as_tensor(mid, dtype=market_spread.dtype, device=market_spread.device)
     shift = mid * r_off
     if side == "bid":
-        return (market_spread + shift).clamp(min=0.0)
-    return (market_spread - shift).clamp(min=0.0)
+        res = (market_spread + shift).clamp(min=0.0)
+    else:
+        res = (market_spread - shift).clamp(min=0.0)
+    return torch.where(r_off == 0.0, market_spread, res)
 
 
 def _softplus_np(x: float) -> float:
@@ -761,10 +745,10 @@ def sigmoid_action_from_flat_raw(
 def component_delta_at_torch(
     k_eff: Any,
     x0: Any,
-    spread: float,
+    spread: Any,
 ) -> Any:
     torch = _torch()
-    s = float(spread)
+    s = spread if torch.is_tensor(spread) else float(spread)
     return torch.sigmoid(k_eff * (s - x0)) - torch.sigmoid(k_eff * (-x0))
 
 
@@ -898,7 +882,7 @@ def materialize_side_torch(
     )
     if l_param.spread_structured:
         q_spread = float(l_param.quote_spread_min_depth or 0.0)
-        delta_at_center = component_delta_at_torch(k_eff, x0_eff, float(x0_eff[0].item()))
+        delta_at_center = component_delta_at_torch(k_eff, x0_eff, x0_eff[0])
         delta_at_max = component_delta_at_torch(k_eff, x0_eff, spread_max)
         if n > 1:
             tail_v = torch.softmax(L_raw[1:], dim=0)
