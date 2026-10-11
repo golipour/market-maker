@@ -158,7 +158,7 @@ def select_order_command_adapter(
     symbol: str,
     *,
     api_token: Any,
-    placement_max_concurrency: int = 8,
+    placement_max_concurrency: int = 32,
 ) -> OrderCommandAdapterSelection:
     exchange_key = exchange.lower().strip()
     capabilities = resolve_order_command_transport(exchange_key)

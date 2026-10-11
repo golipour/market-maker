@@ -19,7 +19,7 @@ class NobitexRestOrderCommandAdapter(AbstractOrderCommandAdapter):
         symbol: str,
         *,
         api_token: Any,
-        max_concurrency: int = 8,
+        max_concurrency: int = 32,
     ):
         self.symbol = symbol
         self.api_token = api_token

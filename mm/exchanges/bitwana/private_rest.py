@@ -15,6 +15,39 @@ from mm.observability.logs import log_event
 
 BASE_URL = os.environ.get("BITWANA_API_BASE_URL", "https://bit.yshm.ir").rstrip("/")
 
+_SESSION: requests.Session | None = None
+_SESSION_LOCK = threading.Lock()
+
+
+def get_session(pool_size: int = 32) -> requests.Session:
+    """Thread-safe pooled requests session with Keep-Alive for Bitwana REST."""
+    global _SESSION
+    if _SESSION is None:
+        with _SESSION_LOCK:
+            if _SESSION is None:
+                s = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=pool_size,
+                    pool_maxsize=pool_size,
+                    max_retries=1,
+                )
+                s.mount("http://", adapter)
+                s.mount("https://", adapter)
+                _SESSION = s
+    return _SESSION
+
+
+def reset_session() -> None:
+    """Close and reset pooled session (useful for tests or token reboots)."""
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None:
+            try:
+                _SESSION.close()
+            except Exception:
+                pass
+            _SESSION = None
+
 # Bitwana wraps REST results as ``{statusCode, content}``. Cancel (and some
 # async writes) return 202 Accepted; treating that as an error aborts replace
 # syncs so new quotes never reach the book.
@@ -108,12 +141,16 @@ class BitwanaJwtAuth:
         if not refresh:
             raise RuntimeError("Bitwana refresh token is missing")
         with self._lock:
-            response = requests.post(
-                f"{self.base_url.rstrip('/')}/api/1/users/authenticate/refresh-token",
-                json={"refreshToken": refresh},
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                timeout=15,
-            )
+            import requests as _requests_module
+
+            session = get_session()
+            url = f"{self.base_url.rstrip('/')}/api/1/users/authenticate/refresh-token"
+            payload = {"refreshToken": refresh}
+            hdrs = {"Accept": "application/json", "Content-Type": "application/json"}
+            if getattr(requests, "post", None) is not _requests_module.api.post:
+                response = requests.post(url, json=payload, headers=hdrs, timeout=15)
+            else:
+                response = session.post(url, json=payload, headers=hdrs, timeout=15)
             if not response.ok:
                 raise RuntimeError(f"Bitwana token refresh failed: HTTP {response.status_code}")
             content = _unwrap(response.json())
@@ -170,14 +207,28 @@ def _request(
     headers = _headers(auth)
     if json_body is not None:
         headers["Content-Type"] = "application/json"
-    response = requests.request(
-        method,
-        f"{auth.base_url.rstrip('/')}{path}",
-        params=params or {},
-        json=json_body,
-        headers=headers,
-        timeout=15,
-    )
+    import requests as _requests_module
+
+    session = get_session()
+    url = f"{auth.base_url.rstrip('/')}{path}"
+    if getattr(requests, "request", None) is not _requests_module.api.request:
+        response = requests.request(
+            method,
+            url,
+            params=params or {},
+            json=json_body,
+            headers=headers,
+            timeout=15,
+        )
+    else:
+        response = session.request(
+            method,
+            url,
+            params=params or {},
+            json=json_body,
+            headers=headers,
+            timeout=15,
+        )
     if response.status_code == 401 and retry and auth.refresh_token:
         auth.refresh()
         return _request(

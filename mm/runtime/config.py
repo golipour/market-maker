@@ -766,7 +766,7 @@ class ControllerRuntimeConfig:
     # Max wall time for MPC decision compute per frame; timeout falls back to holding current orders.
     decision_timeout_ms: int = 3000
     # Max concurrent REST place/cancel calls per exchange adapter batch.
-    placement_max_concurrency: int = 8
+    placement_max_concurrency: int = 32
     action_topic: str = "strategy:actions"
     decisions_topic: str = "strategy:decisions"
     diagnostics_topic: str | None = None
@@ -1796,7 +1796,7 @@ def _controller_from_mapping(
         ),
         placement_timeout_ms=max(0, int(payload.get("placement_timeout_ms", 3000))),
         decision_timeout_ms=max(0, int(payload.get("decision_timeout_ms", 3000))),
-        placement_max_concurrency=max(1, int(payload.get("placement_max_concurrency", 8))),
+        placement_max_concurrency=max(1, int(payload.get("placement_max_concurrency", 32))),
         action_topic=str(payload.get("action_topic", "strategy:actions")),
         decisions_topic=str(payload.get("decisions_topic", "strategy:decisions")),
         diagnostics_topic=(

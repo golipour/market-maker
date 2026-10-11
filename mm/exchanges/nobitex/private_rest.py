@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,39 @@ from typing import Any
 import requests
 
 BASE_URL = "https://apiv2.nobitex.ir"
+
+_SESSION: requests.Session | None = None
+_SESSION_LOCK = threading.Lock()
+
+
+def get_session(pool_size: int = 32) -> requests.Session:
+    """Thread-safe pooled requests session with Keep-Alive for Nobitex REST."""
+    global _SESSION
+    if _SESSION is None:
+        with _SESSION_LOCK:
+            if _SESSION is None:
+                s = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=pool_size,
+                    pool_maxsize=pool_size,
+                    max_retries=1,
+                )
+                s.mount("http://", adapter)
+                s.mount("https://", adapter)
+                _SESSION = s
+    return _SESSION
+
+
+def reset_session() -> None:
+    """Close and reset pooled session (useful for tests)."""
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is not None:
+            try:
+                _SESSION.close()
+            except Exception:
+                pass
+            _SESSION = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +137,7 @@ def _request_auth(
 ) -> requests.Response:
     method_upper = method.upper()
     url = f"{BASE_URL}{path}"
-    session = requests.Session()
+    session = get_session()
     if isinstance(auth, NobitexApiKeyAuth):
         request = requests.Request(
             method_upper,

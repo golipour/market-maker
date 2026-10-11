@@ -253,7 +253,7 @@ async def build_runtime_components(
             if not options.enable_execution:
                 continue
             if config.execution.for_role(source.role).enabled:
-                placement_max_concurrency = 8
+                placement_max_concurrency = 32
                 if config.controller is not None:
                     placement_max_concurrency = config.controller.placement_max_concurrency
                 order_selection = select_order_command_adapter(

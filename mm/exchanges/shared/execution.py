@@ -17,7 +17,7 @@ async def map_in_thread_pool(
     fn: Callable[[T], R],
     items: Sequence[T],
     *,
-    max_concurrency: int = 8,
+    max_concurrency: int = 32,
 ) -> list[R]:
     """Run sync callables in a bounded worker pool, preserving input order.
 

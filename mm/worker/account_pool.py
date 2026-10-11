@@ -180,7 +180,7 @@ def extend_shared_account_pool(
             break
         if not config.execution.for_role(source.role).enabled:
             break
-        placement_max_concurrency = 8
+        placement_max_concurrency = 32
         if config.controller is not None:
             placement_max_concurrency = config.controller.placement_max_concurrency
         try:

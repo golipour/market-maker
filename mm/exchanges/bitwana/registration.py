@@ -45,7 +45,7 @@ def build_order_command(
     symbol: str,
     *,
     api_token: Any,
-    max_concurrency: int,
+    max_concurrency: int = 32,
 ):
     return BitwanaRestOrderCommandAdapter(
         symbol,
