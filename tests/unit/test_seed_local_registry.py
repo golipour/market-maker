@@ -67,3 +67,25 @@ def test_seed_uses_bus_redis_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
     store = MemoryRegistryStore()
     seed_local_worker_registry(store)
     assert store.get_platform_settings().bus["redis_url"] == "redis://redis:6379/0"
+
+
+def test_seed_bitwana_venue_preserves_existing_account_credentials() -> None:
+    from mm.tools.seed_local_registry import BITWANA_ACCOUNT_ID, BITWANA_EXCHANGE, seed_bitwana_venue
+
+    store = MemoryRegistryStore()
+    seed_bitwana_venue(store)
+
+    custom_creds = '{"v":2,"auth_mode":"signed_key","api_key":"test_key","api_secret":"test_secret"}'
+    store.upsert_account(
+        account_id=BITWANA_ACCOUNT_ID,
+        exchange=BITWANA_EXCHANGE,
+        credential_ref=custom_creds,
+    )
+
+    # Calling seed_bitwana_venue again must NOT overwrite the account
+    seed_bitwana_venue(store)
+
+    account = store.get_account(BITWANA_ACCOUNT_ID)
+    assert account.credential_ref == custom_creds
+
+

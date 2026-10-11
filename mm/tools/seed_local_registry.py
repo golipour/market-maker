@@ -196,11 +196,14 @@ def seed_bitwana_venue(store: RegistryStore) -> None:
         exchange=BITWANA_EXCHANGE,
         config=_bitwana_exchange_config(),
     )
-    store.upsert_account(
-        account_id=BITWANA_ACCOUNT_ID,
-        exchange=BITWANA_EXCHANGE,
-        credential_ref="BITWANA_API_TOKEN",
-    )
+    try:
+        store.get_account(BITWANA_ACCOUNT_ID)
+    except RegistryNotFoundError:
+        store.upsert_account(
+            account_id=BITWANA_ACCOUNT_ID,
+            exchange=BITWANA_EXCHANGE,
+            credential_ref="BITWANA_API_TOKEN",
+        )
     store.upsert_market_source(
         source_id=f"{BITWANA_EXCHANGE}-{LOCAL_SYMBOL}",
         exchange=BITWANA_EXCHANGE,
