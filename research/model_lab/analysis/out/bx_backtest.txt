@@ -1,0 +1,191 @@
+
+====================================================================================================
+PRICE  target = next-step mid delta (IRT ticks)
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.551 sd=68.76t mean_tot=174.2 P(tot=0)=0.625
+
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  A INCUMBENT q*N+(1-q)*t continuous              -12.6213  -12.7341  -12.7341     -7.537      -4.606    58329
+  B same recursion, lattice pmf                     4.3527    5.7923    7.0827      9.122     690.777    58329
+  C hurdle + Student-t body nu=3                    3.2806    1.3085    7.3673      9.803      24.942    58329
+  D hurdle + lognormal body                         2.7353    1.3159    7.7411      9.535      21.119    58329
+  E hurdle + lognormal, move-size cells             2.7322    1.3280    7.7144      9.509      21.566    58329
+  F hurdle + lognormal, spread cells                2.7299    1.3249    7.7235      9.510      21.168    58329
+
+====================================================================================================
+PRICE  paired difference vs incumbent (negative = better)
+====================================================================================================
+  baseline: A INCUMBENT q*N+(1-q)*t continuous
+
+  candidate                                              1st half                   2nd half
+  B same recursion, lattice pmf         +16.0041 [+15.6934,+16.3048]  +17.8796 [+17.6694,+18.0752]
+  C hurdle + Student-t body nu=3        +15.0866 [+14.7943,+15.3689]  +16.6631 [+16.4785,+16.8394]
+  D hurdle + lognormal body             +14.7118 [+14.4541,+14.9620]  +15.9587 [+15.8074,+16.1105]
+  E hurdle + lognormal, move-size cells  +14.7075 [+14.4491,+14.9582]  +15.9566 [+15.8061,+16.1084]
+  F hurdle + lognormal, spread cells    +14.7099 [+14.4517,+14.9598]  +15.9499 [+15.7994,+16.1031]
+
+  candidate                             gain nats/step       DM p
+  B same recursion, lattice pmf               -16.9740          0
+  C hurdle + Student-t body nu=3              -15.9019          0
+  D hurdle + lognormal body                   -15.3566          0
+  E hurdle + lognormal, move-size cells        -15.3535          0
+  F hurdle + lognormal, spread cells          -15.3511          0
+
+====================================================================================================
+PRICE  zero-move base rate
+====================================================================================================
+  scored steps=58329  realised P(dmid=0)=0.5564
+
+====================================================================================================
+FLOW  target = next-step buy/sell lots
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.551 sd=68.76t mean_tot=174.2 P(tot=0)=0.625
+
+  --- joint ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   4.1972    1.0854   13.5435     20.330      82.036    58329
+  CHALLENGE prior-regularised sigma                 0.9279    0.3303    3.0417      8.392      30.062    58329
+
+  --- buy ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   2.1652    0.5163    7.4531     11.088      42.361    58329
+  CHALLENGE prior-regularised sigma                 0.4246    0.1358    1.2559      5.184      29.132    58329
+
+  --- sell ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   2.0320    0.4625    7.3582     11.261      43.989    58329
+  CHALLENGE prior-regularised sigma                 0.5033    0.1970    1.5079      5.707      12.867    58329
+
+====================================================================================================
+PRICE  target = next-step mid delta (IRT ticks)
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.335 sd=7027183.58t mean_tot=0.0 P(tot=0)=0.747
+
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  A INCUMBENT q*N+(1-q)*t continuous              -12.6253  -12.7341  -12.7341     -7.681      -4.750    58329
+  B same recursion, lattice pmf                    17.5214   17.3598   18.4481     21.461      28.478    58329
+  C hurdle + Student-t body nu=3                   12.1561   16.9546   18.8119     23.121      31.994    58329
+  D hurdle + lognormal body                         8.5968    5.0057   20.2612     22.027      27.486    58329
+  E hurdle + lognormal, move-size cells             8.5676    5.0074   20.2497     22.154      25.092    58329
+  F hurdle + lognormal, spread cells                8.5770    4.9652   20.2777     22.059      27.245    58329
+
+====================================================================================================
+PRICE  paired difference vs incumbent (negative = better)
+====================================================================================================
+  baseline: A INCUMBENT q*N+(1-q)*t continuous
+
+  candidate                                              1st half                   2nd half
+  B same recursion, lattice pmf         +30.0994 [+30.0087,+30.1849]  +30.1908 [+30.1453,+30.2332]
+  C hurdle + Student-t body nu=3        +24.9193 [+24.5604,+25.2424]  +24.6526 [+24.3364,+24.9629]
+  D hurdle + lognormal body             +21.0957 [+20.8096,+21.3818]  +21.3400 [+21.0615,+21.6141]
+  E hurdle + lognormal, move-size cells  +21.0776 [+20.7925,+21.3648]  +21.3005 [+21.0241,+21.5752]
+  F hurdle + lognormal, spread cells    +21.0696 [+20.7845,+21.3563]  +21.3260 [+21.0483,+21.5998]
+
+  candidate                             gain nats/step       DM p
+  B same recursion, lattice pmf               -30.1467          0
+  C hurdle + Student-t body nu=3              -24.7814          0
+  D hurdle + lognormal body                   -21.2220          0
+  E hurdle + lognormal, move-size cells        -21.1929          0
+  F hurdle + lognormal, spread cells          -21.2022          0
+
+====================================================================================================
+PRICE  zero-move base rate
+====================================================================================================
+  scored steps=58329  realised P(dmid=0)=0.3353
+
+====================================================================================================
+FLOW  target = next-step buy/sell lots
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.335 sd=7027183.58t mean_tot=0.0 P(tot=0)=0.747
+
+  --- joint ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.0000    0.0000    0.0000      0.000       0.000    58329
+  CHALLENGE prior-regularised sigma                 0.0000    0.0000    0.0000      0.000       0.000    58329
+
+  --- buy ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.0000    0.0000    0.0000      0.000       0.000    58329
+  CHALLENGE prior-regularised sigma                 0.0000    0.0000    0.0000      0.000       0.000    58329
+
+  --- sell ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.0000    0.0000    0.0000      0.000       0.000    58329
+  CHALLENGE prior-regularised sigma                 0.0000    0.0000    0.0000      0.000       0.000    58329
+
+====================================================================================================
+PRICE  target = next-step mid delta (IRT ticks)
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.664 sd=55.53t mean_tot=0.4 P(tot=0)=0.975
+
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  A INCUMBENT q*N+(1-q)*t continuous              -12.6092  -12.7341  -12.7341     -7.112      -4.181    58329
+  B same recursion, lattice pmf                     5.1757    5.3024    6.6074      8.973      28.398    58329
+  C hurdle + Student-t body nu=3                    2.6009    0.5842    7.2535      9.377      19.983    58329
+  D hurdle + lognormal body                         2.2821    0.5687    6.9220      9.154      24.615    58329
+  E hurdle + lognormal, move-size cells             2.2332    0.5144    6.8008      9.115      29.200    58329
+  F hurdle + lognormal, spread cells                2.2815    0.5685    6.9196      9.159      24.615    58329
+
+====================================================================================================
+PRICE  paired difference vs incumbent (negative = better)
+====================================================================================================
+  baseline: A INCUMBENT q*N+(1-q)*t continuous
+
+  candidate                                              1st half                   2nd half
+  B same recursion, lattice pmf         +17.4051 [+17.2176,+17.5687]  +18.1395 [+18.0753,+18.2016]
+  C hurdle + Student-t body nu=3        +14.5266 [+14.3209,+14.7087]  +15.8483 [+15.7532,+15.9443]
+  D hurdle + lognormal body             +14.3425 [+14.1493,+14.5135]  +15.4037 [+15.2935,+15.5047]
+  E hurdle + lognormal, move-size cells  +14.2353 [+14.0431,+14.4085]  +15.4094 [+15.3052,+15.5089]
+  F hurdle + lognormal, spread cells    +14.3428 [+14.1496,+14.5137]  +15.4024 [+15.2926,+15.5030]
+
+  candidate                             gain nats/step       DM p
+  B same recursion, lattice pmf               -17.7849          0
+  C hurdle + Student-t body nu=3              -15.2101          0
+  D hurdle + lognormal body                   -14.8913          0
+  E hurdle + lognormal, move-size cells        -14.8424          0
+  F hurdle + lognormal, spread cells          -14.8907          0
+
+====================================================================================================
+PRICE  zero-move base rate
+====================================================================================================
+  scored steps=58329  realised P(dmid=0)=0.6614
+
+====================================================================================================
+FLOW  target = next-step buy/sell lots
+====================================================================================================
+  dataset: N=60330 runs=1 step=10s span=167.6h P(dmid=0)=0.664 sd=55.53t mean_tot=0.4 P(tot=0)=0.975
+
+  --- joint ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.2274    0.0214    0.0551      7.625      35.316    58329
+  CHALLENGE prior-regularised sigma                 0.0305    0.0210    0.0519      1.003      26.943    58329
+
+  --- buy ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.1148    0.0101    0.0282      6.273      34.990    58329
+  CHALLENGE prior-regularised sigma                 0.0162    0.0100    0.0276      0.141      18.117    58329
+
+  --- sell ---
+  model                                            meanNLL    medNLL       p90        p99         max        n
+  INCUMBENT hurdle-lognormal EWMA                   0.1126    0.0098    0.0309      6.149      35.315    58329
+  CHALLENGE prior-regularised sigma                 0.0143    0.0096    0.0302      0.083      18.467    58329
+
+====================================================================================================
+SUMMARY  price gain of each challenger vs the incumbent
+====================================================================================================
+  dataset                    challenger                            nats/step   nats/day         p
+  nobitex/USDT_IRT           B same recursion, lattice pmf          -16.9740  -146655.2         0
+  nobitex/USDT_IRT           C hurdle + Student-t body nu=3         -15.9019  -137392.2         0
+  nobitex/USDT_IRT           D hurdle + lognormal body              -15.3566  -132681.2         0
+  nobitex/USDT_IRT           E hurdle + lognormal, move-size cells   -15.3535  -132653.9         0
+  nobitex/USDT_IRT           F hurdle + lognormal, spread cells     -15.3511  -132633.8         0
+  nobitex/BTC_IRT            B same recursion, lattice pmf          -30.1467  -260467.2         0
+  nobitex/BTC_IRT            C hurdle + Student-t body nu=3         -24.7814  -214110.9         0
+  nobitex/BTC_IRT            D hurdle + lognormal body              -21.2220  -183358.3         0
+  nobitex/BTC_IRT            E hurdle + lognormal, move-size cells   -21.1929  -183106.6         0
+  nobitex/BTC_IRT            F hurdle + lognormal, spread cells     -21.2022  -183187.1         0
+  bitwana/USDT_IRT           B same recursion, lattice pmf          -17.7849  -153661.5         0
+  bitwana/USDT_IRT           C hurdle + Student-t body nu=3         -15.2101  -131415.3         0
+  bitwana/USDT_IRT           D hurdle + lognormal body              -14.8913  -128660.8         0
+  bitwana/USDT_IRT           E hurdle + lognormal, move-size cells   -14.8424  -128238.7         0
+  bitwana/USDT_IRT           F hurdle + lognormal, spread cells     -14.8907  -128656.0         0

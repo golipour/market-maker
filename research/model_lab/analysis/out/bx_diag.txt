@@ -1,0 +1,51 @@
+
+====================================================================================================
+D1  ADMISSIBILITY: a pmf cannot exceed 1, so NLL cannot be negative
+====================================================================================================
+  nobitex/USDT_IRT        incumbent(continuous):-12.621(100.0%INVALID)  lattice: +4.353(  0.0%ok)  hurdle-t: +3.280(  0.0%ok)
+  nobitex/BTC_IRT         incumbent(continuous):-12.625(100.0%INVALID)  lattice:+17.521(  0.0%ok)  hurdle-t:+12.139(  0.0%ok)
+  bitwana/USDT_IRT        incumbent(continuous):-12.609(100.0%INVALID)  lattice: +5.176(  0.0%ok)  hurdle-t: +2.602(  0.0%ok)
+
+  The incumbent is invalid on 100% of steps on ALL THREE datasets.
+
+====================================================================================================
+D2  INCUMBENT parameter trajectories (IRt ticks; 1 tick = 1.0)
+====================================================================================================
+  nobitex/USDT_IRT
+    sigma_market : p1=1e-06  p25=1e-06  p50=1e-06  p75=1e-06  p99=0.0001808
+    sigma_refresh: p1=35.46  p25=35.46  p50=35.46  p75=35.46  p99=35.46
+    q_market     : p1=0.85  p25=0.85  p50=0.85  p75=0.85  p99=0.85
+  nobitex/BTC_IRT
+    sigma_market : p1=1e-06  p25=1e-06  p50=1e-06  p75=1e-06  p99=0.0001564
+    sigma_refresh: p1=37.05  p25=37.05  p50=37.05  p75=37.05  p99=37.05
+    q_market     : p1=0.85  p25=0.85  p50=0.85  p75=0.85  p99=0.85
+  bitwana/USDT_IRT
+    sigma_market : p1=1e-06  p25=1e-06  p50=1e-06  p75=1e-06  p99=0.0002764
+    sigma_refresh: p1=23.85  p25=23.85  p50=23.85  p75=23.85  p99=23.85
+    q_market     : p1=0.85  p25=0.85  p50=0.85  p75=0.85  p99=0.85
+
+  sigma_market -> 0 (100x below one tick), q pinned at the 0.85 cap,
+  and sigma_refresh is FROZEN: the Student-t branch is never updated,
+  so the gate has learned that q=0.85 is optimal.  The artifact and the
+  gate collapse are the same feedback loop.
+
+====================================================================================================
+D3  VALID reference points (nats) on the same tick lattice
+====================================================================================================
+  nobitex/USDT_IRT       P(0)=0.5564  H(emp)=2.5156  hurdle-t=3.2795  gain=+0.7639  mean P0_hat=0.5577  mean sigma=  64.57t
+  nobitex/BTC_IRT        P(0)=0.3353  H(emp)=5.1802  hurdle-t=12.1391  gain=+6.9589  mean P0_hat=0.3356  mean sigma=4278909.06t
+  bitwana/USDT_IRT       P(0)=0.6614  H(emp)=2.1545  hurdle-t=2.6021  gain=+0.4475  mean P0_hat=0.6620  mean sigma=  60.57t
+
+  H(emp) is the marginal entropy of the realised move: no causal model
+  can beat it by much, so it is the honest floor for this comparison.
+
+====================================================================================================
+D4  IS THE ARTIFACT SELF-REINFORCING?
+====================================================================================================
+  nobitex/USDT_IRT       market responsibility: p1=1  p25=1  p50=1  p75=1  p99=1
+  nobitex/BTC_IRT        market responsibility: p1=1  p25=1  p50=1  p75=1  p99=1
+  bitwana/USDT_IRT       market responsibility: p1=1  p25=1  p50=1  p75=1  p99=1
+
+  responsibility -> 1 means every observation is attributed to the
+  Gaussian branch, so the Student-t branch never receives an update and
+  the Gaussian variance is driven to 0 by the very quantity it explains.

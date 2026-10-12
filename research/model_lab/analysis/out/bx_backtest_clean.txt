@@ -1,0 +1,201 @@
+
+================================================================================================
+RIGOROUS EX-ANTE PREQUENTIAL BACKTEST (BITWANA & NOBITEX)
+================================================================================================
+Protocol:
+  - Pure causal walk-forward (predict at t, score t+1, update at t+1)
+  - Gaps where dt != 10000ms strictly segregated into separate runs
+  - Discrete PMFs verified: sum_k P(k) == 1.000000, no probability > 1.0
+  - Warmup = 2000 steps (~5.5 hours) excluded from scoring
+
+Loading nobitex/USDT_IRT ...
+
+================================================================================================
+PRICE EVALUATION: USDT_IRT on 60348 10s steps (tick=0.5 IRT)
+================================================================================================
+  Valid scored steps: 58333
+  P(dmid == 0) realized: 0.5513
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT: Gaussian (lattice)                    4.3327    5.4942     11.699     0.2028    58333
+  BASELINE:  Empirical (rolling 2k)                3.2191    1.6590      8.006     0.1916    58333
+  CHALLENGER: Hurdle + Gaussian body               3.3706    1.3158     10.283     0.1320    58333
+  CHALLENGER: Hurdle-t (nu=4.0)                    3.2747    1.3158     10.156     0.1320    58333
+  CHALLENGER: Hurdle-t (nu=2.5)                    3.2574    1.3158     10.673     0.1320    58333
+  CHALLENGER: Hurdle + signed LogNormal            3.0427    1.3158     10.235     0.1320    58333
+
+  --- PAIRED LOSS DIFFERENCE VS INCUMBENT (negative = better) ---
+  Model                                        Full Gain (nats)   95% CI                   1st Half     2nd Half         DM t
+  BASELINE:  Empirical (rolling 2k)                 -1.1137 nats   [-1.2591, -0.9660]          -0.5251      -1.6632      -16.7
+  CHALLENGER: Hurdle + Gaussian body                -0.9622 nats   [-1.0825, -0.8525]          -0.5621      -1.3357      -17.1
+  CHALLENGER: Hurdle-t (nu=4.0)                     -1.0581 nats   [-1.1841, -0.9360]          -0.6968      -1.3954      -17.5
+  CHALLENGER: Hurdle-t (nu=2.5)                     -1.0753 nats   [-1.2002, -0.9524]          -0.7042      -1.4218      -17.7
+  CHALLENGER: Hurdle + signed LogNormal             -1.2900 nats   [-1.4220, -1.1603]          -0.8228      -1.7263      -20.5
+
+================================================================================================
+ORDER FLOW EVALUATION: USDT_IRT (lot scale = 1.0)
+================================================================================================
+  Realized zero flow: Buy=0.7378, Sell=0.7599
+
+  === FLOW: JOINT ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     3.8118    0.9501     18.565        N/A    58333
+  CHALLENGER: Regularized Hurdle LogNormal         3.8056    0.9637     18.621        N/A    58333
+  INCUMBENT:  Hurdle Weibull                       5.4745    0.9501     22.949        N/A    58333
+  BASELINE:   Empirical Flow                       3.9762    1.3693     15.648        N/A    58333
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0062 nats  [-0.0086, -0.0036]       DM t=  -5.4 (p=6.646e-08)
+    INCUMBENT:  Hurdle Weibull                    +1.6626 nats  [+1.4126, +1.9358]       DM t=  12.7 (p=6.339e-37)
+    BASELINE:   Empirical Flow                    +0.1644 nats  [+0.1303, +0.1996]       DM t=  12.3 (p=1.348e-34)
+
+  === FLOW: BUY ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     1.9742    0.4228     10.813     0.1469    58333
+  CHALLENGER: Regularized Hurdle LogNormal         1.9711    0.4445     10.811     0.1453    58333
+  INCUMBENT:  Hurdle Weibull                       2.7099    0.4228     12.724     0.1469    58333
+  BASELINE:   Empirical Flow                       2.0564    0.6663      7.824     0.1736    58333
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0030 nats  [-0.0044, -0.0016]       DM t=  -4.7 (p=2.979e-06)
+    INCUMBENT:  Hurdle Weibull                    +0.7357 nats  [+0.5831, +0.9054]       DM t=   8.9 (p=5.112e-19)
+    BASELINE:   Empirical Flow                    +0.0823 nats  [+0.0637, +0.1008]       DM t=  11.3 (p=1.048e-29)
+
+  === FLOW: SELL ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     1.8377    0.3721     10.992     0.1444    58333
+  CHALLENGER: Regularized Hurdle LogNormal         1.8345    0.3940     10.998     0.1427    58333
+  INCUMBENT:  Hurdle Weibull                       2.7646    0.3721     13.072     0.1444    58333
+  BASELINE:   Empirical Flow                       1.9198    0.5971      7.824     0.1657    58333
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0032 nats  [-0.0043, -0.0020]       DM t=  -5.9 (p=3.390e-09)
+    INCUMBENT:  Hurdle Weibull                    +0.9269 nats  [+0.7480, +1.1212]       DM t=   9.6 (p=6.566e-22)
+    BASELINE:   Empirical Flow                    +0.0821 nats  [+0.0649, +0.0992]       DM t=  11.9 (p=1.793e-32)
+
+Loading bitwana/USDT_IRT ...
+
+================================================================================================
+PRICE EVALUATION: USDT_IRT on 60349 10s steps (tick=0.5 IRT)
+================================================================================================
+  Valid scored steps: 58334
+  P(dmid == 0) realized: 0.6638
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT: Gaussian (lattice)                    6.0401    5.0209     15.174     0.5675    58334
+  BASELINE:  Empirical (rolling 2k)                2.6919    0.9676      8.006     0.2083    58334
+  CHALLENGER: Hurdle + Gaussian body               2.7095    0.5880      9.863     0.1926    58334
+  CHALLENGER: Hurdle-t (nu=4.0)                    2.5969    0.5880      9.980     0.1926    58334
+  CHALLENGER: Hurdle-t (nu=2.5)                    2.6111    0.5880     10.478     0.1926    58334
+  CHALLENGER: Hurdle + signed LogNormal            2.5951    0.5880      9.895     0.1926    58334
+
+  --- PAIRED LOSS DIFFERENCE VS INCUMBENT (negative = better) ---
+  Model                                        Full Gain (nats)   95% CI                   1st Half     2nd Half         DM t
+  BASELINE:  Empirical (rolling 2k)                 -3.3482 nats   [-3.5928, -3.1106]          -3.8236      -2.9043      -27.8
+  CHALLENGER: Hurdle + Gaussian body                -3.3306 nats   [-3.5654, -3.0964]          -3.7855      -2.9058      -27.9
+  CHALLENGER: Hurdle-t (nu=4.0)                     -3.4432 nats   [-3.6876, -3.2035]          -3.8977      -3.0188      -28.8
+  CHALLENGER: Hurdle-t (nu=2.5)                     -3.4290 nats   [-3.6758, -3.1869]          -3.8927      -2.9961      -28.7
+  CHALLENGER: Hurdle + signed LogNormal             -3.4450 nats   [-3.6921, -3.2039]          -3.9006      -3.0196      -28.9
+
+================================================================================================
+ORDER FLOW EVALUATION: USDT_IRT (lot scale = 1.0)
+================================================================================================
+  Realized zero flow: Buy=0.9872, Sell=0.9876
+
+  === FLOW: JOINT ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     0.2760    0.0122      8.845        N/A    58334
+  CHALLENGER: Regularized Hurdle LogNormal         0.2481    0.0189      7.978        N/A    58334
+  INCUMBENT:  Hurdle Weibull                       0.3081    0.0122      9.041        N/A    58334
+  BASELINE:   Empirical Flow                       0.6260    0.4694      6.962        N/A    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0279 nats  [-0.0306, -0.0254]       DM t= -19.9 (p=6.483e-88)
+    INCUMBENT:  Hurdle Weibull                    +0.0321 nats  [+0.0083, +0.0671]       DM t=   2.0 (p=4.896e-02)
+    BASELINE:   Empirical Flow                    +0.3500 nats  [+0.3132, +0.3771]       DM t=  20.4 (p=2.278e-92)
+
+  === FLOW: BUY ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     0.1389    0.0012      5.932     0.0123    58334
+  CHALLENGER: Regularized Hurdle LogNormal         0.1253    0.0068      6.057     0.0123    58334
+  INCUMBENT:  Hurdle Weibull                       0.1429    0.0012      6.146     0.0123    58334
+  BASELINE:   Empirical Flow                       0.3138    0.2357      5.339     0.0147    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0136 nats  [-0.0156, -0.0117]       DM t= -13.3 (p=4.425e-40)
+    INCUMBENT:  Hurdle Weibull                    +0.0040 nats  [+0.0029, +0.0055]       DM t=   5.9 (p=4.165e-09)
+    BASELINE:   Empirical Flow                    +0.1750 nats  [+0.1491, +0.1902]       DM t=  14.6 (p=3.179e-48)
+
+  === FLOW: SELL ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     0.1371    0.0013      5.811     0.0123    58334
+  CHALLENGER: Regularized Hurdle LogNormal         0.1228    0.0068      5.874     0.0122    58334
+  INCUMBENT:  Hurdle Weibull                       0.1652    0.0013      6.225     0.0123    58334
+  BASELINE:   Empirical Flow                       0.3122    0.2347      5.745     0.0144    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0143 nats  [-0.0162, -0.0124]       DM t= -14.6 (p=6.543e-48)
+    INCUMBENT:  Hurdle Weibull                    +0.0281 nats  [+0.0046, +0.0629]       DM t=   1.7 (p=8.465e-02)
+    BASELINE:   Empirical Flow                    +0.1750 nats  [+0.1500, +0.1900]       DM t=  14.7 (p=9.993e-49)
+
+Loading nobitex/BTC_IRT ...
+
+================================================================================================
+PRICE EVALUATION: BTC_IRT on 60349 10s steps (tick=0.5 IRT)
+================================================================================================
+  Valid scored steps: 58334
+  P(dmid == 0) realized: 0.3355
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT: Gaussian (lattice)                   19.9988   17.1579     31.807     0.3353    58334
+  BASELINE:  Empirical (rolling 2k)                4.8997    4.7875      8.006     0.2205    58334
+  CHALLENGER: Hurdle + Gaussian body              12.8923   17.5828     24.770     0.1982    58334
+  CHALLENGER: Hurdle-t (nu=4.0)                   12.2939   17.2328     22.783     0.1982    58334
+  CHALLENGER: Hurdle-t (nu=2.5)                   12.1166   16.8223     23.045     0.1982    58334
+  CHALLENGER: Hurdle + signed LogNormal            9.0572    5.7015     22.726     0.1982    58334
+
+  --- PAIRED LOSS DIFFERENCE VS INCUMBENT (negative = better) ---
+  Model                                        Full Gain (nats)   95% CI                   1st Half     2nd Half         DM t
+  BASELINE:  Empirical (rolling 2k)                -15.0991 nats   [-15.4189, -14.7774]       -14.9751     -15.2149      -93.3
+  CHALLENGER: Hurdle + Gaussian body                -7.1065 nats   [-7.4995, -6.7277]          -6.7972      -7.3953      -38.6
+  CHALLENGER: Hurdle-t (nu=4.0)                     -7.7049 nats   [-8.0980, -7.3217]          -7.2958      -8.0870      -41.0
+  CHALLENGER: Hurdle-t (nu=2.5)                     -7.8822 nats   [-8.2708, -7.4968]          -7.4849      -8.2532      -42.4
+  CHALLENGER: Hurdle + signed LogNormal            -10.9416 nats   [-11.3220, -10.5577]       -10.7906     -11.0826      -60.8
+
+================================================================================================
+ORDER FLOW EVALUATION: BTC_IRT (lot scale = 0.0001)
+================================================================================================
+  Realized zero flow: Buy=0.9014, Sell=0.8710
+
+  === FLOW: JOINT ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     1.5481    0.2585     12.815        N/A    58334
+  CHALLENGER: Regularized Hurdle LogNormal         1.5297    0.2626     12.577        N/A    58334
+  INCUMBENT:  Hurdle Weibull                       2.1895    0.2585     13.887        N/A    58334
+  BASELINE:   Empirical Flow                       1.8989    0.7105     12.316        N/A    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0184 nats  [-0.0197, -0.0170]       DM t= -25.5 (p=3.714e-142)
+    INCUMBENT:  Hurdle Weibull                    +0.6415 nats  [+0.4922, +0.8032]       DM t=   8.0 (p=1.837e-15)
+    BASELINE:   Empirical Flow                    +0.3508 nats  [+0.3440, +0.3577]       DM t= 107.8 (p=0.000e+00)
+
+  === FLOW: BUY ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     0.6929    0.0908      8.933     0.0854    58334
+  CHALLENGER: Regularized Hurdle LogNormal         0.6834    0.0953      8.694     0.0846    58334
+  INCUMBENT:  Hurdle Weibull                       0.9806    0.0908      8.754     0.0854    58334
+  BASELINE:   Empirical Flow                       0.8679    0.3291      7.824     0.0886    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0095 nats  [-0.0105, -0.0086]       DM t= -18.5 (p=4.964e-76)
+    INCUMBENT:  Hurdle Weibull                    +0.2877 nats  [+0.1945, +0.3951]       DM t=   5.6 (p=2.364e-08)
+    BASELINE:   Empirical Flow                    +0.1750 nats  [+0.1710, +0.1790]       DM t=  85.8 (p=0.000e+00)
+
+  === FLOW: SELL ===
+  Model                                          Mean NLL   Med NLL    p99 NLL   Brier(0)        N
+  INCUMBENT:  Hurdle LogNormal                     0.8552    0.1332      8.571     0.1083    58334
+  CHALLENGER: Regularized Hurdle LogNormal         0.8463    0.1385      8.344     0.1073    58334
+  INCUMBENT:  Hurdle Weibull                       1.2089    0.1332      8.363     0.1083    58334
+  BASELINE:   Empirical Flow                       1.0310    0.3664      7.824     0.1123    58334
+
+  --- Paired difference vs INCUMBENT:  Hurdle LogNormal ---
+    CHALLENGER: Regularized Hurdle LogNormal      -0.0089 nats  [-0.0097, -0.0080]       DM t= -18.7 (p=9.902e-78)
+    INCUMBENT:  Hurdle Weibull                    +0.3538 nats  [+0.2388, +0.4714]       DM t=   6.0 (p=1.675e-09)
+    BASELINE:   Empirical Flow                    +0.1758 nats  [+0.1709, +0.1808]       DM t=  76.1 (p=0.000e+00)
