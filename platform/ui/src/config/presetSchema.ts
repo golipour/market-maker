@@ -36,8 +36,19 @@ function opt(values: readonly string[]): FieldOption[] {
   return values.map((value) => ({ value, label: value }));
 }
 
-const PRICE_LOCAL_KINDS = ["residual", "conditional_mechanical_mixture"] as const;
-const PRICE_GLOBAL_KINDS = ["ewma_gaussian", "conditional_mechanical_mixture", "residual"] as const;
+const PRICE_LOCAL_KINDS = [
+  "residual",
+  "hurdle_student_t",
+  "hurdle_lognormal",
+  "conditional_mechanical_mixture",
+] as const;
+const PRICE_GLOBAL_KINDS = [
+  "ewma_gaussian",
+  "hurdle_student_t",
+  "hurdle_lognormal",
+  "conditional_mechanical_mixture",
+  "residual",
+] as const;
 const FLOW_KINDS = [
   "hurdle_lognormal",
   "hurdle_gamma",
@@ -277,7 +288,21 @@ function priceModelFields(
       label: "Initial σ",
       type: "number",
       defaultValue: 50,
-      when: modelKindWhen(`${base}.kind`, ["residual", "conditional_mechanical_mixture"]),
+      when: modelKindWhen(`${base}.kind`, [
+        "residual",
+        "conditional_mechanical_mixture",
+        "hurdle_student_t",
+        "hurdle_lognormal",
+      ]),
+    },
+    {
+      path: `${base}.tick_size`,
+      label: "Tick size",
+      type: "number",
+      defaultValue: prefix === "local_price_model" ? 0.5 : 1.0,
+      step: "0.1",
+      help: "Discrete lattice quantization interval.",
+      when: modelKindWhen(`${base}.kind`, ["hurdle_student_t", "hurdle_lognormal"]),
     },
     {
       path: `${base}.reference_vwap_vol`,
@@ -307,8 +332,9 @@ function priceModelFields(
       path: `${base}.student_df`,
       label: "Student-t df",
       type: "number",
-      defaultValue: 3,
-      when: modelKindWhen(`${base}.kind`, ["conditional_mechanical_mixture"]),
+      defaultValue: 2.5,
+      step: "0.1",
+      when: modelKindWhen(`${base}.kind`, ["conditional_mechanical_mixture", "hurdle_student_t"]),
     },
     {
       path: `${base}.min_refresh_weight`,

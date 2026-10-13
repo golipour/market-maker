@@ -364,6 +364,650 @@ class TorchResidualPriceModel:
         return d.sample(sample_shape)
 
 
+class TorchHurdleStudentTPriceModel:
+    """
+    Hurdle Student-t discrete lattice price model.
+
+    Separates stationary book zero moves (p0) from heavy-tailed Student-t
+    innovations (df=nu, scale=s) on the discrete tick lattice with recursive
+    volatility and online tail calibration.
+    """
+
+    def __init__(
+        self,
+        market_flow_model: object | None = None,
+        limit_order_flow_model: object | None = None,
+        *,
+        student_df: float = 2.5,
+        decay: float = 0.99,
+        decay_p: float | None = None,
+        decay_s: float | None = None,
+        decay_cal: float = 0.995,
+        tick_size: float = 0.5,
+        init_p0: float = 0.5,
+        init_sigma: float = 1.0,
+        sigma_min: float = 1e-4,
+        calibrate: bool = True,
+        default_vwap_depth_lots: float = 1000.0,
+        vwap_depth: float | None = None,
+        learn_residual: bool = True,
+        device: str | None = None,
+        **kwargs: Any,
+    ):
+        if "initial_sigma" in kwargs and init_sigma == 1.0:
+            init_sigma = float(kwargs["initial_sigma"])
+        if "reference_vwap_vol" in kwargs and vwap_depth is None:
+            vwap_depth = float(kwargs["reference_vwap_vol"])
+        self.market_flow_model = market_flow_model
+        self.limit_order_flow_model = limit_order_flow_model
+        self._nu = max(2.05, float(student_df))
+        self._gamma_p = max(1e-6, min(1.0, float(decay_p if decay_p is not None else decay)))
+        self._gamma_s = max(1e-6, min(1.0, float(decay_s if decay_s is not None else decay)))
+        self._gamma_cal = max(1e-6, min(1.0, float(decay_cal)))
+        self._tick_size = max(1e-6, float(tick_size))
+        self._sigma_min = float(sigma_min)
+        self._calibrate = bool(calibrate)
+        self._learn_residual = bool(learn_residual)
+        self._device = device
+
+        depth = float(vwap_depth) if vwap_depth is not None else float(default_vwap_depth_lots)
+        self._target_depth_lots = max(1.0, depth)
+
+        # Online states for mid
+        self._p0_mid: float = max(0.001, min(0.999, float(init_p0)))
+        init_s = max(self._sigma_min, float(init_sigma))
+        self._m2_mid: float = (init_s ** 2) * self._nu / (self._nu - 2.0)
+        self._alpha_mid: float = 1.0
+
+        # Online states for buy/sell VWAPs
+        self._p0_buy: float = self._p0_mid
+        self._p0_sell: float = self._p0_mid
+        self._m2_buy: float = self._m2_mid
+        self._m2_sell: float = self._m2_mid
+        self._alpha_buy: float = 1.0
+        self._alpha_sell: float = 1.0
+
+        self._last_residual: float | None = None
+
+        # Diagnostic histories
+        self.realized_buy_price_hist: list[float] = []
+        self.computed_buy_price_hist: list[float] = []
+        self.realized_sell_price_hist: list[float] = []
+        self.computed_sell_price_hist: list[float] = []
+        self.residual_mu_hist: list[float] = []
+        self.residual_sigma_hist: list[float] = []
+        self.mu_buy_hist: list[float] = []
+        self.mu_sell_hist: list[float] = []
+        self.sigma_buy_hist: list[float] = []
+        self.sigma_sell_hist: list[float] = []
+        self.p0_hist: list[float] = []
+        self.alpha_hist: list[float] = []
+
+    def get_last_residual(self) -> float | None:
+        return self._last_residual
+
+    def _scale(self, m2: float, alpha: float) -> float:
+        s_raw = math.sqrt(max(m2 * (self._nu - 2.0) / self._nu, self._sigma_min ** 2))
+        if self._calibrate:
+            return max(self._sigma_min, s_raw * alpha)
+        return max(self._sigma_min, s_raw)
+
+    def _update_side(
+        self,
+        e: float,
+        p0: float,
+        m2: float,
+        alpha: float,
+    ) -> tuple[float, float, float]:
+        gp = self._gamma_p
+        gs = self._gamma_s
+        gcal = self._gamma_cal
+        nu = self._nu
+        h = self._tick_size
+
+        z = 1.0 if abs(e) < 0.5 * h else 0.0
+        p0_new = gp * p0 + (1.0 - gp) * z
+        p0_new = max(0.001, min(0.999, p0_new))
+
+        if z == 0.0:
+            m2_new = gs * m2 + (1.0 - gs) * (e * e)
+            s_raw = math.sqrt(max(m2_new * (nu - 2.0) / nu, self._sigma_min ** 2))
+            if self._calibrate:
+                u_tgt_sq = nu / (nu - 2.0)
+                u_obs_sq = (e / max(1e-12, s_raw)) ** 2
+                ratio = math.sqrt(max(0.1, min(10.0, u_obs_sq / u_tgt_sq)))
+                alpha_new = gcal * alpha + (1.0 - gcal) * ratio
+                alpha_new = max(0.2, min(5.0, alpha_new))
+            else:
+                alpha_new = alpha
+        else:
+            m2_new = m2
+            alpha_new = alpha
+
+        return p0_new, m2_new, alpha_new
+
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
+        if prev_step is None:
+            return
+        from mm.pricing import reference_prices_from_transition_ticks
+
+        _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
+        _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
+        buy_real, sell_real, buy_vwap_mof, sell_vwap_mof = reference_prices_from_transition_ticks(
+            prev_ob,
+            cur_ob,
+            float(buy_vol),
+            float(sell_vol),
+            self._target_depth_lots,
+        )
+        self.realized_buy_price_hist.append(float(buy_real))
+        self.computed_buy_price_hist.append(float(buy_vwap_mof))
+        self.realized_sell_price_hist.append(float(sell_real))
+        self.computed_sell_price_hist.append(float(sell_vwap_mof))
+
+        e_buy = float(buy_real - buy_vwap_mof)
+        e_sell = float(sell_real - sell_vwap_mof)
+        self._last_residual = 0.5 * (e_buy + e_sell)
+
+        cur_mid = getattr(cur_ob, "mid", None)
+        prev_mid = getattr(prev_ob, "mid", None)
+        if cur_mid is not None and prev_mid is not None:
+            e_mid = float(cur_mid) - float(prev_mid)
+        else:
+            e_mid = self._last_residual
+
+        if self._learn_residual:
+            self._p0_mid, self._m2_mid, self._alpha_mid = self._update_side(
+                e_mid, self._p0_mid, self._m2_mid, self._alpha_mid
+            )
+            self._p0_buy, self._m2_buy, self._alpha_buy = self._update_side(
+                e_buy, self._p0_buy, self._m2_buy, self._alpha_buy
+            )
+            self._p0_sell, self._m2_sell, self._alpha_sell = self._update_side(
+                e_sell, self._p0_sell, self._m2_sell, self._alpha_sell
+            )
+
+        s_mid = self._scale(self._m2_mid, self._alpha_mid)
+        s_buy = self._scale(self._m2_buy, self._alpha_buy)
+        s_sell = self._scale(self._m2_sell, self._alpha_sell)
+
+        self.p0_hist.append(self._p0_mid)
+        self.alpha_hist.append(self._alpha_mid)
+        self.residual_mu_hist.append(0.0)
+        self.residual_sigma_hist.append(s_mid)
+        self.mu_buy_hist.append(0.0)
+        self.mu_sell_hist.append(0.0)
+        self.sigma_buy_hist.append(s_buy)
+        self.sigma_sell_hist.append(s_sell)
+
+    def get_params(self) -> dict[str, Any]:
+        s_mid = self._scale(self._m2_mid, self._alpha_mid)
+        s_buy = self._scale(self._m2_buy, self._alpha_buy)
+        s_sell = self._scale(self._m2_sell, self._alpha_sell)
+        return {
+            "kind": "hurdle_student_t",
+            "mu_mid": 0.0,
+            "sigma_mid": s_mid,
+            "mu_buy": 0.0,
+            "mu_sell": 0.0,
+            "sigma_buy": s_buy,
+            "sigma_sell": s_sell,
+            "p0": self._p0_mid,
+            "p0_mid": self._p0_mid,
+            "p0_buy": self._p0_buy,
+            "p0_sell": self._p0_sell,
+            "student_df": self._nu,
+            "scale": s_mid,
+            "alpha_cal": self._alpha_mid,
+            "tick_size": self._tick_size,
+        }
+
+    def sample_residual(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        device: str | None = None,
+        dtype: "np.dtype | None" = None,
+    ):
+        """Sample hurdle Student-t residuals for buy/sell VWAPs."""
+        import torch
+        import torch.distributions as dist
+        p = self.get_params()
+        p0_buy = float(p["p0_buy"])
+        p0_sell = float(p["p0_sell"])
+        s_buy = max(self._sigma_min, float(p["sigma_buy"]))
+        s_sell = max(self._sigma_min, float(p["sigma_sell"]))
+        nu = float(p["student_df"])
+        _device = resolve_torch_device(device if device is not None else self._device)
+        _dtype = dtype if dtype is not None else torch.float64
+
+        u_buy = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        u_sell = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        mask_buy = (u_buy > p0_buy).to(_dtype)
+        mask_sell = (u_sell > p0_sell).to(_dtype)
+
+        t_dist = dist.StudentT(torch.tensor(nu, dtype=_dtype, device=_device))
+        t_buy = t_dist.sample(sample_shape)
+        t_sell = t_dist.sample(sample_shape)
+
+        eps_buy = mask_buy * (t_buy * s_buy)
+        eps_sell = mask_sell * (t_sell * s_sell)
+        return eps_buy, eps_sell
+
+    def sample(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        device: str | None = None,
+        dtype: "np.dtype | None" = None,
+    ):
+        """Sample pooled hurdle Student-t residual."""
+        import torch
+        import torch.distributions as dist
+        p = self.get_params()
+        p0 = float(p["p0_mid"])
+        s = max(self._sigma_min, float(p["sigma_mid"]))
+        nu = float(p["student_df"])
+        _device = resolve_torch_device(device if device is not None else self._device)
+        _dtype = dtype if dtype is not None else torch.float64
+
+        u = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        mask = (u > p0).to(_dtype)
+        t_dist = dist.StudentT(torch.tensor(nu, dtype=_dtype, device=_device))
+        t_val = t_dist.sample(sample_shape)
+        return mask * (t_val * s)
+
+    def prob_mid(
+        self,
+        mid_next: float,
+        mid: float,
+        params: dict | None = None,
+    ) -> float:
+        """P(mid_next | mid, params) on discrete tick lattice."""
+        from scipy.stats import t as t_dist
+        p = params if params is not None else self.get_params()
+        p0 = float(p.get("p0_mid", p.get("p0", self._p0_mid)))
+        p0 = max(0.0, min(1.0, p0))
+        s = max(1e-12, float(p.get("sigma_mid", p.get("scale", 1.0))))
+        nu = float(p.get("student_df", self._nu))
+        h = max(1e-6, float(p.get("tick_size", self._tick_size)))
+
+        diff = mid_next - mid
+        k = int(round(diff / h))
+        if k == 0:
+            return float(p0)
+
+        hi = (k * h + 0.5 * h) / s
+        lo = (k * h - 0.5 * h) / s
+        zc_hi = (0.5 * h) / s
+        zc_lo = (-0.5 * h) / s
+
+        m_k = max(0.0, float(t_dist.cdf(hi, df=nu) - t_dist.cdf(lo, df=nu)))
+        m_0 = max(0.0, float(t_dist.cdf(zc_hi, df=nu) - t_dist.cdf(zc_lo, df=nu)))
+        denom = max(1e-12, 1.0 - m_0)
+        return float((1.0 - p0) * (m_k / denom))
+
+    def sample_next_mid(
+        self,
+        mid: float,
+        rng: np.random.Generator | None = None,
+        params: dict | None = None,
+    ) -> float:
+        rng = rng or np.random.default_rng()
+        p = params if params is not None else self.get_params()
+        p0 = float(p.get("p0_mid", p.get("p0", self._p0_mid)))
+        if rng.random() < p0:
+            return float(mid)
+        s = max(1e-12, float(p.get("sigma_mid", p.get("scale", 1.0))))
+        nu = float(p.get("student_df", self._nu))
+        h = max(1e-6, float(p.get("tick_size", self._tick_size)))
+        t_val = float(rng.standard_t(df=nu) * s)
+        k = int(round(t_val / h))
+        if k == 0:
+            k = 1 if rng.random() < 0.5 else -1
+        return float(mid + k * h)
+
+    def get_plot_specs(self) -> list[dict]:
+        return [
+            {"title": "Hurdle Student-t: P(0)", "ylabel": "P(0)"},
+            {"title": "Hurdle Student-t: Scale σ (mid, buy, sell)", "ylabel": "σ"},
+            {"title": "Hurdle Student-t: Tail calibration α", "ylabel": "α"},
+        ]
+
+    def get_plot_data(self) -> dict:
+        return {
+            "title": f"Hurdle Student-t Price Model (ν={self._nu}, γ={self._gamma_p})",
+            "ylabel": "P(0), σ, α",
+            "series": [
+                {"label": "p0", "color": "blue", "y": self.p0_hist},
+                {"label": "sigma_mid", "color": "green", "y": self.residual_sigma_hist},
+                {"label": "alpha_cal", "color": "purple", "y": self.alpha_hist},
+            ],
+            "subplots": [
+                {"title": "P(0)", "ylabel": "P(0)", "series": [{"label": "p0", "color": "blue", "y": self.p0_hist}]},
+                {"title": "Scale σ", "ylabel": "σ", "series": [{"label": "sigma_mid", "color": "green", "y": self.residual_sigma_hist}, {"label": "sigma_buy", "color": "teal", "y": self.sigma_buy_hist}, {"label": "sigma_sell", "color": "orange", "y": self.sigma_sell_hist}]},
+                {"title": "Calibration α", "ylabel": "α", "series": [{"label": "alpha", "color": "purple", "y": self.alpha_hist}]},
+            ],
+        }
+
+
+class TorchHurdleLogNormalPriceModel:
+    """
+    Hurdle Signed-LogNormal discrete lattice price model.
+
+    Separates stationary book zero moves (p0) from signed log-normal innovations
+    on log(|Δmid|), well-suited for assets spanning multiple orders of magnitude (e.g. BTC).
+    """
+
+    def __init__(
+        self,
+        market_flow_model: object | None = None,
+        limit_order_flow_model: object | None = None,
+        *,
+        decay: float = 0.99,
+        decay_p: float | None = None,
+        decay_s: float | None = None,
+        tick_size: float = 100.0,
+        init_p0: float = 0.5,
+        init_mu: float = 2.0,
+        init_sigma: float = 1.0,
+        sigma_min: float = 0.35,
+        default_vwap_depth_lots: float = 1000.0,
+        vwap_depth: float | None = None,
+        learn_residual: bool = True,
+        device: str | None = None,
+        **kwargs: Any,
+    ):
+        if "initial_sigma" in kwargs and init_sigma == 1.0:
+            init_sigma = float(kwargs["initial_sigma"])
+        if "reference_vwap_vol" in kwargs and vwap_depth is None:
+            vwap_depth = float(kwargs["reference_vwap_vol"])
+        self.market_flow_model = market_flow_model
+        self.limit_order_flow_model = limit_order_flow_model
+        self._gamma_p = max(1e-6, min(1.0, float(decay_p if decay_p is not None else decay)))
+        self._gamma_s = max(1e-6, min(1.0, float(decay_s if decay_s is not None else decay)))
+        self._tick_size = max(1e-6, float(tick_size))
+        self._sigma_min = float(sigma_min)
+        self._learn_residual = bool(learn_residual)
+        self._device = device
+
+        depth = float(vwap_depth) if vwap_depth is not None else float(default_vwap_depth_lots)
+        self._target_depth_lots = max(1.0, depth)
+
+        self._p0_mid: float = max(0.001, min(0.999, float(init_p0)))
+        self._mu_mid: float = float(init_mu)
+        self._sigma_mid: float = max(self._sigma_min, float(init_sigma))
+        self._S_log_mid: float = 0.0
+        self._S2_log_mid: float = 0.0
+        self._W_mid: float = 0.0
+
+        self._p0_buy: float = self._p0_mid
+        self._p0_sell: float = self._p0_mid
+        self._mu_buy: float = float(init_mu)
+        self._mu_sell: float = float(init_mu)
+        self._sigma_buy: float = max(self._sigma_min, float(init_sigma))
+        self._sigma_sell: float = max(self._sigma_min, float(init_sigma))
+        self._S_log_buy: float = 0.0
+        self._S2_log_buy: float = 0.0
+        self._W_buy: float = 0.0
+        self._S_log_sell: float = 0.0
+        self._S2_log_sell: float = 0.0
+        self._W_sell: float = 0.0
+
+        self._last_residual: float | None = None
+
+        self.realized_buy_price_hist: list[float] = []
+        self.computed_buy_price_hist: list[float] = []
+        self.realized_sell_price_hist: list[float] = []
+        self.computed_sell_price_hist: list[float] = []
+        self.residual_mu_hist: list[float] = []
+        self.residual_sigma_hist: list[float] = []
+        self.mu_buy_hist: list[float] = []
+        self.mu_sell_hist: list[float] = []
+        self.sigma_buy_hist: list[float] = []
+        self.sigma_sell_hist: list[float] = []
+        self.p0_hist: list[float] = []
+
+    def get_last_residual(self) -> float | None:
+        return self._last_residual
+
+    def _update_moments(
+        self,
+        e: float,
+        p0: float,
+        mu: float,
+        sigma: float,
+        s_log: float,
+        s2_log: float,
+        w: float,
+    ) -> tuple[float, float, float, float, float, float]:
+        gp = self._gamma_p
+        gs = self._gamma_s
+        h = self._tick_size
+
+        z = 1.0 if abs(e) < 0.5 * h else 0.0
+        p0_new = gp * p0 + (1.0 - gp) * z
+        p0_new = max(0.001, min(0.999, p0_new))
+
+        if z == 0.0:
+            log_mag = math.log(max(1e-12, abs(e)))
+            s_log_new = gs * s_log + log_mag
+            s2_log_new = gs * s2_log + log_mag * log_mag
+            w_new = gs * w + 1.0
+            if w_new > 1e-12:
+                mean_l = s_log_new / w_new
+                var_l = max(self._sigma_min ** 2, s2_log_new / w_new - mean_l * mean_l)
+                mu_new = mean_l
+                sigma_new = max(self._sigma_min, math.sqrt(var_l))
+            else:
+                mu_new, sigma_new = mu, sigma
+        else:
+            s_log_new, s2_log_new, w_new = s_log, s2_log, w
+            mu_new, sigma_new = mu, sigma
+
+        return p0_new, mu_new, sigma_new, s_log_new, s2_log_new, w_new
+
+    def update(self, prev_step: Step | None, curr_step: Step, **_: Any) -> None:
+        if prev_step is None:
+            return
+        from mm.pricing import reference_prices_from_transition_ticks
+
+        _t_prev, prev_ob, _b_prev, _s_prev, *_ = prev_step
+        _t_curr, cur_ob, buy_vol, sell_vol, *_ = curr_step
+        buy_real, sell_real, buy_vwap_mof, sell_vwap_mof = reference_prices_from_transition_ticks(
+            prev_ob,
+            cur_ob,
+            float(buy_vol),
+            float(sell_vol),
+            self._target_depth_lots,
+        )
+        self.realized_buy_price_hist.append(float(buy_real))
+        self.computed_buy_price_hist.append(float(buy_vwap_mof))
+        self.realized_sell_price_hist.append(float(sell_real))
+        self.computed_sell_price_hist.append(float(sell_vwap_mof))
+
+        e_buy = float(buy_real - buy_vwap_mof)
+        e_sell = float(sell_real - sell_vwap_mof)
+        self._last_residual = 0.5 * (e_buy + e_sell)
+
+        cur_mid = getattr(cur_ob, "mid", None)
+        prev_mid = getattr(prev_ob, "mid", None)
+        if cur_mid is not None and prev_mid is not None:
+            e_mid = float(cur_mid) - float(prev_mid)
+        else:
+            e_mid = self._last_residual
+
+        if self._learn_residual:
+            self._p0_mid, self._mu_mid, self._sigma_mid, self._S_log_mid, self._S2_log_mid, self._W_mid = self._update_moments(
+                e_mid, self._p0_mid, self._mu_mid, self._sigma_mid, self._S_log_mid, self._S2_log_mid, self._W_mid
+            )
+            self._p0_buy, self._mu_buy, self._sigma_buy, self._S_log_buy, self._S2_log_buy, self._W_buy = self._update_moments(
+                e_buy, self._p0_buy, self._mu_buy, self._sigma_buy, self._S_log_buy, self._S2_log_buy, self._W_buy
+            )
+            self._p0_sell, self._mu_sell, self._sigma_sell, self._S_log_sell, self._S2_log_sell, self._W_sell = self._update_moments(
+                e_sell, self._p0_sell, self._mu_sell, self._sigma_sell, self._S_log_sell, self._S2_log_sell, self._W_sell
+            )
+
+        self.p0_hist.append(self._p0_mid)
+        self.residual_mu_hist.append(self._mu_mid)
+        self.residual_sigma_hist.append(self._sigma_mid)
+        self.mu_buy_hist.append(self._mu_buy)
+        self.mu_sell_hist.append(self._mu_sell)
+        self.sigma_buy_hist.append(self._sigma_buy)
+        self.sigma_sell_hist.append(self._sigma_sell)
+
+    def get_params(self) -> dict[str, Any]:
+        linear_scale = math.exp(self._mu_mid + 0.5 * self._sigma_mid ** 2)
+        return {
+            "kind": "hurdle_lognormal",
+            "mu_mid": 0.0,
+            "sigma_mid": max(self._sigma_min, linear_scale),
+            "mu_buy": 0.0,
+            "mu_sell": 0.0,
+            "sigma_buy": max(self._sigma_min, math.exp(self._mu_buy + 0.5 * self._sigma_buy ** 2)),
+            "sigma_sell": max(self._sigma_min, math.exp(self._mu_sell + 0.5 * self._sigma_sell ** 2)),
+            "p0": self._p0_mid,
+            "p0_mid": self._p0_mid,
+            "p0_buy": self._p0_buy,
+            "p0_sell": self._p0_sell,
+            "mu": self._mu_mid,
+            "sigma": self._sigma_mid,
+            "mu_mid_log": self._mu_mid,
+            "sigma_mid_log": self._sigma_mid,
+            "tick_size": self._tick_size,
+        }
+
+    def sample_residual(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        device: str | None = None,
+        dtype: "np.dtype | None" = None,
+    ):
+        """Sample hurdle signed log-normal residuals for buy/sell VWAPs."""
+        import torch
+        import torch.distributions as dist
+        p = self.get_params()
+        p0_buy = float(p["p0_buy"])
+        p0_sell = float(p["p0_sell"])
+        mu_buy = float(self._mu_buy)
+        sig_buy = float(self._sigma_buy)
+        mu_sell = float(self._mu_sell)
+        sig_sell = float(self._sigma_sell)
+        _device = resolve_torch_device(device if device is not None else self._device)
+        _dtype = dtype if dtype is not None else torch.float64
+
+        u_buy = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        u_sell = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        mask_buy = (u_buy > p0_buy).to(_dtype)
+        mask_sell = (u_sell > p0_sell).to(_dtype)
+
+        sign_buy = torch.where(torch.rand(sample_shape, dtype=_dtype, device=_device) > 0.5, 1.0, -1.0)
+        sign_sell = torch.where(torch.rand(sample_shape, dtype=_dtype, device=_device) > 0.5, 1.0, -1.0)
+
+        d_b = dist.Normal(torch.tensor(mu_buy, dtype=_dtype, device=_device), torch.tensor(sig_buy, dtype=_dtype, device=_device))
+        d_s = dist.Normal(torch.tensor(mu_sell, dtype=_dtype, device=_device), torch.tensor(sig_sell, dtype=_dtype, device=_device))
+
+        mag_buy = torch.exp(d_b.sample(sample_shape))
+        mag_sell = torch.exp(d_s.sample(sample_shape))
+
+        eps_buy = mask_buy * (sign_buy * mag_buy)
+        eps_sell = mask_sell * (sign_sell * mag_sell)
+        return eps_buy, eps_sell
+
+    def sample(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        device: str | None = None,
+        dtype: "np.dtype | None" = None,
+    ):
+        """Sample pooled hurdle signed log-normal residual."""
+        import torch
+        import torch.distributions as dist
+        p = self.get_params()
+        p0 = float(p["p0_mid"])
+        mu = float(self._mu_mid)
+        sig = float(self._sigma_mid)
+        _device = resolve_torch_device(device if device is not None else self._device)
+        _dtype = dtype if dtype is not None else torch.float64
+
+        u = torch.rand(sample_shape, dtype=_dtype, device=_device)
+        mask = (u > p0).to(_dtype)
+        sign = torch.where(torch.rand(sample_shape, dtype=_dtype, device=_device) > 0.5, 1.0, -1.0)
+        d = dist.Normal(torch.tensor(mu, dtype=_dtype, device=_device), torch.tensor(sig, dtype=_dtype, device=_device))
+        mag = torch.exp(d.sample(sample_shape))
+        return mask * (sign * mag)
+
+    def prob_mid(
+        self,
+        mid_next: float,
+        mid: float,
+        params: dict | None = None,
+    ) -> float:
+        """P(mid_next | mid, params) on discrete tick lattice."""
+        from scipy.stats import norm
+        p = params if params is not None else self.get_params()
+        p0 = float(p.get("p0_mid", p.get("p0", self._p0_mid)))
+        p0 = max(0.0, min(1.0, p0))
+        mu = float(p.get("mu", p.get("mu_mid_log", self._mu_mid)))
+        sigma = max(1e-12, float(p.get("sigma", p.get("sigma_mid_log", self._sigma_mid))))
+        h = max(1e-6, float(p.get("tick_size", self._tick_size)))
+
+        diff = mid_next - mid
+        k = int(round(diff / h))
+        if k == 0:
+            return float(p0)
+
+        abs_k = abs(k)
+        hi_val = (abs_k + 0.5) * h
+        lo_val = max(1e-12, (abs_k - 0.5) * h)
+        a = (math.log(lo_val) - mu) / sigma
+        b = (math.log(hi_val) - mu) / sigma
+        phi_zero = norm.cdf((math.log(max(1e-12, 0.5 * h)) - mu) / sigma)
+        denom = max(1e-12, 1.0 - phi_zero)
+        m_k = max(0.0, float(norm.cdf(b) - norm.cdf(a)))
+        return float((1.0 - p0) * 0.5 * (m_k / denom))
+
+    def sample_next_mid(
+        self,
+        mid: float,
+        rng: np.random.Generator | None = None,
+        params: dict | None = None,
+    ) -> float:
+        rng = rng or np.random.default_rng()
+        p = params if params is not None else self.get_params()
+        p0 = float(p.get("p0_mid", p.get("p0", self._p0_mid)))
+        if rng.random() < p0:
+            return float(mid)
+        mu = float(p.get("mu", self._mu_mid))
+        sigma = max(1e-12, float(p.get("sigma", self._sigma_mid)))
+        h = max(1e-6, float(p.get("tick_size", self._tick_size)))
+        sign = 1.0 if rng.random() > 0.5 else -1.0
+        mag = float(math.exp(rng.normal(loc=mu, scale=sigma)))
+        k = max(1, int(round(mag / h)))
+        return float(mid + sign * k * h)
+
+    def get_plot_specs(self) -> list[dict]:
+        return [
+            {"title": "Hurdle Signed-LogNormal: P(0)", "ylabel": "P(0)"},
+            {"title": "Hurdle Signed-LogNormal: log-mean μ (mid, buy, sell)", "ylabel": "μ"},
+            {"title": "Hurdle Signed-LogNormal: log-sigma σ (mid, buy, sell)", "ylabel": "σ"},
+        ]
+
+    def get_plot_data(self) -> dict:
+        return {
+            "title": f"Hurdle Signed-LogNormal Price Model (γ={self._gamma_p})",
+            "ylabel": "P(0), μ, σ",
+            "series": [
+                {"label": "p0", "color": "blue", "y": self.p0_hist},
+                {"label": "mu_mid", "color": "green", "y": self.residual_mu_hist},
+                {"label": "sigma_mid", "color": "red", "y": self.residual_sigma_hist},
+            ],
+            "subplots": [
+                {"title": "P(0)", "ylabel": "P(0)", "series": [{"label": "p0", "color": "blue", "y": self.p0_hist}]},
+                {"title": "log-mean μ", "ylabel": "μ", "series": [{"label": "mu_mid", "color": "green", "y": self.residual_mu_hist}, {"label": "mu_buy", "color": "teal", "y": self.mu_buy_hist}, {"label": "mu_sell", "color": "orange", "y": self.mu_sell_hist}]},
+                {"title": "log-sigma σ", "ylabel": "σ", "series": [{"label": "sigma_mid", "color": "red", "y": self.residual_sigma_hist}, {"label": "sigma_buy", "color": "magenta", "y": self.sigma_buy_hist}, {"label": "sigma_sell", "color": "brown", "y": self.sigma_sell_hist}]},
+            ],
+        }
+
+
 class TorchConditionalMechanicalMixturePriceModel:
     """
     Conditional book-state price model for MPC rollouts.

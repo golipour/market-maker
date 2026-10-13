@@ -168,7 +168,80 @@ def score_local_mid_delta(
     delta_mid: float,
     params_before: dict[str, Any],
 ) -> ScoreResult:
-    """Gaussian NLL for realized local mid change (residual / EWMA price models)."""
+    """NLL for realized local mid change (hurdle discrete lattice or continuous Gaussian)."""
+
+    kind = str(params_before.get("kind", "")).lower()
+    if kind in ("hurdle_student_t", "hurdle_t") or ("p0" in params_before and "student_df" in params_before):
+        from scipy.stats import t as t_dist
+
+        p0 = float(params_before.get("p0", params_before.get("p0_mid", 0.5)))
+        p0 = max(0.0, min(1.0, p0))
+        nu = float(params_before.get("student_df", 2.5))
+        s = max(1e-12, float(params_before.get("scale", params_before.get("sigma_mid", 1.0))))
+        h = max(1e-6, float(params_before.get("tick_size", 0.5)))
+        k = int(round(delta_mid / h))
+        if k == 0:
+            prob = p0
+        else:
+            hi = (k * h + 0.5 * h) / s
+            lo = (k * h - 0.5 * h) / s
+            zc_hi = (0.5 * h) / s
+            zc_lo = (-0.5 * h) / s
+            m_k = max(0.0, float(t_dist.cdf(hi, df=nu) - t_dist.cdf(lo, df=nu)))
+            m_0 = max(0.0, float(t_dist.cdf(zc_hi, df=nu) - t_dist.cdf(zc_lo, df=nu)))
+            denom = max(1e-12, 1.0 - m_0)
+            prob = (1.0 - p0) * (m_k / denom)
+        prob = max(_MIN_PROB, min(1.0, prob))
+        ll, nll = _nll_from_log_prob(math.log(prob))
+        z = float(delta_mid / s)
+        return ScoreResult(
+            log_likelihood=ll,
+            nll=nll,
+            observation={
+                "delta_mid": float(delta_mid),
+                "p0_before": p0,
+                "sigma_mid_before": s,
+                "prob": float(prob),
+                "k": k,
+            },
+            standardized_residual=float(z),
+        )
+    if kind == "hurdle_lognormal":
+        from scipy.stats import norm
+
+        p0 = float(params_before.get("p0", params_before.get("p0_mid", 0.5)))
+        p0 = max(0.0, min(1.0, p0))
+        mu = float(params_before.get("mu", params_before.get("mu_mid_log", 0.0)))
+        sigma = max(1e-12, float(params_before.get("sigma", params_before.get("sigma_mid_log", 1.0))))
+        h = max(1e-6, float(params_before.get("tick_size", 100.0)))
+        k = int(round(delta_mid / h))
+        if k == 0:
+            prob = p0
+        else:
+            abs_k = abs(k)
+            hi_val = (abs_k + 0.5) * h
+            lo_val = max(1e-12, (abs_k - 0.5) * h)
+            a = (math.log(lo_val) - mu) / sigma
+            b = (math.log(hi_val) - mu) / sigma
+            phi_zero = norm.cdf((math.log(max(1e-12, 0.5 * h)) - mu) / sigma)
+            denom = max(1e-12, 1.0 - phi_zero)
+            m_k = max(0.0, float(norm.cdf(b) - norm.cdf(a)))
+            prob = (1.0 - p0) * 0.5 * (m_k / denom)
+        prob = max(_MIN_PROB, min(1.0, prob))
+        ll, nll = _nll_from_log_prob(math.log(prob))
+        z = float(delta_mid / sigma)
+        return ScoreResult(
+            log_likelihood=ll,
+            nll=nll,
+            observation={
+                "delta_mid": float(delta_mid),
+                "p0_before": p0,
+                "sigma_mid_before": sigma,
+                "prob": float(prob),
+                "k": k,
+            },
+            standardized_residual=float(z),
+        )
 
     mu = float(params_before.get("mu_mid", 0.0))
     sigma = float(params_before.get("sigma_mid", params_before.get("sigma_buy", 1e-6)))
@@ -412,7 +485,7 @@ def _price_params_before(model: Any) -> dict[str, Any]:
         if params:
             # Residual / EWMA-style models already expose mu_mid / sigma_mid.
             if "mu_mid" in params and "sigma_mid" in params:
-                return {
+                result_params = {
                     "mu_mid": float(params["mu_mid"]),
                     "sigma_mid": float(params["sigma_mid"]),
                     "mu_buy": float(params.get("mu_buy", params["mu_mid"])),
@@ -421,6 +494,23 @@ def _price_params_before(model: Any) -> dict[str, Any]:
                     "sigma_sell": float(params.get("sigma_sell", params["sigma_mid"])),
                     "kind": params.get("kind"),
                 }
+                for extra in (
+                    "p0",
+                    "p0_mid",
+                    "p0_buy",
+                    "p0_sell",
+                    "student_df",
+                    "scale",
+                    "alpha_cal",
+                    "tick_size",
+                    "mu",
+                    "sigma",
+                    "mu_mid_log",
+                    "sigma_mid_log",
+                ):
+                    if extra in params:
+                        result_params[extra] = params[extra]
+                return result_params
             if _is_mixture_price_kind(str(params.get("kind", "")), params):
                 return params
 

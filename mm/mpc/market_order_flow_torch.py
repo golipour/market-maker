@@ -962,6 +962,7 @@ class TorchHurdleLogNormalModel:
     """
     Market order flow: hurdle lognormal. P(0) = p0; if > 0 then round(LogNormal(μ, σ)).
     Params updated by EWMA. get_params() returns p0_buy, mu_buy, sigma_buy, p0_sell, mu_sell, sigma_sell.
+    Enforces a variance prior floor (sigma_floor) to prevent probability collapse on illiquid books.
     """
 
     def __init__(
@@ -972,9 +973,11 @@ class TorchHurdleLogNormalModel:
         init_p0: float = 0.3,
         init_mu: float = 2.0,
         init_sigma: float = 0.8,
+        sigma_floor: float = 0.35,
     ):
         self._gamma = max(1e-6, min(1.0, float(decay)))
         self._param_eps = float(param_eps)
+        self._sigma_floor = max(float(param_eps), float(sigma_floor))
         self._p0_buy: float = max(0.0, min(1.0, float(init_p0)))
         self._p0_sell: float = max(0.0, min(1.0, float(init_p0)))
         self._S_log_buy: float = 0.0
@@ -984,9 +987,9 @@ class TorchHurdleLogNormalModel:
         self._S2_log_sell: float = 0.0
         self._W_sell: float = 0.0
         self._mu_buy: float = float(init_mu)
-        self._sigma_buy: float = max(float(param_eps), float(init_sigma))
+        self._sigma_buy: float = max(self._sigma_floor, float(init_sigma))
         self._mu_sell: float = float(init_mu)
-        self._sigma_sell: float = max(float(param_eps), float(init_sigma))
+        self._sigma_sell: float = max(self._sigma_floor, float(init_sigma))
         self.p0_buy_hist: list[float] = []
         self.p0_sell_hist: list[float] = []
         self.mu_buy_hist: list[float] = []
@@ -1009,9 +1012,9 @@ class TorchHurdleLogNormalModel:
             self._W_buy = g * self._W_buy + 1.0
         if self._W_buy > 1e-12:
             mean_log = self._S_log_buy / self._W_buy
-            var_log = max(eps * eps, self._S2_log_buy / self._W_buy - mean_log * mean_log)
+            var_log = max(self._sigma_floor * self._sigma_floor, self._S2_log_buy / self._W_buy - mean_log * mean_log)
             self._mu_buy = mean_log
-            self._sigma_buy = max(eps, np.sqrt(var_log))
+            self._sigma_buy = max(self._sigma_floor, np.sqrt(var_log))
         z_sell = 1.0 if x_sell == 0 else 0.0
         self._p0_sell = g * self._p0_sell + (1.0 - g) * z_sell
         self._p0_sell = max(0.0, min(1.0, self._p0_sell))
@@ -1022,9 +1025,9 @@ class TorchHurdleLogNormalModel:
             self._W_sell = g * self._W_sell + 1.0
         if self._W_sell > 1e-12:
             mean_log = self._S_log_sell / self._W_sell
-            var_log = max(eps * eps, self._S2_log_sell / self._W_sell - mean_log * mean_log)
+            var_log = max(self._sigma_floor * self._sigma_floor, self._S2_log_sell / self._W_sell - mean_log * mean_log)
             self._mu_sell = mean_log
-            self._sigma_sell = max(eps, np.sqrt(var_log))
+            self._sigma_sell = max(self._sigma_floor, np.sqrt(var_log))
         self.p0_buy_hist.append(self._p0_buy)
         self.p0_sell_hist.append(self._p0_sell)
         self.mu_buy_hist.append(self._mu_buy)
@@ -1104,6 +1107,7 @@ class TorchHurdleLogStudentTModel:
     Market order flow: hurdle log-Student-t. P(0) = p0; if > 0 then round(exp(Z)) with Z ~ t(df, μ, σ).
     Same EWMA moments on log(·) for μ, σ as hurdle lognormal; df is fixed (init).
     get_params() includes logt_df for NLL dispatch plus p0_*, mu_*, sigma_* per side.
+    Enforces a variance prior floor (sigma_floor) to prevent probability collapse on illiquid books.
     """
 
     def __init__(
@@ -1115,9 +1119,11 @@ class TorchHurdleLogStudentTModel:
         init_mu: float = 2.0,
         init_sigma: float = 0.8,
         init_df: float = 5.0,
+        sigma_floor: float = 0.35,
     ):
         self._gamma = max(1e-6, min(1.0, float(decay)))
         self._param_eps = float(param_eps)
+        self._sigma_floor = max(float(param_eps), float(sigma_floor))
         self._df: float = max(1.1, float(init_df))
         self._p0_buy: float = max(0.0, min(1.0, float(init_p0)))
         self._p0_sell: float = max(0.0, min(1.0, float(init_p0)))
@@ -1128,9 +1134,9 @@ class TorchHurdleLogStudentTModel:
         self._S2_log_sell: float = 0.0
         self._W_sell: float = 0.0
         self._mu_buy: float = float(init_mu)
-        self._sigma_buy: float = max(float(param_eps), float(init_sigma))
+        self._sigma_buy: float = max(self._sigma_floor, float(init_sigma))
         self._mu_sell: float = float(init_mu)
-        self._sigma_sell: float = max(float(param_eps), float(init_sigma))
+        self._sigma_sell: float = max(self._sigma_floor, float(init_sigma))
         self.p0_buy_hist: list[float] = []
         self.p0_sell_hist: list[float] = []
         self.mu_buy_hist: list[float] = []
@@ -1154,9 +1160,9 @@ class TorchHurdleLogStudentTModel:
             self._W_buy = g * self._W_buy + 1.0
         if self._W_buy > 1e-12:
             mean_log = self._S_log_buy / self._W_buy
-            var_log = max(eps * eps, self._S2_log_buy / self._W_buy - mean_log * mean_log)
+            var_log = max(self._sigma_floor * self._sigma_floor, self._S2_log_buy / self._W_buy - mean_log * mean_log)
             self._mu_buy = mean_log
-            self._sigma_buy = max(eps, np.sqrt(var_log))
+            self._sigma_buy = max(self._sigma_floor, np.sqrt(var_log))
         z_sell = 1.0 if x_sell == 0 else 0.0
         self._p0_sell = g * self._p0_sell + (1.0 - g) * z_sell
         self._p0_sell = max(0.0, min(1.0, self._p0_sell))
@@ -1167,9 +1173,9 @@ class TorchHurdleLogStudentTModel:
             self._W_sell = g * self._W_sell + 1.0
         if self._W_sell > 1e-12:
             mean_log = self._S_log_sell / self._W_sell
-            var_log = max(eps * eps, self._S2_log_sell / self._W_sell - mean_log * mean_log)
+            var_log = max(self._sigma_floor * self._sigma_floor, self._S2_log_sell / self._W_sell - mean_log * mean_log)
             self._mu_sell = mean_log
-            self._sigma_sell = max(eps, np.sqrt(var_log))
+            self._sigma_sell = max(self._sigma_floor, np.sqrt(var_log))
         self.p0_buy_hist.append(self._p0_buy)
         self.p0_sell_hist.append(self._p0_sell)
         self.mu_buy_hist.append(self._mu_buy)

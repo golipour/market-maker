@@ -740,7 +740,12 @@ def _build_price_model(
     market_flow_model: Any,
     config_name: str = "local_price_model",
 ) -> Any:
-    from mm.mpc.price_torch import TorchConditionalMechanicalMixturePriceModel, TorchResidualPriceModel
+    from mm.mpc.price_torch import (
+        TorchConditionalMechanicalMixturePriceModel,
+        TorchHurdleLogNormalPriceModel,
+        TorchHurdleStudentTPriceModel,
+        TorchResidualPriceModel,
+    )
 
     price_cfg = {
         key: value
@@ -759,6 +764,16 @@ def _build_price_model(
         for key in ("gate_kind", "gate_bins", "gate_learning_rate"):
             price_cfg.pop(key, None)
         return TorchConditionalMechanicalMixturePriceModel(
+            market_flow_model=market_flow_model,
+            **price_cfg,
+        )
+    if price_kind in ("hurdle_student_t", "hurdle_t"):
+        return TorchHurdleStudentTPriceModel(
+            market_flow_model=market_flow_model,
+            **price_cfg,
+        )
+    if price_kind == "hurdle_lognormal":
+        return TorchHurdleLogNormalPriceModel(
             market_flow_model=market_flow_model,
             **price_cfg,
         )
@@ -784,7 +799,14 @@ def _build_sourcing_global_price_model(
     kind = str(cfg.get("kind", "ewma_gaussian")).lower().strip()
     if kind in ("none", "null", "disabled"):
         return None
-    if kind in ("residual", "conditional_mechanical_mixture", "flow_gated_mixture"):
+    if kind in (
+        "residual",
+        "conditional_mechanical_mixture",
+        "flow_gated_mixture",
+        "hurdle_student_t",
+        "hurdle_t",
+        "hurdle_lognormal",
+    ):
         return _build_price_model(
             cfg,
             market_flow_model=market_flow_model,
