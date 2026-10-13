@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -137,3 +139,27 @@ def test_shifted_effective_depth_stays_monotone_on_grid() -> None:
     )
     assert torch.all(bid[1:] + 1e-9 >= bid[:-1])
     assert torch.all(ask[1:] + 1e-9 >= ask[:-1])
+
+
+def test_reservation_offset_autograd_nonzero_at_zero_initialization() -> None:
+    from mm.mpc.l_param import curve_spread_for_market_spread
+
+    spread = torch.tensor([5.0, 20.0, 50.0], dtype=torch.float64)
+    mid_t = torch.tensor(1000.0, dtype=torch.float64)
+    u_r = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+    r_max = 0.005
+    r_off = r_max * torch.tanh(u_r)
+
+    bid_spread = curve_spread_for_market_spread(
+        spread,
+        side="bid",
+        mid_price=mid_t,
+        reservation_r_offset=r_off,
+    )
+    loss = bid_spread.sum()
+    loss.backward()
+    # At u_r = 0, gradient must flow through reservation offset (must not be zeroed out)
+    assert u_r.grad is not None
+    assert u_r.grad.item() != 0.0
+    assert math.isfinite(u_r.grad.item())
+

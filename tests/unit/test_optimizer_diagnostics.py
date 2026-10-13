@@ -274,3 +274,62 @@ def test_optimizer_diagnostics_records_reservation_and_recovery() -> None:
     assert "viability_recovery_penalty" in final_comps
     assert "viability_recovery_fraction" in final_comps
     assert final_comps["viability_recovery_fraction"] == pytest.approx(0.1)
+    assert action_best["effective_depth"]["bid_qty_touch"] > 0.0
+
+
+def test_touch_depth_sampling_non_zero_spread() -> None:
+    from mm.mpc.mpc_state import SigmoidMixtureAction
+    from mm.mpc.optimizer_diagnostics import build_action_snapshot
+
+    action = SigmoidMixtureAction(
+        bid_L=(5.0,), bid_k=(0.1,), bid_x0=(2.0,),
+        ask_L=(5.0,), ask_k=(0.1,), ask_x0=(2.0,),
+    )
+    # Grid starting at spread = 0.0 with step = 5.0
+    spread_levels = (0.0, 5.0, 10.0)
+    snap = build_action_snapshot(action, mid=100.0, spread_levels=spread_levels)
+    eff = snap.effective_depth
+    # Touch must sample index 1 (spread = 5.0) rather than index 0 (spread = 0.0)
+    assert eff["bid_qty_touch"] > 0.0
+    assert eff["ask_qty_touch"] > 0.0
+    assert eff["bid_qty_touch"] == pytest.approx(eff["bid"][1]["cumulative_qty"])
+    assert eff["ask_qty_touch"] == pytest.approx(eff["ask"][1]["cumulative_qty"])
+
+
+def test_reservation_skew_learns_offset_under_inventory_imbalance() -> None:
+    from mm.mpc.l_param import ReservationSkewParams
+    from mm.mpc.mpc_tensor_batched import VenueOptimizerParams
+
+    local_opt = VenueOptimizerParams(
+        n_components=2,
+        reservation_skew=ReservationSkewParams(max_abs_skew=0.005),
+        cumulative_qty_floor_at_spread_max=1.0,
+        cumulative_qty_cap_at_spread_max=10.0,
+    )
+    mpc = MonteCarloMPCTensorBatched(
+        _FixedPriceModel(),
+        _FixedFlowModel(),
+        _FixedExecutionModel(),
+        n_components=2,
+        n_samples=4,
+        horizon=1,
+        spread_max=10.0,
+        spread_step=5.0,
+        adam_epochs=15,
+        fixed_mc_samples=True,
+        device="cpu",
+        local_optimizer=local_opt,
+    )
+    state_long = _minimal_state()
+    state_long.inventory = 50.0
+    _, diag_long = mpc.optimize_with_diagnostics(state_long)
+    r_offset_long = float(diag_long.to_payload()["action"]["best"]["reservation_r_offset"])
+    # When long inventory, optimizer shifts quotes downward (negative r_offset) to encourage selling
+    assert r_offset_long < 0.0
+
+    state_short = _minimal_state()
+    state_short.inventory = -50.0
+    _, diag_short = mpc.optimize_with_diagnostics(state_short)
+    r_offset_short = float(diag_short.to_payload()["action"]["best"]["reservation_r_offset"])
+    # When short inventory, optimizer shifts quotes upward (positive r_offset) to encourage buying
+    assert r_offset_short > 0.0

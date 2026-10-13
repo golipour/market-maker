@@ -441,10 +441,8 @@ def curve_spread_for_market_spread(
         mid = torch.as_tensor(mid, dtype=market_spread.dtype, device=market_spread.device)
     shift = mid * r_off
     if side == "bid":
-        res = (market_spread + shift).clamp(min=0.0)
-    else:
-        res = (market_spread - shift).clamp(min=0.0)
-    return torch.where(r_off == 0.0, market_spread, res)
+        return (market_spread + shift).clamp(min=0.0)
+    return (market_spread - shift).clamp(min=0.0)
 
 
 def _softplus_np(x: float) -> float:

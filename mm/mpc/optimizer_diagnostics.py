@@ -145,14 +145,17 @@ def build_action_snapshot(
         if math.isfinite(da):
             ask.append({"spread_quote": s, "price": mid_f + s, "cumulative_qty": da})
 
-    bid_qty_touch = bid[0]["cumulative_qty"] if bid else 0.0
-    ask_qty_touch = ask[0]["cumulative_qty"] if ask else 0.0
+    bid_touch = next((e for e in bid if float(e.get("spread_quote", 0.0)) > 0.0), bid[0] if bid else None)
+    ask_touch = next((e for e in ask if float(e.get("spread_quote", 0.0)) > 0.0), ask[0] if ask else None)
+    bid_qty_touch = bid_touch["cumulative_qty"] if bid_touch else 0.0
+    ask_qty_touch = ask_touch["cumulative_qty"] if ask_touch else 0.0
     bid_qty_max = bid[-1]["cumulative_qty"] if bid else 0.0
     ask_qty_max = ask[-1]["cumulative_qty"] if ask else 0.0
-    s_min = float(spread_levels[0]) if spread_levels else 0.0
+    s_min_bid = float(bid_touch["spread_quote"]) if bid_touch else 0.0
+    s_min_ask = float(ask_touch["spread_quote"]) if ask_touch else 0.0
     s_max = float(spread_levels[-1]) if spread_levels else 0.0
-    bid_notional_touch = bid_qty_touch * max(0.0, mid_f - s_min)
-    ask_notional_touch = ask_qty_touch * max(0.0, mid_f + s_min)
+    bid_notional_touch = bid_qty_touch * max(0.0, mid_f - s_min_bid)
+    ask_notional_touch = ask_qty_touch * max(0.0, mid_f + s_min_ask)
     bid_notional_max = bid_qty_max * max(0.0, mid_f - s_max)
     ask_notional_max = ask_qty_max * max(0.0, mid_f + s_max)
 
