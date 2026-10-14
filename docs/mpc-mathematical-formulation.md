@@ -143,33 +143,68 @@ Tick, lot, min-notional, net-delta, and allocation caps are applied
 
 ## 3. Stochastic rollout $\Phi$
 
-Given $u$ and $\xi_t$, the closure draws $N=$ `n_samples` paths
-$\varepsilon_i$ from the configured price and flow models and simulates
-$H$ steps:
+Given quote parameter vector $u$ and current market state $\xi_t$, the
+simulator draws $N=$ `n_samples` paths $\varepsilon_i$ from the configured
+stochastic flow and price models and rolls out $H$ steps:
 
 $$
 \bigl(b_{i,h},\, q_{i,h},\, p_{i,h},\, W_{i,h}\bigr)_{h=0}^{H}
 = \Phi(u,\,\xi_t,\,\varepsilon_i).
 $$
 
-Index $h=0$ is the pre-action wallet. Index $h=1$ is the wallet after
-the first simulated fill (viability uses this step only).
+Index $h=0$ is the pre-action state. Index $h=1$ is the state after the
+first simulated fill (viability uses $h=1$ only).
 
-Per step, `soft_fill_batched` matches sampled market flow against the
-combined (market + quoted) book with a temperature and queue model
-(`soft_fill_temp`, `soft_fill_activation`, `soft_fill_queue_model`), applies
-maker fees, updates the public book, and marks wealth with inventory-aware
-VWAP:
+For each path $i$ and step $h \in \{0, \ldots, H-1\}$:
 
-$$
-W_{i,h} = q_{i,h} + b_{i,h}\cdot \mathrm{mark}_{i,h}.
-$$
+1. **Market order-flow sampling:**
+   Aggressive buy and sell volumes $(V^{+}_{i,h}, V^{-}_{i,h})$ are drawn
+   from the regularized hurdle-lognormal flow model:
+   $$
+   V_s \sim \text{Hurdle-LogNormal}(p_{0,s},\, \mu_s,\, \sigma_s),
+   \quad s \in \{+, -\},
+   $$
+   with online log-variance floored at $\sigma_{\mathrm{floor}} \ge 0.35$
+   to prevent distribution collapse on low-liquidity books.
 
-Wealth change on a step is the accounting identity
+2. **Soft fill & book execution:**
+   `soft_fill_batched` matches $(V^{+}, V^{-})$ against the combined
+   (market depth + decoded quotes) order book using a temperature and queue
+   model (`soft_fill_temp`, `soft_fill_activation`, `soft_fill_queue_model`).
+   This yields filled quantities $\Delta b_{i,h}, \Delta q_{i,h}$, maker fee
+   deductions, and the post-trade mechanical order book $\mathcal{B}^{\mathrm{mech}}_{i,h+1}$.
 
-$$
-\Delta W = \Delta q + b\,\Delta p + \Delta b\, p + \Delta b\,\Delta p.
-$$
+3. **Price innovation injection:**
+   The post-trade book is perturbed by the configured price model:
+   - **Discrete Hurdle Models (`hurdle_student_t`, `hurdle_lognormal`):**
+     Independent residuals $(\varepsilon^{\mathrm{buy}}_{i,h}, \varepsilon^{\mathrm{sell}}_{i,h})$
+     are sampled from the hurdle process:
+     $$
+     \mathbb{P}(\varepsilon = 0) = p_0, \qquad
+     \varepsilon \mid \varepsilon \ne 0 \sim t_{\nu}(0, s^2)
+     \quad\text{(or signed LogNormal)}.
+     $$
+     With probability $p_0$, the book residual is zero (preserving stationary
+     book state without drift); with probability $1-p_0$, heavy-tailed
+     innovations perturb the buy and sell reference VWAPs:
+     $$
+     \mathrm{VWAP}^{\mathrm{buy}}_{i,h+1} = \mathrm{VWAP}^{\mathrm{buy}}_{\mathrm{mof}} + \varepsilon^{\mathrm{buy}}_{i,h}, \qquad
+     \mathrm{VWAP}^{\mathrm{sell}}_{i,h+1} = \mathrm{VWAP}^{\mathrm{sell}}_{\mathrm{mof}} + \varepsilon^{\mathrm{sell}}_{i,h}.
+     $$
+   - **Conditional Mechanical Mixture (`conditional_mechanical_mixture`):**
+     A 4-component vector $(m, \log S, \log\psi^{+}, \log\psi^{-})$ is sampled
+     conditional on mechanical flow consumption via a flow-gated mixture,
+     and dynamic-depth VWAPs are reconstructed analytically.
+
+4. **Marking & Wealth Accounting:**
+   Simulated portfolio wealth is marked using the inventory-aware VWAP:
+   $$
+   W_{i,h} = q_{i,h} + b_{i,h}\cdot \mathrm{mark}_{i,h},
+   $$
+   and step return is governed by the accounting identity:
+   $$
+   \Delta W = \Delta q + b\,\Delta p + \Delta b\, p + \Delta b\,\Delta p.
+   $$
 
 ---
 

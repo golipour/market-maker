@@ -1,0 +1,60 @@
+# Example Grafana Datasource Secret for Market Maker
+#
+# Cluster Grafana discovers any Secret labeled `grafana_datasource: "1"`
+# across all namespaces and reloads automatically within ~1 minute.
+#
+# Usage:
+#   kubectl apply -f - <<EOF
+#   apiVersion: v1
+#   kind: Secret
+#   metadata:
+#     name: grafana-datasource-market-maker
+#     namespace: market-maker
+#     labels:
+#       grafana_datasource: "1"
+#   stringData:
+#     market-maker.yaml: |
+#       apiVersion: 1
+#       datasources:
+#         - name: PostgreSQL
+#           uid: postgres-mm
+#           type: grafana-postgresql-datasource
+#           access: proxy
+#           url: postgres.market-maker.svc.cluster.local:5432
+#           user: mm
+#           jsonData:
+#             database: postgres
+#             sslmode: disable
+#             postgresVersion: 1700
+#           secureJsonData:
+#             password: <set-actual-password-here>
+#   EOF
+#
+# Rules:
+#   1. Keep uid `postgres-mm` stable so dashboards match.
+#   2. Do NOT edit the grafana ConfigMap in the observability namespace.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-datasource-market-maker
+  namespace: market-maker
+  labels:
+    grafana_datasource: "1"
+    app.kubernetes.io/part-of: market-maker
+type: Opaque
+stringData:
+  market-maker.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: PostgreSQL
+        uid: postgres-mm
+        type: grafana-postgresql-datasource
+        access: proxy
+        url: postgres.market-maker.svc.cluster.local:5432
+        user: mm
+        jsonData:
+          database: postgres
+          sslmode: disable
+          postgresVersion: 1700
+        secureJsonData:
+          password: replace-me

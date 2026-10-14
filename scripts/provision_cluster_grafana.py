@@ -301,97 +301,53 @@ def _apply_dashboard_configmaps() -> None:
     print(f"applied {len(files)} dashboard configmaps")
 
 
-def _grafana_datasources_yaml() -> str:
-    cm = _kubectl_json("-n", "observability", "get", "configmap", "grafana")
-    return str((cm.get("data") or {}).get("datasources.yaml") or "")
+def _apply_datasource_secret(*, user: str, password: str) -> None:
+    """Provision postgres-mm datasource via sidecar Secret in market-maker namespace.
 
-
-def _patch_grafana_postgres_datasource(*, user: str, password: str) -> bool:
-    text = _grafana_datasources_yaml()
-    if "uid: postgres-mm" in text:
-        return False
-    snippet = (
-        "- name: Market Maker Postgres\n"
-        "  type: grafana-postgresql-datasource\n"
-        "  uid: postgres-mm\n"
-        "  access: proxy\n"
-        "  url: postgres.market-maker.svc.cluster.local:5432\n"
-        f"  user: {json.dumps(user)}\n"
-        "  editable: true\n"
-        "  jsonData:\n"
-        "    database: postgres\n"
-        "    sslmode: disable\n"
-        "    postgresVersion: 1700\n"
-        "    timescaledb: false\n"
-        "  secureJsonData:\n"
-        f"    password: {json.dumps(password)}\n"
-    )
-    marker = "deleteDatasources:"
-    if marker not in text:
-        raise SystemExit("grafana datasources.yaml missing deleteDatasources marker")
-    patched = text.replace(marker, snippet + marker, 1)
-    patch = {"data": {"datasources.yaml": patched}}
+    Grafana sidecar discovers any Secret labeled `grafana_datasource: "1"`
+    across all namespaces and reloads automatically within ~1 minute without
+    modifying the observability ConfigMap or restarting Grafana.
+    """
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": "grafana-datasource-market-maker",
+            "namespace": "market-maker",
+            "labels": {
+                "grafana_datasource": "1",
+                "app.kubernetes.io/part-of": "market-maker",
+            },
+        },
+        "stringData": {
+            "market-maker.yaml": (
+                "apiVersion: 1\n"
+                "datasources:\n"
+                "  - name: PostgreSQL\n"
+                "    uid: postgres-mm\n"
+                "    type: grafana-postgresql-datasource\n"
+                "    access: proxy\n"
+                f"    url: {POSTGRES_HOST}\n"
+                f"    user: {user}\n"
+                "    jsonData:\n"
+                "      database: postgres\n"
+                "      sslmode: disable\n"
+                "      postgresVersion: 1700\n"
+                "    secureJsonData:\n"
+                f"      password: {password}\n"
+            )
+        },
+    }
     result = subprocess.run(
-        [
-            "kubectl",
-            "-n",
-            "observability",
-            "patch",
-            "configmap",
-            "grafana",
-            "--type",
-            "merge",
-            "--patch",
-            json.dumps(patch),
-        ],
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(manifest),
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise SystemExit(f"patch grafana cm failed: {result.stderr.strip()}")
-    return True
-
-
-def _patch_allow_embedding() -> bool:
-    cm = _kubectl_json("-n", "observability", "get", "configmap", "grafana")
-    ini = str((cm.get("data") or {}).get("grafana.ini") or "")
-    changed = False
-    patched = ini.rstrip() + "\n"
-    if not (
-        "allow_embedding" in patched
-        and "true" in patched.split("allow_embedding", 1)[-1][:40].lower()
-    ):
-        patched += "\n[security]\nallow_embedding = true\n"
-        changed = True
-    if "[auth.anonymous]" not in patched:
-        patched += "\n[auth.anonymous]\nenabled = true\norg_role = Viewer\n"
-        changed = True
-    elif "enabled = true" not in patched.split("[auth.anonymous]", 1)[-1][:80]:
-        patched += "\n[auth.anonymous]\nenabled = true\norg_role = Viewer\n"
-        changed = True
-    if not changed:
-        return False
-    result = subprocess.run(
-        [
-            "kubectl",
-            "-n",
-            "observability",
-            "patch",
-            "configmap",
-            "grafana",
-            "--type",
-            "merge",
-            "--patch",
-            json.dumps({"data": {"grafana.ini": patched}}),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(f"patch grafana.ini failed: {result.stderr.strip()}")
-    return True
+        raise SystemExit(f"apply grafana-datasource-market-maker secret failed: {result.stderr.strip()}")
+    print(result.stdout.strip() or "secret/grafana-datasource-market-maker applied")
 
 
 def _ensure_public_dashboards(client: GrafanaClient) -> dict[str, str]:
@@ -458,142 +414,6 @@ def _write_public_token_configmap(tokens: dict[str, str]) -> None:
     print(result.stdout.strip() or "configmap/market-maker-grafana-public")
 
 
-def _argocd_grafana_sync_policy() -> dict | None:
-    app = _kubectl_json("-n", "argocd", "get", "application", "grafana-staging")
-    return (app.get("spec") or {}).get("syncPolicy")
-
-
-def _ensure_argocd_ignore_grafana_datasources() -> None:
-    """Keep postgres-mm and grafana.ini in Grafana's ConfigMap across grafana-staging auto-sync."""
-
-    app = _kubectl_json("-n", "argocd", "get", "application", "grafana-staging")
-    spec = app.get("spec") or {}
-    ignores = list(spec.get("ignoreDifferences") or [])
-    found = False
-    updated = False
-    for row in ignores:
-        if isinstance(row, dict) and row.get("kind") == "ConfigMap" and row.get("name") == "grafana":
-            found = True
-            pointers = list(row.get("jsonPointers") or [])
-            for pointer in ("/data/datasources.yaml", "/data/grafana.ini"):
-                if pointer not in pointers:
-                    pointers.append(pointer)
-                    updated = True
-            row["jsonPointers"] = pointers
-            break
-    if not found:
-        ignores.append(
-            {
-                "group": "",
-                "kind": "ConfigMap",
-                "name": "grafana",
-                "jsonPointers": ["/data/datasources.yaml", "/data/grafana.ini"],
-            }
-        )
-        updated = True
-
-    if updated:
-        op = "add" if spec.get("ignoreDifferences") is None else "replace"
-        result = subprocess.run(
-            [
-                "kubectl",
-                "-n",
-                "argocd",
-                "patch",
-                "application",
-                "grafana-staging",
-                "--type",
-                "json",
-                "--patch",
-                json.dumps([{"op": op, "path": "/spec/ignoreDifferences", "value": ignores}]),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise SystemExit(f"patch grafana-staging ignoreDifferences failed: {result.stderr.strip()}")
-        print("argocd ignores grafana datasources.yaml and grafana.ini")
-    else:
-        print("argocd already ignores grafana datasources.yaml and grafana.ini")
-
-
-
-def _set_argocd_grafana_sync_policy(policy: dict | None) -> None:
-    patch = [{"op": "replace" if policy is not None else "remove", "path": "/spec/syncPolicy", "value": policy}]
-    if policy is None:
-        patch = [{"op": "remove", "path": "/spec/syncPolicy"}]
-    result = subprocess.run(
-        [
-            "kubectl",
-            "-n",
-            "argocd",
-            "patch",
-            "application",
-            "grafana-staging",
-            "--type",
-            "json",
-            "--patch",
-            json.dumps(patch),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(f"patch grafana-staging syncPolicy failed: {result.stderr.strip()}")
-
-
-def _provision_postgres_via_grafana_configmap(*, user: str, password: str) -> None:
-    """Add postgres-mm to Grafana provisioning and restart Grafana.
-
-    Briefly pause ArgoCD auto-sync so the new pod mounts the patched ConfigMap.
-    """
-
-    import time
-
-    original = _argocd_grafana_sync_policy()
-    print("pausing argocd auto-sync for grafana-staging")
-    _set_argocd_grafana_sync_policy(None)
-    try:
-        _patch_grafana_postgres_datasource(user=user, password=password)
-        print("patched grafana cm with postgres-mm")
-        if _patch_allow_embedding():
-            print("patched grafana.ini allow_embedding")
-        else:
-            print("grafana.ini already allows embedding")
-        restart = subprocess.run(
-            ["kubectl", "-n", "observability", "rollout", "restart", "deploy/grafana"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if restart.returncode != 0:
-            raise SystemExit(f"restart grafana failed: {restart.stderr.strip()}")
-        print("restarted grafana to load postgres-mm")
-        wait = subprocess.run(
-            ["kubectl", "-n", "observability", "rollout", "status", "deploy/grafana", "--timeout=180s"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if wait.returncode != 0:
-            raise SystemExit(f"grafana rollout failed: {wait.stderr.strip()}")
-        time.sleep(3)
-        print("grafana rollout complete")
-    finally:
-        _ensure_argocd_ignore_grafana_datasources()
-        if original is not None:
-            restored = dict(original)
-            opts = list(original.get("syncOptions") or [])
-            if not any(str(opt).startswith("RespectIgnoreDifferences=") for opt in opts):
-                opts.append("RespectIgnoreDifferences=true")
-                print("argocd RespectIgnoreDifferences=true")
-            restored["syncOptions"] = opts
-            _set_argocd_grafana_sync_policy(restored)
-            print("restored argocd auto-sync for grafana-staging")
-
-
 def _health(client: GrafanaClient) -> None:
     status, payload = client.get("/api/health")
     if status != 200:
@@ -610,7 +430,7 @@ def main() -> int:
     if not pg_password:
         raise SystemExit("POSTGRES_PASSWORD missing")
 
-    _provision_postgres_via_grafana_configmap(user=pg_user, password=pg_password)
+    _apply_datasource_secret(user=pg_user, password=pg_password)
 
     api_user, api_password = _grafana_admin()
     client = GrafanaClient(GRAFANA_URL, api_user, api_password)

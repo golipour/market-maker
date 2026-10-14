@@ -670,9 +670,33 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
     dashboard = portfolio_pnl()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
+    stat_expected = {
+        "Total Wealth PnL": (0, 3, 6, "total_pnl"),
+        "Net Spread Capture": (6, 3, 6, "spread_pnl"),
+        "Inventory Drift PnL": (12, 3, 6, "inventory_pnl"),
+        "Adverse Selection PnL": (18, 3, 6, "adverse_selection"),
+    }
+    for title, (x, y, w, stat_key) in stat_expected.items():
+        panel = panels_by_title[title]
+        assert panel["type"] == "stat"
+        assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": y}
+        sql = panel["targets"][0]["rawSql"]
+        assert "component_steps" in sql
+        assert f"WHERE metric = 'total'" in sql
+
+    decomp_total_panel = panels_by_title["Cumulative PnL decomposition (Total)"]
+    assert decomp_total_panel["type"] == "timeseries"
+    assert decomp_total_panel["gridPos"] == {"h": 9, "w": 24, "x": 0, "y": 8}
+    decomp_sql = decomp_total_panel["targets"][0]["rawSql"]
+    assert "'Total Wealth PnL' AS metric" in decomp_sql
+    assert "'Net Spread Capture'" in decomp_sql
+    assert "'Inventory Drift'" in decomp_sql
+    assert "'Adverse Selection'" in decomp_sql
+    assert "WHERE metric = 'total'" in decomp_sql
+
     expected = {
-        "Local cash / inventory value / wealth": (0, 19, "local"),
-        "Global cash / inventory value / wealth": (12, 19, "global"),
+        "Local cash / inventory value / wealth": (0, 33, "local"),
+        "Global cash / inventory value / wealth": (12, 33, "global"),
     }
     for title, (x, y, role) in expected.items():
         panel = panels_by_title[title]
@@ -691,9 +715,10 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert "COALESCE(reported_wealth, cash + inventory * COALESCE(mark_price, 0.0)) AS value" in sql
 
     decomposition_expected = {
-        "Cumulative net spread capture PnL": (0, 27, "(delta_cash + delta_inventory * mark_price_prev)"),
-        "Cumulative inventory drift PnL": (0, 35, "(inventory_prev * delta_price)"),
-        "Cumulative adverse selection PnL": (0, 43, "(delta_inventory * delta_price)"),
+        "Cumulative total wealth PnL": (0, 41, "((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price))"),
+        "Cumulative net spread capture PnL": (0, 49, "(delta_cash + delta_inventory * mark_price_prev)"),
+        "Cumulative inventory drift PnL": (0, 57, "(inventory_prev * delta_price)"),
+        "Cumulative adverse selection PnL": (0, 65, "(delta_inventory * delta_price)"),
     }
     for title, (x, y, component_expr) in decomposition_expected.items():
         panel = panels_by_title[title]
@@ -716,6 +741,16 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         assert "ARRAY['state','local_base_wallet','total']" in sql
         assert "ARRAY['state','global_base_wallet','total']" in sql
         assert "ARRAY['optimizer','config','reference_price']" in sql
+
+    hold_panel = panels_by_title["Total PnL vs Hold Strategy PnL"]
+    assert hold_panel["type"] == "timeseries"
+    assert hold_panel["gridPos"] == {"h": 9, "w": 24, "x": 0, "y": 73}
+    hold_sql = hold_panel["targets"][0]["rawSql"]
+    assert "'Strategy Total PnL' AS metric" in hold_sql
+    assert "'Hold Strategy PnL' AS metric" in hold_sql
+    assert "'Active Alpha (Strategy - Hold)' AS metric" in hold_sql
+    assert "FIRST_VALUE(inventory) OVER" in hold_sql
+    assert "(inventory_0 * (mark_price - mark_price_0)) AS hold_pnl" in hold_sql
 
     assert "Local interval deltas" not in panels_by_title
 
@@ -1025,7 +1060,7 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
     dashboard = fill_spread_pnl()
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
-    expected_positions = {
+    fill_volume_positions = {
         "Total filled bid volume": (0, 3, 6),
         "Local filled bid volume": (6, 3, 6),
         "Global filled bid volume": (12, 3, 6),
@@ -1034,12 +1069,22 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         "Local filled ask volume": (6, 8, 6),
         "Global filled ask volume": (12, 8, 6),
         "Average ask fill price": (18, 8, 6),
+    }
+
+    pnl_stat_positions = {
         "Spread PnL": (0, 13, 6),
         "Inventory PnL": (6, 13, 6),
         "Fee PnL": (12, 13, 6),
+        "Total PnL": (18, 13, 6),
+        "Adverse Selection PnL": (0, 18, 6),
+        "Gross Spread PnL": (6, 18, 6),
+        "Starting Inventory": (12, 18, 6),
+        "Ending Inventory": (18, 18, 6),
     }
 
-    for title, (x, y, w) in expected_positions.items():
+    all_stat_positions = {**fill_volume_positions, **pnl_stat_positions}
+
+    for title, (x, y, w) in all_stat_positions.items():
         panel = panels_by_title[title]
         assert panel["type"] == "stat"
         assert panel["gridPos"] == {"h": 5, "w": w, "x": x, "y": y}
@@ -1051,6 +1096,9 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
                 {"color": "green", "value": 1e-12},
             ],
         }
+
+    for title in fill_volume_positions:
+        panel = panels_by_title[title]
         sql = panel["targets"][0]["rawSql"]
         assert "$__timeFilter(e.ts)" in sql
         assert "'private:state:' || id || ':fills'" in sql
@@ -1059,8 +1107,6 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
         assert "e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])" in sql
         assert "SUM(price * qty) FILTER" in sql
         assert "e.payload->>'fee'" in sql
-        assert "interval_mark" in sql
-        assert "LEFT JOIN interval_mark ON TRUE" in sql
         assert "FROM latest_diagnostics d" in sql
 
     total_bid_volume_sql = panels_by_title["Total filled bid volume"]["targets"][0]["rawSql"]
@@ -1095,24 +1141,62 @@ def test_fill_spread_pnl_dashboard_shows_interval_fill_summary() -> None:
     assert "ask_avg_price AS value" in ask_avg_sql
     assert "WHERE role = " not in ask_avg_sql
 
+    for title in pnl_stat_positions:
+        panel = panels_by_title[title]
+        sql = panel["targets"][0]["rawSql"]
+        assert "component_steps" in sql
+        assert "scope_rows" in sql
+        assert "pnl_summary" in sql
+        assert "fills_fee" in sql
+        assert "inventory_bounds" in sql
+
     spread_sql = panels_by_title["Spread PnL"]["targets"][0]["rawSql"]
-    assert (
-        "LEAST(COALESCE(bid_qty, 0.0), COALESCE(ask_qty, 0.0)) "
-        "* (COALESCE(ask_avg_price, 0.0) - COALESCE(bid_avg_price, 0.0)) AS value"
-    ) in spread_sql
+    assert "p.spread_pnl AS value" in spread_sql
+    assert "COALESCE(SUM(net_spread_capture), 0.0) AS spread_pnl" in spread_sql
 
     inventory_sql = panels_by_title["Inventory PnL"]["targets"][0]["rawSql"]
-    assert "WHEN COALESCE(bid_qty, 0.0) >= COALESCE(ask_qty, 0.0) THEN" in inventory_sql
-    assert "interval_mark.mark_price - COALESCE(bid_avg_price, 0.0)" in inventory_sql
-    assert "COALESCE(ask_avg_price, 0.0) - interval_mark.mark_price" in inventory_sql
+    assert "p.inventory_pnl AS value" in inventory_sql
+    assert "COALESCE(SUM(inventory_drift), 0.0) AS inventory_pnl" in inventory_sql
 
     fee_sql = panels_by_title["Fee PnL"]["targets"][0]["rawSql"]
-    assert "SUM(fee) AS total_fee" in fee_sql
-    assert "-COALESCE(total_fee, 0.0) AS value" in fee_sql
+    assert "-f.total_fee AS value" in fee_sql
+    assert "e.payload->>'fee'" in fee_sql
+    assert "AS total_fee" in fee_sql
     assert "global_maker_fee" not in fee_sql
     assert "local_maker_fee" not in fee_sql
     assert "fee_config" not in fee_sql
-    assert "e.payload->>'fee'" in fee_sql
+
+    total_pnl_sql = panels_by_title["Total PnL"]["targets"][0]["rawSql"]
+    assert "p.total_pnl AS value" in total_pnl_sql
+    assert "COALESCE(SUM(total_wealth_delta), 0.0) AS total_pnl" in total_pnl_sql
+
+    adverse_sql = panels_by_title["Adverse Selection PnL"]["targets"][0]["rawSql"]
+    assert "p.adverse_selection AS value" in adverse_sql
+    assert "COALESCE(SUM(adverse_selection), 0.0) AS adverse_selection" in adverse_sql
+
+    gross_spread_sql = panels_by_title["Gross Spread PnL"]["targets"][0]["rawSql"]
+    assert "(p.spread_pnl + f.total_fee) AS value" in gross_spread_sql
+
+    starting_inv_sql = panels_by_title["Starting Inventory"]["targets"][0]["rawSql"]
+    assert "COALESCE(ib.starting_inventory, 0.0) AS value" in starting_inv_sql
+    assert "(ARRAY_AGG(inventory ORDER BY \"time\" ASC))[1] AS starting_inventory" in starting_inv_sql
+
+    ending_inv_sql = panels_by_title["Ending Inventory"]["targets"][0]["rawSql"]
+    assert "COALESCE(ib.ending_inventory, 0.0) AS value" in ending_inv_sql
+    assert "(ARRAY_AGG(inventory ORDER BY \"time\" DESC))[1] AS ending_inventory" in ending_inv_sql
+
+    ts_panel = panels_by_title["Cumulative PnL Decomposition"]
+    assert ts_panel["type"] == "timeseries"
+    assert ts_panel["gridPos"] == {"h": 9, "w": 24, "x": 0, "y": 23}
+    ts_sql = ts_panel["targets"][0]["rawSql"]
+    assert "'Total Wealth PnL' AS metric" in ts_sql
+    assert "'Net Spread Capture'" in ts_sql
+    assert "'Inventory Drift'" in ts_sql
+    assert "'Adverse Selection'" in ts_sql
+    assert "SUM(total_wealth_delta) OVER" in ts_sql
+    assert "SUM(net_spread_capture) OVER" in ts_sql
+    assert "SUM(inventory_drift) OVER" in ts_sql
+    assert "SUM(adverse_selection) OVER" in ts_sql
 
 
 def test_frame_readiness_legends_include_readiness_field() -> None:

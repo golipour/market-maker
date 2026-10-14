@@ -10,22 +10,25 @@ in [`mpc-spread-grid-and-depth.md`](mpc-spread-grid-and-depth.md).
 Source of truth is the current implementation, not research notes or unused
 kinds. The runtime example and controller builder wire:
 
-| Role | Config key | Kind | Class |
-| --- | --- | --- | --- |
-| Local / global flow | `controller.local_market_flow_model`, `.global_market_flow_model` | `hurdle_lognormal` | `TorchHurdleLogNormalModel` |
-| Local / global price | `controller.local_price_model`, `.global_price_model` | `conditional_mechanical_mixture` | `TorchConditionalMechanicalMixturePriceModel` |
+| Role | Config key | Kind | Class | Typical asset / venue |
+| --- | --- | --- | --- | --- |
+| Local / global flow | `controller.local_market_flow_model`, `.global_market_flow_model` | `hurdle_lognormal` | `TorchHurdleLogNormalModel` | All pairs (with $\sigma_{\mathrm{floor}} \ge 0.35$) |
+| Local / global price | `controller.local_price_model`, `.global_price_model` | `hurdle_student_t` | `TorchHurdleStudentTPriceModel` | USDT_IRT (Nobitex, Bitwana) |
+| Local / global price | `controller.local_price_model`, `.global_price_model` | `hurdle_lognormal` | `TorchHurdleLogNormalPriceModel` | BTC_IRT (multi-magnitude jumps) |
+| Local / global price (legacy) | `controller.local_price_model`, `.global_price_model` | `conditional_mechanical_mixture` | `TorchConditionalMechanicalMixturePriceModel` | Experimental 4-component mixture |
 
 Primary references:
 
 - `mm.mpc.market_order_flow_torch.TorchHurdleLogNormalModel`
+- `mm.mpc.price_torch.TorchHurdleStudentTPriceModel`
+- `mm.mpc.price_torch.TorchHurdleLogNormalPriceModel`
 - `mm.mpc.price_torch.TorchConditionalMechanicalMixturePriceModel`
 - `mm.pricing.reference_prices_ticks` (mechanical book consume, fixed-depth VWAP)
 - `mm.mpc.mpc_tensor_batched.MonteCarloMPCTensorBatched` (how samples enter $\Phi$)
 - `mm.models.scoring` (prequential NLL diagnostics)
 
-Kinds that exist in the builder but are **not** the current production models
-(`residual`, `ewma_gaussian`, `hurdle_gamma`, `hurdle_weibull`, `gamma`,
-`weibull`) are omitted.
+Kinds that exist in the builder as legacy/baselines (`residual`, `ewma_gaussian`,
+`hurdle_gamma`, `hurdle_weibull`, `gamma`, `weibull`) are omitted.
 
 ---
 
@@ -35,11 +38,17 @@ At each decision $t$, the inner Adam loop evaluates $J(u;\xi_t,\theta_t)$
 by Monte Carlo. For path $i=1,\ldots,N$ and horizon step $h=0,\ldots,H-1$:
 
 1. Draw market-order volumes $(V^{+}_{i,h}, V^{-}_{i,h})$ from the
-   **hurdle-lognormal flow model**.
+   **regularized hurdle-lognormal flow model**.
 2. Consume that flow against the public book (and the decoded quotes) via
    `soft_fill_batched`. This produces a **mechanical** next book and mid.
-3. Draw a **conditional mechanical-mixture** price innovation and convert it
-   to inventory-aware buy/sell VWAPs used to mark wealth.
+3. Draw price innovations:
+   - In **discrete hurdle models** (`hurdle_student_t`, `hurdle_lognormal`),
+     sample independent hurdle innovations $(\varepsilon^{\mathrm{buy}}, \varepsilon^{\mathrm{sell}})$,
+     leaving book VWAPs unchanged with probability $p_0$ and perturbing them by
+     heavy-tailed Student-$t$ (or signed log-normal) jumps with probability $1-p_0$.
+   - In the **conditional mechanical mixture** (`conditional_mechanical_mixture`),
+     draw a 4-component feature innovation conditional on mechanical flow, then
+     reconstruct dynamic-depth buy/sell VWAPs.
 
 Buy volume $V^{+}$ is aggressive buy flow (hits asks). Sell volume $V^{-}$
 is aggressive sell flow (hits bids). The two sides are modelled as
@@ -77,7 +86,7 @@ V_s \;=\;
 \end{cases}
 $$
 
-This is exactly `TorchHurdleLogNormalModel.sample()` (continuous, no rounding).
+This is `TorchHurdleLogNormalModel.sample()` (continuous, no rounding).
 Buy and sell draws are independent, so
 
 $$
@@ -113,7 +122,7 @@ $$
 where $\Phi$ is the standard normal CDF. The MPC rollout uses the continuous
 sampler above; it does not round.
 
-### 2.2 Online parameter update (EWMA)
+### 2.2 Online parameter update (EWMA) with variance floor
 
 Let $\gamma \in (0,1)$ be `decay` (example: $0.95$) and
 $\alpha = 1-\gamma$. On each closed interval the model sees integer lots
@@ -135,13 +144,18 @@ S_s &\leftarrow \gamma S_s + \log x_s, \\
 Q_s &\leftarrow \gamma Q_s + (\log x_s)^2, \\
 W_s &\leftarrow \gamma W_s + 1, \\
 \mu_s &= S_s / W_s, \\
-\sigma_s^2 &= \max\bigl(\varepsilon^2,\; Q_s/W_s - \mu_s^2\bigr).
+\sigma_s^2 &= \max\bigl(\sigma_{\mathrm{floor}}^2,\; Q_s/W_s - \mu_s^2\bigr).
 \end{aligned}
 $$
 
-Zeros freeze $(\mu_s,\sigma_s)$. That is the hurdle split: $p_{0,s}$ sees
-all observations; $(\mu_s,\sigma_s)$ are EWMA moments of $\log x$ on the
-positive subset only.
+**Variance floor rationale:** The prior floor $\sigma_{\mathrm{floor}} = 0.35$ (`sigma_floor`)
+prevents variance collapse. On low-liquidity books (such as Bitwana, where
+$>98\%$ of intervals have zero trades, or where consecutive trades have
+identical lot sizes), empirical sample variance $Q_s/W_s - \mu_s^2 \to 0$. Without
+a floor, $\sigma_s \to 0$, causing standard score $z = (\log x - \mu)/\sigma$
+to diverge into tens of thousands of standard deviations whenever an unexpected
+fill occurs, producing infinite NLL penalties. The variance floor guarantees
+numerical stability across all liquidity regimes.
 
 Initial values come from config (`init_p0`, `init_mu`, `init_sigma`). Until
 the first positive observation, $(\mu_s,\sigma_s)$ stay at those initials.
@@ -155,13 +169,152 @@ the first positive observation, $(\mu_s,\sigma_s)$ stay at those initials.
 
 ---
 
-## 3. Price model (`conditional_mechanical_mixture`)
+## 3. Discrete Lattice Price Models
 
-The price model does not sample a raw $\Delta \mathrm{mid}$ in isolation.
-It predicts a **four-component book-shape transition**, then converts that
-shape to **dynamic-depth buy/sell VWAPs** for marking.
+### 3.1 Empirical motivation
 
-### 3.1 Book features
+Real exchange mid-prices are quantized on discrete tick lattices with quantum
+$h$ ($h = 0.5$ IRT for USDT pairs, $h = 100$ IRT for BTC pairs). Historical
+data reveals two structural realities:
+
+1. **High zero probability:** Between $60\%$ and $95\%$ of 10-second intervals
+   have zero mid-price move ($\Delta\mathrm{mid} = 0$). Continuous models lack
+   an atom at zero and misallocate probability mass to fractional ticks.
+2. **Heavy-tailed jumps:** Realized jumps exhibit severe excess kurtosis that
+   Gaussian distributions underestimate, leading to adverse selection underpricing.
+
+Discrete hurdle models separate stationary book intervals from jump sizes and
+evaluate exact discrete probability mass functions (PMFs) summing to $1.0$.
+
+---
+
+### 3.2 Hurdle Student-$t$ Price Model (`hurdle_student_t`)
+
+Designed for stationary quote assets (USDT_IRT on Nobitex and Bitwana).
+
+#### Discrete Generative Law
+
+Let $h$ be the tick quantum (`tick_size`, e.g. $0.5$) and $\Delta\mathrm{mid} \in \{k \cdot h : k \in \mathbb{Z}\}$.
+The transition probability mass function is:
+
+$$
+\mathbb{P}(\Delta\mathrm{mid} = 0) = p_0,
+$$
+
+and for non-zero tick jumps $k \in \mathbb{Z} \setminus \{0\}$:
+
+$$
+\mathbb{P}(\Delta\mathrm{mid} = k \cdot h)
+  = (1 - p_0) \cdot
+    \frac{
+      T_{\nu}\!\left(\frac{k h + h/2}{s}\right)
+      - T_{\nu}\!\left(\frac{k h - h/2}{s}\right)
+    }{
+      1 - \left[
+        T_{\nu}\!\left(\frac{h/2}{s}\right)
+        - T_{\nu}\!\left(-\frac{h/2}{s}\right)
+      \right]
+    },
+$$
+
+where $T_{\nu}$ is the standard Student-$t$ CDF with degrees of freedom
+$\nu$ (`student_df`, empirically $\nu = 2.5$) and scale parameter $s$.
+Because the denominator subtracts the zero-bin mass $[-h/2, h/2]$,
+the discrete PMF analytically satisfies:
+
+$$
+\sum_{k=-\infty}^{\infty} \mathbb{P}(\Delta\mathrm{mid} = k \cdot h) \equiv 1.0.
+$$
+
+#### Online Parameter Updates
+
+Updates track zero probability, conditional non-zero variance, and online
+tail calibration factor $\alpha$:
+
+1. **Zero mass update:**
+   $$
+   z_t = \mathbf{1}_{\{|\Delta\mathrm{mid}| < h/2\}}, \qquad
+   p_0 \leftarrow \gamma_p\, p_0 + (1 - \gamma_p)\, z_t.
+   $$
+2. **Conditional second moment:** On non-zero steps ($z_t = 0$),
+   $$
+   m_2 \leftarrow \gamma_s\, m_2 + (1 - \gamma_s)\, (\Delta\mathrm{mid})^2.
+   $$
+   Raw scale:
+   $$
+   s_{\mathrm{raw}} = \sqrt{\max\!\left(m_2 \frac{\nu - 2}{\nu},\; \sigma_{\min}^2\right)}.
+   $$
+3. **Online tail calibration factor $\alpha$:**
+   The theoretical fourth-moment Student-$t$ ratio is $u_{\mathrm{tgt}}^2 = \frac{\nu}{\nu - 2}$.
+   Given observed normalized jump $u_{\mathrm{obs}} = \Delta\mathrm{mid} / s_{\mathrm{raw}}$:
+   $$
+   \alpha \leftarrow
+     \gamma_{\mathrm{cal}}\,\alpha
+     + (1 - \gamma_{\mathrm{cal}})\,\sqrt{\mathrm{clip}\!\left(\frac{u_{\mathrm{obs}}^2}{u_{\mathrm{tgt}}^2},\; 0.1,\; 10.0\right)},
+   \qquad \alpha \in [0.2,\; 5.0].
+   $$
+   Effective scale:
+   $$
+   s = \max(\sigma_{\min},\; s_{\mathrm{raw}} \cdot \alpha).
+   $$
+
+#### Rollout Sampling
+
+Inside the rollout operator $\Phi$, `sample_residual()` draws independent
+buy and sell innovations:
+
+$$
+U \sim \mathrm{Unif}(0, 1), \quad T \sim t_{\nu},
+\qquad
+\varepsilon =
+\begin{cases}
+0, & U \le p_0, \\
+T \cdot s, & U > p_0.
+\end{cases}
+$$
+
+With probability $p_0$, $\varepsilon = 0$, simulating a stationary book with
+no artificial drift; with probability $1 - p_0$, $\varepsilon$ injects a heavy-tailed
+shock that penalizes inventory adverse selection.
+
+---
+
+### 3.3 Hurdle Signed-LogNormal Price Model (`hurdle_lognormal`)
+
+Designed for high-volatility pairs (e.g. BTC_IRT) whose price movements span
+several orders of magnitude (from 100 IRT to 5,000,000 IRT).
+
+#### Discrete Generative Law
+
+For tick size $h$ and $k \in \mathbb{Z} \setminus \{0\}$:
+
+$$
+\mathbb{P}(\Delta\mathrm{mid} = 0) = p_0,
+$$
+
+$$
+\mathbb{P}(\Delta\mathrm{mid} = k \cdot h)
+  = \frac{1}{2}\,(1 - p_0)\cdot
+    \frac{
+      \Phi\!\left(\frac{\log(|k| h + h/2) - \mu}{\sigma}\right)
+      - \Phi\!\left(\frac{\log(\max(10^{-12},\, |k| h - h/2)) - \mu}{\sigma}\right)
+    }{
+      1 - \Phi\!\left(\frac{\log(h/2) - \mu}{\sigma}\right)
+    }.
+$$
+
+The factor $1/2$ assigns symmetric probability to positive and negative jumps.
+Online moments $(\mu, \sigma)$ are updated via EWMA on $\log|\Delta\mathrm{mid}|$
+for non-zero steps, with $\sigma \ge \sigma_{\mathrm{floor}} = 0.35$.
+
+---
+
+## 4. Conditional Mechanical-Mixture Price Model (`conditional_mechanical_mixture`)
+
+The mechanical mixture model predicts a **four-component book-shape transition**,
+then converts that shape to **dynamic-depth buy/sell VWAPs** for marking.
+
+### 4.1 Book features
 
 Fix a reference depth $Q_{\mathrm{ref}} =$ `reference_vwap_vol` (example:
 $1000$ local, $100$ global). On an order book $\mathcal{B}$ with mid
@@ -190,42 +343,19 @@ f(\mathcal{B})
   = \bigl(m,\; \log S,\; \log \psi^{\mathrm{buy}},\; \log \psi^{\mathrm{sell}}\bigr).
 $$
 
-A transition from book $\mathcal{B}$ to book $\mathcal{B}'$ is
-
-$$
-\Delta f = f(\mathcal{B}') - f(\mathcal{B}).
-$$
-
+A transition from book $\mathcal{B}$ to book $\mathcal{B}'$ is $\Delta f = f(\mathcal{B}') - f(\mathcal{B})$.
 Components are indexed $c \in \{\mathrm{mid},\; \log S,\; \log\psi^{+},\; \log\psi^{-}\}$.
 
-### 3.2 Mechanical (market-order-flow-only) transition
+### 4.2 Mechanical (market-order-flow-only) transition
 
-Given observed or sampled flow $(V^{+}, V^{-})$ and a starting book
-$\mathcal{B}$, the mechanical next book $\mathcal{B}^{\mathrm{mech}}$ is
-obtained by consuming volume against standing depth, best-first:
-
-- $V^{-}$ walks the bid side (highest price first),
-- $V^{+}$ walks the ask side (lowest price first),
-- no limit-order replenishment.
-
+Given observed or sampled flow $(V^{+}, V^{-})$ and starting book $\mathcal{B}$,
+the mechanical next book $\mathcal{B}^{\mathrm{mech}}$ is obtained by consuming
+volume against standing depth without limit-order replenishment.
 The mechanical feature move is $\Delta f^{\mathrm{mech}} = f(\mathcal{B}^{\mathrm{mech}}) - f(\mathcal{B})$.
 
-On **live updates**, $\mathcal{B}^{\mathrm{mech}}$ is this MOF-only consume
-of the previous public book; the *observed* move $\Delta f^{\mathrm{obs}}$
-uses the actual next book (which also includes refresh / new limits).
+### 4.3 Two-regime mixture
 
-On **MPC rollout**, $\mathcal{B}^{\mathrm{mech}}$ is the book after
-`soft_fill_batched` (sampled flow plus the bot’s own fills). That is the
-mechanical feature the sampler conditions on.
-
-### 3.3 Two-regime mixture
-
-Let $V_{\Sigma} = V^{+} + V^{-}$ and
-
-$$
-x_{\mathrm{gate}} = \bigl(1,\; \min(\log(1+V_{\Sigma}),\, 12)\bigr)^\top.
-$$
-
+Let $V_{\Sigma} = V^{+} + V^{-}$ and $x_{\mathrm{gate}} = (1,\; \min(\log(1+V_{\Sigma}),\, 12))^\top$.
 The **market-event probability** (flow gate) is
 
 $$
@@ -236,106 +366,25 @@ q
     \bigr),
 $$
 
-with logistic $\sigma(z) = (1+e^{-z})^{-1}$ and default `min_refresh_weight` $w_{\mathrm{refresh}}^{\min} = 0.15$ ($q \le 0.85$). High total flow raises $q$
-when $\beta_{\mathrm{gate},1} > 0$.
+with default $w_{\mathrm{refresh}}^{\min} = 0.15$ ($q \le 0.85$). Enforcing $w_{\mathrm{refresh}}^{\min} > 0$
+prevents **gate saturation** during heavy flow bursts.
 
-Enforcing the refresh floor $w_{\mathrm{refresh}}^{\min} > 0$ prevents **gate saturation**: under heavy, sustained flow where $\beta_{\mathrm{gate}}^\top x_{\mathrm{gate}} \gg 0$, an uncapped gate would push $q \to 1.0$. If a large quote jump or sudden order book shift occurs during that flow burst, the mechanical Gaussian likelihood severely underflows. Capping $q \le 0.85$ (leaving at least $15\%$ weight on the heavy-tailed Student-$t$ innovation branch) preserves tail defense at all times and eliminates likelihood blow-ups.
-
-For each component $c$, the predictive law of the realized move
-$\Delta f_c$ is the mixture
+For each component $c$, the predictive law is:
 
 $$
 \Delta f_c
   \;\sim\;
-  q\cdot
-    \mathcal{N}\!\bigl(
-      \mu^{\mathrm{mkt}}_c,\;
-      (\sigma^{\mathrm{mkt}}_c)^2
-    \bigr)
-  + (1-q)\cdot
-    t_{\nu}\!\bigl(
-      \mu^{\mathrm{ref}}_c,\;
-      (\sigma^{\mathrm{ref}}_c)^2
-    \bigr).
+  q\cdot \mathcal{N}\!\bigl(\mu^{\mathrm{mkt}}_c,\; (\sigma^{\mathrm{mkt}}_c)^2\bigr)
+  + (1-q)\cdot t_{\nu}\!\bigl(\mu^{\mathrm{ref}}_c,\; (\sigma^{\mathrm{ref}}_c)^2\bigr).
 $$
 
-**Market regime** (flow-driven, Gaussian), linear in the mechanical move:
+- **Market regime** (Gaussian): $\mu^{\mathrm{mkt}}_c = \beta_{c,0} + \beta_{c,1}\,\Delta f^{\mathrm{mech}}_c$.
+- **Refresh regime** (Student-$t$ with scale $\sigma^{\mathrm{ref}}_c \sqrt{(\nu-2)/\nu}$): $\mu^{\mathrm{ref}}_c = m_c$.
 
-$$
-\mu^{\mathrm{mkt}}_c
-  = \beta_{c,0} + \beta_{c,1}\,\Delta f^{\mathrm{mech}}_c.
-$$
+### 4.4 Reconstructing dynamic VWAP
 
-**Refresh regime** (quote revision with little or no flow, Student-$t$):
-
-$$
-\mu^{\mathrm{ref}}_c = m_c
-  \qquad\text{(learned intercept, no mechanical feature)}.
-$$
-
-The Student-$t$ is parameterized so its variance equals
-$(\sigma^{\mathrm{ref}}_c)^2$: a standard $t_{\nu}$ draw $T$ is scaled by
-
-$$
-\sigma^{\mathrm{ref}}_c \sqrt{(\nu-2)/\nu},
-$$
-
-with $\nu =$ `student_df` (example: $3$). This matches the stored
-refresh variance used in the log-density.
-
-Default `point_mode = "sample"` draws the mixture (Bernoulli gate, then
-Gaussian or scaled-$t$). Alternatives: `"mean"` returns the mixture mean;
-`"map"` returns the mean of the regime with $q \ge 1/2$.
-
-The four component innovations are drawn independently given $q$ and
-$\Delta f^{\mathrm{mech}}$. The same Bernoulli $q$ is shared across
-components (one market/refresh choice per step).
-
-### 3.4 Reconstructing prices and dynamic VWAP
-
-Let $\Delta\hat f$ be the sampled (or mean) component vector. Then
-
-$$
-\begin{aligned}
-\hat m &= m + \Delta\hat f_{\mathrm{mid}}, \\
-\hat S &= S \cdot \exp(\Delta\hat f_{\log S}), \\
-\hat\psi^{+} &= \psi^{+} \cdot \exp(\Delta\hat f_{\log\psi^{+}}), \\
-\hat\psi^{-} &= \psi^{-} \cdot \exp(\Delta\hat f_{\log\psi^{-}}),
-\end{aligned}
-$$
-
-with log-increments clamped to $[-5,5]$.
-
-Marking uses **inventory-aware depth**, not $Q_{\mathrm{ref}}$:
-
-$$
-d^{+} = q_{\mathrm{cash}} / \hat m, \qquad d^{-} = |b_{\mathrm{inv}}|.
-$$
-
-A shape-depth ratio $r(d; Q_{\mathrm{ref}}, \alpha)$ rescales extra shape
-from the reference depth to the mark depth (`shape_alpha` $\alpha$, example
-$0.5$):
-
-$$
-r(d)
-  =
-  \mathrm{clip}\!
-  \left(
-    \frac{
-      \bigl((d+\delta)/Q_{\mathrm{ref}}\bigr)^{\alpha}
-      - (\delta/Q_{\mathrm{ref}})^{\alpha}
-    }{
-      \bigl((Q_{\mathrm{ref}}+\delta)/Q_{\mathrm{ref}}\bigr)^{\alpha}
-      - (\delta/Q_{\mathrm{ref}})^{\alpha}
-    },\; 0,\; \infty
-  \right),
-$$
-
-with shift $\delta = \max(10^{-9}, 10^{-6} Q_{\mathrm{ref}})$ so the map is
-$0$ at $d=0$ and has finite slope for autograd. If $\alpha = 0$,
-$r = \mathbf{1}_{d>0}$.
-
-Dynamic VWAPs returned by `sample_dynamic_vwap`:
+Reconstructed state $\hat m, \hat S, \hat\psi^{+}, \hat\psi^{-}$ is scaled to
+inventory depth $d^{+} = q_{\mathrm{cash}}/\hat m, d^{-} = |b_{\mathrm{inv}}|$ via shape ratio $r(d; Q_{\mathrm{ref}}, \alpha)$:
 
 $$
 \begin{aligned}
@@ -346,172 +395,123 @@ $$
 \end{aligned}
 $$
 
-These are the marks that enter $\Delta W$ in the CE term of $J$.
-
-### 3.5 Online parameter update
-
-Updates run **prequentially**: score the new interval with parameters from
-the previous interval, then `update(prev_step, curr_step)`.
-
-Let $\gamma =$ `decay` (example: $0.99$), $\alpha = 1-\gamma$.
-Compute $\Delta f^{\mathrm{obs}}$ from the actual next book and
-$\Delta f^{\mathrm{mech}}$ from MOF-only consume of the previous book.
-
-**Responsibilities.** For each component, market and refresh log-densities
-are summed (components treated as independent given the regime), then
-
-$$
-\begin{aligned}
-\ell_{\mathrm{mkt}}
-  &= \log q + \sum_c \log \mathcal{N}(\Delta f^{\mathrm{obs}}_c; \mu^{\mathrm{mkt}}_c, (\sigma^{\mathrm{mkt}}_c)^2), \\
-\ell_{\mathrm{ref}}
-  &= \log(1-q) + \sum_c \log t_{\nu}(\Delta f^{\mathrm{obs}}_c; \mu^{\mathrm{ref}}_c, (\sigma^{\mathrm{ref}}_c)^2), \\
-r_{\mathrm{mkt}}
-  &= \frac{e^{\ell_{\mathrm{mkt}}}}{e^{\ell_{\mathrm{mkt}}}+e^{\ell_{\mathrm{ref}}}},
-  \qquad
-  r_{\mathrm{ref}} = 1 - r_{\mathrm{mkt}}.
-\end{aligned}
-$$
-
-**Gate (logistic gradient step):**
-
-$$
-\beta_{\mathrm{gate}}
-  \leftarrow
-  \mathrm{clip}\bigl(
-    \beta_{\mathrm{gate}} + \alpha\,(r_{\mathrm{mkt}} - q)\, x_{\mathrm{gate}},\;
-    -20,\; 20
-  \bigr).
-$$
-
-**Market means (weighted RLS with forgetting $\gamma$)** for each $c$,
-with feature $x_c = (1,\; \Delta f^{\mathrm{mech}}_c)^\top$ and weight
-$w = r_{\mathrm{mkt}}$:
-
-$$
-\begin{aligned}
-x_w &= \sqrt{w}\, x_c, \quad
-y_w = \sqrt{w}\, \Delta f^{\mathrm{obs}}_c, \\
-k &= \frac{P_c x_w}{\gamma + x_w^\top P_c x_w}, \\
-\beta_c &\leftarrow \beta_c + k\,(y_w - x_w^\top \beta_c), \\
-P_c &\leftarrow \gamma^{-1}\bigl(P_c - k x_w^\top P_c\bigr).
-\end{aligned}
-$$
-
-If $w \approx 0$, $\beta_c$ is left unchanged. $P_c$ is initialized as
-$P_0 I$ with $P_0 =$ `rls_p0`.
-
-**Refresh means (responsibility-weighted EWMA):**
-
-$$
-m_c \leftarrow m_c + \alpha\, r_{\mathrm{ref}}\,(\Delta f^{\mathrm{obs}}_c - m_c).
-$$
-
-**Variances:**
-
-$$
-\begin{aligned}
-(\sigma^{\mathrm{mkt}}_c)^2
-  &\leftarrow
-  (1 - \alpha r_{\mathrm{mkt}})(\sigma^{\mathrm{mkt}}_c)^2
-  + \alpha r_{\mathrm{mkt}}\,(\Delta f^{\mathrm{obs}}_c - \mu^{\mathrm{mkt}}_c)^2, \\
-(\sigma^{\mathrm{ref}}_c)^2
-  &\leftarrow
-  (1 - \alpha r_{\mathrm{ref}})(\sigma^{\mathrm{ref}}_c)^2
-  + \alpha r_{\mathrm{ref}}\,(\Delta f^{\mathrm{obs}}_c - m_c)^2,
-\end{aligned}
-$$
-
-floored at $\sigma_{\min}^2$. Mid starts from `initial_sigma`; log
-components from `initial_log_sigma`.
-
-### 3.6 Predictive density used in diagnostics
-
-Prequential NLL for the mid component (the logged score) is the mixture
-density at the realized mid change $\Delta m$:
-
-$$
-p(\Delta m)
-  = q\,\varphi\!\bigl(\Delta m; \mu^{\mathrm{mkt}}_{\mathrm{mid}}, \sigma^{\mathrm{mkt}}_{\mathrm{mid}}\bigr)
-  + (1-q)\, t_{\nu}\!\bigl(\Delta m; \mu^{\mathrm{ref}}_{\mathrm{mid}}, \sigma^{\mathrm{ref}}_{\mathrm{mid}}\bigr),
-$$
-
-with $q$ from the flow gate and $\mu^{\mathrm{mkt}}_{\mathrm{mid}} = \beta_{\mathrm{mid},0} + \beta_{\mathrm{mid},1}\,\Delta m^{\mathrm{mech}}$.
-This is `score_conditional_mechanical_mid_delta`.
-
 ---
 
-## 4. How the two models compose in one rollout step
+## 5. Composition in One Rollout Step
 
-For path $i$, step $h$, with current book $\mathcal{B}_{i,h}$, wallet
-$(b_{i,h}, q_{i,h})$, and decoded quotes $u^{(h)}$:
+For path $i$, horizon step $h$, with book $\mathcal{B}_{i,h}$ and wallet $(b_{i,h}, q_{i,h})$:
 
+### Step 1: Flow and Soft Fill
 $$
 \begin{aligned}
 (V^{+}_{i,h}, V^{-}_{i,h})
-  &\sim \text{hurdle-lognormal}, \\
+  &\sim \text{Hurdle-LogNormal}(\mathbf{p}_0, \boldsymbol{\mu}, \boldsymbol{\sigma}), \\
 (\mathcal{B}_{i,h+1}^{\mathrm{mech}},\; \Delta\mathrm{cash},\; \Delta\mathrm{inv})
-  &= \mathrm{soft\_fill}(u^{(h)}, \mathcal{B}_{i,h}, V^{+}_{i,h}, V^{-}_{i,h}), \\
-\Delta f^{\mathrm{mech}}_{i,h}
-  &= f(\mathcal{B}_{i,h+1}^{\mathrm{mech}}) - f(\mathcal{B}_{i,h}), \\
-q_{i,h}
-  &= \sigma\!\bigl(\beta_{\mathrm{gate}}^\top (1, \log(1+V^{+}_{i,h}+V^{-}_{i,h}))\bigr), \\
-\Delta \hat f_{i,h}
-  &\sim q_{i,h}\,\mathcal{N}(\beta_{0}+\beta_{1}\odot\Delta f^{\mathrm{mech}}_{i,h}, \sigma^{\mathrm{mkt}2})
-     + (1-q_{i,h})\, t_{\nu}(m, \sigma^{\mathrm{ref}2}), \\
-(\mathrm{VWAP}^{+}_{i,h+1}, \mathrm{VWAP}^{-}_{i,h+1})
-  &= \Gamma\!\bigl(\Delta\hat f_{i,h},\; d^{+}_{i,h+1},\; d^{-}_{i,h+1}\bigr).
+  &= \mathrm{soft\_fill}(u^{(h)}, \mathcal{B}_{i,h}, V^{+}_{i,h}, V^{-}_{i,h}).
 \end{aligned}
 $$
 
-$\Gamma$ is the reconstruction in §3.4. Wealth marking uses those VWAPs
-(bid VWAP when inventory is short, sell VWAP when long). The flow model
-does not see the price model; the price model *does* see the sampled flow,
-both through the gate $q$ and through $\Delta f^{\mathrm{mech}}$.
+### Step 2: Price Innovation Injection
+
+#### Branch A: Discrete Hurdle Residuals (`hurdle_student_t` or `hurdle_lognormal`)
+$$
+\begin{aligned}
+\varepsilon^{\mathrm{buy}}_{i,h},\, \varepsilon^{\mathrm{sell}}_{i,h}
+  &\sim \text{HurdleResidual}(p_0, s, \nu), \\
+\mathrm{VWAP}^{\mathrm{buy}}_{i,h+1}
+  &= \mathrm{VWAP}_{\mathrm{mof}}^{\mathrm{buy}} + \varepsilon^{\mathrm{buy}}_{i,h}, \\
+\mathrm{VWAP}^{\mathrm{sell}}_{i,h+1}
+  &= \mathrm{VWAP}_{\mathrm{mof}}^{\mathrm{sell}} + \varepsilon^{\mathrm{sell}}_{i,h}.
+\end{aligned}
+$$
+
+#### Branch B: Conditional Mechanical Mixture (`conditional_mechanical_mixture`)
+$$
+\begin{aligned}
+\Delta f^{\mathrm{mech}}_{i,h} &= f(\mathcal{B}_{i,h+1}^{\mathrm{mech}}) - f(\mathcal{B}_{i,h}), \\
+q_{i,h} &= \sigma(\beta_{\mathrm{gate}}^\top x_{\mathrm{gate}}), \\
+\Delta\hat f_{i,h} &\sim q_{i,h}\,\mathcal{N}(\mu^{\mathrm{mkt}}, \sigma^{\mathrm{mkt}2}) + (1-q_{i,h})\,t_{\nu}(\mu^{\mathrm{ref}}, \sigma^{\mathrm{ref}2}), \\
+(\mathrm{VWAP}^{+}_{i,h+1}, \mathrm{VWAP}^{-}_{i,h+1}) &= \Gamma(\Delta\hat f_{i,h}, d^{+}, d^{-}).
+\end{aligned}
+$$
 
 ---
 
-## 5. Example config (runtime example)
+## 6. Example Configurations
 
-From `mm/configs/market_maker.runtime.example.json`:
+### 6.1 Recommended Production Config (USDT_IRT)
 
-```text
-local/global_market_flow_model:
-  kind: hurdle_lognormal
-  decay γ = 0.95
-  init_p0 = 0.3, init_μ = 0, init_σ = 1
+```json
+{
+  "local_market_flow_model": {
+    "kind": "hurdle_lognormal",
+    "decay": 0.95,
+    "init_p0": 0.3,
+    "init_mu": 0.0,
+    "init_sigma": 1.0,
+    "sigma_floor": 0.35
+  },
+  "local_price_model": {
+    "kind": "hurdle_student_t",
+    "decay": 0.99,
+    "student_df": 2.5,
+    "tick_size": 0.5,
+    "initial_sigma": 1.0,
+    "calibrate": true
+  }
+}
+```
 
-local_price_model:
-  kind: conditional_mechanical_mixture
-  reference_vwap_vol Q_ref = 1000
-  shape_alpha α = 0.5
-  decay γ = 0.99
-  initial_sigma = 50, initial_log_sigma = 0.25
-  student_df ν = 3
-  point_mode = sample
+### 6.2 High-Volatility Production Config (BTC_IRT)
 
-global_price_model: same kind, Q_ref = 100
+```json
+{
+  "local_price_model": {
+    "kind": "hurdle_lognormal",
+    "decay": 0.99,
+    "tick_size": 100.0,
+    "init_p0": 0.5,
+    "init_mu": 4.0,
+    "init_sigma": 1.0,
+    "sigma_min": 0.35
+  }
+}
+```
+
+### 6.3 Mechanical Mixture Config (Legacy / Experimental)
+
+```json
+{
+  "local_price_model": {
+    "kind": "conditional_mechanical_mixture",
+    "reference_vwap_vol": 1000,
+    "shape_alpha": 0.5,
+    "decay": 0.99,
+    "initial_sigma": 50,
+    "initial_log_sigma": 0.25,
+    "student_df": 3.0,
+    "min_refresh_weight": 0.15,
+    "point_mode": "sample"
+  }
+}
 ```
 
 ---
 
-## 6. Symbol map
+## 7. Symbol Map
 
-| Symbol | Code / config |
-| --- | --- |
-| $V^{+}, V^{-}$ | `buy_vol`, `sell_vol` |
-| $p_{0,s}, \mu_s, \sigma_s$ | `p0_buy/sell`, `mu_buy/sell`, `sigma_buy/sell` |
-| $\gamma_{\mathrm{flow}}$ | `local_market_flow_model.decay` |
-| $Q_{\mathrm{ref}}$ | `reference_vwap_vol` |
-| $\psi^{+}, \psi^{-}$ | `buy_shape`, `sell_shape` |
-| $\Delta f^{\mathrm{mech}}$ | mechanical component deltas |
-| $q$ | `market_prob` (gate) |
-| $r_{\mathrm{mkt}}$ | `market_resp` (posterior, update only) |
-| $\beta_{\mathrm{gate}}$ | `gate_beta` |
-| $\beta_c$ | `market_beta[c]` |
-| $m_c$ | `refresh_mean[c]` |
-| $\sigma^{\mathrm{mkt}}_c, \sigma^{\mathrm{ref}}_c$ | `market_sigma`, `refresh_sigma` |
-| $\nu$ | `student_df` |
-| $w_{\mathrm{refresh}}^{\min}$ | `min_refresh_weight` |
-| $\alpha$ (shape) | `shape_alpha` |
-| $\gamma_{\mathrm{price}}$ | `local_price_model.decay` |
+| Symbol | Code / config | Meaning |
+| --- | --- | --- |
+| $V^{+}, V^{-}$ | `buy_vol`, `sell_vol` | Aggressive buy/sell flow per step |
+| $p_{0,s}, \mu_s, \sigma_s$ | `p0_buy/sell`, `mu_buy/sell`, `sigma_buy/sell` | Hurdle flow parameters |
+| $\sigma_{\mathrm{floor}}$ | `sigma_floor` | Prior floor on log-flow variance ($0.35$) |
+| $h$ | `tick_size` | Discrete lattice quantum ($0.5$ USDT, $100$ BTC) |
+| $p_0$ | `p0`, `p0_mid` | Probability of zero mid-price move |
+| $s$ | `scale`, `sigma_mid` | Student-$t$ scale parameter on discrete lattice |
+| $\nu$ | `student_df` | Student-$t$ degrees of freedom ($2.5$ USDT, $3.0$ mix) |
+| $\alpha_{\mathrm{cal}}$ | `alpha_cal` | Online recursive tail calibration factor |
+| $\Delta f^{\mathrm{mech}}$ | mechanical component deltas | MOF-only feature move |
+| $q$ | `market_prob` | Mixture market-regime gate probability |
+| $w_{\mathrm{refresh}}^{\min}$ | `min_refresh_weight` | Minimum weight floor for refresh tail regime ($0.15$) |
+| $Q_{\mathrm{ref}}$ | `reference_vwap_vol` | Fixed reference volume for mixture shape ($1000$) |
+| $\alpha$ (shape) | `shape_alpha` | Power-law depth elasticity exponent ($0.5$) |

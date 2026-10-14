@@ -18,12 +18,291 @@
       },
       "id": 1,
       "options": {
-        "content": "Strategy portfolio from ControllerDiagnostics.state (virtual wallet when ledger_source=virtual, otherwise exchange account). Physical exchange balances are in physical_state when virtual mode is active. Exchange-account REST snapshots remain on 07A Exchange Accounts.",
+        "content": "Strategy portfolio from ControllerDiagnostics.state (virtual wallet when ledger_source=virtual, otherwise exchange account). Wealth delta over the selected time window is decomposed without residual into Net Spread Capture, Inventory Drift, and Adverse Selection. Identity: Total Wealth PnL = Net Spread Capture + Inventory Drift + Adverse Selection.",
         "mode": "markdown"
       },
       "title": "Scope",
       "transparent": true,
       "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 3
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(SUM(total_wealth_delta), 0.0) AS value\nFROM component_steps\nWHERE metric = 'total'",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Wealth PnL",
+      "type": "stat",
+      "description": "Net total wealth change over selected window: W(t_end) - W(t_0)",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 3
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(SUM(net_spread_capture), 0.0) AS value\nFROM component_steps\nWHERE metric = 'total'",
+          "refId": "A"
+        }
+      ],
+      "title": "Net Spread Capture",
+      "type": "stat",
+      "description": "Gross quoting edge: sum(delta_cash + delta_inventory * mark_price_prev)",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 3
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(SUM(inventory_drift), 0.0) AS value\nFROM component_steps\nWHERE metric = 'total'",
+          "refId": "A"
+        }
+      ],
+      "title": "Inventory Drift PnL",
+      "type": "stat",
+      "description": "Market carry / beta on held inventory: sum(inventory_prev * delta_price)",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "gray",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 3
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n)\nSELECT ($__timeTo())::timestamptz AS \"time\",\n       COALESCE(SUM(adverse_selection), 0.0) AS value\nFROM component_steps\nWHERE metric = 'total'",
+          "refId": "A"
+        }
+      ],
+      "title": "Adverse Selection PnL",
+      "type": "stat",
+      "description": "Toxic flow slippage: sum(delta_inventory * delta_price)",
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n)\nSELECT \"time\", metric, value\nFROM (\n  SELECT \"time\",\n         'Total Wealth PnL' AS metric,\n         SUM(total_wealth_delta) OVER (\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n         ) AS value\n  FROM component_steps\n  WHERE metric = 'total'\n  UNION ALL\n  SELECT \"time\",\n         'Net Spread Capture',\n         SUM(net_spread_capture) OVER (\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n         )\n  FROM component_steps\n  WHERE metric = 'total'\n  UNION ALL\n  SELECT \"time\",\n         'Inventory Drift',\n         SUM(inventory_drift) OVER (\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n         )\n  FROM component_steps\n  WHERE metric = 'total'\n  UNION ALL\n  SELECT \"time\",\n         'Adverse Selection',\n         SUM(adverse_selection) OVER (\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n         )\n  FROM component_steps\n  WHERE metric = 'total'\n) s\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Cumulative PnL decomposition (Total)",
+      "type": "timeseries",
+      "description": "Trajectory of total wealth delta decomposed into Net Spread Capture, Inventory Drift, and Adverse Selection relative to window start",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     },
     {
       "datasource": {
@@ -41,9 +320,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 3
+        "y": 17
       },
-      "id": 2,
+      "id": 7,
       "targets": [
         {
           "datasource": {
@@ -87,9 +366,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 3
+        "y": 17
       },
-      "id": 3,
+      "id": 8,
       "targets": [
         {
           "datasource": {
@@ -133,101 +412,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 51
+        "y": 25
       },
-      "id": 11,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'physical_local_inventory' AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_inventory'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['physical_state','local_inventory'] IS NOT NULL\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Physical exchange inventory (virtual mode only)",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 51
-      },
-      "id": 12,
-      "targets": [
-        {
-          "datasource": {
-            "type": "postgres",
-            "uid": "postgres-mm"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT e.ts AS \"time\", 'physical_local_cash' AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_cash'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['physical_state','local_cash'] IS NOT NULL\nORDER BY 1",
-          "refId": "A"
-        }
-      ],
-      "title": "Physical exchange cash (virtual mode only)",
-      "type": "timeseries",
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "postgres-mm"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 3
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 11
-      },
-      "id": 4,
+      "id": 9,
       "targets": [
         {
           "datasource": {
@@ -271,9 +458,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 11
+        "y": 25
       },
-      "id": 5,
+      "id": 10,
       "targets": [
         {
           "datasource": {
@@ -317,9 +504,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 19
+        "y": 33
       },
-      "id": 6,
+      "id": 11,
       "targets": [
         {
           "datasource": {
@@ -363,9 +550,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 19
+        "y": 33
       },
-      "id": 7,
+      "id": 12,
       "targets": [
         {
           "datasource": {
@@ -409,9 +596,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 41
       },
-      "id": 8,
+      "id": 13,
       "targets": [
         {
           "datasource": {
@@ -421,7 +608,54 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Cumulative total wealth PnL",
+      "type": "timeseries",
+      "description": "Cumulative wealth change over time for local, global, and total",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "id": 14,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta,\n         (delta_cash + delta_inventory * mark_price_prev) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
           "refId": "A"
         }
       ],
@@ -455,9 +689,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 57
       },
-      "id": 9,
+      "id": 15,
       "targets": [
         {
           "datasource": {
@@ -467,7 +701,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (inventory_prev * delta_price) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta,\n         (inventory_prev * delta_price) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
           "refId": "A"
         }
       ],
@@ -501,9 +735,9 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 65
       },
-      "id": 10,
+      "id": 16,
       "targets": [
         {
           "datasource": {
@@ -513,11 +747,150 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_inventory * delta_price) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta,\n         (delta_inventory * delta_price) AS step_value\n  FROM step_parts\n)\nSELECT \"time\", metric,\n       SUM(step_value) OVER (\n         PARTITION BY metric\n         ORDER BY \"time\"\n         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n       ) AS value\nFROM component_steps\nORDER BY 1, 2",
           "refId": "A"
         }
       ],
       "title": "Cumulative adverse selection PnL",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currency",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "id": 17,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH state_rows AS (\n  SELECT e.ts AS \"time\",\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS local_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_quote_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_cash'], ''))::double precision\n  ELSE 0.0\nEND) AS global_cash,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS local_inventory,\n         COALESCE(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_base_wallet','total'], ''))::double precision\n  ELSE NULL\nEND, CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_inventory'], ''))::double precision\n  ELSE 0.0\nEND) AS global_inventory,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS local_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS global_mark_price,\n         COALESCE(NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['optimizer','config','reference_price'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','global_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','local_sell_vwap'], ''))::double precision\n  ELSE NULL\nEND, 0.0), NULLIF(CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['state','mid'], ''))::double precision\n  ELSE NULL\nEND, 0.0)) AS total_mark_price\n  FROM mm_events e\n  WHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n),\nscope_rows AS (\n  SELECT \"time\", 'local' AS metric,\n         local_cash AS cash,\n         local_inventory AS inventory,\n         local_mark_price AS mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'global',\n         global_cash,\n         global_inventory,\n         global_mark_price\n  FROM state_rows\n  UNION ALL\n  SELECT \"time\", 'total',\n         (local_cash + global_cash),\n         (local_inventory + global_inventory),\n         total_mark_price\n  FROM state_rows\n),\ndeltas AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         mark_price,\n         LAG(cash) OVER (PARTITION BY metric ORDER BY \"time\") AS cash_prev,\n         LAG(inventory) OVER (PARTITION BY metric ORDER BY \"time\") AS inventory_prev,\n         LAG(mark_price) OVER (PARTITION BY metric ORDER BY \"time\") AS mark_price_prev\n  FROM scope_rows\n),\nstep_parts AS (\n  SELECT \"time\",\n         metric,\n         (cash - cash_prev) AS delta_cash,\n         (inventory - inventory_prev) AS delta_inventory,\n         (mark_price - mark_price_prev) AS delta_price,\n         inventory_prev,\n         mark_price_prev\n  FROM deltas\n  WHERE cash_prev IS NOT NULL\n    AND inventory_prev IS NOT NULL\n    AND mark_price_prev IS NOT NULL\n),\ncomponent_steps AS (\n  SELECT \"time\", metric,\n         (delta_cash + delta_inventory * mark_price_prev) AS net_spread_capture,\n         (inventory_prev * delta_price) AS inventory_drift,\n         (delta_inventory * delta_price) AS adverse_selection,\n         ((delta_cash + delta_inventory * mark_price_prev) + (inventory_prev * delta_price) + (delta_inventory * delta_price)) AS total_wealth_delta\n  FROM step_parts\n),\nscope_base AS (\n  SELECT \"time\",\n         metric,\n         cash,\n         inventory,\n         COALESCE(mark_price, 0.0) AS mark_price,\n         (cash + inventory * COALESCE(mark_price, 0.0)) AS wealth,\n         FIRST_VALUE(cash) OVER (\n           PARTITION BY metric\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n         ) AS cash_0,\n         FIRST_VALUE(inventory) OVER (\n           PARTITION BY metric\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n         ) AS inventory_0,\n         FIRST_VALUE(COALESCE(mark_price, 0.0)) OVER (\n           PARTITION BY metric\n           ORDER BY \"time\"\n           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\n         ) AS mark_price_0\n  FROM scope_rows\n  WHERE metric = 'total'\n),\npnl_trajectories AS (\n  SELECT \"time\",\n         (wealth - (cash_0 + inventory_0 * mark_price_0)) AS strategy_pnl,\n         (inventory_0 * (mark_price - mark_price_0)) AS hold_pnl,\n         ((wealth - (cash_0 + inventory_0 * mark_price_0)) - (inventory_0 * (mark_price - mark_price_0))) AS active_alpha\n  FROM scope_base\n)\nSELECT \"time\", metric, value\nFROM (\n  SELECT \"time\", 'Strategy Total PnL' AS metric, strategy_pnl AS value\n  FROM pnl_trajectories\n  UNION ALL\n  SELECT \"time\", 'Hold Strategy PnL' AS metric, hold_pnl AS value\n  FROM pnl_trajectories\n  UNION ALL\n  SELECT \"time\", 'Active Alpha (Strategy - Hold)' AS metric, active_alpha AS value\n  FROM pnl_trajectories\n) s\nORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Total PnL vs Hold Strategy PnL",
+      "type": "timeseries",
+      "description": "Strategy Wealth PnL vs passive Hold Strategy PnL (inventory_0 * (mark_price(t) - mark_price_0)) and Active Alpha (Strategy - Hold)",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 82
+      },
+      "id": 18,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'physical_local_inventory' AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_inventory'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_inventory'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['physical_state','local_inventory'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Physical exchange inventory (virtual mode only)",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "postgres-mm"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 82
+      },
+      "id": 19,
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "postgres-mm"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT e.ts AS \"time\", 'physical_local_cash' AS metric,\n       CASE\n  WHEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_cash'], '')) ~ '^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$'\n  THEN trim(COALESCE(e.payload #>> ARRAY['physical_state','local_cash'], ''))::double precision\n  ELSE NULL\nEND AS value\nFROM mm_events e\nWHERE e.topic = ANY (SELECT 'strategy:diagnostics:' || id FROM unnest(ARRAY[${actor_id:sqlstring}]::text[]) AS id)\n  AND e.event_type = 'ControllerDiagnostics'\n  AND e.exchange = ANY(ARRAY[${exchange:sqlstring}]::text[])\n  AND e.symbol = ANY(ARRAY[${symbol:sqlstring}]::text[])\n  AND e.actor_id = ANY(ARRAY[${actor_id:sqlstring}]::text[])\n  AND $__timeFilter(e.ts)\n  AND e.payload #>> ARRAY['physical_state','local_cash'] IS NOT NULL\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Physical exchange cash (virtual mode only)",
       "type": "timeseries",
       "options": {
         "legend": {
