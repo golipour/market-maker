@@ -671,10 +671,12 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
     panels_by_title = {panel["title"]: panel for panel in dashboard["panels"]}
 
     stat_expected = {
-        "Total Wealth PnL": (0, 3, 6, "total_pnl"),
-        "Net Spread Capture": (6, 3, 6, "spread_pnl"),
-        "Inventory Drift PnL": (12, 3, 6, "inventory_pnl"),
-        "Adverse Selection PnL": (18, 3, 6, "adverse_selection"),
+        "Total Wealth PnL": (0, 3, 4, "total_pnl"),
+        "Total Active Alpha": (4, 3, 4, "active_alpha"),
+        "Hold Strategy PnL": (8, 3, 4, "hold_pnl"),
+        "Net Spread Capture": (12, 3, 4, "spread_pnl"),
+        "Inventory Drift PnL": (16, 3, 4, "inventory_pnl"),
+        "Adverse Selection PnL": (20, 3, 4, "adverse_selection"),
     }
     for title, (x, y, w, stat_key) in stat_expected.items():
         panel = panels_by_title[title]
@@ -683,6 +685,11 @@ def test_portfolio_pnl_includes_per_venue_value_breakdowns() -> None:
         sql = panel["targets"][0]["rawSql"]
         assert "component_steps" in sql
         assert f"WHERE metric = 'total'" in sql
+
+    active_alpha_sql = panels_by_title["Total Active Alpha"]["targets"][0]["rawSql"]
+    assert "p.total_pnl - COALESCE(ib.starting_inventory" in active_alpha_sql
+    hold_pnl_sql = panels_by_title["Hold Strategy PnL"]["targets"][0]["rawSql"]
+    assert "COALESCE(ib.starting_inventory * (ib.ending_mark_price - ib.starting_mark_price), 0.0)" in hold_pnl_sql
 
     decomp_total_panel = panels_by_title["Cumulative PnL decomposition (Total)"]
     assert decomp_total_panel["type"] == "timeseries"

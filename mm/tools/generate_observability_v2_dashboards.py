@@ -5052,7 +5052,9 @@ def portfolio_pnl() -> dict[str, Any]:
                 "ledger_source=virtual, otherwise exchange account). Wealth delta over the selected "
                 "time window is decomposed without residual into Net Spread Capture, Inventory Drift, "
                 "and Adverse Selection. "
-                "Identity: Total Wealth PnL = Net Spread Capture + Inventory Drift + Adverse Selection."
+                "Identity: Total Wealth PnL = Net Spread Capture + Inventory Drift + Adverse Selection. "
+                "Active Alpha = Total Wealth PnL - Hold Strategy PnL. "
+                "Exchange trading fees are absorbed inside Net Spread Capture via net cash balances."
             ),
             y=0,
         ),
@@ -5064,52 +5066,78 @@ def portfolio_pnl() -> dict[str, Any]:
             _portfolio_interval_stat_sql("total_pnl"),
             x=0,
             y=3,
-            w=6,
+            w=4,
             h=5,
             unit="currency",
             description="Net total wealth change over selected window: W(t_end) - W(t_0)",
         ),
         _panel(
             3,
+            "Total Active Alpha",
+            "stat",
+            PG_DS,
+            _portfolio_interval_stat_sql("active_alpha"),
+            x=4,
+            y=3,
+            w=4,
+            h=5,
+            unit="currency",
+            description="Active strategy outperformance over passive hold benchmark: Total Wealth PnL - Hold Strategy PnL",
+        ),
+        _panel(
+            4,
+            "Hold Strategy PnL",
+            "stat",
+            PG_DS,
+            _portfolio_interval_stat_sql("hold_pnl"),
+            x=8,
+            y=3,
+            w=4,
+            h=5,
+            unit="currency",
+            description="Benchmark return of holding initial inventory passively: inventory_0 * (mark_price_end - mark_price_0)",
+        ),
+        _panel(
+            5,
             "Net Spread Capture",
             "stat",
             PG_DS,
             _portfolio_interval_stat_sql("spread_pnl"),
-            x=6,
+            x=12,
             y=3,
-            w=6,
+            w=4,
             h=5,
             unit="currency",
-            description="Gross quoting edge: sum(delta_cash + delta_inventory * mark_price_prev)",
+            description="Net quoting edge after exchange fees: sum(delta_cash + delta_inventory * mark_price_prev). Fees paid are embedded in delta_cash.",
         ),
         _panel(
-            4,
+            6,
             "Inventory Drift PnL",
             "stat",
             PG_DS,
             _portfolio_interval_stat_sql("inventory_pnl"),
-            x=12,
+            x=16,
             y=3,
-            w=6,
+            w=4,
             h=5,
             unit="currency",
             description="Market carry / beta on held inventory: sum(inventory_prev * delta_price)",
         ),
         _panel(
-            5,
+            7,
             "Adverse Selection PnL",
             "stat",
             PG_DS,
             _portfolio_interval_stat_sql("adverse_selection"),
-            x=18,
+            x=20,
             y=3,
-            w=6,
+            w=4,
             h=5,
             unit="currency",
             description="Toxic flow slippage: sum(delta_inventory * delta_price)",
         ),
         _panel(
-            6,
+            8,
             "Cumulative PnL decomposition (Total)",
             "timeseries",
             PG_DS,
@@ -5122,7 +5150,7 @@ def portfolio_pnl() -> dict[str, Any]:
             description="Trajectory of total wealth delta decomposed into Net Spread Capture, Inventory Drift, and Adverse Selection relative to window start",
         ),
         _panel(
-            7,
+            9,
             "Strategy inventory (virtual or physical)",
             "timeseries",
             PG_DS,
@@ -5131,7 +5159,7 @@ def portfolio_pnl() -> dict[str, Any]:
             y=17,
         ),
         _panel(
-            8,
+            10,
             "Strategy cash (virtual or physical)",
             "timeseries",
             PG_DS,
@@ -5139,12 +5167,12 @@ def portfolio_pnl() -> dict[str, Any]:
             x=12,
             y=17,
         ),
-        _panel(9, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=25),
-        _panel(10, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=25),
-        _panel(11, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=33),
-        _panel(12, "Global cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("global"), x=12, y=33),
+        _panel(11, "Wealth", "timeseries", PG_DS, _portfolio_field_sql("local_wealth", "global_wealth"), x=0, y=25),
+        _panel(12, "Total cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_total_value_sql(), x=12, y=25),
+        _panel(13, "Local cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("local"), x=0, y=33),
+        _panel(14, "Global cash / inventory value / wealth", "timeseries", PG_DS, _portfolio_venue_value_sql("global"), x=12, y=33),
         _panel(
-            13,
+            15,
             "Cumulative total wealth PnL",
             "timeseries",
             PG_DS,
@@ -5155,7 +5183,7 @@ def portfolio_pnl() -> dict[str, Any]:
             description="Cumulative wealth change over time for local, global, and total",
         ),
         _panel(
-            14,
+            16,
             "Cumulative net spread capture PnL",
             "timeseries",
             PG_DS,
@@ -5165,7 +5193,7 @@ def portfolio_pnl() -> dict[str, Any]:
             w=24,
         ),
         _panel(
-            15,
+            17,
             "Cumulative inventory drift PnL",
             "timeseries",
             PG_DS,
@@ -5175,7 +5203,7 @@ def portfolio_pnl() -> dict[str, Any]:
             w=24,
         ),
         _panel(
-            16,
+            18,
             "Cumulative adverse selection PnL",
             "timeseries",
             PG_DS,
@@ -5185,7 +5213,7 @@ def portfolio_pnl() -> dict[str, Any]:
             w=24,
         ),
         _panel(
-            17,
+            19,
             "Total PnL vs Hold Strategy PnL",
             "timeseries",
             PG_DS,
@@ -5198,7 +5226,7 @@ def portfolio_pnl() -> dict[str, Any]:
             description="Strategy Wealth PnL vs passive Hold Strategy PnL (inventory_0 * (mark_price(t) - mark_price_0)) and Active Alpha (Strategy - Hold)",
         ),
         _panel(
-            18,
+            20,
             "Physical exchange inventory (virtual mode only)",
             "timeseries",
             PG_DS,
@@ -5208,7 +5236,7 @@ def portfolio_pnl() -> dict[str, Any]:
             w=12,
         ),
         _panel(
-            19,
+            21,
             "Physical exchange cash (virtual mode only)",
             "timeseries",
             PG_DS,
@@ -6993,18 +7021,37 @@ ORDER BY 1, 2"""
 
 def _portfolio_interval_stat_sql(stat: str, *, role: str = "total") -> str:
     stat_exprs = {
-        "total_pnl": "COALESCE(SUM(total_wealth_delta), 0.0)",
-        "spread_pnl": "COALESCE(SUM(net_spread_capture), 0.0)",
-        "inventory_pnl": "COALESCE(SUM(inventory_drift), 0.0)",
-        "adverse_selection": "COALESCE(SUM(adverse_selection), 0.0)",
+        "total_pnl": "p.total_pnl",
+        "active_alpha": "(p.total_pnl - COALESCE(ib.starting_inventory * (ib.ending_mark_price - ib.starting_mark_price), 0.0))",
+        "hold_pnl": "COALESCE(ib.starting_inventory * (ib.ending_mark_price - ib.starting_mark_price), 0.0)",
+        "spread_pnl": "p.spread_pnl",
+        "inventory_pnl": "p.inventory_pnl",
+        "adverse_selection": "p.adverse_selection",
     }
     if stat not in stat_exprs:
         raise ValueError(f"unsupported portfolio interval stat: {stat}")
-    return f"""WITH {_macro_portfolio_pnl_ctes()}
+    return f"""WITH {_macro_portfolio_pnl_ctes()},
+inventory_bounds AS (
+  SELECT
+    (ARRAY_AGG(inventory ORDER BY "time" ASC))[1] AS starting_inventory,
+    (ARRAY_AGG(COALESCE(mark_price, 0.0) ORDER BY "time" ASC))[1] AS starting_mark_price,
+    (ARRAY_AGG(COALESCE(mark_price, 0.0) ORDER BY "time" DESC))[1] AS ending_mark_price
+  FROM scope_rows
+  WHERE metric = '{role}'
+),
+pnl_summary AS (
+  SELECT
+    COALESCE(SUM(total_wealth_delta), 0.0) AS total_pnl,
+    COALESCE(SUM(net_spread_capture), 0.0) AS spread_pnl,
+    COALESCE(SUM(inventory_drift), 0.0) AS inventory_pnl,
+    COALESCE(SUM(adverse_selection), 0.0) AS adverse_selection
+  FROM component_steps
+  WHERE metric = '{role}'
+)
 SELECT ($__timeTo())::timestamptz AS "time",
        {stat_exprs[stat]} AS value
-FROM component_steps
-WHERE metric = '{role}'"""
+FROM pnl_summary p
+LEFT JOIN inventory_bounds ib ON TRUE"""
 
 
 def _step_economics_sql() -> str:
@@ -7045,6 +7092,8 @@ def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:
         "fee_pnl",
         "gross_spread_pnl",
         "total_pnl",
+        "active_alpha",
+        "hold_pnl",
         "starting_inventory",
         "ending_inventory",
     }
@@ -7073,6 +7122,8 @@ def _fill_interval_stat_sql(stat: str, *, role: str | None = None) -> str:
             "fee_pnl": "-f.total_fee",
             "gross_spread_pnl": "(p.spread_pnl + f.total_fee)",
             "total_pnl": "p.total_pnl",
+            "active_alpha": "(p.total_pnl - COALESCE(ib.starting_inventory * (ib.ending_mark_price - ib.starting_mark_price), 0.0))",
+            "hold_pnl": "COALESCE(ib.starting_inventory * (ib.ending_mark_price - ib.starting_mark_price), 0.0)",
             "starting_inventory": "COALESCE(ib.starting_inventory, 0.0)",
             "ending_inventory": "COALESCE(ib.ending_inventory, 0.0)",
         }
@@ -7108,7 +7159,9 @@ fills_fee AS (
 inventory_bounds AS (
   SELECT
     (ARRAY_AGG(inventory ORDER BY "time" ASC))[1] AS starting_inventory,
-    (ARRAY_AGG(inventory ORDER BY "time" DESC))[1] AS ending_inventory
+    (ARRAY_AGG(inventory ORDER BY "time" DESC))[1] AS ending_inventory,
+    (ARRAY_AGG(COALESCE(mark_price, 0.0) ORDER BY "time" ASC))[1] AS starting_mark_price,
+    (ARRAY_AGG(COALESCE(mark_price, 0.0) ORDER BY "time" DESC))[1] AS ending_mark_price
   FROM scope_rows
   WHERE metric = '{pnl_role}'
 ),
