@@ -37,8 +37,9 @@ class ViabilityParams:
     """Two-sided wallet-reserve constraint on total balances.
 
     Penalty term is ``-λ · S`` with squared hinge deficits (zero above
-    ``min_viable_quote``). Dual ``λ`` is a bounded linear multiplier updated
-    from an EWMA of ``S``, not ``exp(θ)``.
+    ``min_viable_quote`` or relative wealth ratio ``min_viable_ratio``).
+    Dual ``λ`` is a bounded linear multiplier updated from an EWMA of ``S``,
+    not ``exp(θ)``.
 
     When ``recovery_fraction > 0``, an explicit deficit recovery term penalizes
     failure to reduce existing reserve deficits by at least fraction ``recovery_fraction``
@@ -52,6 +53,8 @@ class ViabilityParams:
     lambda_max: float = 100.0
     dual_ewma_decay: float = 0.9
     recovery_fraction: float = 0.0
+    min_viable_ratio: float = 0.0
+    min_viable_bps: float = 0.0
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ViabilityParams | None:
@@ -83,9 +86,24 @@ class ViabilityParams:
                 "removed viability keys; use "
                 "{min_viable_quote, shortfall_tolerance, lambda_init, "
                 "lambda_learning_rate, lambda_max, dual_ewma_decay, "
-                "recovery_fraction}: "
+                "recovery_fraction, min_viable_ratio, min_viable_bps}: "
                 + ", ".join(removed)
             )
+        min_viable_ratio = float(payload.get("min_viable_ratio", 0.0))
+        min_viable_bps = float(payload.get("min_viable_bps", 0.0))
+        if min_viable_bps > 0.0 and min_viable_ratio <= 0.0:
+            min_viable_ratio = min_viable_bps / 10000.0
+        elif min_viable_ratio > 0.0 and min_viable_bps <= 0.0:
+            min_viable_bps = min_viable_ratio * 10000.0
+        if min_viable_ratio < 0.0 or min_viable_ratio >= 1.0:
+            raise ValueError("viability.min_viable_ratio must be in [0, 1)")
+        min_viable_quote_val = payload.get("min_viable_quote")
+        if min_viable_quote_val is not None:
+            min_viable_quote = max(1e-12, float(min_viable_quote_val))
+        elif min_viable_ratio > 0.0:
+            min_viable_quote = 0.0
+        else:
+            min_viable_quote = 50_000.0
         shortfall_tolerance = float(payload.get("shortfall_tolerance", 0.05))
         if shortfall_tolerance < 0.0:
             raise ValueError("viability.shortfall_tolerance must be >= 0")
@@ -103,17 +121,19 @@ class ViabilityParams:
             raise ValueError("viability.recovery_fraction must be in [0, 1]")
         lambda_init = max(0.0, float(payload.get("lambda_init", 0.0)))
         return cls(
-            min_viable_quote=max(1e-12, float(payload.get("min_viable_quote", 50_000.0))),
+            min_viable_quote=min_viable_quote,
             shortfall_tolerance=shortfall_tolerance,
             lambda_init=min(lambda_init, lambda_max),
             lambda_learning_rate=lambda_learning_rate,
             lambda_max=lambda_max,
             dual_ewma_decay=dual_ewma_decay,
             recovery_fraction=recovery_fraction,
+            min_viable_ratio=min_viable_ratio,
+            min_viable_bps=min_viable_bps,
         )
 
     def as_mapping(self) -> dict[str, float]:
-        return {
+        out = {
             "min_viable_quote": self.min_viable_quote,
             "shortfall_tolerance": self.shortfall_tolerance,
             "lambda_init": self.lambda_init,
@@ -122,6 +142,10 @@ class ViabilityParams:
             "dual_ewma_decay": self.dual_ewma_decay,
             "recovery_fraction": self.recovery_fraction,
         }
+        if self.min_viable_ratio > 0.0:
+            out["min_viable_ratio"] = self.min_viable_ratio
+            out["min_viable_bps"] = self.min_viable_bps
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +242,7 @@ class BookQualityHardStructure:
     action_max_spread: float
     action_min_depth: float = 0.0
     action_k_epsilon: float = 0.01
+    action_max_spread_bps: float | None = None
 
     @classmethod
     def from_mapping(cls, payload: Any) -> BookQualityHardStructure | None:
@@ -232,17 +257,31 @@ class BookQualityHardStructure:
                 "action_max_spread, action_min_depth, action_k_epsilon; remove "
                 + ", ".join(legacy)
             )
-        action_max_spread = float(payload.get("action_max_spread", 0.0))
+        action_max_spread_bps = payload.get("action_max_spread_bps")
+        if action_max_spread_bps is not None:
+            action_max_spread = float(action_max_spread_bps)
+            action_max_spread_bps = float(action_max_spread_bps)
+        else:
+            action_max_spread = float(payload.get("action_max_spread", 0.0))
+            action_max_spread_bps = None
         if action_max_spread <= 0.0:
             raise ValueError("book_quality.hard_structure.action_max_spread must be > 0")
         return cls(
             action_max_spread=action_max_spread,
             action_min_depth=max(0.0, float(payload.get("action_min_depth", 0.0))),
             action_k_epsilon=float(payload.get("action_k_epsilon", 0.01)),
+            action_max_spread_bps=action_max_spread_bps,
         )
+
+    def resolved_action_max_spread(self, mid: float | None = None) -> float:
+        if self.action_max_spread_bps is not None and mid is not None and mid > 0:
+            return float(mid) * float(self.action_max_spread_bps) / 10000.0
+        return float(self.action_max_spread)
 
     def as_mapping(self) -> dict[str, float]:
         out: dict[str, float] = {"action_max_spread": self.action_max_spread}
+        if self.action_max_spread_bps is not None:
+            out["action_max_spread_bps"] = self.action_max_spread_bps
         if self.action_min_depth > 0.0:
             out["action_min_depth"] = self.action_min_depth
         if self.action_k_epsilon != 0.01:
@@ -262,6 +301,7 @@ class BookQualitySoftScoring:
     v_tightness: float = 0.25
     v_balance: float = 0.25
     v_uniformity: float = 0.25
+    tightness_spread_scale_bps: float | None = None
 
     @classmethod
     def from_mapping(cls, payload: Any) -> BookQualitySoftScoring:
@@ -273,8 +313,15 @@ class BookQualitySoftScoring:
         measure = str(payload.get("measure", "quoted")).strip().lower()
         if measure not in ("quoted", "combined"):
             raise ValueError(f"book_quality.{SOFT_SCORING}.measure must be 'quoted' or 'combined'")
+        tightness_spread_scale_bps = payload.get("tightness_spread_scale_bps")
+        if tightness_spread_scale_bps is not None:
+            tightness_spread_scale = float(tightness_spread_scale_bps)
+            tightness_spread_scale_bps = float(tightness_spread_scale_bps)
+        else:
+            tightness_spread_scale = max(1e-9, float(payload.get(TIGHTNESS_SPREAD_SCALE, 50.0)))
+            tightness_spread_scale_bps = None
         return cls(
-            tightness_spread_scale=max(1e-9, float(payload.get(TIGHTNESS_SPREAD_SCALE, 50.0))),
+            tightness_spread_scale=tightness_spread_scale,
             presence_reference_qty=max(1e-9, float(payload.get(PRESENCE_REFERENCE_QTY, 1.0))),
             touch_spread_fraction=max(1e-9, float(payload.get("touch_spread_fraction", 0.01))),
             measure=measure,
@@ -282,7 +329,13 @@ class BookQualitySoftScoring:
             v_tightness=float(payload.get("v_tightness", 0.25)),
             v_balance=float(payload.get("v_balance", 0.25)),
             v_uniformity=float(payload.get("v_uniformity", 0.25)),
+            tightness_spread_scale_bps=tightness_spread_scale_bps,
         )
+
+    def resolved_tightness_spread_scale(self, mid: float | None = None) -> float:
+        if self.tightness_spread_scale_bps is not None and mid is not None and mid > 0:
+            return float(mid) * float(self.tightness_spread_scale_bps) / 10000.0
+        return float(self.tightness_spread_scale)
 
     def as_mapping(self) -> dict[str, float | str]:
         out: dict[str, float | str] = {
@@ -290,6 +343,8 @@ class BookQualitySoftScoring:
             PRESENCE_REFERENCE_QTY: self.presence_reference_qty,
             "measure": self.measure,
         }
+        if self.tightness_spread_scale_bps is not None:
+            out["tightness_spread_scale_bps"] = self.tightness_spread_scale_bps
         if self.touch_spread_fraction != 0.01:
             out["touch_spread_fraction"] = self.touch_spread_fraction
         if self.v_presence != 0.25:
@@ -392,11 +447,18 @@ def wallet_quadratic_deficit(
     """
 
     torch = _torch()
-    q_min = max(1e-12, float(params.min_viable_quote))
     mid_safe = torch.clamp(mid_price, min=1e-12)
     quote_total = torch.clamp(cash, min=0.0)
     base_total = torch.clamp(inventory, min=0.0)
     base_notional = base_total * mid_safe
+    total_wealth = quote_total + base_notional
+
+    if float(params.min_viable_ratio) > 0.0:
+        ratio = float(params.min_viable_ratio)
+        q_min = torch.clamp(total_wealth * ratio, min=1e-12)
+    else:
+        q_min = max(1e-12, float(params.min_viable_quote))
+
     m_bid = quote_total - q_min
     m_ask = base_notional - q_min
     d_bid = torch.clamp(-m_bid, min=0.0) / q_min

@@ -196,6 +196,7 @@ class EffectiveSigmoidMixtureAction(SigmoidMixtureAction):
     reservation_r_offset: float = 0.0
     reservation_mid: float = 0.0
     raw_reservation_logit: float = 0.0
+    spread_max: float = 0.0
 
     def _curve_spread_for_market(self, market_spread: float, side: str) -> float:
         from mm.mpc.l_param import curve_spread_for_market_spread_np
@@ -205,6 +206,7 @@ class EffectiveSigmoidMixtureAction(SigmoidMixtureAction):
             side=side,
             mid_price=self.reservation_mid,
             reservation_r_offset=self.reservation_r_offset,
+            spread_max=self.spread_max if self.spread_max > 0.0 else None,
         )
 
     def raw_depth_bid(self, spread: float) -> float:

@@ -101,6 +101,12 @@ def optimize_joint_with_diagnostics(
 ) -> tuple[SigmoidMixtureAction, OptimizerRunDiagnostics]:
     """Run four-curve joint MPC with consolidated wealth objective."""
 
+    if getattr(mpc, "is_bps", False) and state.mid > 0 and getattr(mpc, "spread_max_bps", None) is not None and getattr(mpc, "spread_step_bps", None) is not None:
+        from mm.mpc.mpc_tensor_batched import _grid_levels
+        mpc.spread_max = float(state.mid) * float(mpc.spread_max_bps) / 10000.0
+        mpc.spread_step = max(1e-12, float(state.mid) * float(mpc.spread_step_bps) / 10000.0)
+        mpc.grid_levels = _grid_levels(mpc.spread_max, mpc.spread_step)
+
     torch_mod = _get_torch()
     if isinstance(mpc.device, str) and mpc.device.lower() == "cpu":
         _device = torch_mod.device("cpu")

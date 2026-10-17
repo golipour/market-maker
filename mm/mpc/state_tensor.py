@@ -157,6 +157,7 @@ def depth_bid_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
+    spread_max = float(l_param.spread_max) if l_param is not None else None
     from mm.mpc.l_param import curve_spread_for_market_spread
 
     curve_spread = curve_spread_for_market_spread(
@@ -164,6 +165,7 @@ def depth_bid_tensor(
         side="bid",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_max,
     )
     z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
@@ -214,6 +216,7 @@ def depth_ask_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
+    spread_max = float(l_param.spread_max) if l_param is not None else None
     from mm.mpc.l_param import curve_spread_for_market_spread
 
     curve_spread = curve_spread_for_market_spread(
@@ -221,6 +224,7 @@ def depth_ask_tensor(
         side="ask",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_max,
     )
     z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
@@ -301,6 +305,7 @@ def _depth_at_spreads(
     side: str,
     mid_price: "Tensor | float | None" = None,
     reservation_r_offset: "Tensor | float | None" = None,
+    spread_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Evaluate the depth curve for already-materialized ``(L, k, x0)``."""
     from mm.mpc.l_param import curve_spread_for_market_spread
@@ -311,6 +316,7 @@ def _depth_at_spreads(
         side=side,
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_max,
     )
     z = (curve_spread.unsqueeze(-1) - x0) * k
     return _depth_from_materialized(L, torch.sigmoid(z))
@@ -341,11 +347,13 @@ def effective_depth_bid_tensor(
         quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
+    s_max = float(l_param.spread_max) if l_param is not None else None
     raw = _depth_at_spreads(
         L, k, x0, spread,
         side="bid",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=s_max,
     )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
     base = _depth_at_spreads(
@@ -353,6 +361,7 @@ def effective_depth_bid_tensor(
         side="bid",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=s_max,
     )
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
@@ -381,11 +390,13 @@ def effective_depth_ask_tensor(
         quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
     )
+    s_max = float(l_param.spread_max) if l_param is not None else None
     raw = _depth_at_spreads(
         L, k, x0, spread,
         side="ask",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=s_max,
     )
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
     base = _depth_at_spreads(
@@ -393,6 +404,7 @@ def effective_depth_ask_tensor(
         side="ask",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=s_max,
     )
     if raw.ndim == 1:
         return torch.clamp(raw - base[0], min=0.0)
@@ -570,6 +582,7 @@ def depth_bid_derivative_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
+    spread_max = float(l_param.spread_max) if l_param is not None else None
     from mm.mpc.l_param import curve_spread_for_market_spread
 
     curve_spread = curve_spread_for_market_spread(
@@ -577,6 +590,7 @@ def depth_bid_derivative_tensor(
         side="bid",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_max,
     )
     z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)
@@ -621,6 +635,7 @@ def depth_ask_derivative_tensor(
             k = _softplus_positive(k_raw)
         else:
             k = k_raw
+    spread_max = float(l_param.spread_max) if l_param is not None else None
     from mm.mpc.l_param import curve_spread_for_market_spread
 
     curve_spread = curve_spread_for_market_spread(
@@ -628,6 +643,7 @@ def depth_ask_derivative_tensor(
         side="ask",
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_max,
     )
     z = (curve_spread.unsqueeze(-1) - x0) * k
     s = torch.sigmoid(z)

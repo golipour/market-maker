@@ -346,18 +346,38 @@ class OrderbookGridConfig:
     ``((i) * spread_step, (i + 1) * spread_step]``; cumulative depth is evaluated at
     the upper edge ``(i + 1) * spread_step``.
 
+    Can be specified in absolute quote units (``spread_max``, ``spread_step``)
+    or in basis points of mid price (``spread_max_bps``, ``spread_step_bps``).
+
     Live order prices are controlled separately by ``ExecutionGridConfig``. When no
     execution grid is configured, the target book defaults to this same ladder.
     """
 
     spread_max: float = 100.0
     spread_step: float = 1.0
+    unit: str = "quote"
+    spread_max_bps: float | None = None
+    spread_step_bps: float | None = None
 
     def __post_init__(self) -> None:
+        if self.spread_max_bps is not None:
+            object.__setattr__(self, "spread_max", float(self.spread_max_bps))
+            object.__setattr__(self, "unit", "bps")
+        if self.spread_step_bps is not None:
+            object.__setattr__(self, "spread_step", float(self.spread_step_bps))
+            object.__setattr__(self, "unit", "bps")
         if self.spread_step <= 0:
             raise ValueError("orderbook_grid.spread_step must be positive")
         if self.spread_max <= 0:
             raise ValueError("orderbook_grid.spread_max must be positive")
+        unit = str(self.unit).strip().lower()
+        if unit not in ("quote", "bps"):
+            raise ValueError("orderbook_grid.unit must be 'quote' or 'bps'")
+        object.__setattr__(self, "unit", unit)
+
+    @property
+    def is_bps(self) -> bool:
+        return self.unit == "bps" or self.spread_max_bps is not None
 
     @property
     def levels(self) -> int:
@@ -365,19 +385,38 @@ class OrderbookGridConfig:
 
         return max(1, int(math.ceil(self.spread_max / self.spread_step)))
 
-    def spread_ladder(self) -> tuple[float, ...]:
+    def resolved_spread_max(self, mid: float | None = None) -> float:
+        if self.is_bps and mid is not None and mid > 0:
+            return float(mid) * float(self.spread_max) / 10000.0
+        return float(self.spread_max)
+
+    def resolved_spread_step(self, mid: float | None = None) -> float:
+        if self.is_bps and mid is not None and mid > 0:
+            return float(mid) * float(self.spread_step) / 10000.0
+        return float(self.spread_step)
+
+    def spread_ladder(self, mid: float | None = None) -> tuple[float, ...]:
         """Discrete quote spreads: step, 2*step, …, up to spread_max."""
+        import math
+
+        s_max = self.resolved_spread_max(mid)
+        s_step = self.resolved_spread_step(mid)
+        levels = max(1, int(math.ceil(s_max / s_step)))
         return tuple(
-            min(self.spread_max, self.spread_step * float(i + 1))
-            for i in range(self.levels)
+            min(s_max, s_step * float(i + 1))
+            for i in range(levels)
         )
 
-    def as_contract(self) -> dict[str, Any]:
+    def as_contract(self, mid: float | None = None) -> dict[str, Any]:
         return {
+            "unit": self.unit,
+            "is_bps": self.is_bps,
             "spread_max": self.spread_max,
             "spread_step": self.spread_step,
+            "resolved_spread_max": self.resolved_spread_max(mid),
+            "resolved_spread_step": self.resolved_spread_step(mid),
             "levels": self.levels,
-            "spread_ladder": list(self.spread_ladder()),
+            "spread_ladder": list(self.spread_ladder(mid)),
             "role": "mpc_simulation",
             "index_policy": (
                 "bucket i is cumulative depth through quote spread (i + 1) * spread_step from mid"
@@ -452,6 +491,12 @@ class ExecutionGridConfig:
     inner_linear_max: float | None = None
     inner_step: float | None = None
     spreads: tuple[float, ...] | None = None
+    unit: str = "quote"
+    spread_max_bps: float | None = None
+    spread_step_bps: float | None = None
+    spread_min_bps: float | None = None
+    inner_linear_max_bps: float | None = None
+    inner_step_bps: float | None = None
 
     def __post_init__(self) -> None:
         mode = str(self.mode).strip().lower()
@@ -460,6 +505,28 @@ class ExecutionGridConfig:
                 "execution_grid.mode must be one of: uniform, log, hybrid, explicit"
             )
         object.__setattr__(self, "mode", mode)
+        if self.spread_max_bps is not None and self.spread_max is None:
+            object.__setattr__(self, "spread_max", float(self.spread_max_bps))
+        if self.spread_step_bps is not None and self.spread_step is None:
+            object.__setattr__(self, "spread_step", float(self.spread_step_bps))
+        if self.spread_min_bps is not None and self.spread_min is None:
+            object.__setattr__(self, "spread_min", float(self.spread_min_bps))
+        if self.inner_linear_max_bps is not None and self.inner_linear_max is None:
+            object.__setattr__(self, "inner_linear_max", float(self.inner_linear_max_bps))
+        if self.inner_step_bps is not None and self.inner_step is None:
+            object.__setattr__(self, "inner_step", float(self.inner_step_bps))
+        if (
+            self.spread_max_bps is not None
+            or self.spread_min_bps is not None
+            or self.spread_step_bps is not None
+            or self.inner_linear_max_bps is not None
+            or self.inner_step_bps is not None
+        ):
+            object.__setattr__(self, "unit", "bps")
+        unit = str(self.unit).strip().lower()
+        if unit not in ("quote", "bps"):
+            raise ValueError("execution_grid.unit must be 'quote' or 'bps'")
+        object.__setattr__(self, "unit", unit)
         if self.spread_max is not None and float(self.spread_max) <= 0.0:
             raise ValueError("execution_grid.spread_max must be positive when set")
         if self.spread_step is not None and float(self.spread_step) <= 0.0:
@@ -475,32 +542,59 @@ class ExecutionGridConfig:
         if self.spreads is not None:
             object.__setattr__(self, "spreads", tuple(float(s) for s in self.spreads))
 
-    def resolved_spread_max(self, canonical: OrderbookGridConfig) -> float:
+    @property
+    def is_bps(self) -> bool:
+        return (
+            self.unit == "bps"
+            or self.spread_max_bps is not None
+            or self.spread_min_bps is not None
+            or self.spread_step_bps is not None
+        )
+
+    def resolved_spread_max(self, canonical: OrderbookGridConfig, mid: float | None = None) -> float:
+        canon_max = canonical.resolved_spread_max(mid)
         if self.spread_max is None:
-            return float(canonical.spread_max)
-        value = float(self.spread_max)
-        if value > float(canonical.spread_max) + 1e-12:
+            return canon_max
+        if self.is_bps and mid is not None and mid > 0:
+            val = float(mid) * float(self.spread_max) / 10000.0
+        else:
+            val = float(self.spread_max)
+        if val > canon_max + 1e-12:
             raise ValueError(
                 "execution_grid.spread_max must be <= orderbook_grid.spread_max "
-                f"({value} > {canonical.spread_max})"
+                f"({val} > {canon_max})"
             )
-        return value
+        return val
 
-    def spread_ladder(self, *, canonical: OrderbookGridConfig) -> tuple[float, ...]:
+    def resolved_spread_min(self, mid: float | None = None) -> float | None:
+        if self.spread_min is None:
+            return None
+        if self.is_bps and mid is not None and mid > 0:
+            return float(mid) * float(self.spread_min) / 10000.0
+        return float(self.spread_min)
+
+    def resolved_spread_step(self, canonical: OrderbookGridConfig, mid: float | None = None) -> float:
+        if self.spread_step is None:
+            return canonical.resolved_spread_step(mid)
+        if self.is_bps and mid is not None and mid > 0:
+            return float(mid) * float(self.spread_step) / 10000.0
+        return float(self.spread_step)
+
+    def spread_ladder(self, *, canonical: OrderbookGridConfig, mid: float | None = None) -> tuple[float, ...]:
         """Resolved execution spreads inside ``(0, spread_max]``, always including ``spread_max``."""
         import math
 
-        spread_max = self.resolved_spread_max(canonical)
+        spread_max = self.resolved_spread_max(canonical, mid=mid)
         mode = self.mode
 
         if mode == "uniform":
-            step = float(self.spread_step) if self.spread_step is not None else float(canonical.spread_step)
+            step = self.resolved_spread_step(canonical, mid=mid)
             if (
                 self.spread_step is None
                 and self.spread_max is None
-                and abs(spread_max - float(canonical.spread_max)) <= 1e-12
+                and abs(spread_max - canonical.resolved_spread_max(mid)) <= 1e-12
             ):
-                return canonical.spread_ladder()
+                return canonical.spread_ladder(mid=mid)
             levels = max(1, int(math.ceil(spread_max / step)))
             raw = [min(spread_max, step * float(i + 1)) for i in range(levels)]
             return _normalize_execution_spreads(raw, spread_max=spread_max)
@@ -508,35 +602,53 @@ class ExecutionGridConfig:
         if mode == "explicit":
             if not self.spreads:
                 raise ValueError("execution_grid.spreads is required when mode=explicit")
-            return _normalize_execution_spreads(self.spreads, spread_max=spread_max)
+            spreads = self.spreads
+            if self.is_bps and mid is not None and mid > 0:
+                spreads = tuple(float(mid) * s / 10000.0 for s in spreads)
+            return _normalize_execution_spreads(spreads, spread_max=spread_max)
 
         if mode == "log":
-            if self.spread_min is None:
+            spread_min = self.resolved_spread_min(mid=mid)
+            if spread_min is None:
                 raise ValueError("execution_grid.spread_min is required when mode=log")
             levels = int(self.levels) if self.levels is not None else 8
-            raw = _log_spaced_spreads(float(self.spread_min), spread_max, levels)
+            raw = _log_spaced_spreads(float(spread_min), spread_max, levels)
             return _normalize_execution_spreads(raw, spread_max=spread_max)
 
         # hybrid
-        inner_max = (
+        inner_max_raw = (
             float(self.inner_linear_max)
             if self.inner_linear_max is not None
             else (float(self.spread_min) if self.spread_min is not None else None)
         )
-        if inner_max is None:
+        if inner_max_raw is None:
             raise ValueError(
                 "execution_grid.inner_linear_max (or spread_min) is required when mode=hybrid"
             )
+        inner_max = (
+            float(mid) * inner_max_raw / 10000.0
+            if (self.is_bps and mid is not None and mid > 0)
+            else inner_max_raw
+        )
         if inner_max >= spread_max:
             raise ValueError("execution_grid.inner_linear_max must be < spread_max")
-        inner_step = (
+        inner_step_raw = (
             float(self.inner_step)
             if self.inner_step is not None
-            else float(canonical.spread_step)
+            else (
+                float(self.spread_step)
+                if self.spread_step is not None
+                else float(canonical.spread_step)
+            )
+        )
+        inner_step = (
+            float(mid) * inner_step_raw / 10000.0
+            if (self.is_bps and mid is not None and mid > 0)
+            else inner_step_raw
         )
         inner_levels = max(1, int(math.ceil(inner_max / inner_step)))
         inner = [min(inner_max, inner_step * float(i + 1)) for i in range(inner_levels)]
-        outer_min = float(self.spread_min) if self.spread_min is not None else inner_max
+        outer_min = self.resolved_spread_min(mid=mid) or inner_max
         outer_min = max(outer_min, inner_max)
         if outer_min >= spread_max:
             return _normalize_execution_spreads(inner, spread_max=spread_max)
@@ -544,15 +656,17 @@ class ExecutionGridConfig:
         outer = _log_spaced_spreads(outer_min, spread_max, max(2, outer_levels))
         return _normalize_execution_spreads([*inner, *outer], spread_max=spread_max)
 
-    def as_contract(self, *, canonical: OrderbookGridConfig) -> dict[str, Any]:
-        ladder = self.spread_ladder(canonical=canonical)
+    def as_contract(self, *, canonical: OrderbookGridConfig, mid: float | None = None) -> dict[str, Any]:
+        ladder = self.spread_ladder(canonical=canonical, mid=mid)
         return {
             "mode": self.mode,
-            "spread_max": self.resolved_spread_max(canonical),
+            "unit": self.unit,
+            "is_bps": self.is_bps,
+            "spread_max": self.resolved_spread_max(canonical, mid=mid),
             "spread_step": self.spread_step,
             "levels": len(ladder),
             "configured_levels": self.levels,
-            "spread_min": self.spread_min,
+            "spread_min": self.resolved_spread_min(mid=mid),
             "inner_linear_max": self.inner_linear_max,
             "inner_step": self.inner_step,
             "spreads": list(self.spreads) if self.spreads is not None else None,
@@ -828,9 +942,9 @@ class ControllerRuntimeConfig:
             return int(getattr(parent, "interval_ms", 30_000) or 30_000)
         return 30_000
 
-    def execution_spread_ladder(self) -> tuple[float, ...]:
+    def execution_spread_ladder(self, mid: float | None = None) -> tuple[float, ...]:
         """Resolved live-order spreads (execution grid sampled within the MPC domain)."""
-        return self.execution_grid.spread_ladder(canonical=self.orderbook_grid)
+        return self.execution_grid.spread_ladder(canonical=self.orderbook_grid, mid=mid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1910,12 +2024,29 @@ def _orderbook_grid_from_mapping(payload: dict[str, Any]) -> OrderbookGridConfig
         return OrderbookGridConfig()
     if not isinstance(grid, dict):
         raise ValueError("orderbook_grid must be an object")
+    unit = str(grid.get("unit", "quote")).strip().lower()
+    has_bps = "spread_max_bps" in grid or "spread_step_bps" in grid or unit == "bps"
+    if has_bps:
+        s_max_val = grid.get("spread_max_bps", grid.get("spread_max"))
+        s_step_val = grid.get("spread_step_bps", grid.get("spread_step"))
+        if s_max_val is None or s_step_val is None:
+            raise ValueError(
+                "orderbook_grid in bps mode requires spread_max_bps (or spread_max) and spread_step_bps (or spread_step)"
+            )
+        return OrderbookGridConfig(
+            spread_max=float(s_max_val),
+            spread_step=float(s_step_val),
+            unit="bps",
+            spread_max_bps=float(s_max_val),
+            spread_step_bps=float(s_step_val),
+        )
     missing = [k for k in ("spread_max", "spread_step") if k not in grid]
     if missing:
         raise ValueError(f"orderbook_grid missing required keys: {', '.join(missing)}")
     return OrderbookGridConfig(
         spread_max=float(grid["spread_max"]),
         spread_step=float(grid["spread_step"]),
+        unit="quote",
     )
 
 
@@ -1931,17 +2062,39 @@ def _execution_grid_from_mapping(payload: dict[str, Any]) -> ExecutionGridConfig
         if not isinstance(spreads_raw, (list, tuple)):
             raise ValueError("execution_grid.spreads must be a list of numbers")
         spreads = tuple(float(v) for v in spreads_raw)
+    unit = str(grid.get("unit", "quote")).strip().lower()
+    spread_max_bps = float(grid["spread_max_bps"]) if grid.get("spread_max_bps") is not None else None
+    spread_step_bps = float(grid["spread_step_bps"]) if grid.get("spread_step_bps") is not None else None
+    spread_min_bps = float(grid["spread_min_bps"]) if grid.get("spread_min_bps") is not None else None
+    inner_linear_max_bps = (
+        float(grid["inner_linear_max_bps"]) if grid.get("inner_linear_max_bps") is not None else None
+    )
+    inner_step_bps = float(grid["inner_step_bps"]) if grid.get("inner_step_bps") is not None else None
+    if (
+        spread_max_bps is not None
+        or spread_min_bps is not None
+        or spread_step_bps is not None
+        or inner_linear_max_bps is not None
+        or inner_step_bps is not None
+    ):
+        unit = "bps"
     return ExecutionGridConfig(
         mode=str(grid.get("mode", "uniform")),  # type: ignore[arg-type]
-        spread_max=float(grid["spread_max"]) if grid.get("spread_max") is not None else None,
-        spread_step=float(grid["spread_step"]) if grid.get("spread_step") is not None else None,
+        spread_max=float(grid["spread_max"]) if grid.get("spread_max") is not None else spread_max_bps,
+        spread_step=float(grid["spread_step"]) if grid.get("spread_step") is not None else spread_step_bps,
         levels=int(grid["levels"]) if grid.get("levels") is not None else None,
-        spread_min=float(grid["spread_min"]) if grid.get("spread_min") is not None else None,
+        spread_min=float(grid["spread_min"]) if grid.get("spread_min") is not None else spread_min_bps,
         inner_linear_max=(
-            float(grid["inner_linear_max"]) if grid.get("inner_linear_max") is not None else None
+            float(grid["inner_linear_max"]) if grid.get("inner_linear_max") is not None else inner_linear_max_bps
         ),
-        inner_step=float(grid["inner_step"]) if grid.get("inner_step") is not None else None,
+        inner_step=float(grid["inner_step"]) if grid.get("inner_step") is not None else inner_step_bps,
         spreads=spreads,
+        unit=unit,
+        spread_max_bps=spread_max_bps,
+        spread_step_bps=spread_step_bps,
+        spread_min_bps=spread_min_bps,
+        inner_linear_max_bps=inner_linear_max_bps,
+        inner_step_bps=inner_step_bps,
     )
 
 

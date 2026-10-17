@@ -295,7 +295,7 @@ class MpcStrategyEngine:
         state = _state_from_frame(
             frame,
             self.binding,
-            self.config.orderbook_grid.spread_max,
+            self.config.orderbook_grid,
             reference_price_source=self.config.reference_price_source,
             pricing=self.config.pricing,
             liquidity_sourcing=self.liquidity_sourcing,
@@ -412,7 +412,7 @@ class MpcStrategyEngine:
             self.binding.local,
             max_orders_per_side=local_max_orders_per_side,
         )
-        execution_ladder = self.config.execution_spread_ladder()
+        execution_ladder = self.config.execution_spread_ladder(mid=state.mid)
         continuous_depth = _continuous_action_depth_series(
             sigmoid_action,
             mid=float(state.mid),
@@ -674,6 +674,9 @@ def _build_controller(
         "adam_epochs": 10,
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
+        "is_bps": getattr(grid, "is_bps", False),
+        "spread_max_bps": getattr(grid, "spread_max_bps", None) or (grid.spread_max if getattr(grid, "is_bps", False) else None),
+        "spread_step_bps": getattr(grid, "spread_step_bps", None) or (grid.spread_step if getattr(grid, "is_bps", False) else None),
         "device": "cpu",
         "reference_price_source": config.reference_price_source,
         "local_optimizer": local_optimizer_defaults,
@@ -915,7 +918,7 @@ def _update_global_residual_price_model(
 def _state_from_frame(
     frame: StrategyInputFrame,
     binding: SymbolBinding,
-    spread_max: float,
+    spread_max: float | Any,
     *,
     reference_price_source: str = "global",
     pricing: PricingRuntimeConfig | None = None,
@@ -956,15 +959,20 @@ def _state_from_frame(
     quote_anchor = float(anchor_result.price)
     local_book_mid = _two_sided_mid_or_none(frame.local.orderbook)
     liquidity_book_mid = _two_sided_mid_or_none(liquidity_event.orderbook)
+    effective_spread_max = (
+        float(spread_max.resolved_spread_max(mid=quote_anchor))
+        if hasattr(spread_max, "resolved_spread_max")
+        else float(spread_max)
+    )
     bids = tuple(
         (spread, level.qty)
         for level in frame.local.orderbook.bids
-        if (spread := quote_anchor - level.price) >= 0 and spread <= spread_max and level.qty > 0
+        if (spread := quote_anchor - level.price) >= 0 and spread <= effective_spread_max and level.qty > 0
     )
     asks = tuple(
         (spread, level.qty)
         for level in frame.local.orderbook.asks
-        if (spread := level.price - quote_anchor) >= 0 and spread <= spread_max and level.qty > 0
+        if (spread := level.price - quote_anchor) >= 0 and spread <= effective_spread_max and level.qty > 0
     )
     buy_vwap, sell_vwap = _inventory_vwap_or_anchor(
         frame.local.orderbook,
@@ -979,7 +987,7 @@ def _state_from_frame(
     if frame.global_ is not None:
         try:
             global_mid = mid_from_orderbook(frame.global_.orderbook)
-            global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=spread_max)
+            global_ob_rel = ob_rel_from_market_event(frame.global_.orderbook, spread_max=effective_spread_max)
         except ValueError:
             global_mid = None
             global_ob_rel = OrderbookRelative(bids=(), asks=())

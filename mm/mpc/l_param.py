@@ -106,9 +106,13 @@ class SpreadStructureParams:
             return None
         if not isinstance(payload, dict):
             raise ValueError("book_quality.hard_structure must be an object")
-        center_sum_max = float(
-            payload.get("action_max_spread", payload.get("center_sum_max", 0.0))
-        )
+        center_sum_max_raw = payload.get("action_max_spread_bps")
+        if center_sum_max_raw is not None:
+            center_sum_max = float(center_sum_max_raw)
+        else:
+            center_sum_max = float(
+                payload.get("action_max_spread", payload.get("center_sum_max", 0.0))
+            )
         if center_sum_max <= 0.0:
             raise ValueError("book_quality.hard_structure.action_max_spread must be > 0")
         return cls(
@@ -126,13 +130,14 @@ class SpreadStructureParams:
     def from_book_quality_hard_structure(cls, hard: Any) -> SpreadStructureParams | None:
         if hard is None:
             return None
-        return cls.from_mapping(
-            {
-                "action_max_spread": hard.action_max_spread,
-                "action_min_depth": hard.action_min_depth,
-                "action_k_epsilon": hard.action_k_epsilon,
-            }
-        )
+        payload: dict[str, Any] = {
+            "action_max_spread": hard.action_max_spread,
+            "action_min_depth": hard.action_min_depth,
+            "action_k_epsilon": hard.action_k_epsilon,
+        }
+        if getattr(hard, "action_max_spread_bps", None) is not None:
+            payload["action_max_spread_bps"] = hard.action_max_spread_bps
+        return cls.from_mapping(payload)
 
     def as_mapping(self) -> dict[str, float]:
         out: dict[str, float] = {"center_sum_max": self.center_sum_max}
@@ -176,13 +181,19 @@ class ReservationSkewParams:
         if not isinstance(payload, dict):
             raise ValueError(f"{RESERVATION_SKEW} must be an object")
         reject_removed_reservation_skew_keys(payload)
-        max_abs_skew = max(0.0, float(payload.get(MAX_ABS_SKEW, 0.0)))
+        if "max_abs_skew_bps" in payload:
+            max_abs_skew = max(0.0, float(payload["max_abs_skew_bps"]) / 10000.0)
+        else:
+            max_abs_skew = max(0.0, float(payload.get(MAX_ABS_SKEW, 0.0)))
         if max_abs_skew <= 0.0:
             return None
         return cls(max_abs_skew=max_abs_skew)
 
     def as_mapping(self) -> dict[str, float]:
-        return {MAX_ABS_SKEW: self.max_abs_skew}
+        return {
+            MAX_ABS_SKEW: self.max_abs_skew,
+            "max_abs_skew_bps": self.max_abs_skew * 10000.0,
+        }
 
 
 def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
@@ -411,12 +422,16 @@ def curve_spread_for_market_spread_np(
     side: str,
     mid_price: float,
     reservation_r_offset: float,
+    spread_max: float | None = None,
 ) -> float:
     """Numpy map from market spread to sigmoid curve argument."""
 
     if mid_price <= 0.0 or abs(float(reservation_r_offset)) <= 0.0:
         return float(market_spread)
     shift = float(mid_price) * float(reservation_r_offset)
+    if spread_max is not None and float(spread_max) > 0.0:
+        max_shift = 0.8 * float(spread_max)
+        shift = max(-max_shift, min(max_shift, shift))
     if side == "bid":
         return max(0.0, float(market_spread) + shift)
     return max(0.0, float(market_spread) - shift)
@@ -428,6 +443,7 @@ def curve_spread_for_market_spread(
     side: str,
     mid_price: Any | None,
     reservation_r_offset: Any | None,
+    spread_max: Any | None = None,
 ) -> Any:
     """Map market-grid spread to sigmoid argument with relative reservation shift."""
     if mid_price is None or reservation_r_offset is None:
@@ -440,6 +456,12 @@ def curve_spread_for_market_spread(
     if not torch.is_tensor(mid):
         mid = torch.as_tensor(mid, dtype=market_spread.dtype, device=market_spread.device)
     shift = mid * r_off
+    if spread_max is not None:
+        s_max = spread_max
+        if not torch.is_tensor(s_max):
+            s_max = torch.as_tensor(s_max, dtype=market_spread.dtype, device=market_spread.device)
+        max_shift = 0.8 * s_max
+        shift = shift.clamp(-max_shift, max_shift)
     if side == "bid":
         return (market_spread + shift).clamp(min=0.0)
     return (market_spread - shift).clamp(min=0.0)
@@ -737,6 +759,7 @@ def sigmoid_action_from_flat_raw(
         reservation_r_offset=r_offset,
         reservation_mid=float(mid_price or 0.0),
         raw_reservation_logit=raw_logit,
+        spread_max=float(l_param.spread_max) if l_param is not None else 0.0,
     )
 
 

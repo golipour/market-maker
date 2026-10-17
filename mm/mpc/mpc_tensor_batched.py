@@ -1220,6 +1220,9 @@ class MonteCarloMPCTensorBatched:
         tensor_dtype: str = "float64",
         torch_threads: int | str | None = None,
         compile_soft_fill: bool | None = None,
+        is_bps: bool = False,
+        spread_max_bps: float | None = None,
+        spread_step_bps: float | None = None,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -1227,6 +1230,17 @@ class MonteCarloMPCTensorBatched:
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
+        self.is_bps = bool(is_bps) or (spread_max_bps is not None)
+        self.spread_max_bps = (
+            float(spread_max_bps)
+            if spread_max_bps is not None
+            else (float(spread_max) if self.is_bps else None)
+        )
+        self.spread_step_bps = (
+            float(spread_step_bps)
+            if spread_step_bps is not None
+            else (float(spread_step) if self.is_bps else None)
+        )
         self.spread_max = float(spread_max)
         self.spread_step = max(1e-12, float(spread_step))
         self.grid_levels = _grid_levels(self.spread_max, self.spread_step)
@@ -1505,6 +1519,10 @@ class MonteCarloMPCTensorBatched:
         return action
 
     def optimize_with_diagnostics(self, state: State) -> tuple[SigmoidMixtureAction, OptimizerRunDiagnostics]:
+        if getattr(self, "is_bps", False) and state.mid > 0 and getattr(self, "spread_max_bps", None) is not None and getattr(self, "spread_step_bps", None) is not None:
+            self.spread_max = float(state.mid) * float(self.spread_max_bps) / 10000.0
+            self.spread_step = max(1e-12, float(state.mid) * float(self.spread_step_bps) / 10000.0)
+            self.grid_levels = _grid_levels(self.spread_max, self.spread_step)
         has_global_reference = (
             self.reference_price_source == "global"
             and state.global_sell_vwap is not None
