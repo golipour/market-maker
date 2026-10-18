@@ -2346,8 +2346,8 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
                 "optional learnable reservation skew: max_abs_skew bounds dimensionless "
                 "r_skew; curve evaluation uses D(x ± mid * r_skew) on the market spread grid"
             ),
-            "soft_fill_temp": "venue soft-fill temperature",
-            "soft_fill_activation": "venue soft-fill activation: sigmoid or hardsigmoid",
+            "soft_fill_temp": "venue soft-fill temperature (deprecated: matching is exact volume-conserving)",
+            "soft_fill_activation": "venue soft-fill activation (deprecated: matching is exact volume-conserving)",
             "soft_fill_queue_model": "venue queue model: pro_rata or back_of_queue",
         },
         "float_bridge": {

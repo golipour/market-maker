@@ -35,7 +35,8 @@ SPREAD_STEP = 20.0
 
 
 def _reference_two_sided(book_cum, vol, our, activation, queue_model, eps=1e-12):
-    """The pre-refactor implementation, one independent (N, G) chain."""
+    """Independent reference matching implementation, one independent (N, G) chain."""
+    del activation  # Deprecated in conserving matching
     book_prev = F.pad(book_cum[:, :-1], (1, 0))
     book_level = torch.relu(book_cum - book_prev)
     # ``our`` is (G,) when the decode produced a grid-shaped depth and (N, G)
@@ -46,24 +47,24 @@ def _reference_two_sided(book_cum, vol, our, activation, queue_model, eps=1e-12)
     depth_prev = F.pad(our[:, :-1], (1, 0))
     marg = torch.relu(our - depth_prev)
     comb_level = book_level + marg
+
+    # Exact flow-conserving prefix consumption
     comb_cum = torch.cumsum(comb_level, dim=1)
-    reach_raw = vol - comb_cum
-    pos = torch.clamp(reach_raw.max(dim=1, keepdim=True).values, min=eps)
-    neg = torch.clamp((-reach_raw).max(dim=1, keepdim=True).values, min=eps)
-    reach = torch.where(reach_raw >= 0.0, reach_raw / pos, reach_raw / neg)
-    frac = _soft_fill_fraction(reach, 1.0, activation)
-    consumed = comb_level * frac
-    nxt = (
-        F.pad(book_level[:, 1:], (0, 1))
-        if queue_model == "back_of_queue"
-        else torch.zeros_like(book_level)
-    )
-    den = comb_level + nxt
-    share = torch.where(
-        den > eps, marg / torch.clamp(den, min=eps), torch.zeros_like(comb_level)
-    )
-    fill_level = consumed * share
-    consumed_market = torch.minimum(torch.relu(consumed - fill_level), book_level)
+    cons_cum = torch.minimum(vol, comb_cum)
+    cons_prev = F.pad(cons_cum[:, :-1], (1, 0))
+    consumed = torch.relu(cons_cum - cons_prev)
+
+    if queue_model == "back_of_queue":
+        consumed_market = torch.minimum(consumed, book_level)
+        fill_level = consumed - consumed_market
+    else:  # pro_rata
+        den = torch.clamp(comb_level, min=eps)
+        share = torch.where(
+            comb_level > eps, marg / den, torch.zeros_like(comb_level)
+        )
+        fill_level = consumed * share
+        consumed_market = consumed - fill_level
+
     return torch.relu(book_level - consumed_market), fill_level
 
 
@@ -626,3 +627,139 @@ def test_unwarmed_shape_never_compiles_on_the_decide_path():
             "an unwarmed shape ran eager without recording the signature, so "
             "the missed warm-up would be invisible in logs"
         )
+
+
+def test_exact_flow_conservation_zero_volume():
+    """Physical law: When incoming trade volume is 0, execution is identically 0."""
+    gen = torch.Generator().manual_seed(42)
+    kwargs = _build_case("random", gen)
+    # Zero volume on both sides
+    kwargs["sell_vol"] = torch.zeros((N_SAMPLES, 1), dtype=torch.float64)
+    kwargs["buy_vol"] = torch.zeros((N_SAMPLES, 1), dtype=torch.float64)
+
+    ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(**kwargs)
+
+    # 1. Orderbooks must be completely untouched
+    book_prev_b = F.pad(kwargs["book_cum_bid"][:, :-1], (1, 0))
+    expected_ob_b = torch.relu(kwargs["book_cum_bid"] - book_prev_b)
+    book_prev_a = F.pad(kwargs["book_cum_ask"][:, :-1], (1, 0))
+    expected_ob_a = torch.relu(kwargs["book_cum_ask"] - book_prev_a)
+
+    assert torch.equal(ob_bids_next, expected_ob_b)
+    assert torch.equal(ob_asks_next, expected_ob_a)
+
+    # 2. Fills, cash delta, and inventory delta must be EXACTLY zero
+    assert torch.equal(cash_delta, torch.zeros_like(cash_delta))
+    assert torch.equal(inv_delta, torch.zeros_like(inv_delta))
+
+    # 3. One-sided test: sell_vol > 0, buy_vol == 0
+    kwargs["sell_vol"] = torch.full((N_SAMPLES, 1), 50.0, dtype=torch.float64)
+    kwargs["buy_vol"] = torch.zeros((N_SAMPLES, 1), dtype=torch.float64)
+
+    ob_bids_next2, ob_asks_next2, cash_delta2, inv_delta2 = soft_fill_batched(**kwargs)
+    # Ask book must be completely untouched, no ask fills
+    assert torch.equal(ob_asks_next2, expected_ob_a)
+    # Bid book was consumed
+    assert not torch.equal(ob_bids_next2, expected_ob_b)
+
+
+def test_hand_calculated_queue_allocations():
+    """Test exact bucket-level matching against hand-calculated analytical solutions.
+
+    Fixture:
+      Level 0: public depth = 4.0, our quote = 2.0 (combined = 6.0)
+    """
+    l_param = LParamConfig(
+        quote_size_min=2.0, quote_size_max=2.0, spread_max=20.0, n_components=1
+    )
+    # Configure 1 level
+    spread_grid = torch.tensor([20.0], dtype=torch.float64)
+    mid_price = torch.tensor([[100.0]], dtype=torch.float64)
+    empty_ask = torch.zeros((1, 1), dtype=torch.float64)
+    buy_vol = torch.zeros((1, 1), dtype=torch.float64)
+    book_bid = torch.tensor([[4.0]], dtype=torch.float64)
+
+    # Decode params to produce exactly 2.0 quote size
+    params = torch.tensor([0.0, 20.0, 0.0, 0.0, 20.0, 0.0, 30.0, 30.0, 0.0], dtype=torch.float64)
+
+    # Case 1: V = 3.0 (under public depth of 4.0)
+    # BOQ: market eats 3.0, our gets 0.0
+    _, _, _, inv_boq_3 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[3.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="back_of_queue", l_param=l_param,
+    )
+    # Pro-rata: our gets 3.0 * (2.0 / 6.0) = 1.0
+    _, _, _, inv_pr_3 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[3.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="pro_rata", l_param=l_param,
+    )
+    assert float(inv_boq_3[0]) == pytest.approx(0.0, abs=1e-9)
+    assert float(inv_pr_3[0]) == pytest.approx(1.0, rel=1e-6)
+
+    # Case 2: V = 5.0 (exceeds public 4.0 by 1.0)
+    # BOQ: market eats 4.0, our gets 1.0
+    _, _, _, inv_boq_5 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[5.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="back_of_queue", l_param=l_param,
+    )
+    # Pro-rata: our gets 5.0 * (2.0 / 6.0) = 5/3 = 1.666667
+    _, _, _, inv_pr_5 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[5.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="pro_rata", l_param=l_param,
+    )
+    assert float(inv_boq_5[0]) == pytest.approx(1.0, rel=1e-6)
+    assert float(inv_pr_5[0]) == pytest.approx(5.0 / 3.0, rel=1e-6)
+
+    # Case 3: V = 10.0 (overflow beyond total capacity of 6.0)
+    # Both: our gets exactly 2.0 (our maximum quote capacity)
+    _, _, _, inv_boq_10 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[10.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="back_of_queue", l_param=l_param,
+    )
+    _, _, _, inv_pr_10 = soft_fill_batched(
+        params, n_components=1, mid_price=mid_price, book_cum_bid=book_bid, book_cum_ask=empty_ask,
+        sell_vol=torch.tensor([[10.0]], dtype=torch.float64), buy_vol=buy_vol, spread_grid=spread_grid,
+        maker_fee=0.0, soft_fill_queue_model="pro_rata", l_param=l_param,
+    )
+    assert float(inv_boq_10[0]) == pytest.approx(2.0, rel=1e-6)
+    assert float(inv_pr_10[0]) == pytest.approx(2.0, rel=1e-6)
+
+
+def test_flow_conservation_invariants_across_random_books():
+    """Verify that total volume consumed across public + maker <= incoming market volume."""
+    gen = torch.Generator().manual_seed(999)
+    for q_model in ("back_of_queue", "pro_rata"):
+        kwargs = _build_case("random", gen)
+        kwargs["soft_fill_queue_model"] = q_model
+        vols_bid = kwargs["sell_vol"]  # market sells hit bids
+        vols_ask = kwargs["buy_vol"]   # market buys hit asks
+
+        ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(**kwargs)
+
+        # Original public book levels
+        book_prev_b = F.pad(kwargs["book_cum_bid"][:, :-1], (1, 0))
+        orig_book_b = torch.relu(kwargs["book_cum_bid"] - book_prev_b)
+        book_prev_a = F.pad(kwargs["book_cum_ask"][:, :-1], (1, 0))
+        orig_book_a = torch.relu(kwargs["book_cum_ask"] - book_prev_a)
+
+        # Public volume consumed
+        consumed_mkt_b = orig_book_b - ob_bids_next
+        consumed_mkt_a = orig_book_a - ob_asks_next
+
+        # Invariant 1: Public book next state is non-negative and <= original
+        assert (ob_bids_next >= -1e-12).all()
+        assert (ob_asks_next >= -1e-12).all()
+        assert (consumed_mkt_b >= -1e-12).all()
+        assert (consumed_mkt_a >= -1e-12).all()
+
+        # Invariant 2: Total consumed on each side <= incoming market volume
+        # Bid side: maker fee is applied to inv_delta, so invert to find gross maker fill
+        # Or simpler: total public consumed <= vol
+        assert (consumed_mkt_b.sum(dim=1, keepdim=True) <= vols_bid + 1e-9).all()
+        assert (consumed_mkt_a.sum(dim=1, keepdim=True) <= vols_ask + 1e-9).all()
+

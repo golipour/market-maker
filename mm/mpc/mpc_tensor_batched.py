@@ -724,41 +724,30 @@ def soft_fill_batched(
     our_level = marg * scale
     comb_level = book_level + our_level
 
-    # Soft consumption against combined cumulative depth.
+    # Exact flow-conserving prefix consumption.
     comb_cum = torch.cumsum(comb_level, dim=2)
-    reach_raw = vol - comb_cum
-    pos_scale = torch.clamp(reach_raw.max(dim=2, keepdim=True).values, min=eps)
-    neg_scale = torch.clamp((-reach_raw).max(dim=2, keepdim=True).values, min=eps)
-    reach = torch.where(
-        reach_raw >= 0.0,
-        reach_raw / pos_scale,
-        reach_raw / neg_scale,
-    )
-    fill_frac = _soft_fill_fraction(reach, soft_temp, soft_fill_activation)
-    consumed_level = comb_level * fill_frac
+    cons_cum = torch.minimum(vol, comb_cum)
+    cons_prev = F.pad(cons_cum[:, :, :-1], (1, 0))
+    consumed_level = torch.relu(cons_cum - cons_prev)
 
-    # Split consumed level volumes between market book and our quotes.
-    # back_of_queue treats the next worse public level as ahead of our order,
-    # which is a conservative differentiable queue approximation.
+    # Split consumed volume between market book and our quotes.
     queue_model = _normalize_soft_fill_queue_model(soft_fill_queue_model)
     if queue_model == "back_of_queue":
-        next_public = F.pad(book_level[:, :, 1:], (0, 1))
-    else:
-        next_public = torch.zeros_like(book_level)
-    share_den = comb_level + next_public
-    share_our = torch.where(
-        share_den > eps,
-        our_level / torch.clamp(share_den, min=eps),
-        torch.zeros_like(comb_level),
-    )
-    fill_level = consumed_level * share_our
+        consumed_market = torch.minimum(consumed_level, book_level)
+        fill_level = consumed_level - consumed_market
+    else:  # pro_rata
+        share_den = torch.clamp(comb_level, min=eps)
+        share_our = torch.where(
+            comb_level > eps,
+            our_level / share_den,
+            torch.zeros_like(comb_level),
+        )
+        fill_level = consumed_level * share_our
+        consumed_market = consumed_level - fill_level
+
     fill = fill_level.sum(dim=2)
 
     # Market-book next state after market-flow consumption (our resting remainder is canceled).
-    consumed_market = torch.minimum(
-        torch.relu(consumed_level - fill_level),
-        book_level,
-    )
     ob_next = torch.relu(book_level - consumed_market)
     ob_bids_next, ob_asks_next = ob_next[0], ob_next[1]
     fill_bid_level, fill_ask_level = fill_level[0], fill_level[1]
