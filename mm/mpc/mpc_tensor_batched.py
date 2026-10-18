@@ -541,8 +541,7 @@ def _mid_from_book_best_levels_batched(
     Mid implied by post-flow best bid/ask from level volumes.
     center_mid sets the absolute price reference; spread_grid is quote-price distance from mid.
     """
-    big = float(spread_grid.max().item()) + 1000.0
-    big_t = torch.tensor(big, dtype=center_mid.dtype, device=center_mid.device)
+    big_t = spread_grid[-1] + 1000.0
     # Select the spread (or the "absent" sentinel) directly instead of
     # blending two float tensors via a 0/1 mask. The arithmetic form
     # ``grid * mask + (1 - mask) * big`` spends four dispatches per side
@@ -570,10 +569,7 @@ def _best_spread_from_book_batched(
     spread_grid: torch.Tensor,
 ) -> torch.Tensor:
     """Best bid/ask spread width from grid-aligned book levels."""
-    big = float(spread_grid.max().item()) + 1000.0
-    dtype = ob_bids.dtype
-    device = ob_bids.device
-    big_t = torch.tensor(big, dtype=dtype, device=device)
+    big_t = spread_grid[-1] + 1000.0
     # See ``_mid_from_book_best_levels_batched``: a direct ``where`` replaces
     # the 0/1 mask blend bit-exactly at lower dispatch cost.
     spread_b = torch.where(ob_bids > 0, spread_grid.unsqueeze(0), big_t)
@@ -705,6 +701,7 @@ def soft_fill_batched(
         ask_quote_size_max=ask_quote_size_max,
         mid_price=mid_price,
         reservation_r_offset=reservation_r_offset,
+        spread_max=spread_grid[-1],
     )
     if depth_sample.ndim == 2:
         depth_sample = depth_sample.unsqueeze(1).expand(-1, book_cum_bid.shape[0], -1)
@@ -1223,6 +1220,9 @@ class MonteCarloMPCTensorBatched:
         is_bps: bool = False,
         spread_max_bps: float | None = None,
         spread_step_bps: float | None = None,
+        crn_enabled: bool = False,
+        crn_seed: int = 42,
+        warmup_gate_enabled: bool = False,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -1230,6 +1230,9 @@ class MonteCarloMPCTensorBatched:
         self.n_components = max(1, n_components)
         self.n_samples = max(1, n_samples)
         self.horizon = max(1, horizon)
+        self.crn_enabled = bool(crn_enabled)
+        self.crn_seed = int(crn_seed)
+        self.warmup_gate_enabled = bool(warmup_gate_enabled)
         self.is_bps = bool(is_bps) or (spread_max_bps is not None)
         self.spread_max_bps = (
             float(spread_max_bps)
@@ -1485,10 +1488,35 @@ class MonteCarloMPCTensorBatched:
         n_components = (
             self.global_n_components if str(venue).lower() == "global" else self.local_n_components
         )
+        s_max = (
+            float(self.spread_max_bps)
+            if (getattr(self, "is_bps", False) and getattr(self, "spread_max_bps", None) is not None)
+            else float(self.spread_max)
+        )
         return self._venue_optimizer(venue).l_param_config(
-            spread_max=self.spread_max,
+            spread_max=s_max,
             n_components=n_components,
         )
+
+    def _l_param_config_for_mid(self, mid_price: float, venue: str = "local") -> LParamConfig:
+        from dataclasses import replace
+
+        n_components = (
+            self.global_n_components if str(venue).lower() == "global" else self.local_n_components
+        )
+        quote_s_max = float(mid_price) * float(self.spread_max_bps) / 10000.0
+        l_param = self._venue_optimizer(venue).l_param_config(
+            spread_max=quote_s_max,
+            n_components=n_components,
+        )
+        if (
+            l_param.spread_structured
+            and l_param.quote_spread_max is not None
+            and float(self.spread_max_bps) > 0
+        ):
+            ratio = float(l_param.quote_spread_max) / float(self.spread_max_bps)
+            l_param = replace(l_param, quote_spread_max=quote_s_max * ratio)
+        return l_param
 
     def _depth_call_kwargs(self, venue: str = "local") -> dict[str, Any]:
         return {"use_softplus": True, "l_param": self._l_param_config(venue)}
@@ -1503,10 +1531,15 @@ class MonteCarloMPCTensorBatched:
         ask_quote_size_min: float | None = None,
         ask_quote_size_max: float | None = None,
     ) -> SigmoidMixtureAction:
+        l_param = (
+            self._l_param_config_for_mid(mid_price)
+            if (getattr(self, "is_bps", False) and mid_price is not None and mid_price > 0 and getattr(self, "spread_max_bps", None) is not None)
+            else self._l_param_config()
+        )
         return sigmoid_action_from_flat_raw(
             flat,
             self.local_n_components,
-            l_param=self._l_param_config(),
+            l_param=l_param,
             mid_price=mid_price,
             bid_quote_size_min=bid_quote_size_min,
             bid_quote_size_max=bid_quote_size_max,
@@ -1643,6 +1676,8 @@ class MonteCarloMPCTensorBatched:
 
         # Pre-draw MC samples: (n_samples, horizon) for MOF and price shocks.
         def draw_samples():
+            if self.crn_enabled:
+                torch_mod.manual_seed(self.crn_seed)
             sample_shape = (self.n_samples, self.horizon)
             if hasattr(self.local_market_flow_model, "sample"):
                 buy_vol, sell_vol = self.local_market_flow_model.sample(

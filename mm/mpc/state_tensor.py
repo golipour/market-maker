@@ -248,6 +248,7 @@ def _materialize_side(
     l_param: "LParamConfig | None" = None,
     quote_size_min: "Tensor | float | None" = None,
     quote_size_max: "Tensor | float | None" = None,
+    spread_max: "Tensor | float | None" = None,
 ) -> "tuple[Tensor, Tensor, Tensor]":
     """Return ``(L, k, x0)`` for the side whose block starts at ``side_off``.
 
@@ -279,6 +280,7 @@ def _materialize_side(
             l_param=l_param,
             quote_size_min=quote_size_min,
             quote_size_max=quote_size_max,
+            spread_max=spread_max,
         )
     L_raw = params[base + 0 : base + 3 * n_components : 3]
     k_raw = params[base + 1 : base + 3 * n_components : 3]
@@ -332,9 +334,15 @@ def effective_depth_bid_tensor(
     quote_size_max: "Tensor | float | None" = None,
     mid_price: "Tensor | float | None" = None,
     reservation_r_offset: "Tensor | float | None" = None,
+    spread_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable bid depth ``D_bid(spread) - D_bid(0)`` with non-negative clamp."""
     torch = _get_torch()
+    s_max = (
+        spread_max
+        if spread_max is not None
+        else (float(l_param.spread_max) if l_param is not None else None)
+    )
     # Materialize (L, k, x0) once and reuse it for both curve evaluations.
     # Previously each ``depth_bid_tensor`` call re-materialized the action
     # parameters, doubling the per-epoch work in the dominant autograd path.
@@ -346,8 +354,8 @@ def effective_depth_bid_tensor(
         l_param=l_param,
         quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
+        spread_max=s_max,
     )
-    s_max = float(l_param.spread_max) if l_param is not None else None
     raw = _depth_at_spreads(
         L, k, x0, spread,
         side="bid",
@@ -378,9 +386,15 @@ def effective_depth_ask_tensor(
     quote_size_max: "Tensor | float | None" = None,
     mid_price: "Tensor | float | None" = None,
     reservation_r_offset: "Tensor | float | None" = None,
+    spread_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable ask depth ``D_ask(spread) - D_ask(0)`` with non-negative clamp."""
     torch = _get_torch()
+    s_max = (
+        spread_max
+        if spread_max is not None
+        else (float(l_param.spread_max) if l_param is not None else None)
+    )
     L, k, x0 = _materialize_side(
         params,
         side_off=3 * n_components,
@@ -389,8 +403,8 @@ def effective_depth_ask_tensor(
         l_param=l_param,
         quote_size_min=quote_size_min,
         quote_size_max=quote_size_max,
+        spread_max=s_max,
     )
-    s_max = float(l_param.spread_max) if l_param is not None else None
     raw = _depth_at_spreads(
         L, k, x0, spread,
         side="ask",
@@ -398,6 +412,17 @@ def effective_depth_ask_tensor(
         reservation_r_offset=reservation_r_offset,
         spread_max=s_max,
     )
+    s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
+    base = _depth_at_spreads(
+        L, k, x0, s0,
+        side="ask",
+        mid_price=mid_price,
+        reservation_r_offset=reservation_r_offset,
+        spread_max=s_max,
+    )
+    if raw.ndim == 1:
+        return torch.clamp(raw - base[0], min=0.0)
+    return torch.clamp(raw - base, min=0.0)
     s0 = torch.zeros(1, dtype=spread.dtype, device=spread.device)
     base = _depth_at_spreads(
         L, k, x0, s0,
@@ -434,9 +459,15 @@ def effective_depth_stacked_tensor(
     ask_quote_size_max: "Tensor | float | None" = None,
     mid_price: "Tensor | float | None" = None,
     reservation_r_offset: "Tensor | float | None" = None,
+    spread_max: "Tensor | float | None" = None,
 ) -> "Tensor":
     """Executable bid and ask depth evaluated simultaneously as stacked ``(2, ...)``."""
     torch = _get_torch()
+    s_max = (
+        spread_max
+        if spread_max is not None
+        else (float(l_param.spread_max) if l_param is not None else None)
+    )
     # Whether the reservation skew is in play is a *configuration* fact, not a
     # per-decide data fact: ``reservation_r_max`` is baked into ``l_param`` and
     # the offset is always non-zero when it is enabled. Branching on that
@@ -457,6 +488,7 @@ def effective_depth_stacked_tensor(
             quote_size_max=bid_quote_size_max,
             mid_price=mid_price,
             reservation_r_offset=reservation_r_offset,
+            spread_max=s_max,
         )
         da = effective_depth_ask_tensor(
             params,
@@ -468,13 +500,14 @@ def effective_depth_stacked_tensor(
             quote_size_max=ask_quote_size_max,
             mid_price=mid_price,
             reservation_r_offset=reservation_r_offset,
+            spread_max=s_max,
         )
         return torch.stack([db, da], dim=0)
 
     from mm.mpc.l_param import depth_logit_index
 
     n = n_components
-    spread_max = float(l_param.spread_max)
+    spread_max_val = s_max if s_max is not None else float(l_param.spread_max)
     bid_L_raw = params[0 : 3 * n : 3]
     bid_k_raw = params[1 : 3 * n : 3]
     bid_x0_raw = params[2 : 3 * n : 3]
@@ -493,7 +526,7 @@ def effective_depth_stacked_tensor(
     else:
         k_eff = torch.stack([bid_k_raw, ask_k_raw], dim=0)
 
-    x0_eff = spread_max * torch.stack(
+    x0_eff = spread_max_val * torch.stack(
         [torch.sigmoid(bid_x0_raw), torch.sigmoid(ask_x0_raw)], dim=0
     )
 
@@ -527,7 +560,7 @@ def effective_depth_stacked_tensor(
     w = torch.stack(
         [torch.softmax(bid_L_raw, dim=-1), torch.softmax(ask_L_raw, dim=-1)], dim=0
     )
-    delta = torch.sigmoid(k_eff * (spread_max - x0_eff)) - torch.sigmoid(k_eff * (-x0_eff))
+    delta = torch.sigmoid(k_eff * (spread_max_val - x0_eff)) - torch.sigmoid(k_eff * (-x0_eff))
     z = (w * delta).sum(dim=-1, keepdim=True).clamp(min=1e-12)
 
     z_grid = (spread.unsqueeze(0).unsqueeze(-1) - x0_eff.unsqueeze(1)) * k_eff.unsqueeze(1)

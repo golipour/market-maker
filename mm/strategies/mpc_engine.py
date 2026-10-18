@@ -677,6 +677,8 @@ def _build_controller(
         "is_bps": getattr(grid, "is_bps", False),
         "spread_max_bps": getattr(grid, "spread_max_bps", None) or (grid.spread_max if getattr(grid, "is_bps", False) else None),
         "spread_step_bps": getattr(grid, "spread_step_bps", None) or (grid.spread_step if getattr(grid, "is_bps", False) else None),
+        "crn_enabled": getattr(config, "crn_enabled", False),
+        "warmup_gate_enabled": getattr(config, "warmup_gate_enabled", False),
         "device": "cpu",
         "reference_price_source": config.reference_price_source,
         "local_optimizer": local_optimizer_defaults,

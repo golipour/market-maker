@@ -91,7 +91,14 @@ class ViabilityParams:
             )
         min_viable_ratio = float(payload.get("min_viable_ratio", 0.0))
         min_viable_bps = float(payload.get("min_viable_bps", 0.0))
-        if min_viable_bps > 0.0 and min_viable_ratio <= 0.0:
+        if min_viable_bps > 0.0 and min_viable_ratio > 0.0:
+            expected_ratio = min_viable_bps / 10000.0
+            if abs(min_viable_ratio - expected_ratio) > 1e-6:
+                raise ValueError(
+                    f"viability.min_viable_ratio ({min_viable_ratio}) and min_viable_bps ({min_viable_bps}) "
+                    f"disagree (expected ratio {expected_ratio})"
+                )
+        elif min_viable_bps > 0.0 and min_viable_ratio <= 0.0:
             min_viable_ratio = min_viable_bps / 10000.0
         elif min_viable_ratio > 0.0 and min_viable_bps <= 0.0:
             min_viable_bps = min_viable_ratio * 10000.0

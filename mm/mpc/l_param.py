@@ -173,6 +173,7 @@ class ReservationSkewParams:
     """Bounded learnable reservation skew on the spread grid."""
 
     max_abs_skew: float
+    is_bps: bool = False
 
     @classmethod
     def from_mapping(cls, payload: Any) -> ReservationSkewParams | None:
@@ -181,19 +182,20 @@ class ReservationSkewParams:
         if not isinstance(payload, dict):
             raise ValueError(f"{RESERVATION_SKEW} must be an object")
         reject_removed_reservation_skew_keys(payload)
-        if "max_abs_skew_bps" in payload:
+        is_bps = "max_abs_skew_bps" in payload
+        if is_bps:
             max_abs_skew = max(0.0, float(payload["max_abs_skew_bps"]) / 10000.0)
         else:
             max_abs_skew = max(0.0, float(payload.get(MAX_ABS_SKEW, 0.0)))
         if max_abs_skew <= 0.0:
             return None
-        return cls(max_abs_skew=max_abs_skew)
+        return cls(max_abs_skew=max_abs_skew, is_bps=is_bps)
 
     def as_mapping(self) -> dict[str, float]:
-        return {
-            MAX_ABS_SKEW: self.max_abs_skew,
-            "max_abs_skew_bps": self.max_abs_skew * 10000.0,
-        }
+        out = {MAX_ABS_SKEW: self.max_abs_skew}
+        if self.is_bps:
+            out["max_abs_skew_bps"] = self.max_abs_skew * 10000.0
+        return out
 
 
 def joint_action_param_len(n_components: int, global_n_components: int | None = None) -> int:
@@ -385,6 +387,15 @@ def validate_l_param_config(l_param: LParamConfig) -> None:
             raise ValueError(
                 "spread-structured softmax requires n_components >= 2 "
                 "(spread leg + tail leg)"
+            )
+        # Reservation skew coherence check: reservation shift must not overpower the spread leg
+        r_max = float(l_param.reservation_r_max or 0.0)
+        # In dimensionless/bps mode, r_max and s_max are both relative to mid.
+        # Ensure reservation skew cannot overpower half the target spread.
+        if r_max > 0.5 * s_max and s_max <= 1.0:
+            raise ValueError(
+                f"reservation_skew.max_abs_skew ({r_max}) must be <= 0.5 * action_max_spread ({s_max}) "
+                "to ensure reservation shifts do not overpower spread capture"
             )
     if float(l_param.reservation_r_max) > 0.0 and float(l_param.reservation_r_max) >= 1.0:
         raise ValueError(f"{RESERVATION_SKEW}.{MAX_ABS_SKEW} must be < 1.0 for relative mid shift")
@@ -830,6 +841,17 @@ def _solve_spread_leg_L_torch(
     return L_eff
 
 
+def spread_ratios_torch(spreads: Any, spread_max: Any) -> Any:
+    """Map quote-unit spreads to dimensionless ratios in [0, 1]."""
+    torch = _torch()
+    s_max = (
+        spread_max
+        if torch.is_tensor(spread_max)
+        else torch.as_tensor(spread_max, dtype=spreads.dtype, device=spreads.device)
+    )
+    return spreads / s_max.clamp(min=1e-12)
+
+
 def materialize_side_torch(
     params: Any,
     *,
@@ -838,13 +860,21 @@ def materialize_side_torch(
     l_param: LParamConfig,
     quote_size_min: Any | None = None,
     quote_size_max: Any | None = None,
+    spread_max: Any | None = None,
 ) -> tuple[Any, Any, Any]:
     torch = _torch()
     n = n_components
     L_raw = params[side_off + 0 : side_off + 3 * n : 3]
     k_raw = params[side_off + 1 : side_off + 3 * n : 3]
     x0_raw = params[side_off + 2 : side_off + 3 * n : 3]
-    spread_max = float(l_param.spread_max)
+    if spread_max is not None:
+        s_max = (
+            spread_max
+            if torch.is_tensor(spread_max)
+            else torch.as_tensor(spread_max, dtype=params.dtype, device=params.device)
+        )
+    else:
+        s_max = float(l_param.spread_max)
 
     min_len = action_param_len(n)
     if params.numel() < min_len:
@@ -858,12 +888,19 @@ def materialize_side_torch(
     u_depth = params[depth_logit_index(side_off=side_off, n_components=n)]
 
     if l_param.spread_structured:
-        spread_cap = float(l_param.quote_spread_max)
+        cap_val = float(l_param.quote_spread_max)
+        if torch.is_tensor(s_max):
+            spread_max_float = float(l_param.spread_max) if float(l_param.spread_max) > 0 else 1.0
+            spread_cap = s_max * (cap_val / spread_max_float)
+        else:
+            spread_cap = cap_val
         scale = torch.sigmoid(u_scale)
         spread_w = torch.softmax(torch.stack([u_bid, u_ask]), dim=0)
         min_center = _scalar_tensor(
-            _min_structured_center(spread_cap), None, params, clamp_zero=False
+            _min_structured_center(cap_val), None, params, clamp_zero=False
         )
+        if torch.is_tensor(s_max):
+            min_center = min_center * (s_max / float(l_param.spread_max))
         centers = torch.clamp(scale * spread_cap * spread_w, min=min_center)
         x0_first = centers[0] if side_off == 0 else centers[1]
         # Tail centers are ``x0_first + (spread_max - x0_first) * sigmoid(x0_raw)``.
@@ -871,12 +908,12 @@ def materialize_side_torch(
         # zeros tensor element by element in a Python loop: the same values with
         # one op instead of n slice-assignments, and a cheaper backward.
         if n > 1:
-            tail_centers = x0_first + (spread_max - x0_first) * torch.sigmoid(x0_raw[1:])
+            tail_centers = x0_first + (s_max - x0_first) * torch.sigmoid(x0_raw[1:])
             x0_eff = torch.cat([x0_first.reshape(1), tail_centers])
         else:
             x0_eff = x0_first.reshape(1)
     else:
-        x0_eff = spread_max * torch.sigmoid(x0_raw)
+        x0_eff = s_max * torch.sigmoid(x0_raw)
 
     if l_param.spread_structured:
         eps_val = min(max(float(l_param.quote_spread_k_epsilon), 1e-6), 0.49)
@@ -904,7 +941,7 @@ def materialize_side_torch(
     if l_param.spread_structured:
         q_spread = float(l_param.quote_spread_min_depth or 0.0)
         delta_at_center = component_delta_at_torch(k_eff, x0_eff, x0_eff[0])
-        delta_at_max = component_delta_at_torch(k_eff, x0_eff, spread_max)
+        delta_at_max = component_delta_at_torch(k_eff, x0_eff, s_max)
         if n > 1:
             tail_v = torch.softmax(L_raw[1:], dim=0)
             L_eff = _solve_spread_leg_L_torch(
@@ -919,7 +956,7 @@ def materialize_side_torch(
         return L_eff, k_eff, x0_eff
 
     w = torch.softmax(L_raw, dim=-1)
-    delta = component_delta_spread_range_torch(k_eff, x0_eff, spread_max)
+    delta = component_delta_spread_range_torch(k_eff, x0_eff, s_max)
     z = (w * delta).sum().clamp(min=1e-12)
     if torch.is_tensor(q_total) and q_total.ndim > 0:
         L_eff = q_total.reshape(-1, 1) * w.unsqueeze(0) / z

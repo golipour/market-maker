@@ -470,6 +470,64 @@ def _log_spaced_spreads(spread_min: float, spread_max: float, levels: int) -> li
 
 
 @dataclass(frozen=True, slots=True)
+class SpreadGeometryConfig:
+    """Single source of truth for quote geometry, all dimensionless.
+
+    half_spread_bps is the target mid->touch distance. Everything else is
+    derived as a declared fraction of it, so spread, skew, and scoring scale
+    cannot silently contradict each other.
+    """
+
+    half_spread_bps: float = 5.0
+    skew_share: float = 0.4
+    tightness_share: float = 1.5
+
+    def derived(self, spread_max_bps: float) -> dict[str, float]:
+        self.validate(spread_max_bps)
+        return {
+            "action_max_spread_bps": float(self.half_spread_bps),
+            "spread_min_bps": float(self.half_spread_bps) * 0.4,
+            "max_abs_skew_bps": float(self.half_spread_bps) * float(self.skew_share),
+            "tightness_spread_scale_bps": float(self.half_spread_bps) * float(self.tightness_share),
+        }
+
+    def validate(self, spread_max_bps: float) -> None:
+        if self.half_spread_bps <= 0:
+            raise ValueError(
+                f"SpreadGeometryConfig.half_spread_bps ({self.half_spread_bps}) must be > 0"
+            )
+        if spread_max_bps <= self.half_spread_bps:
+            raise ValueError(
+                f"spread_max_bps ({spread_max_bps}) must be > half_spread_bps ({self.half_spread_bps})"
+            )
+        if not (0.0 <= self.skew_share <= 0.5):
+            raise ValueError(
+                f"SpreadGeometryConfig.skew_share ({self.skew_share}) must be in [0.0, 0.5]"
+            )
+        if self.tightness_share <= 0:
+            raise ValueError(
+                f"SpreadGeometryConfig.tightness_share ({self.tightness_share}) must be > 0"
+            )
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any] | None) -> SpreadGeometryConfig:
+        if not mapping:
+            return cls()
+        return cls(
+            half_spread_bps=float(mapping.get("half_spread_bps", 5.0)),
+            skew_share=float(mapping.get("skew_share", 0.4)),
+            tightness_share=float(mapping.get("tightness_share", 1.5)),
+        )
+
+    def as_contract(self) -> dict[str, Any]:
+        return {
+            "half_spread_bps": float(self.half_spread_bps),
+            "skew_share": float(self.skew_share),
+            "tightness_share": float(self.tightness_share),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionGridConfig:
     """Execution-only ladder that samples continuous depth ``D(δ)`` into live orders.
 
@@ -898,6 +956,9 @@ class ControllerRuntimeConfig:
     optimizer: dict[str, Any] | None = None
     risk: RiskRuntimeConfig = field(default_factory=RiskRuntimeConfig)
     reconcile: ReconcileRuntimeConfig = field(default_factory=ReconcileRuntimeConfig)
+    spread_geometry: SpreadGeometryConfig | None = None
+    crn_enabled: bool = False
+    warmup_gate_enabled: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -905,6 +966,82 @@ class ControllerRuntimeConfig:
             "reference_price_source",
             _normalize_reference_price_source(self.reference_price_source),
         )
+        self.validate_coherence()
+
+    def validate_coherence(self) -> None:
+        """Strict validation of spread geometry, ordering, and skew coherence."""
+        if self.spread_geometry is not None:
+            s_max_bps = (
+                float(self.orderbook_grid.spread_max_bps or self.orderbook_grid.spread_max)
+                if self.orderbook_grid.is_bps
+                else None
+            )
+            if s_max_bps is not None:
+                self.spread_geometry.validate(s_max_bps)
+
+        if self.orderbook_grid.is_bps:
+            s_max = float(self.orderbook_grid.spread_max_bps or self.orderbook_grid.spread_max)
+            s_min = (
+                float(self.execution_grid.spread_min_bps or self.execution_grid.spread_min)
+                if self.execution_grid.is_bps
+                and (
+                    self.execution_grid.spread_min_bps is not None
+                    or self.execution_grid.spread_min is not None
+                )
+                else None
+            )
+            action_max = None
+            max_abs_skew = None
+            tightness_scale = None
+            if isinstance(self.optimizer, dict):
+                local_opt = (
+                    self.optimizer.get("local")
+                    if isinstance(self.optimizer.get("local"), dict)
+                    else self.optimizer
+                )
+                if isinstance(local_opt, dict):
+                    bq = local_opt.get("book_quality", {})
+                    if isinstance(bq, dict):
+                        hs = bq.get("hard_structure", {})
+                        if isinstance(hs, dict):
+                            action_max = hs.get("action_max_spread_bps") or hs.get("action_max_spread")
+                        ss = bq.get("soft_scoring", {})
+                        if isinstance(ss, dict):
+                            tightness_scale = ss.get("tightness_spread_scale_bps") or ss.get(
+                                "tightness_spread_scale"
+                            )
+                    res = local_opt.get("reservation_skew", {})
+                    if isinstance(res, dict):
+                        max_abs_skew = res.get("max_abs_skew_bps") or res.get("max_abs_skew")
+
+            if action_max is not None:
+                action_max = float(action_max)
+                if action_max >= s_max:
+                    raise ValueError(
+                        f"action_max_spread ({action_max}) must be < spread_max ({s_max})"
+                    )
+                if s_min is not None:
+                    if s_min <= 0:
+                        raise ValueError(f"spread_min ({s_min}) must be > 0")
+                    if s_min >= action_max:
+                        raise ValueError(
+                            f"spread_min ({s_min}) must be < action_max_spread ({action_max})"
+                        )
+                if max_abs_skew is not None:
+                    max_abs_skew = float(max_abs_skew)
+                    skew_val = max_abs_skew if max_abs_skew > 0.05 else max_abs_skew * 10000.0
+                    act_val = action_max if action_max > 0.05 else action_max * 10000.0
+                    if skew_val > 0.5 * act_val:
+                        raise ValueError(
+                            f"reservation_skew ({skew_val:.2f} bps) must be <= 0.5 * action_max_spread ({act_val:.2f} bps) "
+                            "to ensure reservation shifts do not overpower spread capture"
+                        )
+            if tightness_scale is not None:
+                t_val = float(tightness_scale)
+                if t_val > 2.0 * s_max:
+                    raise ValueError(
+                        f"tightness_spread_scale ({t_val}) must be <= 2 * spread_max ({2.0 * s_max})"
+                    )
 
     @property
     def normalized_action_topic(self) -> str:
@@ -1945,6 +2082,13 @@ def _controller_from_mapping(
                 )
             ),
         ),
+        spread_geometry=(
+            SpreadGeometryConfig.from_mapping(payload["spread_geometry"])
+            if payload.get("spread_geometry") is not None
+            else None
+        ),
+        crn_enabled=bool(payload.get("crn_enabled", False)),
+        warmup_gate_enabled=bool(payload.get("warmup_gate_enabled", False)),
     )
     # Fail fast if the execution ladder cannot be resolved inside the MPC domain.
     controller.execution_spread_ladder()
@@ -2116,6 +2260,11 @@ def _controller_contract(config: ControllerRuntimeConfig | None) -> dict[str, An
         "target_books_topic": config.normalized_target_books_topic,
         "orderbook_grid": config.orderbook_grid.as_contract(),
         "execution_grid": config.execution_grid.as_contract(canonical=config.orderbook_grid),
+        "spread_geometry": (
+            config.spread_geometry.as_contract() if config.spread_geometry is not None else None
+        ),
+        "crn_enabled": config.crn_enabled,
+        "warmup_gate_enabled": config.warmup_gate_enabled,
         "max_orders_per_side": config.max_orders_per_side,
         "vwap_depth_note": (
             "derived each frame from abs(local_inventory), or from "
