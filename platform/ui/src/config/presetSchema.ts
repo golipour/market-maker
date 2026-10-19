@@ -848,6 +848,14 @@ export const PRESET_SECTIONS: readonly SectionDef[] = [
         help: "weighted_stratified uses deterministic quadrature scenarios for hurdle distribution zero-atom and positive quantiles, preventing zero gradients.",
       },
       {
+        path: "controller.optimizer.optimizer_mode",
+        label: "Optimizer mode",
+        type: "select",
+        defaultValue: "adam",
+        options: opt(["adam", "discrete_trust_region", "hybrid"]),
+        help: "Optimizer algorithm. 'adam' runs smooth gradient descent.",
+      },
+      {
         path: "controller.optimizer.horizon",
         label: "Horizon",
         type: "number",
