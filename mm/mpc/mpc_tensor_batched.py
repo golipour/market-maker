@@ -1187,6 +1187,7 @@ class MonteCarloMPCTensorBatched:
         adam_lr: float = 0.05,
         adam_epochs: int = 80,
         adam_grad_clip: float = 10.0,
+        adam_eps: float = 1e-12,
         device: str | None = None,
         bounds: list[tuple[float, float]] | None = None,
         warm_start: bool | dict[str, Any] | WarmStartParams | None = False,
@@ -1255,6 +1256,16 @@ class MonteCarloMPCTensorBatched:
         self.adam_lr = adam_lr
         self.adam_epochs = adam_epochs
         self.adam_grad_clip = adam_grad_clip
+        # Adam's ``eps`` guards the division by ``sqrt(v_hat) + eps``. The
+        # rollout objective is a *relative* wealth change (dW / W_0), so its
+        # natural magnitude is ~1e-5..1e-6 and its gradient magnitude is
+        # ~1e-8..1e-10. With PyTorch's default ``eps=1e-8`` the denominator
+        # is dominated by ``eps`` rather than by ``sqrt(v_hat)``: at a
+        # gradient of 1e-10 the effective step is 0.0099 * lr instead of
+        # 1.0 * lr, i.e. the optimizer is attenuated by ~100x and the
+        # objective curve looks flat. ``eps`` must therefore be scaled to the
+        # gradient scale of this problem, not left at the default.
+        self.adam_eps = max(0.0, float(adam_eps))
         # How often to materialize full per-epoch objective diagnostics.
         # 1 keeps the historical every-epoch behavior; higher values record
         # only the first, last, sampled, and best epochs. The best epoch is
@@ -2254,16 +2265,16 @@ class MonteCarloMPCTensorBatched:
 
         if self._x_torch is None or self._x_torch.numel() != param_len:
             self._x_torch = torch_mod.tensor(x0_arr, dtype=dtype, device=_device, requires_grad=True)
-            self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
+            self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr, eps=self.adam_eps)
         else:
             with torch_mod.no_grad():
                 self._x_torch.data = torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
             if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
-                self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr)
+                self._optimizer = torch_mod.optim.Adam([self._x_torch], lr=self.adam_lr, eps=self.adam_eps)
         x_torch = self._x_torch
         optimizer = self._optimizer
         if not _torch_optimizer_state_is_finite(optimizer, torch_mod):
-            self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+            self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr, eps=self.adam_eps)
             optimizer = self._optimizer
         maker_fee = getattr(
             self.execution_model,
@@ -2349,6 +2360,11 @@ class MonteCarloMPCTensorBatched:
         captured_initial_components = False
         nonfinite_loss_count = 0
         nonfinite_grad_count = 0
+        # Per-epoch gradient norms. Published in the diagnostics payload so a
+        # dead optimizer (identically zero gradient) is visible in Grafana
+        # instead of being inferred from a flat objective curve.
+        grad_norm_samples: list[float] = []
+        grad_norm_max = 0.0
         last_eval_x = best_x.detach().clone()
         t0 = time.perf_counter()
         # Wall-clock accumulated inside ``closure`` so the Adam stage can be
@@ -2493,6 +2509,7 @@ class MonteCarloMPCTensorBatched:
                     nonlocal batch_time_sec, captured_initial_components
                     nonlocal initial_metrics, final_metrics
                     nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
+                    nonlocal grad_norm_samples, grad_norm_max
                     nonlocal closure_wall_ms, sample_inside_forward_ms
                     nonlocal best_epoch_metrics
                     closure_started = time.perf_counter()
@@ -2940,6 +2957,11 @@ class MonteCarloMPCTensorBatched:
                                 nonfinite_grad_count += 1
                                 x_torch.grad.detach().zero_()
                             else:
+                                grad_norm = float(x_torch.grad.detach().norm().item())
+                                if math.isfinite(grad_norm):
+                                    grad_norm_samples.append(grad_norm)
+                                    if grad_norm > grad_norm_max:
+                                        grad_norm_max = grad_norm
                                 torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
                         stage_timer.record("backward", (time.perf_counter() - backward_started) * 1000.0)
                     closure_wall_ms += (time.perf_counter() - closure_started) * 1000.0
@@ -2974,7 +2996,7 @@ class MonteCarloMPCTensorBatched:
                             torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
                         )
                     if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
-                        self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+                        self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr, eps=self.adam_eps)
                         optimizer = self._optimizer
                     adaptive_warm_resolved = True
 
@@ -3128,14 +3150,34 @@ class MonteCarloMPCTensorBatched:
             gradients={
                 "nonfinite_loss_count": nonfinite_loss_count,
                 "nonfinite_grad_count": nonfinite_grad_count,
+                "grad_norm_max": grad_norm_max,
+                "grad_norm_mean": (
+                    float(sum(grad_norm_samples) / len(grad_norm_samples))
+                    if grad_norm_samples
+                    else 0.0
+                ),
+                "grad_norm_min": (
+                    float(min(grad_norm_samples)) if grad_norm_samples else 0.0
+                ),
+                "grad_norm_last": (
+                    float(grad_norm_samples[-1]) if grad_norm_samples else 0.0
+                ),
+                "grad_norm_epoch_count": len(grad_norm_samples),
+                "grad_norm_zero_epochs": sum(
+                    1 for g in grad_norm_samples if g <= 1e-12
+                ),
             },
             rollout={
-                "n_samples": self.n_samples,
+                "n_samples": n_samples,
+                "n_samples_configured": self.n_samples,
                 "horizon": self.horizon,
                 "liquidity_sourcing": False,
                 "soft_fill_temp": self.soft_fill_temp,
                 "soft_fill_activation": self.soft_fill_activation,
                 "soft_fill_queue_model": self.soft_fill_queue_model,
+                "optimizer_mode": self.optimizer_mode,
+                "flow_scenario_mode": self.flow_scenario_mode,
+                "stratified_positive_nodes": self.stratified_positive_nodes,
             },
         )
         self._last_diagnostics = diagnostics

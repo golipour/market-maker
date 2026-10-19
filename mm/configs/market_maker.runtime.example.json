@@ -284,6 +284,10 @@
           "horizon": 2,
           "adam_epochs": 20,
           "adam_lr": 1e0,
+          "_comment_adam_eps": "adam_eps must be scaled to the gradient scale of this objective. The rollout objective is a relative wealth change (dW / W_0), so its gradient magnitude is ~1e-8..1e-10. PyTorch's default Adam eps=1e-8 then dominates the denominator sqrt(v_hat)+eps and attenuates every step by ~100x, which looks exactly like a dead optimizer. 1e-12 keeps the direction intact.",
+          "adam_eps": 1e-12,
+          "flow_scenario_mode": "weighted_stratified",
+          "stratified_positive_nodes": 3,
           "device": "cpu",
           "objective_normalize": {
             "enabled": true,
@@ -319,7 +323,7 @@
             },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",
-            "soft_fill_queue_model": "back_of_queue"
+            "soft_fill_queue_model": "pro_rata"
           },
             "global": {
             "n_components": 2,
@@ -353,7 +357,7 @@
             },
             "soft_fill_temp": 0.1,
             "soft_fill_activation": "hardsigmoid",
-            "soft_fill_queue_model": "back_of_queue"
+            "soft_fill_queue_model": "pro_rata"
           }
         }
       }

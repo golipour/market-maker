@@ -676,6 +676,13 @@ def _build_controller(
         "adam_epochs": 10,
         "optimizer_mode": "adam",
         "flow_scenario_mode": "weighted_stratified",
+        "stratified_positive_nodes": 3,
+        # The rollout objective is a relative wealth change (dW / W_0), so its
+        # gradient magnitude is ~1e-8..1e-10. PyTorch's default Adam eps=1e-8
+        # then dominates sqrt(v_hat)+eps and attenuates every step by ~100x,
+        # which is indistinguishable from a dead optimizer. Scale eps to the
+        # problem's gradient scale instead of leaving it at the default.
+        "adam_eps": 1e-12,
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "is_bps": getattr(grid, "is_bps", False),

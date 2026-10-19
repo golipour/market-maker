@@ -867,6 +867,20 @@ export const PRESET_SECTIONS: readonly SectionDef[] = [
         step: "0.01",
       },
       {
+        path: "controller.optimizer.adam_eps",
+        label: "Adam epsilon",
+        type: "number",
+        defaultValue: 1e-12,
+        help: "Must be scaled to the gradient scale of this objective. The rollout objective is a relative wealth change, so gradients are ~1e-8..1e-10. The default 1e-8 would dominate sqrt(v_hat)+eps and attenuate every step by ~100x, which looks like a dead optimizer.",
+      },
+      {
+        path: "controller.optimizer.stratified_positive_nodes",
+        label: "Stratified positive nodes",
+        type: "number",
+        defaultValue: 3,
+        help: "Number of representative positive trade sizes per side, on top of the V=0 hurdle atom. Total scenarios = (1 + nodes)^2. 3 gives small/median/tail coverage.",
+      },
+      {
         path: "controller.optimizer.device",
         label: "Device",
         type: "select",

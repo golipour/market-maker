@@ -4290,6 +4290,18 @@ def optimizer_diagnostics() -> dict[str, Any]:
         ),
         _panel(4, "Optimizer timings", "timeseries", PG_DS, _optimizer_timing_sql(), x=12, y=11, w=12),
         _panel(
+            7,
+            "Optimizer gradient norms",
+            "timeseries",
+            PG_DS,
+            _optimizer_gradients_sql(),
+            x=0,
+            y=56,
+            w=24,
+            unit="sci",
+            decimals=4,
+        ),
+        _panel(
             5,
             "Objective components (weighted J terms)",
             "timeseries",
