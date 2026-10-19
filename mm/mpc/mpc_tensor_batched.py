@@ -2502,7 +2502,7 @@ class MonteCarloMPCTensorBatched:
                         x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
                         last_eval_x = x_torch.detach().clone()
 
-                    if self.fixed_mc_samples:
+                    if self.fixed_mc_samples or use_stratified:
                         buy_vol, sell_vol, eps_buy, eps_sell, price_innov = (
                             fixed_buy_vol,
                             fixed_sell_vol,
@@ -3003,7 +3003,7 @@ class MonteCarloMPCTensorBatched:
                         best_main_reward_mean = best_epoch_metrics.main_reward_mean
 
         loop_elapsed = time.perf_counter() - t0
-        if self.fixed_mc_samples:
+        if self.fixed_mc_samples or use_stratified:
             train_time_sec = loop_elapsed
             total_sec = batch_time_sec + loop_elapsed
         else:

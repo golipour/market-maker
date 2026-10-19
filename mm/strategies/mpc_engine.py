@@ -672,6 +672,8 @@ def _build_controller(
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
+        "optimizer_mode": "discrete_trust_region",
+        "flow_scenario_mode": "weighted_stratified",
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,
         "is_bps": getattr(grid, "is_bps", False),
