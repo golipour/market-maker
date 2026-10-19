@@ -662,9 +662,11 @@ def _build_controller(
     global_min_qty = float(global_constraints.min_qty or local_min_qty)
     local_optimizer_defaults = {
         CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: local_min_qty,
+        "soft_fill_queue_model": "pro_rata",
     }
     global_optimizer_defaults = {
         CUMULATIVE_QTY_FLOOR_AT_SPREAD_MAX: global_min_qty,
+        "soft_fill_queue_model": "pro_rata",
     }
     local_optimizer_defaults.update(local_optimizer_cfg)
     global_optimizer_defaults.update(global_optimizer_cfg)
@@ -672,7 +674,7 @@ def _build_controller(
         "n_samples": 8,
         "horizon": 2,
         "adam_epochs": 10,
-        "optimizer_mode": "discrete_trust_region",
+        "optimizer_mode": "adam",
         "flow_scenario_mode": "weighted_stratified",
         "spread_max": grid.spread_max,
         "spread_step": grid.spread_step,

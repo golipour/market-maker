@@ -232,17 +232,19 @@ function venueOptimizerFields(prefix: "local" | "global"): FieldDef[] {
     },
     {
       path: `${base}.soft_fill_activation`,
-      label: "Soft-fill activation",
+      label: "Soft-fill activation (legacy)",
       type: "select",
       defaultValue: "hardsigmoid",
       options: opt(["sigmoid", "hardsigmoid"]),
+      help: "Legacy parameter from unconstrained soft fill. The active flow-conserving matcher enforces physical volume conservation.",
     },
     {
       path: `${base}.soft_fill_queue_model`,
       label: "Soft-fill queue model",
       type: "select",
-      defaultValue: "back_of_queue",
-      options: opt(["back_of_queue", "pro_rata"]),
+      defaultValue: "pro_rata",
+      options: opt(["pro_rata", "back_of_queue"]),
+      help: "pro_rata provides smooth, ghost-free volume sharing and continuous gradients for Adam. back_of_queue places quotes strictly behind resting book depth.",
     },
   ];
   if (prefix === "local") {
@@ -838,20 +840,12 @@ export const PRESET_SECTIONS: readonly SectionDef[] = [
         help: "Fuses the soft-fill chain with torch.compile (Inductor). Default true. The compile cost (3-5 s cold, ~1 s warm cache) is paid once at construction during startup warm-up, never inside a decide, so it does not consume decision_timeout_ms; the first decide afterwards measures ~200 ms. Set false to force eager. Any compile failure falls back to eager automatically. MM_TORCH_COMPILE=0 forces eager globally.",
       },
       {
-        path: "controller.optimizer.optimizer_mode",
-        label: "Optimizer mode",
-        type: "select",
-        defaultValue: "discrete_trust_region",
-        options: opt(["discrete_trust_region", "adam"]),
-        help: "discrete_trust_region uses exact piecewise-constant book matching with monotonic trust-region pattern search. adam uses continuous gradient descent.",
-      },
-      {
         path: "controller.optimizer.flow_scenario_mode",
         label: "Flow scenario mode",
         type: "select",
         defaultValue: "weighted_stratified",
         options: opt(["weighted_stratified", "monte_carlo"]),
-        help: "weighted_stratified generates deterministic quadrature scenarios for hurdle distribution zero-atom and positive quantiles.",
+        help: "weighted_stratified uses deterministic quadrature scenarios for hurdle distribution zero-atom and positive quantiles, preventing zero gradients.",
       },
       {
         path: "controller.optimizer.horizon",
