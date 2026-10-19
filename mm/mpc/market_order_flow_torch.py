@@ -4,6 +4,7 @@ Torch-based market order flow models: EWMA-updated params, .sample() for pipelin
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -35,6 +36,116 @@ class OrderFlowModel(Protocol):
     ) -> float:
         """Return P(V_plus, V_minus | params). Default 0.0 if not implemented."""
         ...
+
+
+@dataclass(slots=True)
+class StratifiedScenarios:
+    """Exact, weighted scenarios for hurdle order flow expectations."""
+
+    buy_vol: Any  # torch.Tensor [S, horizon]
+    sell_vol: Any  # torch.Tensor [S, horizon]
+    weights: Any  # torch.Tensor [S], sum(weights) == 1.0
+    p0_buy: float
+    p0_sell: float
+    mu_buy: float = 0.0
+    sigma_buy: float = 0.0
+    mu_sell: float = 0.0
+    sigma_sell: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _build_hurdle_quantiles(
+    p0: float,
+    positive_nodes: int,
+    quantile_fn: Any,
+    include_tail: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    p0_clamped = max(0.0, min(1.0, float(p0)))
+    k = max(1, int(positive_nodes))
+    if include_tail and k == 3:
+        u = np.array([0.25, 0.50, 0.85], dtype=np.float64)
+        cond_w = np.array([0.375, 0.30, 0.325], dtype=np.float64)
+    elif include_tail and k == 4:
+        u = np.array([0.15, 0.40, 0.70, 0.92], dtype=np.float64)
+        cond_w = np.array([0.275, 0.275, 0.25, 0.20], dtype=np.float64)
+    elif include_tail and k == 5:
+        u = np.array([0.10, 0.30, 0.50, 0.75, 0.95], dtype=np.float64)
+        cond_w = np.array([0.20, 0.20, 0.225, 0.225, 0.15], dtype=np.float64)
+    else:
+        u = np.array([(i + 0.5) / k for i in range(k)], dtype=np.float64)
+        cond_w = np.full(k, 1.0 / k, dtype=np.float64)
+
+    cond_w = cond_w / cond_w.sum()
+    pos_v = np.array([max(1.0, float(quantile_fn(u_i))) for u_i in u], dtype=np.float64)
+    volumes = np.empty(k + 1, dtype=np.float64)
+    weights = np.empty(k + 1, dtype=np.float64)
+    volumes[0] = 0.0
+    weights[0] = p0_clamped
+    volumes[1:] = pos_v
+    weights[1:] = (1.0 - p0_clamped) * cond_w
+    return volumes, weights
+
+
+def build_hurdle_joint_scenarios(
+    p0_buy: float,
+    p0_sell: float,
+    buy_quantile_fn: Any,
+    sell_quantile_fn: Any,
+    horizon: int = 4,
+    positive_nodes: int = 3,
+    device: str | None = None,
+    dtype: Any = None,
+    include_tail: bool = True,
+    meta: dict[str, Any] | None = None,
+) -> StratifiedScenarios:
+    import torch
+
+    _device = resolve_torch_device(device)
+    _dtype = dtype if dtype is not None else torch.float64
+
+    v_b, w_b = _build_hurdle_quantiles(p0_buy, positive_nodes, buy_quantile_fn, include_tail)
+    v_s, w_s = _build_hurdle_quantiles(p0_sell, positive_nodes, sell_quantile_fn, include_tail)
+
+    Nb = len(v_b)
+    Ns = len(v_s)
+    S = Nb * Ns
+    H = max(1, int(horizon))
+    Kb = Nb - 1
+    Ks = Ns - 1
+
+    buy_vol = np.zeros((S, H), dtype=np.float64)
+    sell_vol = np.zeros((S, H), dtype=np.float64)
+    weights = np.zeros(S, dtype=np.float64)
+
+    for i in range(Nb):
+        for j in range(Ns):
+            s = i * Ns + j
+            weights[s] = w_b[i] * w_s[j]
+            for h in range(H):
+                if i == 0:
+                    buy_vol[s, h] = 0.0
+                else:
+                    pos_idx = 1 + ((i - 1 + h) % Kb)
+                    buy_vol[s, h] = v_b[pos_idx]
+                if j == 0:
+                    sell_vol[s, h] = 0.0
+                else:
+                    pos_idx = 1 + ((j - 1 + h) % Ks)
+                    sell_vol[s, h] = v_s[pos_idx]
+
+    weights = weights / max(1e-12, weights.sum())
+    buy_vol_t = torch.tensor(buy_vol, dtype=_dtype, device=_device)
+    sell_vol_t = torch.tensor(sell_vol, dtype=_dtype, device=_device)
+    weights_t = torch.tensor(weights, dtype=_dtype, device=_device)
+
+    return StratifiedScenarios(
+        buy_vol=buy_vol_t,
+        sell_vol=sell_vol_t,
+        weights=weights_t,
+        p0_buy=float(p0_buy),
+        p0_sell=float(p0_sell),
+        metadata=dict(meta or {}),
+    )
 
 
 class HurdleOrderFlow:
@@ -795,6 +906,35 @@ class TorchHurdleGammaModel:
         sell_vol = torch.where(u_sell <= p0_sell, torch.zeros_like(raw_sell), raw_sell)
         return buy_vol, sell_vol
 
+    def stratified_scenarios(
+        self,
+        horizon: int = 4,
+        positive_nodes: int = 3,
+        device: str | None = None,
+        dtype: Any = None,
+        include_tail: bool = True,
+    ) -> StratifiedScenarios:
+        """Construct exact, weighted stratified scenarios over hurdle Gamma distribution."""
+        from scipy.special import gammaincinv
+
+        p = self.get_params()
+        p0_buy = max(0.0, min(1.0, float(p["p0_buy"])))
+        p0_sell = max(0.0, min(1.0, float(p["p0_sell"])))
+        sh_b, sc_b = max(1e-6, float(p["shape_buy"])), max(1e-6, float(p["scale_buy"]))
+        sh_s, sc_s = max(1e-6, float(p["shape_sell"])), max(1e-6, float(p["scale_sell"]))
+        return build_hurdle_joint_scenarios(
+            p0_buy=p0_buy,
+            p0_sell=p0_sell,
+            buy_quantile_fn=lambda u: sc_b * gammaincinv(sh_b, u),
+            sell_quantile_fn=lambda u: sc_s * gammaincinv(sh_s, u),
+            horizon=horizon,
+            positive_nodes=positive_nodes,
+            device=device,
+            dtype=dtype,
+            include_tail=include_tail,
+            meta={"model": "hurdle_gamma", "shape_buy": sh_b, "scale_buy": sc_b, "shape_sell": sh_s, "scale_sell": sc_s},
+        )
+
     @staticmethod
     def pmf(k: int, p0: float, shape: float, scale: float) -> float:
         return _hurdle_gamma_pmf(k, p0, shape, scale)
@@ -953,6 +1093,35 @@ class TorchHurdleWeibullModel:
         sell_vol = torch.where(u_sell <= p0_sell, torch.zeros_like(raw_sell), raw_sell)
         return buy_vol, sell_vol
 
+    def stratified_scenarios(
+        self,
+        horizon: int = 4,
+        positive_nodes: int = 3,
+        device: str | None = None,
+        dtype: Any = None,
+        include_tail: bool = True,
+    ) -> StratifiedScenarios:
+        """Construct exact, weighted stratified scenarios over hurdle Weibull distribution."""
+        p = self.get_params()
+        p0_buy = max(0.0, min(1.0, float(p.get("p0_buy", self._p0_buy))))
+        p0_sell = max(0.0, min(1.0, float(p.get("p0_sell", self._p0_sell))))
+        k_b = max(1e-3, float(p.get("wb_k_buy", self._k_buy)))
+        lam_b = max(1e-9, float(p.get("wb_lambda_buy", self._lambda_buy)))
+        k_s = max(1e-3, float(p.get("wb_k_sell", self._k_sell)))
+        lam_s = max(1e-9, float(p.get("wb_lambda_sell", self._lambda_sell)))
+        return build_hurdle_joint_scenarios(
+            p0_buy=p0_buy,
+            p0_sell=p0_sell,
+            buy_quantile_fn=lambda u: float(lam_b * (-np.log(max(1e-12, 1.0 - u))) ** (1.0 / k_b)),
+            sell_quantile_fn=lambda u: float(lam_s * (-np.log(max(1e-12, 1.0 - u))) ** (1.0 / k_s)),
+            horizon=horizon,
+            positive_nodes=positive_nodes,
+            device=device,
+            dtype=dtype,
+            include_tail=include_tail,
+            meta={"model": "hurdle_weibull", "wb_k_buy": k_b, "wb_lambda_buy": lam_b, "wb_k_sell": k_s, "wb_lambda_sell": lam_s},
+        )
+
     @staticmethod
     def pmf(k: int, p0: float, c: float, scale: float) -> float:
         return _hurdle_weibull_pmf(k, p0, c, scale)
@@ -1096,6 +1265,55 @@ class TorchHurdleLogNormalModel:
         buy_vol = torch.where(u_buy <= p0_buy, torch.zeros_like(raw_buy), raw_buy)
         sell_vol = torch.where(u_sell <= p0_sell, torch.zeros_like(raw_sell), raw_sell)
         return buy_vol, sell_vol
+
+    def stratified_scenarios(
+        self,
+        horizon: int = 4,
+        positive_nodes: int = 3,
+        device: str | None = None,
+        dtype: Any = None,
+        include_tail: bool = True,
+    ) -> StratifiedScenarios:
+        """Construct exact, weighted stratified scenarios over the hurdle distribution."""
+        from scipy.special import ndtri
+
+        p = self.get_params()
+        p0_buy = max(0.0, min(1.0, float(p["p0_buy"])))
+        p0_sell = max(0.0, min(1.0, float(p["p0_sell"])))
+        mu_buy, sigma_buy = float(p["mu_buy"]), max(1e-6, float(p["sigma_buy"]))
+        mu_sell, sigma_sell = float(p["mu_sell"]), max(1e-6, float(p["sigma_sell"]))
+
+        def buy_q(u: float) -> float:
+            z = float(ndtri(u))
+            return float(np.exp(mu_buy + sigma_buy * z))
+
+        def sell_q(u: float) -> float:
+            z = float(ndtri(u))
+            return float(np.exp(mu_sell + sigma_sell * z))
+
+        res = build_hurdle_joint_scenarios(
+            p0_buy=p0_buy,
+            p0_sell=p0_sell,
+            buy_quantile_fn=buy_q,
+            sell_quantile_fn=sell_q,
+            horizon=horizon,
+            positive_nodes=positive_nodes,
+            device=device,
+            dtype=dtype,
+            include_tail=include_tail,
+            meta={
+                "model": "hurdle_lognormal",
+                "mu_buy": mu_buy,
+                "sigma_buy": sigma_buy,
+                "mu_sell": mu_sell,
+                "sigma_sell": sigma_sell,
+            },
+        )
+        res.mu_buy = mu_buy
+        res.sigma_buy = sigma_buy
+        res.mu_sell = mu_sell
+        res.sigma_sell = sigma_sell
+        return res
 
     @staticmethod
     def pmf(k: int, p0: float, mu: float, sigma: float) -> float:
@@ -1262,6 +1480,36 @@ class TorchHurdleLogStudentTModel:
         buy_vol = torch.where(u_buy <= p0_buy, torch.zeros_like(raw_buy), raw_buy)
         sell_vol = torch.where(u_sell <= p0_sell, torch.zeros_like(raw_sell), raw_sell)
         return buy_vol, sell_vol
+
+    def stratified_scenarios(
+        self,
+        horizon: int = 4,
+        positive_nodes: int = 3,
+        device: str | None = None,
+        dtype: Any = None,
+        include_tail: bool = True,
+    ) -> StratifiedScenarios:
+        """Construct exact, weighted stratified scenarios over hurdle log-Student-t distribution."""
+        from scipy.stats import t as student_t
+
+        p = self.get_params()
+        p0_buy = max(0.0, min(1.0, float(p["p0_buy"])))
+        p0_sell = max(0.0, min(1.0, float(p["p0_sell"])))
+        mu_b, sig_b = float(p["mu_buy"]), max(1e-6, float(p["sigma_buy"]))
+        mu_s, sig_s = float(p["mu_sell"]), max(1e-6, float(p["sigma_sell"]))
+        df = max(1.1, float(self._df))
+        return build_hurdle_joint_scenarios(
+            p0_buy=p0_buy,
+            p0_sell=p0_sell,
+            buy_quantile_fn=lambda u: float(np.exp(mu_b + sig_b * student_t.ppf(u, df=df))),
+            sell_quantile_fn=lambda u: float(np.exp(mu_s + sig_s * student_t.ppf(u, df=df))),
+            horizon=horizon,
+            positive_nodes=positive_nodes,
+            device=device,
+            dtype=dtype,
+            include_tail=include_tail,
+            meta={"model": "hurdle_logstudent_t", "df": df, "mu_buy": mu_b, "sigma_buy": sig_b},
+        )
 
     @staticmethod
     def pmf(k: int, p0: float, df: float, mu: float, sigma: float) -> float:
@@ -1441,6 +1689,43 @@ class TorchHurdleGeneralizedParetoModel:
         buy_vol = torch.where(u_buy <= p0_buy, torch.zeros_like(raw_buy), raw_buy)
         sell_vol = torch.where(u_sell <= p0_sell, torch.zeros_like(raw_sell), raw_sell)
         return buy_vol, sell_vol
+
+    def stratified_scenarios(
+        self,
+        horizon: int = 4,
+        positive_nodes: int = 3,
+        device: str | None = None,
+        dtype: Any = None,
+        include_tail: bool = True,
+    ) -> StratifiedScenarios:
+        """Construct exact, weighted stratified scenarios over hurdle GPD distribution."""
+        p = self.get_params()
+        p0_buy = max(0.0, min(1.0, float(p["p0_buy"])))
+        p0_sell = max(0.0, min(1.0, float(p["p0_sell"])))
+        xi_b = float(np.clip(float(p["xi_buy"]), -0.45, 0.95))
+        xi_s = float(np.clip(float(p["xi_sell"]), -0.45, 0.95))
+        beta_b = max(1e-9, float(p["beta_buy"]))
+        beta_s = max(1e-9, float(p["beta_sell"]))
+        u_b = max(1e-9, float(p["u_buy"]))
+        u_s = max(1e-9, float(p["u_sell"]))
+
+        def gpd_q(u: float, xi: float, beta: float, loc: float) -> float:
+            if abs(xi) < 1e-9:
+                return float(loc - beta * np.log(max(1e-12, 1.0 - u)))
+            return float(loc + (beta / xi) * (max(1e-12, 1.0 - u) ** (-xi) - 1.0))
+
+        return build_hurdle_joint_scenarios(
+            p0_buy=p0_buy,
+            p0_sell=p0_sell,
+            buy_quantile_fn=lambda u: gpd_q(u, xi_b, beta_b, u_b),
+            sell_quantile_fn=lambda u: gpd_q(u, xi_s, beta_s, u_s),
+            horizon=horizon,
+            positive_nodes=positive_nodes,
+            device=device,
+            dtype=dtype,
+            include_tail=include_tail,
+            meta={"model": "hurdle_gpd", "xi_buy": xi_b, "beta_buy": beta_b, "u_buy": u_b},
+        )
 
     @staticmethod
     def pmf(k: int, p0: float, xi: float, beta: float, u: float) -> float:

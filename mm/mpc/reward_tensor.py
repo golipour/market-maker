@@ -104,14 +104,19 @@ def objective_mean(values: "Tensor") -> "Tensor":
     return values.view(-1).mean()
 
 
-def objective_entropic_return(returns: "Tensor", *, beta: float) -> "Tensor":
+def objective_entropic_return(
+    returns: "Tensor",
+    *,
+    beta: float,
+    weights: "Tensor | None" = None,
+) -> "Tensor":
     """
     Risk-adjusted return (certainty equivalent):
 
         CE = min(R) - (1/beta) * ln(mean_i exp(-beta * (R_i - min(R))))
 
-    Shifting by ``min(R)`` keeps every exponent <= 0, so ``exp`` stays in (0, 1]
-    and the formula matches ``(-1/beta) * ln(mean_i exp(-beta * R_i))`` without overflow.
+    When weighted scenarios are provided:
+        CE = min(R) - (1/beta) * ln(sum_i w_i * exp(-beta * (R_i - min(R))))
     """
     torch = _get_torch()
     r = returns.view(-1)
@@ -120,9 +125,15 @@ def objective_entropic_return(returns: "Tensor", *, beta: float) -> "Tensor":
     b = max(1e-6, float(beta))
     r_min = r.min()
     shifted = r - r_min
-    log_mean_exp = torch.logsumexp(-b * shifted, dim=0) - torch.log(
-        torch.tensor(float(r.numel()), dtype=r.dtype, device=r.device)
-    )
+    if weights is not None:
+        w = torch.clamp(weights.view(-1), min=1e-12)
+        w = w / w.sum()
+        log_w = torch.log(w)
+        log_mean_exp = torch.logsumexp(-b * shifted + log_w, dim=0)
+    else:
+        log_mean_exp = torch.logsumexp(-b * shifted, dim=0) - torch.log(
+            torch.tensor(float(r.numel()), dtype=r.dtype, device=r.device)
+        )
     return r_min - log_mean_exp / b
 
 
@@ -130,11 +141,13 @@ def terminal_objective(
     returns: "Tensor",
     *,
     return_risk_aversion_beta: float = 1.0,
+    weights: "Tensor | None" = None,
 ) -> tuple["Tensor", dict[str, Any]]:
     """
     Build scalar objective J from per-path returns.
 
     returns: (n_samples,) horizon return R_i = ΔW_i / W_0 per trajectory.
+    weights: optional (n_samples,) probability weights summing to 1.0.
 
     Returns:
         J: scalar tensor to maximize (loss = -J).
@@ -143,7 +156,9 @@ def terminal_objective(
     """
     torch = _get_torch()
     returns = torch.nan_to_num(returns.view(-1), nan=0.0, posinf=1e30, neginf=-1e30)
-    term_return = objective_entropic_return(returns, beta=return_risk_aversion_beta)
+    term_return = objective_entropic_return(
+        returns, beta=return_risk_aversion_beta, weights=weights
+    )
     components = {
         "risk_adjusted_return": term_return,
     }

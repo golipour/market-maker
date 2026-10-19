@@ -41,7 +41,14 @@ def compute_contribution_fractions(
     }
     total_abs = sum(abs_components.values())
     if total_abs <= float(eps):
-        return {k: 0.0 for k in abs_components}
+        if "risk_adjusted_return" in abs_components:
+            out = {k: 0.0 for k in abs_components}
+            out["risk_adjusted_return"] = 1.0
+            return out
+        if abs_components:
+            equal = 1.0 / len(abs_components)
+            return {k: equal for k in abs_components}
+        return {}
     return {k: v / total_abs for k, v in abs_components.items()}
 
 

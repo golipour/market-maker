@@ -305,6 +305,7 @@ def test_reservation_skew_learns_offset_under_inventory_imbalance() -> None:
         reservation_skew=ReservationSkewParams(max_abs_skew=0.005),
         cumulative_qty_floor_at_spread_max=1.0,
         cumulative_qty_cap_at_spread_max=10.0,
+        soft_fill_queue_model="pro_rata",
     )
     mpc = MonteCarloMPCTensorBatched(
         _FixedPriceModel(),

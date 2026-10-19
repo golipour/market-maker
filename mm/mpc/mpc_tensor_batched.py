@@ -1212,6 +1212,14 @@ class MonteCarloMPCTensorBatched:
         crn_enabled: bool = False,
         crn_seed: int = 42,
         warmup_gate_enabled: bool = False,
+        optimizer_mode: str = "adam",
+        flow_scenario_mode: str = "weighted_stratified",
+        stratified_positive_nodes: int = 3,
+        trust_region_iterations: int = 5,
+        trust_region_radius_ticks: float = 2.0,
+        trust_region_min_radius_ticks: float = 1.0,
+        trust_region_size_step: float = 1.0,
+        trust_region_r_step: float = 0.25,
     ):
         self.local_price_model = local_price_model
         self.local_market_flow_model = local_market_flow_model
@@ -1222,6 +1230,14 @@ class MonteCarloMPCTensorBatched:
         self.crn_enabled = bool(crn_enabled)
         self.crn_seed = int(crn_seed)
         self.warmup_gate_enabled = bool(warmup_gate_enabled)
+        self.optimizer_mode = str(optimizer_mode or "adam").strip().lower()
+        self.flow_scenario_mode = str(flow_scenario_mode or "weighted_stratified").strip().lower()
+        self.stratified_positive_nodes = max(1, int(stratified_positive_nodes))
+        self.trust_region_iterations = max(1, int(trust_region_iterations))
+        self.trust_region_radius_ticks = float(trust_region_radius_ticks)
+        self.trust_region_min_radius_ticks = float(trust_region_min_radius_ticks)
+        self.trust_region_size_step = float(trust_region_size_step)
+        self.trust_region_r_step = float(trust_region_r_step)
         self.is_bps = bool(is_bps) or (spread_max_bps is not None)
         self.spread_max_bps = (
             float(spread_max_bps)
@@ -1536,6 +1552,551 @@ class MonteCarloMPCTensorBatched:
             ask_quote_size_max=ask_quote_size_max,
         )
 
+    def _evaluate_rollout(
+        self,
+        x_action: Any,
+        *,
+        buy_vol: Any,
+        sell_vol: Any,
+        eps_buy: Any,
+        eps_sell: Any,
+        price_innov: dict | None,
+        weights: Any | None,
+        state: State,
+        spread_grid: Any,
+        book_cum_bid: Any,
+        book_cum_ask: Any,
+        ob_bids_0: Any,
+        ob_asks_0: Any,
+        mid_0: float,
+        wealth_0: float,
+        maker_fee: float,
+        bid_quote_size_min_0: float,
+        bid_quote_size_max_0: float,
+        ask_quote_size_min_0: float,
+        ask_quote_size_max_0: float,
+        depth_kw: dict[str, Any],
+        single_len: int,
+        n: int,
+        dtype: Any,
+        _device: Any,
+        want_metrics: bool = True,
+    ) -> tuple[Any, dict[str, Any], EpochObjectiveMetrics | None]:
+        torch_mod = _get_torch()
+        n_samples = buy_vol.shape[0]
+        inv_t = torch_mod.full((n_samples, 1), float(state.inventory), dtype=dtype, device=_device)
+        cash_t = torch_mod.full((n_samples, 1), float(state.cash), dtype=dtype, device=_device)
+        mid_fallback_t = torch_mod.full((n_samples, 1), mid_0, dtype=dtype, device=_device)
+        book_cum_bid_0 = book_cum_bid.unsqueeze(0).expand(n_samples, -1)
+        book_cum_ask_0 = book_cum_ask.unsqueeze(0).expand(n_samples, -1)
+        mid_init = _mid_from_book_best_levels_batched(
+            ob_bids_0,
+            ob_asks_0,
+            mid_fallback_t,
+            spread_grid,
+        )
+        inv_path_0 = inv_t.squeeze(1)
+        cash_path_0 = cash_t.squeeze(1)
+        mid_path_0 = mid_init.squeeze(1)
+        total_reward = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+        total_main_reward = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+        step_reward_0 = torch_mod.zeros(n_samples, dtype=dtype, device=_device)
+        inv_path = [inv_path_0]
+        cash_path = [cash_path_0]
+        mid_path = [mid_path_0]
+
+        (
+            bid_quote_size_min_0_t,
+            bid_quote_size_max_0_t,
+            ask_quote_size_min_0_t,
+            ask_quote_size_max_0_t,
+        ) = _quote_capacity_bounds_batched(
+            cash=cash_t,
+            inventory=inv_t,
+            mid_price=mid_init,
+            optimizer=self.local_optimizer,
+        )
+        conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
+        conditional_buy_vwap_t = None
+        conditional_sell_vwap_t = None
+        buy_vwap_const_t = torch_mod.full(
+            (n_samples, 1), float(state.buy_vwap), dtype=dtype, device=_device
+        )
+        sell_vwap_const_t = torch_mod.full(
+            (n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device
+        )
+
+        ob_bids = ob_bids_0
+        ob_asks = ob_asks_0
+
+        fill_fn = resolve_compiled_soft_fill(
+            torch_mod,
+            enabled=self.compile_soft_fill,
+            n_components=n,
+            n_samples=int(n_samples),
+            grid_levels=int(spread_grid.shape[-1]),
+            soft_fill_activation=self.soft_fill_activation,
+            soft_fill_queue_model=self.soft_fill_queue_model,
+            depth_scale=1.0,
+            soft_temp=self.soft_fill_temp,
+            maker_fee=maker_fee,
+        )
+
+        for h in range(self.horizon):
+            if h == 0:
+                book_cum_bid_h = book_cum_bid_0
+                book_cum_ask_h = book_cum_ask_0
+                mid_t = mid_init
+                (
+                    bid_quote_size_min_t,
+                    bid_quote_size_max_t,
+                    ask_quote_size_min_t,
+                    ask_quote_size_max_t,
+                ) = (
+                    bid_quote_size_min_0_t,
+                    bid_quote_size_max_0_t,
+                    ask_quote_size_min_0_t,
+                    ask_quote_size_max_0_t,
+                )
+            else:
+                book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
+                mid_t = _mid_from_book_best_levels_batched(
+                    ob_bids,
+                    ob_asks,
+                    mid_fallback_t,
+                    spread_grid,
+                )
+                (
+                    bid_quote_size_min_t,
+                    bid_quote_size_max_t,
+                    ask_quote_size_min_t,
+                    ask_quote_size_max_t,
+                ) = _quote_capacity_bounds_batched(
+                    cash=cash_t,
+                    inventory=inv_t,
+                    mid_price=mid_t,
+                    optimizer=self.local_optimizer,
+                )
+
+            action_h = x_action[h * single_len : (h + 1) * single_len]
+            sell_h = sell_vol[:, h : h + 1]
+            buy_h = buy_vol[:, h : h + 1]
+            eps_buy_h = eps_buy[:, h : h + 1]
+            eps_sell_h = eps_sell[:, h : h + 1]
+            if h + 1 < self.horizon:
+                eps_buy_next = eps_buy[:, h + 1 : h + 2]
+                eps_sell_next = eps_sell[:, h + 1 : h + 2]
+            else:
+                eps_buy_next = eps_buy_h
+                eps_sell_next = eps_sell_h
+
+            if conditional_price_model:
+                buy_vwap_t = (
+                    buy_vwap_const_t
+                    if conditional_buy_vwap_t is None
+                    else conditional_buy_vwap_t
+                )
+                sell_vwap_t = (
+                    sell_vwap_const_t
+                    if conditional_sell_vwap_t is None
+                    else conditional_sell_vwap_t
+                )
+            else:
+                buy_vwap_book, sell_vwap_book = vwap_prices_batched(
+                    ob_bids,
+                    ob_asks,
+                    mid_t,
+                    spread_grid,
+                    target_depth=torch_mod.abs(inv_t),
+                )
+                buy_vwap_t = buy_vwap_book + eps_buy_h
+                sell_vwap_t = sell_vwap_book + eps_sell_h
+
+            try:
+                ob_bids_next, ob_asks_next, cash_delta, inv_delta = fill_fn(
+                    action_h,
+                    n,
+                    mid_t,
+                    book_cum_bid_h,
+                    book_cum_ask_h,
+                    sell_h,
+                    buy_h,
+                    spread_grid,
+                    maker_fee,
+                    soft_temp=self.soft_fill_temp,
+                    soft_fill_activation=self.soft_fill_activation,
+                    soft_fill_queue_model=self.soft_fill_queue_model,
+                    bid_quote_size_min=bid_quote_size_min_t,
+                    bid_quote_size_max=bid_quote_size_max_t,
+                    ask_quote_size_min=ask_quote_size_min_t,
+                    ask_quote_size_max=ask_quote_size_max_t,
+                    **depth_kw,
+                )
+            except Exception:
+                ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
+                    action_h,
+                    n,
+                    mid_t,
+                    book_cum_bid_h,
+                    book_cum_ask_h,
+                    sell_h,
+                    buy_h,
+                    spread_grid,
+                    maker_fee,
+                    soft_temp=self.soft_fill_temp,
+                    soft_fill_activation=self.soft_fill_activation,
+                    soft_fill_queue_model=self.soft_fill_queue_model,
+                    bid_quote_size_min=bid_quote_size_min_t,
+                    bid_quote_size_max=bid_quote_size_max_t,
+                    ask_quote_size_min=ask_quote_size_min_t,
+                    ask_quote_size_max=ask_quote_size_max_t,
+                    **depth_kw,
+                )
+
+            inv_next = inv_t + inv_delta.unsqueeze(1)
+            cash_next = cash_t + cash_delta.unsqueeze(1)
+            mid_next = _mid_from_book_best_levels_batched(
+                ob_bids_next,
+                ob_asks_next,
+                mid_t,
+                spread_grid,
+            )
+
+            if conditional_price_model:
+                ref_depth = float(getattr(self.local_price_model, "reference_vwap_vol", 100.0))
+                prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = (
+                    _fixed_depth_shape_features_batched(
+                        ob_bids, ob_asks, mid_t, spread_grid, target_depth=ref_depth
+                    )
+                )
+                mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = (
+                    _fixed_depth_shape_features_batched(
+                        ob_bids_next, ob_asks_next, mid_next, spread_grid, target_depth=ref_depth
+                    )
+                )
+                innov_h = None
+                if price_innov is not None:
+                    innov_h = {
+                        "u_market": price_innov["u_market"][:, h : h + 1],
+                        "z_market": {
+                            name: value[:, h : h + 1]
+                            for name, value in price_innov["z_market"].items()
+                        },
+                        "t_refresh": {
+                            name: value[:, h : h + 1]
+                            for name, value in price_innov["t_refresh"].items()
+                        },
+                    }
+                buy_vwap_next, sell_vwap_next = self.local_price_model.sample_dynamic_vwap(
+                    prev_mid=mid_t,
+                    prev_spread=prev_spread_ref,
+                    prev_buy_shape=prev_buy_shape_ref,
+                    prev_sell_shape=prev_sell_shape_ref,
+                    mech_mid=mid_next,
+                    mech_spread=mech_spread_ref,
+                    mech_buy_shape=mech_buy_shape_ref,
+                    mech_sell_shape=mech_sell_shape_ref,
+                    total_flow=buy_h + sell_h,
+                    buy_depth=torch_mod.relu(cash_next / torch_mod.clamp(mid_next, min=1e-9)),
+                    sell_depth=torch_mod.abs(inv_next),
+                    innovations=innov_h,
+                )
+                conditional_buy_vwap_t = buy_vwap_next
+                conditional_sell_vwap_t = sell_vwap_next
+            else:
+                buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
+                    ob_bids_next,
+                    ob_asks_next,
+                    mid_next,
+                    spread_grid,
+                    target_depth=torch_mod.abs(inv_next),
+                )
+                buy_vwap_next = buy_vwap_book_next + eps_buy_next
+                sell_vwap_next = sell_vwap_book_next + eps_sell_next
+
+            ob_bids, ob_asks = ob_bids_next, ob_asks_next
+            step_reward_main = _delta_wealth_mtm_batched(
+                buy_vwap_t,
+                sell_vwap_t,
+                inv_t,
+                cash_t,
+                buy_vwap_next,
+                sell_vwap_next,
+                inv_next,
+                cash_next,
+            )
+            step_reward = step_reward_main
+            if h == 0:
+                step_reward_0 = step_reward
+            inv_path.append(inv_next.squeeze(1))
+            cash_path.append(cash_next.squeeze(1))
+            mid_path.append(mid_next.squeeze(1))
+            total_reward = total_reward + step_reward
+            total_main_reward = total_main_reward + step_reward_main
+            mid_fallback_t = mid_next
+            inv_t = inv_next
+            cash_t = cash_next
+
+        returns = total_reward / wealth_0
+        if weights is not None:
+            w_norm = weights.view(-1) / max(1e-12, weights.view(-1).sum())
+            J_mean_raw = torch_mod.nan_to_num((total_reward.view(-1) * w_norm).sum(), nan=0.0, posinf=1e30, neginf=-1e30)
+            J_return_raw = torch_mod.nan_to_num((returns.view(-1) * w_norm).sum(), nan=0.0, posinf=1e30, neginf=-1e30)
+            J_mean_next_raw = torch_mod.nan_to_num((step_reward_0.view(-1) * w_norm).sum(), nan=0.0, posinf=1e30, neginf=-1e30)
+            main_reward_mean_raw = torch_mod.nan_to_num((total_main_reward.view(-1) * w_norm).sum(), nan=0.0, posinf=1e30, neginf=-1e30)
+        else:
+            J_mean_raw = torch_mod.nan_to_num(total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30)
+            J_return_raw = torch_mod.nan_to_num(returns.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30)
+            J_mean_next_raw = torch_mod.nan_to_num(step_reward_0.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30)
+            main_reward_mean_raw = torch_mod.nan_to_num(total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30)
+
+        global_reward_mean_raw = torch_mod.zeros((), dtype=dtype, device=_device)
+        if weights is not None:
+            J, components = terminal_objective(
+                returns,
+                return_risk_aversion_beta=self.return_risk_aversion_beta,
+                weights=weights,
+            )
+        else:
+            J, components = terminal_objective(
+                returns,
+                return_risk_aversion_beta=self.return_risk_aversion_beta,
+            )
+        J, components = self.normalize_terminal_objective(J, components)
+
+        venue_opt = self.local_optimizer
+        if venue_opt.validity is not None:
+            book_params = venue_opt.book_quality or BookQualityParams()
+            use_combined = book_params.measure == "combined"
+            book_score, book_components = book_quality_score(
+                x_action[:single_len],
+                l_param=self._l_param_config(),
+                n_components=n,
+                spread_grid=spread_grid,
+                bid_quote_size_min=bid_quote_size_min_0,
+                bid_quote_size_max=bid_quote_size_max_0,
+                ask_quote_size_min=ask_quote_size_min_0,
+                ask_quote_size_max=ask_quote_size_max_0,
+                mid_price=mid_0,
+                params=book_params,
+                market_cum_bid=book_cum_bid if use_combined else None,
+                market_cum_ask=book_cum_ask if use_combined else None,
+            )
+            J, components = combine_validity_term(
+                J,
+                components,
+                params=venue_opt.validity,
+                book_score=book_score,
+                book_components=book_components,
+            )
+        if venue_opt.viability is not None:
+            inv_path_t = torch_mod.stack(inv_path, dim=1)
+            cash_path_t = torch_mod.stack(cash_path, dim=1)
+            mid_path_t = torch_mod.stack(mid_path, dim=1)
+            shortfall, viability_components = viability_path_shortfall(
+                inv_path_t,
+                cash_path=cash_path_t,
+                mid_path=mid_path_t,
+                params=venue_opt.viability,
+            )
+            J, components = combine_viability_term(
+                J,
+                components,
+                viability_lambda=self._viability_lambda_local,
+                viability_params=venue_opt.viability,
+                viability_shortfall=shortfall,
+                viability_components=viability_components,
+            )
+
+        l_cfg = self._l_param_config()
+        if l_cfg is not None and float(l_cfg.reservation_r_max) > 0.0:
+            r_off_t = reservation_r_offset_from_params(
+                x_action[:single_len],
+                n_components=n,
+                r_max=float(l_cfg.reservation_r_max),
+            )
+            r_idx = reservation_logit_index(n)
+            raw_r = x_action[r_idx]
+            components["reservation_r_offset"] = r_off_t
+            components["reservation_shift_quote"] = r_off_t * mid_0
+            components["reservation_raw_logit"] = raw_r
+
+        def _finite_item(t) -> float:
+            try:
+                if hasattr(t, "detach"):
+                    x = float(t.detach().item())
+                else:
+                    x = float(t)
+                return x if math.isfinite(x) else 0.0
+            except Exception:
+                return 0.0
+
+        epoch_metrics = None
+        if want_metrics:
+            obj_val = _finite_item(J)
+            epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                objective_value=obj_val,
+                components={k: _finite_item(v) for k, v in components.items()},
+                expected_total_reward=_finite_item(J_mean_raw),
+                expected_total_return=_finite_item(J_return_raw),
+                expected_next_reward=_finite_item(J_mean_next_raw),
+                main_reward_mean=_finite_item(main_reward_mean_raw),
+                global_reward_mean=_finite_item(global_reward_mean_raw),
+            )
+
+        return J, components, epoch_metrics
+
+    def _optimize_discrete_trust_region(
+        self,
+        x_init: Any,
+        lower: Any,
+        upper: Any,
+        single_len: int,
+        n_components: int,
+        eval_fn: Any,
+    ) -> tuple[Any, EpochObjectiveMetrics, EpochObjectiveMetrics, int, str]:
+        """
+        Derivative-free discrete trust-region / pattern search over physical ticks, lots, and reservation skew.
+        Guarantees monotonic objective improvement or local convergence.
+        """
+        torch_mod = _get_torch()
+        best_x = x_init.detach().clone()
+        with torch_mod.no_grad():
+            J_best_t, _, metrics_init = eval_fn(best_x, want_metrics=True)
+            best_obj = float(J_best_t.item())
+
+        initial_metrics = metrics_init
+        best_metrics = metrics_init
+        best_iter = 0
+        r_ticks = float(self.trust_region_radius_ticks)
+        min_ticks = float(self.trust_region_min_radius_ticks)
+        size_step = float(self.trust_region_size_step)
+        r_step = float(self.trust_region_r_step)
+        termination_reason = "max_iterations"
+        n = n_components
+
+        spread_cap = float(self.spread_max)
+        spread_step = float(self.spread_step)
+        effective_tick_fraction = max(1e-4, spread_step / max(spread_cap, spread_step))
+
+        for iteration in range(self.trust_region_iterations):
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                termination_reason = "cancelled"
+                break
+
+            improved_this_iter = False
+            candidates: list[Any] = []
+
+            # Calibrated logit step that shifts physical quotes by r_ticks on the spread grid
+            logit_tick_delta = max(0.2, min(3.0, 8.0 * r_ticks * effective_tick_fraction))
+
+            # 1. Bilateral spread moves (scale logit at index 0)
+            for multiplier in (1.0, 2.0):
+                c_tight = best_x.clone()
+                c_tight[0] -= multiplier * logit_tick_delta
+                candidates.append(c_tight)
+
+                c_wide = best_x.clone()
+                c_wide[0] += multiplier * logit_tick_delta
+                candidates.append(c_wide)
+
+            # 2. Individual side spread shifts and skews (u_bid index 2, u_ask index 3*n + 2)
+            for c in range(n):
+                idx_b = 3 * c + 2
+                idx_a = 3 * n + 3 * c + 2
+                for delta in (-logit_tick_delta, logit_tick_delta):
+                    c_b = best_x.clone()
+                    c_b[idx_b] += delta
+                    candidates.append(c_b)
+
+                    c_a = best_x.clone()
+                    c_a[idx_a] += delta
+                    candidates.append(c_a)
+
+                # Coordinated skew: bid tight / ask wide, and bid wide / ask tight
+                c_skew_b_tight = best_x.clone()
+                c_skew_b_tight[idx_b] -= logit_tick_delta
+                c_skew_b_tight[idx_a] += logit_tick_delta
+                candidates.append(c_skew_b_tight)
+
+                c_skew_a_tight = best_x.clone()
+                c_skew_a_tight[idx_b] += logit_tick_delta
+                c_skew_a_tight[idx_a] -= logit_tick_delta
+                candidates.append(c_skew_a_tight)
+
+            # 3. Depth logits / quote size moves
+            idx_depth_b = 6 * n
+            idx_depth_a = 6 * n + 1
+            if idx_depth_a < single_len:
+                for s_delta in (-size_step, size_step):
+                    c_db = best_x.clone()
+                    c_db[idx_depth_b] += s_delta
+                    candidates.append(c_db)
+
+                    c_da = best_x.clone()
+                    c_da[idx_depth_a] += s_delta
+                    candidates.append(c_da)
+
+                    c_both_d = best_x.clone()
+                    c_both_d[idx_depth_b] += s_delta
+                    c_both_d[idx_depth_a] += s_delta
+                    candidates.append(c_both_d)
+
+            # 4. Reservation price offset / skew (index 6*n + 2)
+            idx_res = 6 * n + 2
+            if idx_res < single_len:
+                for r_delta in (-r_step, r_step, -2.0 * r_step, 2.0 * r_step):
+                    c_res = best_x.clone()
+                    c_res[idx_res] += r_delta
+                    candidates.append(c_res)
+
+            # 5. Curve steepness k (index 1 for bid, 3*n + 1 for ask)
+            for k_delta in (-0.5, 0.5):
+                c_kb = best_x.clone()
+                c_kb[1] += k_delta
+                candidates.append(c_kb)
+
+                c_ka = best_x.clone()
+                c_ka[3 * n + 1] += k_delta
+                candidates.append(c_ka)
+
+            # Evaluate candidates
+            iter_best_cand = None
+            iter_best_obj = best_obj
+            iter_best_metrics = None
+
+            with torch_mod.no_grad():
+                for cand in candidates:
+                    for h in range(1, self.horizon):
+                        cand[h * single_len : (h + 1) * single_len] = cand[:single_len]
+                    cand = torch_mod.clamp(cand, lower, upper)
+                    if torch_mod.allclose(cand, best_x, atol=1e-7):
+                        continue
+
+                    J_cand, _, metrics_cand = eval_fn(cand, want_metrics=True)
+                    val = float(J_cand.item())
+                    if math.isfinite(val) and val > iter_best_obj + 1e-8:
+                        iter_best_obj = val
+                        iter_best_cand = cand.clone()
+                        iter_best_metrics = metrics_cand
+
+            if iter_best_cand is not None:
+                best_x = iter_best_cand
+                best_obj = iter_best_obj
+                best_metrics = iter_best_metrics
+                best_iter = iteration + 1
+                improved_this_iter = True
+
+            if not improved_this_iter:
+                if r_ticks > min_ticks:
+                    r_ticks = max(min_ticks, r_ticks / 2.0)
+                    size_step = max(0.5, size_step / 2.0)
+                else:
+                    termination_reason = "local_optimum_reached"
+                    break
+
+        return best_x, initial_metrics, best_metrics, best_iter, termination_reason
+
     def optimize(self, state: State) -> SigmoidMixtureAction:
         action, _ = self.optimize_with_diagnostics(state)
         return action
@@ -1594,8 +2155,56 @@ class MonteCarloMPCTensorBatched:
             optimizer=self.local_optimizer,
         )
 
-        ob_bids_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
-        ob_asks_0 = torch_mod.zeros(self.n_samples, self.grid_levels, dtype=dtype, device=_device)
+        use_stratified = (
+            self.flow_scenario_mode == "weighted_stratified"
+            and hasattr(self.local_market_flow_model, "stratified_scenarios")
+        )
+        scenario_weights = None
+        p0_buy = 0.0
+        p0_sell = 0.0
+        fixed_buy_vol = None
+        fixed_sell_vol = None
+        fixed_eps_buy = None
+        fixed_eps_sell = None
+        fixed_price_innov = None
+        batch_time_sec = 0.0
+
+        if use_stratified:
+            t_batch = time.perf_counter()
+            strat = self.local_market_flow_model.stratified_scenarios(
+                horizon=self.horizon,
+                positive_nodes=self.stratified_positive_nodes,
+                device=_device,
+                dtype=dtype,
+            )
+            fixed_buy_vol = strat.buy_vol
+            fixed_sell_vol = strat.sell_vol
+            scenario_weights = strat.weights
+            p0_buy = strat.p0_buy
+            p0_sell = strat.p0_sell
+            n_samples = int(fixed_buy_vol.shape[0])
+            if hasattr(self.local_price_model, "sample_innovations"):
+                fixed_price_innov = self.local_price_model.sample_innovations(
+                    (n_samples, self.horizon), device=_device, dtype=dtype
+                )
+                fixed_eps_buy = torch_mod.zeros((n_samples, self.horizon), dtype=dtype, device=_device)
+                fixed_eps_sell = torch_mod.zeros((n_samples, self.horizon), dtype=dtype, device=_device)
+            elif hasattr(self.local_price_model, "sample_residual"):
+                fixed_eps_buy, fixed_eps_sell = self.local_price_model.sample_residual(
+                    (n_samples, self.horizon), device=_device, dtype=dtype
+                )
+                fixed_price_innov = None
+            else:
+                fixed_eps_buy = torch_mod.zeros((n_samples, self.horizon), dtype=dtype, device=_device)
+                fixed_eps_sell = torch_mod.zeros((n_samples, self.horizon), dtype=dtype, device=_device)
+                fixed_price_innov = None
+            batch_time_sec = time.perf_counter() - t_batch
+            stage_timer.record("sample", batch_time_sec * 1000.0)
+        else:
+            n_samples = self.n_samples
+
+        ob_bids_0 = torch_mod.zeros(n_samples, self.grid_levels, dtype=dtype, device=_device)
+        ob_asks_0 = torch_mod.zeros(n_samples, self.grid_levels, dtype=dtype, device=_device)
         for (s, q) in state.ob_rel.bids:
             i = _spread_bucket_index(float(s), self.spread_step, self.grid_levels)
             if 0 <= i < self.grid_levels:
@@ -1696,9 +2305,8 @@ class MonteCarloMPCTensorBatched:
                 eps_sell = torch_mod.zeros(sample_shape, dtype=dtype, device=_device)
             return buy_vol, sell_vol, eps_buy, eps_sell, price_innov
 
-        batch_time_sec = 0.0
         stage_timer.record("setup", (time.perf_counter() - setup_started) * 1000.0)
-        if self.fixed_mc_samples:
+        if fixed_buy_vol is None and (not use_stratified and (self.fixed_mc_samples or self.optimizer_mode == "discrete_trust_region")):
             t_batch = time.perf_counter()
             (
                 fixed_buy_vol,
@@ -1707,7 +2315,7 @@ class MonteCarloMPCTensorBatched:
                 fixed_eps_sell,
                 fixed_price_innov,
             ) = draw_samples()
-            batch_time_sec = time.perf_counter() - t_batch
+            batch_time_sec += time.perf_counter() - t_batch
             stage_timer.record("sample", batch_time_sec * 1000.0)
 
         spread_levels = tuple(
@@ -1760,7 +2368,7 @@ class MonteCarloMPCTensorBatched:
         # from the hottest path. ``mid_init`` alone is ~38us at production
         # shapes (n_samples=64, grid_levels=10), i.e. ~0.76ms per decide across
         # 20 epochs.
-        n_samples = self.n_samples
+        n_samples = int(fixed_buy_vol.shape[0]) if fixed_buy_vol is not None else self.n_samples
         inv_t_0 = torch_mod.full((n_samples, 1), inv_0, dtype=dtype, device=_device)
         cash_t_0 = torch_mod.full((n_samples, 1), cash_0, dtype=dtype, device=_device)
         mid_fallback_0 = torch_mod.full((n_samples, 1), mid_0, dtype=dtype, device=_device)
@@ -1804,213 +2412,251 @@ class MonteCarloMPCTensorBatched:
             (n_samples, 1), float(state.sell_vwap), dtype=dtype, device=_device
         )
 
-        for epoch in range(self.adam_epochs):
-            # Cooperative cancellation: ``StrategyRunner`` installs a
-            # ``threading.Event`` so a timed-out decide can break out of
-            # the Adam loop without killing the worker thread. The
-            # best-so-far result is returned so the actor can keep its
-            # most recent action rather than throwing away work.
-            if self._cancel_event is not None and self._cancel_event.is_set():
-                self._cancel_requested = True
-                break
-            if self.verbose:
-                cur_flat = x_torch.detach().cpu().numpy()[:single_len]
-                print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
+        if self.optimizer_mode == "discrete_trust_region":
+            t_tr_start = time.perf_counter()
+            depth_kw = self._depth_call_kwargs()
 
-            def closure(probe_only: bool = False, want_metrics: bool = True):
-                nonlocal batch_time_sec, captured_initial_components
-                nonlocal initial_metrics, final_metrics
-                nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
-                nonlocal closure_wall_ms, sample_inside_forward_ms
-                nonlocal best_epoch_metrics
-                closure_started = time.perf_counter()
-                forward_started = time.perf_counter()
-                optimizer.zero_grad()
-                with torch_mod.no_grad():
-                    x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
-                    last_eval_x = x_torch.detach().clone()
+            def tr_eval_fn(cand_x: Any, want_metrics: bool = True):
+                return self._evaluate_rollout(
+                    cand_x,
+                    buy_vol=fixed_buy_vol,
+                    sell_vol=fixed_sell_vol,
+                    eps_buy=fixed_eps_buy,
+                    eps_sell=fixed_eps_sell,
+                    price_innov=fixed_price_innov,
+                    weights=scenario_weights,
+                    state=state,
+                    spread_grid=spread_grid,
+                    book_cum_bid=book_cum_bid,
+                    book_cum_ask=book_cum_ask,
+                    ob_bids_0=ob_bids_0,
+                    ob_asks_0=ob_asks_0,
+                    mid_0=mid_0,
+                    wealth_0=wealth_0,
+                    maker_fee=maker_fee,
+                    bid_quote_size_min_0=bid_quote_size_min_0,
+                    bid_quote_size_max_0=bid_quote_size_max_0,
+                    ask_quote_size_min_0=ask_quote_size_min_0,
+                    ask_quote_size_max_0=ask_quote_size_max_0,
+                    depth_kw=depth_kw,
+                    single_len=single_len,
+                    n=n,
+                    dtype=dtype,
+                    _device=_device,
+                    want_metrics=want_metrics,
+                )
 
-                if self.fixed_mc_samples:
-                    buy_vol, sell_vol, eps_buy, eps_sell, price_innov = (
-                        fixed_buy_vol,
-                        fixed_sell_vol,
-                        fixed_eps_buy,
-                        fixed_eps_sell,
-                        fixed_price_innov,
-                    )
-                else:
-                    t_batch = time.perf_counter()
-                    buy_vol, sell_vol, eps_buy, eps_sell, price_innov = draw_samples()
-                    drawn = time.perf_counter() - t_batch
-                    batch_time_sec += drawn
-                    stage_timer.record("sample", drawn * 1000.0)
-                    sample_inside_forward_ms += drawn * 1000.0
+            best_x, initial_metrics, best_metrics, best_epoch, termination_reason = (
+                self._optimize_discrete_trust_region(
+                    x_init=x_torch,
+                    lower=lower,
+                    upper=upper,
+                    single_len=single_len,
+                    n_components=n,
+                    eval_fn=tr_eval_fn,
+                )
+            )
+            final_metrics = best_metrics
+            with torch_mod.no_grad():
+                x_torch.data.copy_(best_x)
+            if best_metrics is not None:
+                best_loss = -float(best_metrics.objective_value)
+                best_J_mean = best_metrics.expected_total_reward
+                best_J_mean_next = best_metrics.expected_next_reward
+                best_main_reward_mean = best_metrics.main_reward_mean
+                self._last_J_components = dict(best_metrics.components)
+                self._last_J_mean_raw = best_metrics.expected_total_reward
+                self._last_E_dW_next = best_metrics.expected_next_reward
+                self._last_main_reward_mean = best_metrics.main_reward_mean
+                self._last_global_reward_mean = best_metrics.global_reward_mean
+            if initial_metrics is not None:
+                self._last_J_components_initial = dict(initial_metrics.components)
+                self._last_main_reward_mean_initial = initial_metrics.main_reward_mean
+                self._last_global_reward_mean_initial = initial_metrics.global_reward_mean
+            stage_timer.record("trust_region", (time.perf_counter() - t_tr_start) * 1000.0)
+            stage_timer.bump_epochs()
+        else:
+            for epoch in range(self.adam_epochs):
+                # Cooperative cancellation: ``StrategyRunner`` installs a
+                # ``threading.Event`` so a timed-out decide can break out of
+                # the Adam loop without killing the worker thread. The
+                # best-so-far result is returned so the actor can keep its
+                # most recent action rather than throwing away work.
+                if self._cancel_event is not None and self._cancel_event.is_set():
+                    self._cancel_requested = True
+                    break
+                if self.verbose:
+                    cur_flat = x_torch.detach().cpu().numpy()[:single_len]
+                    print(f"  Epoch {epoch}: action  {_format_action_verbose(cur_flat, n)}")
 
-                # ``inv_t``/``cash_t``/``mid_fallback_t`` are read-only here (only
-                # rebound to derived values below), so reuse the hoisted
-                # constants instead of reallocating them per epoch.
-                inv_t = inv_t_0
-                cash_t = cash_t_0
-                # ``ob_bids``/``ob_asks`` are only read or rebound within the
-                # horizon loop (``ob_bids, ob_asks = ob_bids_next, ob_asks_next``);
-                # nothing writes into them in place, so rebinding straight to the
-                # epoch-invariant originals is safe and skips two per-epoch
-                # (n_samples, grid_levels) copies.
-                ob_bids = ob_bids_0
-                ob_asks = ob_asks_0
-                mid_fallback_t = mid_fallback_0
+                def closure(probe_only: bool = False, want_metrics: bool = True):
+                    nonlocal batch_time_sec, captured_initial_components
+                    nonlocal initial_metrics, final_metrics
+                    nonlocal nonfinite_loss_count, nonfinite_grad_count, last_eval_x
+                    nonlocal closure_wall_ms, sample_inside_forward_ms
+                    nonlocal best_epoch_metrics
+                    closure_started = time.perf_counter()
+                    forward_started = time.perf_counter()
+                    optimizer.zero_grad()
+                    with torch_mod.no_grad():
+                        x_torch.data = torch_mod.clamp(x_torch.data, lower, upper)
+                        last_eval_x = x_torch.detach().clone()
 
-                total_reward = total_reward_0
-                total_main_reward = total_main_reward_0
-                step_reward_0 = step_reward_0_init
-                inv_path: list[Any] = [inv_path_0]
-                cash_path: list[Any] = [cash_path_0]
-                mid_path: list[Any] = [mid_path_0]
-                conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
-                conditional_buy_vwap_t = None
-                conditional_sell_vwap_t = None
-
-                for h in range(self.horizon):
-                    if h == 0:
-                        book_cum_bid_h = book_cum_bid_0
-                        book_cum_ask_h = book_cum_ask_0
-                        # ``ob_bids``/``ob_asks`` are still the epoch-invariant
-                        # initial book and ``mid_fallback_t`` is ``mid_fallback_0``,
-                        # so this is exactly the ``mid_init`` computed before the
-                        # Adam loop. Reuse it instead of re-deriving it on every
-                        # epoch's first horizon step.
-                        mid_t = mid_init
-                    else:
-                        book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
-
-                    action_h = x_torch[h * single_len : (h + 1) * single_len]
-                    depth_kw = self._depth_call_kwargs()
-                    sell_h = sell_vol[:, h : h + 1]
-                    buy_h = buy_vol[:, h : h + 1]
-                    eps_buy_h = eps_buy[:, h : h + 1]
-                    eps_sell_h = eps_sell[:, h : h + 1]
-                    if h + 1 < self.horizon:
-                        eps_buy_next = eps_buy[:, h + 1 : h + 2]
-                        eps_sell_next = eps_sell[:, h + 1 : h + 2]
-                    else:
-                        eps_buy_next = eps_buy_h
-                        eps_sell_next = eps_sell_h
-
-                    if h != 0:
-                        mid_t = _mid_from_book_best_levels_batched(
-                            ob_bids,
-                            ob_asks,
-                            mid_fallback_t,
-                            spread_grid,
+                    if self.fixed_mc_samples:
+                        buy_vol, sell_vol, eps_buy, eps_sell, price_innov = (
+                            fixed_buy_vol,
+                            fixed_sell_vol,
+                            fixed_eps_buy,
+                            fixed_eps_sell,
+                            fixed_price_innov,
                         )
-                    if h == 0:
-                        # Everything here is a function of the initial book,
-                        # inventory, cash and mid only, so reuse the values
-                        # derived once before the Adam loop.
-                        (
-                            bid_quote_size_min_t,
-                            bid_quote_size_max_t,
-                            ask_quote_size_min_t,
-                            ask_quote_size_max_t,
-                        ) = (
-                            bid_quote_size_min_0_t,
-                            bid_quote_size_max_0_t,
-                            ask_quote_size_min_0_t,
-                            ask_quote_size_max_0_t,
-                        )
-                        sell_vwap_depth_t = sell_vwap_depth_0_t
-                        buy_vwap_depth_t = buy_vwap_depth_0_t
-                        # Use upstream VWAPs computed from the initial inventory
-                        # depth, instead of recomputing from the book arrays.
-                        buy_vwap_book_t = buy_vwap_const_t
-                        sell_vwap_book_t = sell_vwap_const_t
                     else:
-                        (
-                            bid_quote_size_min_t,
-                            bid_quote_size_max_t,
-                            ask_quote_size_min_t,
-                            ask_quote_size_max_t,
-                        ) = _quote_capacity_bounds_batched(
-                            cash=cash_t,
-                            inventory=inv_t,
-                            mid_price=mid_t,
-                            optimizer=self.local_optimizer,
-                        )
-                        sell_vwap_depth_t = torch_mod.abs(inv_t)
-                        buy_vwap_depth_t = torch_mod.relu(cash_t / torch_mod.clamp(mid_t, min=1e-9))
-                        if conditional_price_model and conditional_buy_vwap_t is not None:
-                            buy_vwap_book_t = conditional_buy_vwap_t
-                            sell_vwap_book_t = conditional_sell_vwap_t
+                        t_batch = time.perf_counter()
+                        buy_vol, sell_vol, eps_buy, eps_sell, price_innov = draw_samples()
+                        drawn = time.perf_counter() - t_batch
+                        batch_time_sec += drawn
+                        stage_timer.record("sample", drawn * 1000.0)
+                        sample_inside_forward_ms += drawn * 1000.0
+
+                    # ``inv_t``/``cash_t``/``mid_fallback_t`` are read-only here (only
+                    # rebound to derived values below), so reuse the hoisted
+                    # constants instead of reallocating them per epoch.
+                    inv_t = inv_t_0
+                    cash_t = cash_t_0
+                    # ``ob_bids``/``ob_asks`` are only read or rebound within the
+                    # horizon loop (``ob_bids, ob_asks = ob_bids_next, ob_asks_next``);
+                    # nothing writes into them in place, so rebinding straight to the
+                    # epoch-invariant originals is safe and skips two per-epoch
+                    # (n_samples, grid_levels) copies.
+                    ob_bids = ob_bids_0
+                    ob_asks = ob_asks_0
+                    mid_fallback_t = mid_fallback_0
+
+                    total_reward = total_reward_0
+                    total_main_reward = total_main_reward_0
+                    step_reward_0 = step_reward_0_init
+                    inv_path: list[Any] = [inv_path_0]
+                    cash_path: list[Any] = [cash_path_0]
+                    mid_path: list[Any] = [mid_path_0]
+                    conditional_price_model = hasattr(self.local_price_model, "sample_dynamic_vwap")
+                    conditional_buy_vwap_t = None
+                    conditional_sell_vwap_t = None
+
+                    for h in range(self.horizon):
+                        if h == 0:
+                            book_cum_bid_h = book_cum_bid_0
+                            book_cum_ask_h = book_cum_ask_0
+                            # ``ob_bids``/``ob_asks`` are still the epoch-invariant
+                            # initial book and ``mid_fallback_t`` is ``mid_fallback_0``,
+                            # so this is exactly the ``mid_init`` computed before the
+                            # Adam loop. Reuse it instead of re-deriving it on every
+                            # epoch's first horizon step.
+                            mid_t = mid_init
                         else:
-                            buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
+                            book_cum_bid_h, book_cum_ask_h = _book_cumulative_from_arrays(ob_bids, ob_asks)
+
+                        action_h = x_torch[h * single_len : (h + 1) * single_len]
+                        depth_kw = self._depth_call_kwargs()
+                        sell_h = sell_vol[:, h : h + 1]
+                        buy_h = buy_vol[:, h : h + 1]
+                        eps_buy_h = eps_buy[:, h : h + 1]
+                        eps_sell_h = eps_sell[:, h : h + 1]
+                        if h + 1 < self.horizon:
+                            eps_buy_next = eps_buy[:, h + 1 : h + 2]
+                            eps_sell_next = eps_sell[:, h + 1 : h + 2]
+                        else:
+                            eps_buy_next = eps_buy_h
+                            eps_sell_next = eps_sell_h
+
+                        if h != 0:
+                            mid_t = _mid_from_book_best_levels_batched(
                                 ob_bids,
                                 ob_asks,
-                                mid_t,
+                                mid_fallback_t,
                                 spread_grid,
-                                target_depth=sell_vwap_depth_t,
                             )
-                    if conditional_price_model:
-                        buy_vwap_t = buy_vwap_book_t
-                        sell_vwap_t = sell_vwap_book_t
-                    else:
-                        buy_vwap_t = buy_vwap_book_t + eps_buy_h
-                        sell_vwap_t = sell_vwap_book_t + eps_sell_h
+                        if h == 0:
+                            # Everything here is a function of the initial book,
+                            # inventory, cash and mid only, so reuse the values
+                            # derived once before the Adam loop.
+                            (
+                                bid_quote_size_min_t,
+                                bid_quote_size_max_t,
+                                ask_quote_size_min_t,
+                                ask_quote_size_max_t,
+                            ) = (
+                                bid_quote_size_min_0_t,
+                                bid_quote_size_max_0_t,
+                                ask_quote_size_min_0_t,
+                                ask_quote_size_max_0_t,
+                            )
+                            sell_vwap_depth_t = sell_vwap_depth_0_t
+                            buy_vwap_depth_t = buy_vwap_depth_0_t
+                            # Use upstream VWAPs computed from the initial inventory
+                            # depth, instead of recomputing from the book arrays.
+                            buy_vwap_book_t = buy_vwap_const_t
+                            sell_vwap_book_t = sell_vwap_const_t
+                        else:
+                            (
+                                bid_quote_size_min_t,
+                                bid_quote_size_max_t,
+                                ask_quote_size_min_t,
+                                ask_quote_size_max_t,
+                            ) = _quote_capacity_bounds_batched(
+                                cash=cash_t,
+                                inventory=inv_t,
+                                mid_price=mid_t,
+                                optimizer=self.local_optimizer,
+                            )
+                            sell_vwap_depth_t = torch_mod.abs(inv_t)
+                            buy_vwap_depth_t = torch_mod.relu(cash_t / torch_mod.clamp(mid_t, min=1e-9))
+                            if conditional_price_model and conditional_buy_vwap_t is not None:
+                                buy_vwap_book_t = conditional_buy_vwap_t
+                                sell_vwap_book_t = conditional_sell_vwap_t
+                            else:
+                                buy_vwap_book_t, sell_vwap_book_t = vwap_prices_batched(
+                                    ob_bids,
+                                    ob_asks,
+                                    mid_t,
+                                    spread_grid,
+                                    target_depth=sell_vwap_depth_t,
+                                )
+                        if conditional_price_model:
+                            buy_vwap_t = buy_vwap_book_t
+                            sell_vwap_t = sell_vwap_book_t
+                        else:
+                            buy_vwap_t = buy_vwap_book_t + eps_buy_h
+                            sell_vwap_t = sell_vwap_book_t + eps_sell_h
 
-                    # Never trigger a lazy inductor compile on the decide
-                    # path. An unwarmed shape used to compile here (measured
-                    # 162 s), which blew ``decision_timeout_ms`` and left the
-                    # controller wedged on "optimizer decision in progress"
-                    # for every subsequent frame. A signature absent from the
-                    # warmed set means this venue's shape was never paid for at
-                    # construction, so run eager -- eager is always correct,
-                    # just slower -- and record it so the shortfall is visible
-                    # in logs rather than silently costing decisions.
-                    venue_n = n
-                    soft_fill_fn = resolve_compiled_soft_fill(
-                        torch_mod,
-                        enabled=self.compile_soft_fill,
-                        n_components=venue_n,
-                        n_samples=int(mid_t.shape[0]),
-                        grid_levels=int(spread_grid.shape[-1]),
-                        soft_fill_activation=self.soft_fill_activation,
-                        soft_fill_queue_model=self.soft_fill_queue_model,
-                        depth_scale=1.0,
-                        soft_temp=self.soft_fill_temp,
-                        maker_fee=maker_fee,
-                    )
-                    _mark_batch_dims_dynamic(
-                        mid_t, book_cum_bid_h, book_cum_ask_h, sell_h, buy_h,
-                        bid_quote_size_min_t, bid_quote_size_max_t,
-                        ask_quote_size_min_t, ask_quote_size_max_t,
-                    )
-                    try:
-                        ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_fn(
-                            action_h,
-                            n,
-                            mid_t,
-                            book_cum_bid_h,
-                            book_cum_ask_h,
-                            sell_h,
-                            buy_h,
-                            spread_grid,
-                            maker_fee,
-                            soft_temp=self.soft_fill_temp,
+                        # Never trigger a lazy inductor compile on the decide
+                        # path. An unwarmed shape used to compile here (measured
+                        # 162 s), which blew ``decision_timeout_ms`` and left the
+                        # controller wedged on "optimizer decision in progress"
+                        # for every subsequent frame. A signature absent from the
+                        # warmed set means this venue's shape was never paid for at
+                        # construction, so run eager -- eager is always correct,
+                        # just slower -- and record it so the shortfall is visible
+                        # in logs rather than silently costing decisions.
+                        venue_n = n
+                        soft_fill_fn = resolve_compiled_soft_fill(
+                            torch_mod,
+                            enabled=self.compile_soft_fill,
+                            n_components=venue_n,
+                            n_samples=int(mid_t.shape[0]),
+                            grid_levels=int(spread_grid.shape[-1]),
                             soft_fill_activation=self.soft_fill_activation,
                             soft_fill_queue_model=self.soft_fill_queue_model,
-                            bid_quote_size_min=bid_quote_size_min_t,
-                            bid_quote_size_max=bid_quote_size_max_t,
-                            ask_quote_size_min=ask_quote_size_min_t,
-                            ask_quote_size_max=ask_quote_size_max_t,
-                            **depth_kw,
+                            depth_scale=1.0,
+                            soft_temp=self.soft_fill_temp,
+                            maker_fee=maker_fee,
                         )
-                    except Exception as exc:
-                        if self.compile_soft_fill:
-                            log_event(
-                                "mpc.torch_compile.runtime_fallback",
-                                {"error": str(exc)},
-                            )
-                            self.compile_soft_fill = False
-                            ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
+                        _mark_batch_dims_dynamic(
+                            mid_t, book_cum_bid_h, book_cum_ask_h, sell_h, buy_h,
+                            bid_quote_size_min_t, bid_quote_size_max_t,
+                            ask_quote_size_min_t, ask_quote_size_max_t,
+                        )
+                        try:
+                            ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_fn(
                                 action_h,
                                 n,
                                 mid_t,
@@ -2029,299 +2675,332 @@ class MonteCarloMPCTensorBatched:
                                 ask_quote_size_max=ask_quote_size_max_t,
                                 **depth_kw,
                             )
-                        else:
-                            raise
-                    inv_next = inv_t + inv_delta.unsqueeze(1)
-                    cash_next = cash_t + cash_delta.unsqueeze(1)
-                    mid_next = _mid_from_book_best_levels_batched(
-                        ob_bids_next,
-                        ob_asks_next,
-                        mid_t,
-                        spread_grid,
-                    )
-                    if conditional_price_model:
-                        ref_depth = float(getattr(self.local_price_model, "reference_vwap_vol", 100.0))
-                        prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = (
-                            _fixed_depth_shape_features_batched(
-                                ob_bids,
-                                ob_asks,
-                                mid_t,
-                                spread_grid,
-                                target_depth=ref_depth,
-                            )
+                        except Exception as exc:
+                            if self.compile_soft_fill:
+                                log_event(
+                                    "mpc.torch_compile.runtime_fallback",
+                                    {"error": str(exc)},
+                                )
+                                self.compile_soft_fill = False
+                                ob_bids_next, ob_asks_next, cash_delta, inv_delta = soft_fill_batched(
+                                    action_h,
+                                    n,
+                                    mid_t,
+                                    book_cum_bid_h,
+                                    book_cum_ask_h,
+                                    sell_h,
+                                    buy_h,
+                                    spread_grid,
+                                    maker_fee,
+                                    soft_temp=self.soft_fill_temp,
+                                    soft_fill_activation=self.soft_fill_activation,
+                                    soft_fill_queue_model=self.soft_fill_queue_model,
+                                    bid_quote_size_min=bid_quote_size_min_t,
+                                    bid_quote_size_max=bid_quote_size_max_t,
+                                    ask_quote_size_min=ask_quote_size_min_t,
+                                    ask_quote_size_max=ask_quote_size_max_t,
+                                    **depth_kw,
+                                )
+                            else:
+                                raise
+                        inv_next = inv_t + inv_delta.unsqueeze(1)
+                        cash_next = cash_t + cash_delta.unsqueeze(1)
+                        mid_next = _mid_from_book_best_levels_batched(
+                            ob_bids_next,
+                            ob_asks_next,
+                            mid_t,
+                            spread_grid,
                         )
-                        mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = (
-                            _fixed_depth_shape_features_batched(
+                        if conditional_price_model:
+                            ref_depth = float(getattr(self.local_price_model, "reference_vwap_vol", 100.0))
+                            prev_spread_ref, prev_buy_shape_ref, prev_sell_shape_ref = (
+                                _fixed_depth_shape_features_batched(
+                                    ob_bids,
+                                    ob_asks,
+                                    mid_t,
+                                    spread_grid,
+                                    target_depth=ref_depth,
+                                )
+                            )
+                            mech_spread_ref, mech_buy_shape_ref, mech_sell_shape_ref = (
+                                _fixed_depth_shape_features_batched(
+                                    ob_bids_next,
+                                    ob_asks_next,
+                                    mid_next,
+                                    spread_grid,
+                                    target_depth=ref_depth,
+                                )
+                            )
+                            innov_h = None
+                            if price_innov is not None:
+                                innov_h = {
+                                    "u_market": price_innov["u_market"][:, h : h + 1],
+                                    "z_market": {
+                                        name: value[:, h : h + 1]
+                                        for name, value in price_innov["z_market"].items()
+                                    },
+                                    "t_refresh": {
+                                        name: value[:, h : h + 1]
+                                        for name, value in price_innov["t_refresh"].items()
+                                    },
+                                }
+                            buy_vwap_next, sell_vwap_next = self.local_price_model.sample_dynamic_vwap(
+                                prev_mid=mid_t,
+                                prev_spread=prev_spread_ref,
+                                prev_buy_shape=prev_buy_shape_ref,
+                                prev_sell_shape=prev_sell_shape_ref,
+                                mech_mid=mid_next,
+                                mech_spread=mech_spread_ref,
+                                mech_buy_shape=mech_buy_shape_ref,
+                                mech_sell_shape=mech_sell_shape_ref,
+                                total_flow=buy_h + sell_h,
+                                buy_depth=torch_mod.relu(cash_next / torch_mod.clamp(mid_next, min=1e-9)),
+                                sell_depth=torch_mod.abs(inv_next),
+                                innovations=innov_h,
+                            )
+                            conditional_buy_vwap_t = buy_vwap_next
+                            conditional_sell_vwap_t = sell_vwap_next
+                        else:
+                            buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
                                 ob_bids_next,
                                 ob_asks_next,
                                 mid_next,
                                 spread_grid,
-                                target_depth=ref_depth,
+                                target_depth=torch_mod.abs(inv_next),
                             )
+                            buy_vwap_next = buy_vwap_book_next + eps_buy_next
+                            sell_vwap_next = sell_vwap_book_next + eps_sell_next
+
+                        ob_bids, ob_asks = ob_bids_next, ob_asks_next
+
+                        step_reward_main = _delta_wealth_mtm_batched(
+                            buy_vwap_t,
+                            sell_vwap_t,
+                            inv_t,
+                            cash_t,
+                            buy_vwap_next,
+                            sell_vwap_next,
+                            inv_next,
+                            cash_next,
                         )
-                        innov_h = None
-                        if price_innov is not None:
-                            innov_h = {
-                                "u_market": price_innov["u_market"][:, h : h + 1],
-                                "z_market": {
-                                    name: value[:, h : h + 1]
-                                    for name, value in price_innov["z_market"].items()
-                                },
-                                "t_refresh": {
-                                    name: value[:, h : h + 1]
-                                    for name, value in price_innov["t_refresh"].items()
-                                },
-                            }
-                        buy_vwap_next, sell_vwap_next = self.local_price_model.sample_dynamic_vwap(
-                            prev_mid=mid_t,
-                            prev_spread=prev_spread_ref,
-                            prev_buy_shape=prev_buy_shape_ref,
-                            prev_sell_shape=prev_sell_shape_ref,
-                            mech_mid=mid_next,
-                            mech_spread=mech_spread_ref,
-                            mech_buy_shape=mech_buy_shape_ref,
-                            mech_sell_shape=mech_sell_shape_ref,
-                            total_flow=buy_h + sell_h,
-                            buy_depth=torch_mod.relu(cash_next / torch_mod.clamp(mid_next, min=1e-9)),
-                            sell_depth=torch_mod.abs(inv_next),
-                            innovations=innov_h,
+                        step_reward = step_reward_main
+                        if h == 0:
+                            step_reward_0 = step_reward
+                        inv_path.append(inv_next.squeeze(1))
+                        cash_path.append(cash_next.squeeze(1))
+                        mid_path.append(mid_next.squeeze(1))
+                        total_reward = total_reward + step_reward
+                        total_main_reward = total_main_reward + step_reward_main
+
+                        mid_fallback_t = mid_next
+                        inv_t = inv_next
+                        cash_t = cash_next
+
+                    stage_timer.record(
+                        "forward",
+                        max(0.0, (time.perf_counter() - forward_started) * 1000.0 - sample_inside_forward_ms),
+                    )
+                    returns = total_reward / wealth_0
+                    objective_started = time.perf_counter()
+                    J_mean_raw = torch_mod.nan_to_num(
+                        total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                    )
+                    J_return_raw = torch_mod.nan_to_num(
+                        returns.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                    )
+                    J_mean_next_raw = torch_mod.nan_to_num(
+                        step_reward_0.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                    )
+                    main_reward_mean_raw = torch_mod.nan_to_num(
+                        total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
+                    )
+                    global_reward_mean_raw = torch_mod.zeros((), dtype=dtype, device=_device)
+                    if scenario_weights is not None:
+                        J, components = terminal_objective(
+                            returns,
+                            return_risk_aversion_beta=self.return_risk_aversion_beta,
+                            weights=scenario_weights,
                         )
-                        conditional_buy_vwap_t = buy_vwap_next
-                        conditional_sell_vwap_t = sell_vwap_next
                     else:
-                        buy_vwap_book_next, sell_vwap_book_next = vwap_prices_batched(
-                            ob_bids_next,
-                            ob_asks_next,
-                            mid_next,
-                            spread_grid,
-                            target_depth=torch_mod.abs(inv_next),
+                        J, components = terminal_objective(
+                            returns,
+                            return_risk_aversion_beta=self.return_risk_aversion_beta,
                         )
-                        buy_vwap_next = buy_vwap_book_next + eps_buy_next
-                        sell_vwap_next = sell_vwap_book_next + eps_sell_next
+                    J, components = self.normalize_terminal_objective(J, components)
+                    venue_opt = self.local_optimizer
+                    if venue_opt.validity is not None:
+                        book_params = venue_opt.book_quality or BookQualityParams()
+                        use_combined = book_params.measure == "combined"
+                        book_score, book_components = book_quality_score(
+                            x_torch[:single_len],
+                            l_param=self._l_param_config(),
+                            n_components=n,
+                            spread_grid=spread_grid,
+                            bid_quote_size_min=bid_quote_size_min_0,
+                            bid_quote_size_max=bid_quote_size_max_0,
+                            ask_quote_size_min=ask_quote_size_min_0,
+                            ask_quote_size_max=ask_quote_size_max_0,
+                            mid_price=mid_0,
+                            params=book_params,
+                            market_cum_bid=book_cum_bid if use_combined else None,
+                            market_cum_ask=book_cum_ask if use_combined else None,
+                        )
+                        J, components = combine_validity_term(
+                            J,
+                            components,
+                            params=venue_opt.validity,
+                            book_score=book_score,
+                            book_components=book_components,
+                        )
+                    if venue_opt.viability is not None:
+                        inv_path_t = torch_mod.stack(inv_path, dim=1)
+                        cash_path_t = torch_mod.stack(cash_path, dim=1)
+                        mid_path_t = torch_mod.stack(mid_path, dim=1)
+                        shortfall, viability_components = viability_path_shortfall(
+                            inv_path_t,
+                            cash_path=cash_path_t,
+                            mid_path=mid_path_t,
+                            params=venue_opt.viability,
+                        )
+                        J, components = combine_viability_term(
+                            J,
+                            components,
+                            viability_lambda=self._viability_lambda_local,
+                            viability_params=venue_opt.viability,
+                            viability_shortfall=shortfall,
+                            viability_components=viability_components,
+                        )
 
-                    ob_bids, ob_asks = ob_bids_next, ob_asks_next
+                    l_cfg = self._l_param_config()
+                    if l_cfg is not None and float(l_cfg.reservation_r_max) > 0.0:
+                        r_off_t = reservation_r_offset_from_params(
+                            x_torch[:single_len],
+                            n_components=n,
+                            r_max=float(l_cfg.reservation_r_max),
+                        )
+                        r_idx = reservation_logit_index(n)
+                        raw_r = x_torch[r_idx]
+                        components["reservation_r_offset"] = r_off_t
+                        components["reservation_shift_quote"] = r_off_t * mid_0
+                        components["reservation_raw_logit"] = raw_r
 
-                    step_reward_main = _delta_wealth_mtm_batched(
-                        buy_vwap_t,
-                        sell_vwap_t,
-                        inv_t,
-                        cash_t,
-                        buy_vwap_next,
-                        sell_vwap_next,
-                        inv_next,
-                        cash_next,
+                    stage_timer.record("objective", (time.perf_counter() - objective_started) * 1000.0)
+                    diagnostics_started = time.perf_counter()
+
+                    def _finite_item(t) -> float:
+                        try:
+                            if hasattr(t, "detach"):
+                                x = float(t.detach().item())
+                            else:
+                                x = float(t)
+                            return x if math.isfinite(x) else 0.0
+                        except Exception:
+                            return 0.0
+
+                    loss = -J
+                    obj_value = _finite_item(J)
+                    # Per-epoch scalar extraction is a real Python/C boundary
+                    # crossing, so full metrics are only materialized for the
+                    # sampled epochs plus any epoch that turns out to be a new
+                    # best (the published ``best`` snapshot depends on it).
+                    # ``best_loss`` tracks the minimum of ``loss = -J``.
+                    is_new_best = math.isfinite(obj_value) and (-obj_value) < best_loss
+                    if not probe_only and (want_metrics or is_new_best):
+                        epoch_metrics = EpochObjectiveMetrics.from_tensors(
+                            objective_value=obj_value,
+                            components={k: _finite_item(v) for k, v in components.items()},
+                            expected_total_reward=_finite_item(J_mean_raw),
+                            expected_total_return=_finite_item(J_return_raw),
+                            expected_next_reward=_finite_item(J_mean_next_raw),
+                            main_reward_mean=_finite_item(main_reward_mean_raw),
+                            global_reward_mean=_finite_item(global_reward_mean_raw),
+                        )
+                        self._last_J_components = dict(epoch_metrics.components)
+                        if not captured_initial_components:
+                            self._last_J_components_initial = dict(epoch_metrics.components)
+                            self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
+                            self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
+                            initial_metrics = epoch_metrics
+                            captured_initial_components = True
+                        final_metrics = epoch_metrics
+                        self._last_J_mean_raw = epoch_metrics.expected_total_reward
+                        self._last_E_dW_next = epoch_metrics.expected_next_reward
+                        self._last_main_reward_mean = epoch_metrics.main_reward_mean
+                        self._last_global_reward_mean = epoch_metrics.global_reward_mean
+                        if is_new_best:
+                            best_epoch_metrics = epoch_metrics
+                    stage_timer.record("diagnostics", (time.perf_counter() - diagnostics_started) * 1000.0)
+                    if not torch_mod.isfinite(loss):
+                        nonfinite_loss_count += 1
+                    if torch_mod.isfinite(loss):
+                        backward_started = time.perf_counter()
+                        loss.backward()
+                        if x_torch.grad is not None:
+                            if not torch_mod.isfinite(x_torch.grad).all():
+                                nonfinite_grad_count += 1
+                                x_torch.grad.detach().zero_()
+                            else:
+                                torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
+                        stage_timer.record("backward", (time.perf_counter() - backward_started) * 1000.0)
+                    closure_wall_ms += (time.perf_counter() - closure_started) * 1000.0
+                    return loss
+
+                if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
+
+                    def _grad_norm_probe(one_flat: np.ndarray) -> float:
+                        tiled = np.tile(one_flat, self.horizon)
+                        with torch_mod.no_grad():
+                            x_torch.data.copy_(
+                                torch_mod.tensor(tiled, dtype=dtype, device=_device)
+                            )
+                        optimizer.zero_grad()
+                        closure(probe_only=True)
+                        if x_torch.grad is None:
+                            return 0.0
+                        grad_norm = float(x_torch.grad.detach().norm().item())
+                        if not math.isfinite(grad_norm):
+                            return 0.0
+                        return grad_norm
+
+                    x0_arr, warm_meta = prepare_warm_start_initial_flat(
+                        params=self.warm_start,
+                        u_default=u_default,
+                        u_warm=u_warm,
+                        horizon=self.horizon,
+                        grad_norm_probe=_grad_norm_probe,
                     )
-                    step_reward = step_reward_main
-                    if h == 0:
-                        step_reward_0 = step_reward
-                    inv_path.append(inv_next.squeeze(1))
-                    cash_path.append(cash_next.squeeze(1))
-                    mid_path.append(mid_next.squeeze(1))
-                    total_reward = total_reward + step_reward
-                    total_main_reward = total_main_reward + step_reward_main
-
-                    mid_fallback_t = mid_next
-                    inv_t = inv_next
-                    cash_t = cash_next
-
-                stage_timer.record(
-                    "forward",
-                    max(0.0, (time.perf_counter() - forward_started) * 1000.0 - sample_inside_forward_ms),
-                )
-                returns = total_reward / wealth_0
-                objective_started = time.perf_counter()
-                J_mean_raw = torch_mod.nan_to_num(
-                    total_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
-                )
-                J_return_raw = torch_mod.nan_to_num(
-                    returns.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
-                )
-                J_mean_next_raw = torch_mod.nan_to_num(
-                    step_reward_0.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
-                )
-                main_reward_mean_raw = torch_mod.nan_to_num(
-                    total_main_reward.view(-1).mean(), nan=0.0, posinf=1e30, neginf=-1e30
-                )
-                global_reward_mean_raw = torch_mod.zeros((), dtype=dtype, device=_device)
-                J, components = terminal_objective(
-                    returns,
-                    return_risk_aversion_beta=self.return_risk_aversion_beta,
-                )
-                J, components = self.normalize_terminal_objective(J, components)
-                venue_opt = self.local_optimizer
-                if venue_opt.validity is not None:
-                    book_params = venue_opt.book_quality or BookQualityParams()
-                    use_combined = book_params.measure == "combined"
-                    book_score, book_components = book_quality_score(
-                        x_torch[:single_len],
-                        l_param=self._l_param_config(),
-                        n_components=n,
-                        spread_grid=spread_grid,
-                        bid_quote_size_min=bid_quote_size_min_0,
-                        bid_quote_size_max=bid_quote_size_max_0,
-                        ask_quote_size_min=ask_quote_size_min_0,
-                        ask_quote_size_max=ask_quote_size_max_0,
-                        mid_price=mid_0,
-                        params=book_params,
-                        market_cum_bid=book_cum_bid if use_combined else None,
-                        market_cum_ask=book_cum_ask if use_combined else None,
-                    )
-                    J, components = combine_validity_term(
-                        J,
-                        components,
-                        params=venue_opt.validity,
-                        book_score=book_score,
-                        book_components=book_components,
-                    )
-                if venue_opt.viability is not None:
-                    inv_path_t = torch_mod.stack(inv_path, dim=1)
-                    cash_path_t = torch_mod.stack(cash_path, dim=1)
-                    mid_path_t = torch_mod.stack(mid_path, dim=1)
-                    shortfall, viability_components = viability_path_shortfall(
-                        inv_path_t,
-                        cash_path=cash_path_t,
-                        mid_path=mid_path_t,
-                        params=venue_opt.viability,
-                    )
-                    J, components = combine_viability_term(
-                        J,
-                        components,
-                        viability_lambda=self._viability_lambda_local,
-                        viability_params=venue_opt.viability,
-                        viability_shortfall=shortfall,
-                        viability_components=viability_components,
-                    )
-
-                l_cfg = self._l_param_config()
-                if l_cfg is not None and float(l_cfg.reservation_r_max) > 0.0:
-                    r_off_t = reservation_r_offset_from_params(
-                        x_torch[:single_len],
-                        n_components=n,
-                        r_max=float(l_cfg.reservation_r_max),
-                    )
-                    r_idx = reservation_logit_index(n)
-                    raw_r = x_torch[r_idx]
-                    components["reservation_r_offset"] = r_off_t
-                    components["reservation_shift_quote"] = r_off_t * mid_0
-                    components["reservation_raw_logit"] = raw_r
-
-                stage_timer.record("objective", (time.perf_counter() - objective_started) * 1000.0)
-                diagnostics_started = time.perf_counter()
-
-                def _finite_item(t) -> float:
-                    try:
-                        if hasattr(t, "detach"):
-                            x = float(t.detach().item())
-                        else:
-                            x = float(t)
-                        return x if math.isfinite(x) else 0.0
-                    except Exception:
-                        return 0.0
-
-                loss = -J
-                obj_value = _finite_item(J)
-                # Per-epoch scalar extraction is a real Python/C boundary
-                # crossing, so full metrics are only materialized for the
-                # sampled epochs plus any epoch that turns out to be a new
-                # best (the published ``best`` snapshot depends on it).
-                # ``best_loss`` tracks the minimum of ``loss = -J``.
-                is_new_best = math.isfinite(obj_value) and (-obj_value) < best_loss
-                if not probe_only and (want_metrics or is_new_best):
-                    epoch_metrics = EpochObjectiveMetrics.from_tensors(
-                        objective_value=obj_value,
-                        components={k: _finite_item(v) for k, v in components.items()},
-                        expected_total_reward=_finite_item(J_mean_raw),
-                        expected_total_return=_finite_item(J_return_raw),
-                        expected_next_reward=_finite_item(J_mean_next_raw),
-                        main_reward_mean=_finite_item(main_reward_mean_raw),
-                        global_reward_mean=_finite_item(global_reward_mean_raw),
-                    )
-                    self._last_J_components = dict(epoch_metrics.components)
-                    if not captured_initial_components:
-                        self._last_J_components_initial = dict(epoch_metrics.components)
-                        self._last_main_reward_mean_initial = epoch_metrics.main_reward_mean
-                        self._last_global_reward_mean_initial = epoch_metrics.global_reward_mean
-                        initial_metrics = epoch_metrics
-                        captured_initial_components = True
-                    final_metrics = epoch_metrics
-                    self._last_J_mean_raw = epoch_metrics.expected_total_reward
-                    self._last_E_dW_next = epoch_metrics.expected_next_reward
-                    self._last_main_reward_mean = epoch_metrics.main_reward_mean
-                    self._last_global_reward_mean = epoch_metrics.global_reward_mean
-                    if is_new_best:
-                        best_epoch_metrics = epoch_metrics
-                stage_timer.record("diagnostics", (time.perf_counter() - diagnostics_started) * 1000.0)
-                if not torch_mod.isfinite(loss):
-                    nonfinite_loss_count += 1
-                if torch_mod.isfinite(loss):
-                    backward_started = time.perf_counter()
-                    loss.backward()
-                    if x_torch.grad is not None:
-                        if not torch_mod.isfinite(x_torch.grad).all():
-                            nonfinite_grad_count += 1
-                            x_torch.grad.detach().zero_()
-                        else:
-                            torch_mod.nn.utils.clip_grad_norm_([x_torch], self.adam_grad_clip)
-                    stage_timer.record("backward", (time.perf_counter() - backward_started) * 1000.0)
-                closure_wall_ms += (time.perf_counter() - closure_started) * 1000.0
-                return loss
-
-            if epoch == 0 and needs_adaptive_probe and not adaptive_warm_resolved:
-
-                def _grad_norm_probe(one_flat: np.ndarray) -> float:
-                    tiled = np.tile(one_flat, self.horizon)
                     with torch_mod.no_grad():
                         x_torch.data.copy_(
-                            torch_mod.tensor(tiled, dtype=dtype, device=_device)
+                            torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
                         )
-                    optimizer.zero_grad()
-                    closure(probe_only=True)
-                    if x_torch.grad is None:
-                        return 0.0
-                    grad_norm = float(x_torch.grad.detach().norm().item())
-                    if not math.isfinite(grad_norm):
-                        return 0.0
-                    return grad_norm
+                    if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
+                        self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
+                        optimizer = self._optimizer
+                    adaptive_warm_resolved = True
 
-                x0_arr, warm_meta = prepare_warm_start_initial_flat(
-                    params=self.warm_start,
-                    u_default=u_default,
-                    u_warm=u_warm,
-                    horizon=self.horizon,
-                    grad_norm_probe=_grad_norm_probe,
+                want_metrics = _epoch_needs_metrics(
+                    epoch, self.adam_epochs - 1, self.optimizer_diagnostics_every
                 )
-                with torch_mod.no_grad():
-                    x_torch.data.copy_(
-                        torch_mod.tensor(x0_arr, dtype=dtype, device=_device)
+                step_started = time.perf_counter()
+                with maybe_profile_decide():
+                    loss = optimizer.step(
+                        lambda: closure(probe_only=False, want_metrics=want_metrics)
                     )
-                if not (self.warm_start.enabled and self.warm_start.preserve_optimizer_state):
-                    self._optimizer = torch_mod.optim.Adam([x_torch], lr=self.adam_lr)
-                    optimizer = self._optimizer
-                adaptive_warm_resolved = True
-
-            want_metrics = _epoch_needs_metrics(
-                epoch, self.adam_epochs - 1, self.optimizer_diagnostics_every
-            )
-            step_started = time.perf_counter()
-            with maybe_profile_decide():
-                loss = optimizer.step(
-                    lambda: closure(probe_only=False, want_metrics=want_metrics)
-                )
-            # ``optimizer.step`` runs the closure before applying the update, so
-            # the Adam arithmetic itself is the residual after the closure cost.
-            step_wall_ms = (time.perf_counter() - step_started) * 1000.0
-            stage_timer.record("adam", max(0.0, step_wall_ms - closure_wall_ms))
-            closure_wall_ms = 0.0
-            stage_timer.bump_epochs()
-            if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
-                best_loss = loss.item()
-                best_x = last_eval_x.detach().clone()
-                best_epoch = epoch
-                if best_epoch_metrics is not None:
-                    best_metrics = best_epoch_metrics
-                    best_J_mean = best_epoch_metrics.expected_total_reward
-                    best_J_mean_next = best_epoch_metrics.expected_next_reward
-                    best_main_reward_mean = best_epoch_metrics.main_reward_mean
+                # ``optimizer.step`` runs the closure before applying the update, so
+                # the Adam arithmetic itself is the residual after the closure cost.
+                step_wall_ms = (time.perf_counter() - step_started) * 1000.0
+                stage_timer.record("adam", max(0.0, step_wall_ms - closure_wall_ms))
+                closure_wall_ms = 0.0
+                stage_timer.bump_epochs()
+                if loss is not None and torch_mod.isfinite(loss) and loss.item() < best_loss:
+                    best_loss = loss.item()
+                    best_x = last_eval_x.detach().clone()
+                    best_epoch = epoch
+                    if best_epoch_metrics is not None:
+                        best_metrics = best_epoch_metrics
+                        best_J_mean = best_epoch_metrics.expected_total_reward
+                        best_J_mean_next = best_epoch_metrics.expected_next_reward
+                        best_main_reward_mean = best_epoch_metrics.main_reward_mean
 
         loop_elapsed = time.perf_counter() - t0
         if self.fixed_mc_samples:
