@@ -26,7 +26,8 @@ from mm.ingestion.symbol_engine import SymbolEngine
 from mm.observability import configure_observability, log_event
 from mm.observability.subscribers import RuntimeObservabilitySubscriber
 from mm.env_loader import load_mm_env
-from mm.execution.order_attribution import OrderAttributionRegistry, load_attribution_registry
+from mm.execution.order_attribution import OrderAttributionRegistry
+from mm.execution.order_attribution_store import OrderAttributionService, build_order_attribution_service
 from mm.execution.reconcile import ReconcileConfig
 from mm.runtime.config import MarketDataSourceConfig, MarketMakerRuntimeConfig, ReconcileRuntimeConfig, SourceRole
 from mm.runtime.build_options import RuntimeBuildOptions
@@ -56,6 +57,7 @@ class RuntimeComponents:
     control_plane: RuntimeControlPlane | None = None
     strategy_runner: object | None = None
     ledger_service: object | None = None
+    attribution_services: dict[str, OrderAttributionService] = field(default_factory=dict)
     build_options: RuntimeBuildOptions = field(default_factory=RuntimeBuildOptions.monolith)
     _scheduler_task: asyncio.Task | None = None
     _started: bool = False
@@ -63,6 +65,8 @@ class RuntimeComponents:
     async def start(self) -> None:
         if self._started:
             return
+        for service in self.attribution_services.values():
+            await service.start()
         for daemon in self.persistence_daemons:
             start = getattr(daemon, "start", None)
             if start is not None:
@@ -104,6 +108,8 @@ class RuntimeComponents:
             await reconciler.stop()
         for reconciler in reversed(tuple(self.execution_reconcilers.values())):
             await reconciler.stop()
+        for service in self.attribution_services.values():
+            await service.stop()
         for daemon in reversed(self.persistence_daemons):
             stop = getattr(daemon, "stop", None)
             if stop is not None:
@@ -216,12 +222,14 @@ async def build_runtime_components(
     private_reconcilers: dict[SourceRole, PrivateStateReconciler] = {}
     execution_reconcilers: dict[SourceRole, ExecutionStateReconciler] = {}
     order_attribution: dict[str, OrderAttributionRegistry] = {}
+    attribution_services: dict[str, OrderAttributionService] = {}
 
     def _attribution_for(exchange: str) -> OrderAttributionRegistry:
         key = exchange.lower().strip()
         registry = order_attribution.get(key)
         if registry is None:
-            registry = load_attribution_registry(key)
+            registry = OrderAttributionRegistry()
+            attribution_services[key] = build_order_attribution_service(registry, exchange=key)
             order_attribution[key] = registry
         return registry
 
@@ -351,6 +359,7 @@ async def build_runtime_components(
         control_plane=control_plane,
         strategy_runner=strategy_runner,
         ledger_service=ledger_service,
+        attribution_services=attribution_services,
         build_options=options,
     )
 

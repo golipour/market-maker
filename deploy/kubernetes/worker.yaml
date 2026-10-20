@@ -44,6 +44,8 @@ spec:
               value: worker-1
             - name: MM_METRICS_LABEL_WORKER_ID
               value: "1"
+            # Read once at startup only when Postgres has no attribution rows yet.
+            # The order path no longer rewrites this file.
             - name: MM_ORDER_ATTRIBUTION_CACHE_DIR
               value: /data/attribution
             # Bitwana is served in-cluster by panther-app; bit.yshm.ir is only an

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -322,6 +323,7 @@ class OrderManager(AbstractOrderManager):
             self._pending_places.pop(open_order.exchange_order_id, None)
             self._pending_place_absent_snapshots.pop(open_order.exchange_order_id, None)
             self._pending_cancels.pop(open_order.exchange_order_id, None)
+            self._release_order_attribution(open_order.exchange_order_id)
         else:
             self._live_orders[open_order.exchange_order_id] = open_order
             self._pending_places.pop(open_order.exchange_order_id, None)
@@ -336,6 +338,7 @@ class OrderManager(AbstractOrderManager):
             self._pending_places.pop(update.exchange_order_id, None)
             self._pending_place_absent_snapshots.pop(update.exchange_order_id, None)
             self._pending_cancels.pop(update.exchange_order_id, None)
+            self._release_order_attribution(update.exchange_order_id)
             return self.snapshot(timestamp_ms=update.timestamp_ms)
         current = self._live_orders.get(update.exchange_order_id)
         if current is not None:
@@ -385,6 +388,7 @@ class OrderManager(AbstractOrderManager):
             if pending is not None:
                 self._pending_place_absent_snapshots.pop(fill.exchange_order_id, None)
                 self._pending_cancels.pop(fill.exchange_order_id, None)
+                self._release_order_attribution(fill.exchange_order_id)
         return self.snapshot(timestamp_ms=fill.timestamp_ms)
 
     def snapshot(self, *, timestamp_ms: int | None = None) -> ExecutionSnapshot:
@@ -508,6 +512,15 @@ class OrderManager(AbstractOrderManager):
                         order.client_order_id,
                     ),
                 )
+
+    def _release_order_attribution(self, exchange_order_id: str) -> None:
+        if self._attribution_registry is None:
+            return
+        self._attribution_registry.release(
+            self.exchange,
+            exchange_order_id,
+            closed_at=datetime.fromtimestamp(self.clock_ms() / 1000.0, timezone.utc),
+        )
 
     def _sync_attribution_registry(self, *, open_order: OpenOrder | None = None) -> None:
         if self._attribution_registry is None:
@@ -694,9 +707,11 @@ class OrderManager(AbstractOrderManager):
             self._pending_places.pop(order_id, None)
             self._pending_place_absent_snapshots.pop(order_id, None)
             released_absent.append(order_id)
+            self._release_order_attribution(order_id)
         for order_id in list(self._pending_cancels):
             if order_id not in self._live_orders:
                 self._pending_cancels.pop(order_id, None)
+                self._release_order_attribution(order_id)
         if released_absent:
             from mm.observability import log_event
 

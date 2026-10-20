@@ -18,7 +18,8 @@ from mm.exchanges.factory import (
 )
 from mm.runtime.build_options import RuntimeBuildOptions
 from mm.runtime.config import MarketMakerRuntimeConfig, ReconcileRuntimeConfig
-from mm.execution.order_attribution import OrderAttributionRegistry, load_attribution_registry
+from mm.execution.order_attribution import OrderAttributionRegistry
+from mm.execution.order_attribution_store import OrderAttributionService, build_order_attribution_service
 from mm.execution.reconcile import ReconcileConfig
 
 
@@ -49,17 +50,21 @@ class SharedAccountPool:
     private_state_selections: dict[str, PrivateStateAdapterSelection] = field(default_factory=dict)
     order_command_selections: dict[str, OrderCommandAdapterSelection] = field(default_factory=dict)
     order_attribution: dict[str, OrderAttributionRegistry] = field(default_factory=dict)
+    attribution_services: dict[str, OrderAttributionService] = field(default_factory=dict)
     attachment_results: dict[str, AccountAttachmentResult] = field(default_factory=dict)
 
     def attribution_for(self, exchange: str) -> OrderAttributionRegistry:
         key = exchange.lower().strip()
         registry = self.order_attribution.get(key)
         if registry is None:
-            registry = load_attribution_registry(key)
+            registry = OrderAttributionRegistry()
+            self.attribution_services[key] = build_order_attribution_service(registry, exchange=key)
             self.order_attribution[key] = registry
         return registry
 
     async def start(self) -> None:
+        for service in self.attribution_services.values():
+            await service.start()
         for reconciler in self.execution_reconcilers.values():
             await reconciler.start()
         for reconciler in self.private_reconcilers.values():
@@ -70,6 +75,8 @@ class SharedAccountPool:
             await reconciler.stop()
         for reconciler in reversed(tuple(self.private_reconcilers.values())):
             await reconciler.stop()
+        for service in self.attribution_services.values():
+            await service.stop()
 
 
 def validate_worker_account_exchange_mapping(
