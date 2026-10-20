@@ -11,6 +11,7 @@ from mm.bus.factory import build_event_bus
 from mm.env_loader import load_mm_env
 from mm.observability import configure_observability, log_event
 from mm.portfolio.virtual_ledger_service import VirtualLedgerService
+from mm.portfolio.wallet_store import build_wallet_store
 from mm.registry.memory import RegistryNotFoundError
 from mm.registry.models import WorkerAssignmentRecord
 from mm.registry.runtime_config import runtime_config_from_registry
@@ -302,6 +303,7 @@ async def build_worker_components(
             bindings=bindings,
             order_managers=account_pool.order_managers,
             control_plane=control_plane,
+            wallet_store=build_wallet_store(),
         )
 
     def _rebuild_slot(strategy_id: str) -> StrategySlot:

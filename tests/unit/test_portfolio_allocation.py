@@ -353,3 +353,213 @@ def test_risk_rejects_on_virtual_ledger_without_allocation_cap_double_count() ->
     assert not ok
     assert "insufficient_quote_for_bid_orders" in reasons
     assert "allocation_quote_exceeded" not in reasons
+
+
+def test_pending_place_locks_virtual_quote_before_the_order_is_live() -> None:
+    from mm.core.models.execution import Order
+    from mm.core.models.private import OpenOrder
+
+    wallet = StrategyWallet(
+        actor_id="btc-maker-actor",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+        initial_base=1.0,
+        initial_quote=50.0,
+        held_base=1.0,
+        held_quote=50.0,
+    )
+    pending = OpenOrder(
+        exchange_order_id="pending-1",
+        actor_id="btc-maker-actor",
+        order=Order("nobitex", "BTC_IRT", "buy", 100.0, 2.0),
+        remaining_qty=2.0,
+        filled_qty=0.0,
+        status="pending",
+        timestamp_ms=1,
+    )
+
+    class _Manager:
+        live_orders: dict = {}
+
+        def pending_place_orders(self):
+            return {"pending-1": pending}
+
+    wallet.refresh_open_order_locks({"nobitex": _Manager()})
+    assert wallet.locked_quote == pytest.approx(200.0)
+    assert "wallet_quote_locked_exceeds_held" in wallet.breach_reasons()
+
+
+@pytest.mark.asyncio
+async def test_wallet_held_restores_when_grant_matches_and_resets_when_it_changes() -> None:
+    from mm.portfolio.wallet_store import MemoryWalletStore
+
+    store = MemoryWalletStore()
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        controller=ControllerRuntimeConfig(enabled=True, actor_id="btc-maker-actor"),
+    )
+    record = AllocationRecord(
+        allocation_id="a1",
+        strategy_id="btc-maker",
+        actor_id="btc-maker-actor",
+        account_id="nobitex-main",
+        allocated_quote=1_000.0,
+        allocated_base=2.0,
+    )
+    service = VirtualLedgerService(
+        bus=InMemoryBus(),
+        allocations=(record,),
+        bindings={record.actor_id: config.binding},
+        order_managers={},
+        wallet_store=store,
+    )
+    wallet = service.wallet_for("btc-maker-actor")
+    assert wallet is not None
+    wallet.held_base = 4.0
+    wallet.held_quote = 250.0
+    await service._persist_wallets()
+
+    restored = VirtualLedgerService(
+        bus=InMemoryBus(),
+        allocations=(record,),
+        bindings={record.actor_id: config.binding},
+        order_managers={},
+        wallet_store=store,
+    )
+    await restored._restore_wallets()
+    kept = restored.wallet_for("btc-maker-actor")
+    assert kept is not None
+    assert kept.held_base == pytest.approx(4.0)
+    assert kept.held_quote == pytest.approx(250.0)
+
+    changed = AllocationRecord(
+        allocation_id="a1",
+        strategy_id="btc-maker",
+        actor_id="btc-maker-actor",
+        account_id="nobitex-main",
+        allocated_quote=1_000.0,
+        allocated_base=9.0,
+    )
+    reset = VirtualLedgerService(
+        bus=InMemoryBus(),
+        allocations=(changed,),
+        bindings={record.actor_id: config.binding},
+        order_managers={},
+        wallet_store=store,
+    )
+    await reset._restore_wallets()
+    fresh = reset.wallet_for("btc-maker-actor")
+    assert fresh is not None
+    assert fresh.held_base == pytest.approx(9.0)
+
+
+def test_shared_wallets_breach_when_held_exceeds_physical_balances() -> None:
+    from mm.core.models.private import PrivateStateSnapshot
+    from mm.core.wallet import make_balance
+
+    config = MarketMakerRuntimeConfig(
+        local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+        controller=ControllerRuntimeConfig(enabled=True, actor_id="btc-maker-actor"),
+    )
+    first = AllocationRecord(
+        allocation_id="a1",
+        strategy_id="btc-maker",
+        actor_id="btc-maker-actor",
+        account_id="nobitex-main",
+        allocated_quote=100.0,
+        allocated_base=2.0,
+    )
+    second = AllocationRecord(
+        allocation_id="a2",
+        strategy_id="btc-maker-2",
+        actor_id="btc-maker-actor-2",
+        account_id="nobitex-main",
+        allocated_quote=100.0,
+        allocated_base=2.0,
+    )
+    service = VirtualLedgerService(
+        bus=InMemoryBus(),
+        allocations=(first, second),
+        bindings={
+            first.actor_id: config.binding,
+            second.actor_id: config.binding,
+        },
+        order_managers={},
+    )
+    service._remember_physical_totals(
+        "nobitex",
+        PrivateStateSnapshot(
+            exchange="nobitex",
+            timestamp_ms=1,
+            balances={
+                "BTC": make_balance("nobitex", "BTC", 1.0, 0.0, 1, total=1.0),
+                "IRT": make_balance("nobitex", "IRT", 1_000.0, 0.0, 1, total=1_000.0),
+            },
+        ),
+    )
+    service._apply_physical_coverage()
+    wallet = service.wallet_for("btc-maker-actor")
+    assert wallet is not None
+    assert "wallet_exceeds_physical" in wallet.breach_reasons()
+
+
+def test_shared_global_account_does_not_expose_the_full_physical_balance() -> None:
+    from mm.core.models.instrument import InstrumentSpec, SymbolBinding
+    from mm.core.models.ledger import JointLedgerSnapshot, VenueLedger
+    from mm.core.wallet import make_balance
+
+    local = InstrumentSpec(exchange="nobitex", symbol="BTC_IRT", base_asset="BTC", quote_asset="IRT")
+    shared_global = InstrumentSpec(exchange="bitwana", symbol="USDT_IRT", base_asset="USDT", quote_asset="IRT")
+    binding = SymbolBinding(local=local, global_=shared_global)
+    first = AllocationRecord(
+        allocation_id="a1",
+        strategy_id="one",
+        actor_id="actor-1",
+        account_id="nobitex-main",
+        allocated_quote=100.0,
+        allocated_base=1.0,
+    )
+    second = AllocationRecord(
+        allocation_id="a2",
+        strategy_id="two",
+        actor_id="actor-2",
+        account_id="nobitex-main",
+        allocated_quote=100.0,
+        allocated_base=1.0,
+    )
+    service = VirtualLedgerService(
+        bus=InMemoryBus(),
+        allocations=(first, second),
+        bindings={first.actor_id: binding, second.actor_id: binding},
+        order_managers={},
+    )
+    wallet = service.wallet_for("actor-1")
+    assert wallet is not None
+    assert wallet.isolate_global_balances
+    physical_global = VenueLedger(
+        exchange="bitwana",
+        symbol="USDT_IRT",
+        base_asset="USDT",
+        quote_asset="IRT",
+        available_base=50.0,
+        available_quote=9_000_000.0,
+        balances={
+            "USDT": make_balance("bitwana", "USDT", 50.0, 0.0, 1),
+            "IRT": make_balance("bitwana", "IRT", 9_000_000.0, 0.0, 1),
+        },
+    )
+    local_ledger = VenueLedger(
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        base_asset="BTC",
+        quote_asset="IRT",
+    )
+    virtual = joint_ledger_with_virtual_local(
+        JointLedgerSnapshot(local=local_ledger, global_=physical_global),
+        wallet,
+    )
+    assert virtual.global_ is not None
+    assert virtual.global_.available_quote == 0.0
+    assert virtual.global_.available_base == 0.0

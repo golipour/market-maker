@@ -52,6 +52,7 @@ class ToleranceReconcilePlanner(AbstractExecutionPlanner):
         *,
         config: ReconcileConfig | None = None,
     ) -> ExecutionPlan:
+        cfg = config or ReconcileConfig()
         desired = target_orders_to_domain_orders(target)
         reconcile_plan = reconcile_target_orders(
             actor_id=target.actor_id,
@@ -59,8 +60,8 @@ class ToleranceReconcilePlanner(AbstractExecutionPlanner):
             symbol=target.symbol,
             desired=desired,
             live_orders=ledger.live_orders,
-            config=config,
-            include_unattributed=True,
+            config=cfg,
+            include_unattributed=cfg.include_unattributed,
         )
         return ExecutionPlan(
             exchange=target.exchange.lower().strip(),
@@ -106,7 +107,7 @@ class AtomicReplacePlanner(AbstractExecutionPlanner):
         *,
         config: ReconcileConfig | None = None,
     ) -> ExecutionPlan:
-        _ = config
+        cfg = config or ReconcileConfig()
         ex = target.exchange.lower().strip()
         sym = target.symbol.strip()
         actor = target.actor_id.strip()
@@ -118,7 +119,7 @@ class AtomicReplacePlanner(AbstractExecutionPlanner):
                 actor_id=actor,
                 exchange=ex,
                 symbol=sym,
-                include_unattributed=True,
+                include_unattributed=cfg.include_unattributed,
             )
         ]
         desired = target_orders_to_domain_orders(target)

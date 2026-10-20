@@ -71,6 +71,33 @@ def test_nobitex_fill_normalization_uses_attribution_registry() -> None:
     assert fill.actor_id == "mpc-controller"
 
 
+def test_fill_waits_for_actor_before_consuming_cumulative_qty() -> None:
+    from mm.exchanges.shared.private_state import RestPollingPrivateStateAdapter
+
+    registry = OrderAttributionRegistry()
+    adapter = RestPollingPrivateStateAdapter("bitwana", "USDT_IRT", api_token="token")
+    adapter.attribution_registry = registry
+    row = {
+        "id": "55",
+        "side": "buy",
+        "executedQty": "1.0",
+        "executedPrice": "100.0",
+        "fee": "1.0",
+    }
+
+    assert adapter.normalize_fill(row, timestamp_ms=1) is None
+    assert adapter.normalize_fill(row, timestamp_ms=2) is None
+
+    registry.register("bitwana", "55", "actor-a")
+    fill = adapter.normalize_fill(row, timestamp_ms=3)
+
+    assert fill is not None
+    assert fill.actor_id == "actor-a"
+    assert fill.qty == pytest.approx(1.0)
+    assert fill.fee == pytest.approx(1.0)
+    assert adapter.normalize_fill(row, timestamp_ms=4) is None
+
+
 def test_wire_client_order_id_for_exchange_uses_registration_hook() -> None:
     assert (
         wire_client_order_id_for_exchange("nobitex", "mpc-controller:buy:0")
@@ -313,3 +340,26 @@ async def test_terminal_order_closes_attribution_and_keeps_it_resolvable() -> No
     assert registry.resolve_actor_id("nobitex", exchange_order_id="ex-1") == "mpc-controller"
     stored = registry._records["nobitex:ex-1"]
     assert stored.closed_at == datetime.fromtimestamp(1.0, timezone.utc)
+
+
+def test_shared_exchange_does_not_cancel_unattributed_orders() -> None:
+    from mm.runtime.config import ControllerRuntimeConfig, MarketDataSourceConfig, MarketMakerRuntimeConfig
+    from mm.worker.account_pool import SharedAccountPool, _scope_unattributed_orders
+
+    manager = OrderManager("nobitex", object())
+    pool = SharedAccountPool(order_managers={"nobitex": manager})
+
+    def config(actor_id: str) -> MarketMakerRuntimeConfig:
+        return MarketMakerRuntimeConfig(
+            local=MarketDataSourceConfig(role="local", exchange="nobitex", symbol="BTC_IRT"),
+            controller=ControllerRuntimeConfig(enabled=True, actor_id=actor_id),
+        )
+
+    _scope_unattributed_orders(
+        pool,
+        (
+            ("s1", "acct", config("actor-a")),
+            ("s2", "acct", config("actor-b")),
+        ),
+    )
+    assert manager._reconcile_config.include_unattributed is False

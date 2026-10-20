@@ -247,10 +247,22 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         )
         if cumulative_qty <= 0.0:
             return None
+        actor_id = _resolve_actor_id(
+            self.exchange,
+            row,
+            exchange_order_id=order_id,
+            attribution_registry=self.attribution_registry,
+        )
+        # A shared account can poll a fill during place, before the exchange
+        # order id is registered. Leave the cursor alone so the next poll
+        # emits the same delta once the actor is known. Without a registry,
+        # physical mode still emits the fill immediately.
+        if self.attribution_registry is not None and not actor_id:
+            return None
         seen_qty = self._seen_fill_qty_by_order.get(order_id, 0.0)
         delta_qty = max(0.0, cumulative_qty - seen_qty)
-        self._seen_fill_qty_by_order[order_id] = max(seen_qty, cumulative_qty)
         if delta_qty <= 1e-12:
+            self._seen_fill_qty_by_order[order_id] = max(seen_qty, cumulative_qty)
             return None
         price = _safe_float(_first_value(row, "price", "averagePrice", "avgFilledPrice", "executedPrice"))
         cumulative_fee = _safe_float(_first_value(row, "fee", "commission"), 0.0)
@@ -258,13 +270,8 @@ class RestPollingPrivateStateAdapter(AbstractPrivateStateAdapter):
         fee = max(0.0, cumulative_fee - seen_fee)
         if fee <= 1e-12 and cumulative_fee > 0.0:
             fee = cumulative_fee
+        self._seen_fill_qty_by_order[order_id] = max(seen_qty, cumulative_qty)
         self._seen_fill_fee_by_order[order_id] = max(seen_fee, cumulative_fee)
-        actor_id = _resolve_actor_id(
-            self.exchange,
-            row,
-            exchange_order_id=order_id,
-            attribution_registry=self.attribution_registry,
-        )
         return Fill(
             exchange_order_id=order_id,
             actor_id=actor_id or "",

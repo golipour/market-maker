@@ -158,3 +158,19 @@ def test_reconcile_cleans_up_unattributed_orders() -> None:
     assert plan.cancel_ids == ("live-2",)
     assert plan.place == ()
 
+
+def test_reconcile_config_can_leave_unattributed_orders_alone() -> None:
+    live = {
+        "live-1": _live("live-1", _order("buy", 100.0, 1.0), actor_id=""),
+    }
+    plan = reconcile_target_orders(
+        actor_id="actor-1",
+        exchange="nobitex",
+        symbol="BTC_IRT",
+        desired=(),
+        live_orders=live,
+        config=ReconcileConfig(include_unattributed=False),
+    )
+    assert plan.cancel_ids == ()
+    assert plan.keep == ()
+

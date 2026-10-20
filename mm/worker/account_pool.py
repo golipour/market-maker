@@ -271,7 +271,31 @@ def build_shared_account_pool(
             bus=bus,
             options=options,
         )
+    _scope_unattributed_orders(pool, strategies)
     return pool
+
+
+def _scope_unattributed_orders(
+    pool: SharedAccountPool,
+    strategies: tuple[tuple[str, str, MarketMakerRuntimeConfig], ...],
+) -> None:
+    """A shared book must not let every strategy cancel orders that have no actor."""
+
+    actors_by_exchange: dict[str, set[str]] = {}
+    for _strategy_id, _account_id, config in strategies:
+        controller = config.controller
+        actor_id = controller.actor_id.strip() if controller is not None else ""
+        if not actor_id:
+            continue
+        exchanges = {config.local.normalized_exchange()}
+        if config.global_ is not None:
+            exchanges.add(config.global_.normalized_exchange())
+        for exchange in exchanges:
+            actors_by_exchange.setdefault(exchange, set()).add(actor_id)
+    for exchange, actors in actors_by_exchange.items():
+        manager = pool.order_managers.get(exchange)
+        if manager is not None and len(actors) > 1:
+            manager.set_include_unattributed(False)
 
 
 def summarise_capability(

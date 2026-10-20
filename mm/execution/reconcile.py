@@ -15,6 +15,7 @@ class ReconcileConfig:
 
     price_tol_bps: float = 0.0
     qty_tol_rel: float = 0.0
+    include_unattributed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,11 +35,12 @@ def reconcile_target_orders(
     desired: Sequence[Order],
     live_orders: Mapping[str, OpenOrder],
     config: ReconcileConfig | None = None,
-    include_unattributed: bool = True,
+    include_unattributed: bool | None = None,
 ) -> ReconcilePlan:
     """Match *desired* to *live_orders* for one actor; cancel unmatched live, place unmatched targets."""
 
     cfg = config or ReconcileConfig()
+    scoped_unattributed = cfg.include_unattributed if include_unattributed is None else include_unattributed
     actor = actor_id.strip()
     ex = exchange.lower().strip()
     sym = symbol.lower().strip() if symbol else None
@@ -57,7 +59,7 @@ def reconcile_target_orders(
             actor_id=actor,
             exchange=ex,
             symbol=sym,
-            include_unattributed=include_unattributed,
+            include_unattributed=scoped_unattributed,
         )
     ]
 

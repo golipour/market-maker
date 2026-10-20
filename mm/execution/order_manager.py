@@ -4,7 +4,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from mm.bus.base import AbstractEventBus
@@ -136,6 +136,36 @@ class OrderManager(AbstractOrderManager):
     def live_orders(self) -> dict[str, OpenOrder]:
         return dict(self._live_orders)
 
+    def set_include_unattributed(self, include_unattributed: bool) -> None:
+        """When several actors share this book, neither may cancel orders with no actor."""
+
+        self._reconcile_config = replace(
+            self._reconcile_config,
+            include_unattributed=bool(include_unattributed),
+        )
+
+    def pending_place_orders(self) -> dict[str, OpenOrder]:
+        """Accepted places that are not on the live book yet.
+
+        Collateral for these is reserved until the snapshot shows the order, so
+        two strategies cannot spend the same virtual cash in one cycle.
+        """
+
+        pending: dict[str, OpenOrder] = {}
+        for order_id, change in self._pending_places.items():
+            if change.order is None or order_id in self._live_orders:
+                continue
+            pending[order_id] = OpenOrder(
+                exchange_order_id=order_id,
+                actor_id=change.actor_id,
+                order=change.order,
+                remaining_qty=float(change.order.qty),
+                filled_qty=0.0,
+                status="pending",
+                timestamp_ms=int(change.accepted_ms),
+            )
+        return pending
+
     async def sync(self, actions: list[Action]) -> None:
         await self.sync_with_report(actions)
 
@@ -231,6 +261,7 @@ class OrderManager(AbstractOrderManager):
         router_cancel_ms = 0.0
         router_place_ms = 0.0
         if plan.cancel or plan.place:
+            self._preregister_place_clients(plan)
             router_result = await self._router.execute(plan)
             router_cancel_ms = router_result.cancel_ms
             router_place_ms = router_result.place_ms
@@ -454,6 +485,7 @@ class OrderManager(AbstractOrderManager):
             router_cancel_ms = 0.0
             router_place_ms = 0.0
             if execute and (plan.cancel or plan.place):
+                self._preregister_place_clients(plan)
                 router_result = await self._router.execute(plan)
                 router_cancel_ms = router_result.cancel_ms
                 router_place_ms = router_result.place_ms
@@ -512,6 +544,25 @@ class OrderManager(AbstractOrderManager):
                         order.client_order_id,
                     ),
                 )
+
+    def _preregister_place_clients(self, plan: ExecutionPlan) -> None:
+        """Index client ids before the place HTTP call returns an exchange order id."""
+
+        if self._attribution_registry is None:
+            return
+        for command in plan.place:
+            if not (command.actor_id or "").strip():
+                continue
+            self._attribution_registry.register(
+                self.exchange,
+                "",
+                command.actor_id,
+                client_order_id=command.order.client_order_id,
+                wire_client_order_id=wire_client_order_id_for_exchange(
+                    self.exchange,
+                    command.order.client_order_id,
+                ),
+            )
 
     def _release_order_attribution(self, exchange_order_id: str) -> None:
         if self._attribution_registry is None:
